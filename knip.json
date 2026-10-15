@@ -7,9 +7,6 @@
     "packages/core": {
       "entry": ["src/**/index.ts", "testing/**/*.ts"]
     },
-    "packages/contracts": {
-      "ignoreDependencies": ["typebox"]
-    },
     "integrations/*": {
       "entry": ["src/**/index.ts"]
     },

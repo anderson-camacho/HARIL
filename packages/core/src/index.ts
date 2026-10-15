@@ -1,2 +1,2 @@
-// Placeholder: public surface of @haril/core, filled in by later tasks.
-export {};
+// Public surface of @haril/core.
+export * from "./domain/index.js";

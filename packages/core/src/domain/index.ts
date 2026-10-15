@@ -1,2 +1,2 @@
-// Placeholder: core layer domain, filled in by later tasks.
-export {};
+// Domain layer of @haril/core: pure rules over the contract types.
+export * from "./task-state.js";

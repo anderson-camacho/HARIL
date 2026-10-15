@@ -246,7 +246,11 @@ importers:
         specifier: 1.3.27
         version: 1.3.27
 
-  packages/core: {}
+  packages/core:
+    dependencies:
+      '@haril/contracts':
+        specifier: workspace:*
+        version: link:../contracts
 
 packages:
 
