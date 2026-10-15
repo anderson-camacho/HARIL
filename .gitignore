@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build artifacts
+dist/
+build/
+*.tsbuildinfo
+
+# Database and SQLite runtime files
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+haril.db*
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Logs and debug
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# OS artifacts
+Thumbs.db
+.DS_Store
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Temporary files
+tmp/
+temp/
+
+# Audit and analysis folders (confined auditor workspace)
+analisis_gemini/
+gemini_analisis_programacion/
+docs/auditoria-gemini/
+
+# Auditoria aislada (el Gentleman / analisis_gemini)
+analisis_gemini/
