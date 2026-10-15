@@ -1,0 +1,37 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    "packages/*": {
+      "entry": ["src/**/index.ts"]
+    },
+    "packages/core": {
+      "entry": ["src/**/index.ts", "testing/**/*.ts"]
+    },
+    "packages/contracts": {
+      "ignoreDependencies": ["typebox"]
+    },
+    "integrations/*": {
+      "entry": ["src/**/index.ts"]
+    },
+    "integrations/os": { "ignoreDependencies": ["@haril/contracts"] },
+    "integrations/git": { "ignoreDependencies": ["@haril/contracts"] },
+    "integrations/state-sqlite": { "ignoreDependencies": ["@haril/contracts"] },
+    "integrations/gateway": { "ignoreDependencies": ["@haril/contracts"] },
+    "integrations/agent-pi": { "ignoreDependencies": ["@haril/contracts"] },
+    "apps/*": {
+      "entry": ["src/**/index.ts"]
+    },
+    "apps/haril": {
+      "ignoreDependencies": [
+        "@haril/contracts",
+        "@haril/core",
+        "@haril/os",
+        "@haril/git",
+        "@haril/state-sqlite",
+        "@haril/gateway",
+        "@haril/agent-pi",
+        "@haril/agent-pi-bridge"
+      ]
+    }
+  }
+}

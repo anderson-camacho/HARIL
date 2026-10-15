@@ -1,0 +1,23 @@
+{
+  "name": "@haril/haril",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@haril/contracts": "workspace:*",
+    "@haril/core": "workspace:*",
+    "@haril/os": "workspace:*",
+    "@haril/git": "workspace:*",
+    "@haril/state-sqlite": "workspace:*",
+    "@haril/gateway": "workspace:*",
+    "@haril/agent-pi": "workspace:*",
+    "@haril/agent-pi-bridge": "workspace:*"
+  }
+}

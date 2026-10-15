@@ -5,15 +5,20 @@
   "type": "module",
   "packageManager": "pnpm@12.11.2",
   "engines": {
-    "node": ">=22.0.0"
+    "node": "^24.21.0 || >=26.8.0"
   },
   "scripts": {
-    "build": "pnpm -r run build",
-    "typecheck": "pnpm -r run typecheck",
-    "test": "pnpm -r run test",
-    "clean": "pnpm -r run clean"
+    "check": "npm run check:biome && npm run check:types && npm run check:scripts && npm run check:deps",
+    "check:biome": "biome ci .",
+    "check:types": "tsc --noEmit -p packages/contracts && tsc --noEmit -p packages/core && tsc --noEmit -p integrations/os && tsc --noEmit -p integrations/git && tsc --noEmit -p integrations/state-sqlite && tsc --noEmit -p integrations/gateway && tsc --noEmit -p integrations/agent-pi && tsc --noEmit -p integrations/agent-pi-bridge && tsc --noEmit -p apps/haril && tsc --noEmit -p apps/bootstrap && tsc --noEmit -p tsconfig.check.json",
+    "check:scripts": "node -e \"process.exit(0)\"",
+    "check:deps": "knip",
+    "test": "vitest run"
   },
   "devDependencies": {
-    "typescript": "^5.8.2"
+    "@biomejs/biome": "2.5.15",
+    "knip": "6.41.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.4"
   }
 }

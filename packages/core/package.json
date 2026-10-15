@@ -1,21 +1,15 @@
 {
   "name": "@haril/core",
   "version": "0.1.0",
+  "private": true,
   "type": "module",
   "description": "HARIL Core: pure orchestration, state machine, budget, and domain logic",
   "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    },
-    "./ports": {
-      "types": "./dist/ports/index.d.ts",
-      "import": "./dist/ports/index.js"
-    }
+    ".": "./src/index.ts",
+    "./ports": "./src/ports/index.ts"
   },
   "scripts": {
-    "build": "tsc -b",
     "typecheck": "tsc --noEmit",
-    "clean": "node -e \"fs.rmSync('dist', { recursive: true, force: true })\""
+    "test": "vitest run --passWithNoTests"
   }
 }

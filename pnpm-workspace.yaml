@@ -2,3 +2,7 @@ packages:
   - 'apps/*'
   - 'packages/*'
   - 'integrations/*'
+
+minimumReleaseAge: 1440
+strictDepBuilds: true
+allowBuilds: {}
