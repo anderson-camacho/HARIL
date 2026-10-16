@@ -22,6 +22,9 @@
     },
     "apps/haril": {
       "entry": ["src/**/index.ts", "src/main.ts"]
+    },
+    "apps/shell": {
+      "entry": ["src/main.ts"]
     }
   }
 }

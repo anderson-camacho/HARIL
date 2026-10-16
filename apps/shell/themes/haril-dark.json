@@ -1,0 +1,16 @@
+{
+  "name": "haril-dark",
+  "appearance": "dark",
+  "vars": {
+    "text": "#e2e5ee",
+    "muted": "#8d95a8",
+    "violet": "#a78bfa",
+    "amber": "#f5c26b"
+  },
+  "colors": {
+    "accent": "violet",
+    "text": "text",
+    "muted": "muted",
+    "warning": "amber"
+  }
+}

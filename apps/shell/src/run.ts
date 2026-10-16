@@ -1,0 +1,104 @@
+import type { Terminal } from "@earendil-works/pi-tui";
+import { createShellApp } from "./app.js";
+import { DEFAULT_THEME_NAME, readOptionalFile, resolveTheme } from "./theme.js";
+
+// Entry logic of the shell (TUI-D3, TUI-D8). The CLI passes resolved paths; this process never opens the store and
+// never starts the runtime. main.ts wires the real process; tests inject the streams and the terminal.
+
+const EXIT_OK = 0;
+const EXIT_USAGE = 2;
+
+const USAGE = "usage: shell [--data-dir <path>] [--runtime-root <path>] [--config <path>]";
+const NOT_A_TERMINAL =
+  "haril shell needs an interactive terminal: stdin and stdout must both be a TTY. Run it in a terminal window.";
+
+export interface ShellRunDeps {
+  readonly stdinIsTTY: boolean | undefined;
+  readonly stdoutIsTTY: boolean | undefined;
+  readonly stderr: (line: string) => void;
+  // Reads a file as text, or undefined when it does not exist.
+  readonly readFile?: (path: string) => string | undefined;
+  readonly createTerminal: () => Terminal;
+}
+
+interface ShellArgs {
+  readonly dataDir: string | undefined;
+  readonly runtimeRoot: string | undefined;
+  readonly config: string | undefined;
+}
+
+const VALUE_FLAGS: Readonly<Record<string, keyof ShellArgs>> = {
+  "--data-dir": "dataDir",
+  "--runtime-root": "runtimeRoot",
+  "--config": "config",
+};
+
+export async function runShell(argv: readonly string[], deps: ShellRunDeps): Promise<number> {
+  const args = parseArgs(argv);
+  if (args === undefined) {
+    deps.stderr(USAGE);
+    return EXIT_USAGE;
+  }
+  if (!deps.stdinIsTTY || !deps.stdoutIsTTY) {
+    deps.stderr(NOT_A_TERMINAL);
+    return EXIT_USAGE;
+  }
+
+  const readFile = deps.readFile ?? readOptionalFile;
+  const requested = themeNameFrom(args.config, readFile);
+  const { theme, warning } = resolveTheme({
+    name: requested.name,
+    runtimeRoot: args.runtimeRoot,
+    readFile,
+  });
+  const notices = [requested.warning, warning].filter((notice) => notice !== undefined);
+
+  const app = createShellApp({
+    terminal: deps.createTerminal(),
+    theme,
+    warning: notices.length > 0 ? notices.join("; ") : undefined,
+    banner: { isolation: "N0", pendingApprovals: 0 },
+  });
+  app.start();
+  await app.done;
+  return EXIT_OK;
+}
+
+// Only the flags listed in VALUE_FLAGS, each with one value. Anything else is a usage error.
+function parseArgs(argv: readonly string[]): ShellArgs | undefined {
+  const values: { -readonly [K in keyof ShellArgs]: ShellArgs[K] } = {
+    dataDir: undefined,
+    runtimeRoot: undefined,
+    config: undefined,
+  };
+  for (let index = 0; index < argv.length; index++) {
+    const flag = argv[index];
+    const key = flag === undefined ? undefined : VALUE_FLAGS[flag];
+    const value = argv[index + 1];
+    if (key === undefined || value === undefined || value.startsWith("--")) return undefined;
+    values[key] = value;
+    index++;
+  }
+  return values;
+}
+
+// The theme named by haril.json (ui.theme). A missing file means the default; an unreadable one is a warning.
+function themeNameFrom(
+  configPath: string | undefined,
+  readFile: (path: string) => string | undefined,
+): { name: string; warning: string | undefined } {
+  if (configPath === undefined) return { name: DEFAULT_THEME_NAME, warning: undefined };
+  const text = readFile(configPath);
+  if (text === undefined) return { name: DEFAULT_THEME_NAME, warning: undefined };
+  try {
+    const document = JSON.parse(text) as { ui?: { theme?: unknown } } | null;
+    const name = document?.ui?.theme;
+    if (name === undefined) return { name: DEFAULT_THEME_NAME, warning: undefined };
+    if (typeof name !== "string" || name === "") {
+      return { name: DEFAULT_THEME_NAME, warning: "ui.theme must be a theme name" };
+    }
+    return { name, warning: undefined };
+  } catch {
+    return { name: DEFAULT_THEME_NAME, warning: "haril.json is not valid JSON" };
+  }
+}

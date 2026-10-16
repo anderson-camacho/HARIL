@@ -21,6 +21,9 @@ const BRIDGE = "integrations/agent-pi-bridge";
 const OS = "integrations/os";
 const GATEWAY = "integrations/gateway";
 const PI_WORKSPACES = new Set(["integrations/agent-pi", BRIDGE]);
+// R1 exception (TUI-D1, ARCHITECTURE 6.3): the terminal UI library is imported only by apps/shell.
+const SHELL = "apps/shell";
+const PI_TUI = "@earendil-works/pi-tui";
 const VARIANT_SEGMENT = /(^|\/)(win32|posix)(\/|$)/;
 
 // Core folder layers (ADR-0015 / ARCHITECTURE 6.3). An edge is allowed only to a strictly lower
@@ -113,7 +116,9 @@ function checkEdge(ctx, ws, fileAbs, edge) {
   const report = (rule, message) => out.push({ rule, file, line: edge.line, message });
   const spec = edge.specifier;
 
-  if (spec.startsWith("@earendil-works/") && !PI_WORKSPACES.has(ws.rel)) {
+  if (isPiTui(spec)) {
+    if (ws.rel !== SHELL) report("R1", `"${spec}" may only be imported by apps/shell`);
+  } else if (spec.startsWith("@earendil-works/") && !PI_WORKSPACES.has(ws.rel)) {
     report("R1", `"${spec}" may only be imported by agent-pi and agent-pi-bridge`);
   }
 
@@ -217,6 +222,10 @@ function matrixMessage(ws, tws, typeOnly, spec) {
     return tws.kind === "app" ? `apps may not import other apps (${tws.rel})` : null;
   }
   return null;
+}
+
+function isPiTui(spec) {
+  return spec === PI_TUI || spec.startsWith(`${PI_TUI}/`);
 }
 
 function fileRelStartsWith(file, prefix) {
