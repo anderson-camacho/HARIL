@@ -109,7 +109,9 @@ async function drainQueue(
       type: "task.claimed",
       taskId: claimed.taskId,
       goal: claimed.goal,
-      attempt: claimed.attempt,
+      // M1-T8: the number shown is the charged attempts plus one. `attempt` also counts orphan recoveries,
+      // which charge nothing, so showing it would print "attempt 2/1" after a crash.
+      attempt: claimed.attemptsUsed + 1,
       maxAttempts: claimed.maxAttempts,
     });
 
@@ -129,7 +131,7 @@ async function drainQueue(
         type: "task.retrying",
         taskId: result.taskId,
         goal: result.goal,
-        nextAttempt: result.attempt + 1,
+        nextAttempt: result.attemptsUsed + 1,
         maxAttempts: result.maxAttempts,
         code,
       });

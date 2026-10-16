@@ -1,0 +1,11 @@
+#!/bin/sh
+# HARIL shim for POSIX shells (M1-D10): runs the built CLI without editing PATH.
+# The executable bit is not stored in git here, so run it as: sh bin/haril <command> [args]
+# (run "npm run build" first).
+here=$(cd "$(dirname "$0")" && pwd) || exit 2
+entry="$here/../apps/haril/dist/haril.mjs"
+if [ ! -f "$entry" ]; then
+  echo "haril: $entry not found. Run \"npm run build\" first." >&2
+  exit 2
+fi
+exec node "$entry" "$@"

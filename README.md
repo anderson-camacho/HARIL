@@ -6,30 +6,68 @@ Una consola, múltiples inteligencias, un solo propósito.
 HARIL es una plataforma **local** de orquestación de agentes de IA, desarrollo de software y automatización, con un solo comando: `haril`.
 Un núcleo propio controla la ejecución; Pi, Engram, Herdr y los proveedores de modelos quedan detrás de puertos reemplazables.
 
-> **Estado real (2026-10-16).** Fases 0 a 2 completadas en diseño. **Fase 3 (monorepo, hito M0 parcial) implementada** en la rama `feat/phase-3-monorepo`: 10 workspaces, contratos TypeBox de `Task`, `Plan` y `Session`, máquina de estados de tareas, validación de planes, controles de capas y una CLI mínima.
-> No existe todavía Runtime, Store, Pi, Broker ni proveedores: llegan en la Fase 4 (M1 a M3).
+> **Estado real (2026-10-16).** Fases 0 a 2 completadas en diseño. **Fase 3 (monorepo) implementada** en `feat/phase-3-monorepo`. **M1 implementado** en `feat/phase-4-m1`: Store SQLite (`node:sqlite`), runtime en primer plano (`haril start`), agente simulado y recuperación tras una caída (`kill -9`).
+> Aún no existen Pi, Broker ni proveedores reales: llegan en M2 y M3. Hasta entonces los agentes son simulados.
 
 ## Cómo probarlo
 
-Requisitos: Node 24 (recomendado `^24.21.0`; con 24.19 funciona y `doctor` avisa) y `corepack` (incluido en Node 24).
+Requisitos: Node 24 (recomendado `^24.21.0`; con 24.19 funciona y `doctor` avisa) y `corepack` (incluido en Node 24). Los pasos son para PowerShell, desde la raíz del repositorio.
 
-```bash
-corepack pnpm install
-```
+1. Instalar dependencias y compilar la CLI:
 
-```bash
-npm run smoke
-```
+   ```powershell
+   corepack pnpm install
+   npm run build
+   ```
 
-`smoke` compila la CLI en `apps/haril/dist/haril.mjs` y la ejecuta. Después puede usarse directamente:
+2. Comprobar el entorno. `doctor` sale con 0 (correcto) o 1 (advertencias, por ejemplo Node 24.19):
 
-| Comando | Qué hace |
-|---|---|
-| `node apps/haril/dist/haril.mjs --version` | Versión de HARIL |
-| `node apps/haril/dist/haril.mjs doctor [--json]` | Node, plataforma y piso de versión |
-| `node apps/haril/dist/haril.mjs states` | Los 7 estados de tarea y sus transiciones legales (ARCH 7.2) |
-| `node apps/haril/dist/haril.mjs plan validate examples/plan.valid.json` | Valida un plan: esquema, dependencias, ciclos, tope de 50 tareas y profundidad de delegación; muestra el orden topológico |
-| `node apps/haril/dist/haril.mjs plan validate examples/plan.cycle.json` | Ejemplo de plan inválido (ciclo): sale con código 1 |
+   ```powershell
+   .\bin\haril.ps1 doctor
+   ```
+
+3. Usar una carpeta de prueba y una raíz de datos propia para no tocar la predeterminada:
+
+   ```powershell
+   $env:HARIL_HOME = "$env:TEMP\haril-demo\data"
+   New-Item -ItemType Directory -Force "$env:TEMP\haril-demo\proyecto" | Out-Null
+   ```
+
+4. Crear el proyecto. Sin `--yes` solo se muestra la vista previa y no se escribe nada:
+
+   ```powershell
+   .\bin\haril.ps1 project init "$env:TEMP\haril-demo\proyecto" --name Demo --slug demo
+   .\bin\haril.ps1 project init "$env:TEMP\haril-demo\proyecto" --name Demo --slug demo --yes
+   ```
+
+5. Encolar trabajo. `task add` y `plan import` solo dejan comandos en la cola; `start` los aplica:
+
+   ```powershell
+   .\bin\haril.ps1 task add "Tarea de prueba" --project demo
+   .\bin\haril.ps1 plan import examples\plan.valid.json --project demo
+   ```
+
+6. Ejecutar la cola. `start` corre en primer plano y sale al quedar ocioso (0 si todo fue bien, 1 si una tarea falló):
+
+   ```powershell
+   .\bin\haril.ps1 start --project demo
+   ```
+
+7. Consultar el resultado:
+
+   ```powershell
+   .\bin\haril.ps1 status --project demo
+   .\bin\haril.ps1 metrics --project demo
+   .\bin\haril.ps1 events --project demo --limit 10
+   ```
+
+8. Limpiar la variable de sesión: `Remove-Item Env:HARIL_HOME`.
+
+Notas:
+
+- **Agentes simulados hasta M2.** `fake:succeed` (por defecto), `fake:fail` y `fake:slow:<ms>` se comportan como su nombre indica. Cualquier otro agente del plan (por ejemplo `developer-block`) se ejecuta como simulado con éxito y `start` lo indica. Ningún agente real modifica el disco.
+- **Otras formas de invocar la CLI.** `bin\haril.cmd` (cmd) y `sh bin/haril` (POSIX) hacen lo mismo. No editan el `PATH`. Si falta `apps/haril/dist/haril.mjs`, avisan de que hay que ejecutar `npm run build`.
+- **Códigos de salida.** 0 correcto, 1 advertencias o tarea fallida, 2 error de uso o de entorno.
 
 Calidad del repositorio:
 
@@ -37,6 +75,7 @@ Calidad del repositorio:
 |---|---|
 | `corepack pnpm run check` | Biome, `tsc --noEmit` por workspace, `scripts/check-layers`, `check-purity`, `check-forbidden` y knip |
 | `corepack pnpm test` | Vitest (contratos, core, CLI) y `node:test` (scripts de control con violaciones sembradas) |
+| `npm run e2e` | Compila y recorre el flujo M1 completo con la CLI en directorios temporales, incluida una caída a mitad de run (`scripts/e2e.mjs`) |
 
 El CI (`.github/workflows/ci.yml`) ejecuta lo mismo en `windows-latest` y `ubuntu-latest`.
 

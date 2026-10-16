@@ -35,3 +35,5 @@ jobs:
         run: pnpm test
       - name: Smoke (build CLI and run it)
         run: pnpm run smoke
+      - name: E2E (M1 flow in temporary directories)
+        run: pnpm run e2e

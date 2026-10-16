@@ -17,7 +17,8 @@
     "test:scripts": "node --test \"scripts/tests/**/*.test.mjs\"",
     "build": "tsdown --config apps/haril/tsdown.config.ts",
     "haril": "node apps/haril/dist/haril.mjs",
-    "smoke": "npm run build && node apps/haril/dist/haril.mjs --version && node apps/haril/dist/haril.mjs plan validate examples/plan.valid.json"
+    "smoke": "npm run build && node apps/haril/dist/haril.mjs --version && node apps/haril/dist/haril.mjs plan validate examples/plan.valid.json",
+    "e2e": "npm run build && node scripts/e2e.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",

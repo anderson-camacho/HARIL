@@ -65,6 +65,8 @@ describe("haril start after a crash (M1-T7)", () => {
     // The dead runtime's pid is not alive, so its unexpired lease is taken over at once.
     expect(await start({ ...sb.host, isPidAlive: () => false })).toBe(0);
     expect(h.out).toContain(`recovered ${taskId} Crashed (orphaned, restart 1/3)`);
+    // The orphan recovery charged no attempt, so the rerun is attempt 1 of 1 (M1-T8).
+    expect(h.out).toContain(`claimed ${taskId} Crashed (attempt 1/1)`);
     expect(h.out).toContain(`completed ${taskId} Crashed`);
   });
 });
