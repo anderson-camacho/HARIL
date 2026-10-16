@@ -1,18 +1,36 @@
 import type { IncomingMessage } from "node:http";
-import type { UpstreamMessage } from "./types.js";
+import type { UpstreamBody } from "./types.js";
 
 // Parsing and request guards of the Broker: the body limit, the bearer token, the chat body and the route grant.
 
 const MAX_BODY_BYTES = 1024 * 1024;
 const BEARER = /^Bearer ([A-Za-z0-9_-]+)$/;
-const ROLES: ReadonlySet<string> = new Set(["system", "user", "assistant"]);
 const UPSTREAM_CODE = /^[a-z_]{1,40}$/;
+
+// The fields the Broker forwards unchanged (GWY-14). Everything else in the body is dropped. The Broker itself
+// reads model, messages, stream and the max-token fields, and decides max_tokens; the rest reaches the upstream as sent.
+const PASS_THROUGH_FIELDS: readonly string[] = [
+  "tools",
+  "tool_choice",
+  "parallel_tool_calls",
+  "temperature",
+  "top_p",
+  "stop",
+  "seed",
+  "response_format",
+  "stream_options",
+  "reasoning_effort",
+];
 
 export interface ChatInput {
   readonly model: string;
-  readonly messages: readonly UpstreamMessage[];
+  // Any roles, including tool and assistant tool_calls: forwarded verbatim.
+  readonly messages: readonly unknown[];
   readonly stream: boolean;
+  // The client's own cap (max_tokens or max_completion_tokens); the Broker decides the value it forwards.
   readonly maxTokens: number | undefined;
+  // The allowlisted pass-through fields, as the client sent them.
+  readonly fields: Readonly<Record<string, unknown>>;
 }
 
 export type ParsedChat =
@@ -33,8 +51,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isRole(value: unknown): value is UpstreamMessage["role"] {
-  return typeof value === "string" && ROLES.has(value);
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1;
 }
 
 // The whole body, or null when it is over the limit. Over-limit bytes are drained, not buffered.
@@ -61,7 +79,6 @@ export function bearerToken(header: string | undefined): string | undefined {
   return header === undefined ? undefined : BEARER.exec(header)?.[1];
 }
 
-// Only the fields HARIL knows reach the upstream (GWY-14): everything else in the body is dropped.
 export function parseChat(text: string): ParsedChat {
   let body: unknown;
   try {
@@ -70,40 +87,68 @@ export function parseChat(text: string): ParsedChat {
     return { ok: false, reason: "body is not JSON" };
   }
   if (!isRecord(body)) return { ok: false, reason: "body must be a JSON object" };
-  const { model, messages, stream, max_tokens: maxTokens } = body;
+  const { model, messages, stream } = body;
   if (typeof model !== "string" || model.length === 0) {
     return { ok: false, reason: "model is required" };
   }
   if (!Array.isArray(messages) || messages.length === 0) {
     return { ok: false, reason: "messages is required" };
   }
-  const parsed: UpstreamMessage[] = [];
   for (const item of messages) {
-    if (!isRecord(item) || !isRole(item.role) || typeof item.content !== "string") {
-      return {
-        ok: false,
-        reason: "messages must be {role: system|user|assistant, content: string}",
-      };
+    if (!isRecord(item) || typeof item.role !== "string" || item.role.length === 0) {
+      return { ok: false, reason: "messages must be objects with a role" };
     }
-    parsed.push({ role: item.role, content: item.content });
   }
   if (stream !== undefined && typeof stream !== "boolean") {
     return { ok: false, reason: "stream must be a boolean" };
   }
-  if (
-    maxTokens !== undefined &&
-    !(typeof maxTokens === "number" && Number.isInteger(maxTokens) && maxTokens >= 1)
-  ) {
-    return { ok: false, reason: "max_tokens must be a positive integer" };
+  for (const field of ["max_tokens", "max_completion_tokens"]) {
+    const value = body[field];
+    if (value !== undefined && !isPositiveInteger(value)) {
+      return { ok: false, reason: `${field} must be a positive integer` };
+    }
   }
+  if (body.tools !== undefined && !Array.isArray(body.tools)) {
+    return { ok: false, reason: "tools must be an array" };
+  }
+  if (body.stream_options !== undefined && !isRecord(body.stream_options)) {
+    return { ok: false, reason: "stream_options must be an object" };
+  }
+  const fields: Record<string, unknown> = {};
+  for (const field of PASS_THROUGH_FIELDS) {
+    if (body[field] !== undefined) fields[field] = body[field];
+  }
+  const maxTokens = body.max_tokens ?? body.max_completion_tokens;
   return {
     ok: true,
     input: {
       model,
-      messages: parsed,
+      messages,
       stream: stream === true,
       maxTokens: typeof maxTokens === "number" ? maxTokens : undefined,
+      fields,
     },
+  };
+}
+
+// The body the upstream receives: the allowlisted fields verbatim, the Broker's max_tokens, and include_usage
+// on every stream (stream_options is sent only with a stream, as the OpenAI API requires).
+export function upstreamBody(input: ChatInput, maxTokens: number): UpstreamBody {
+  const { stream_options: streamOptions, ...fields } = input.fields;
+  return {
+    ...fields,
+    model: input.model,
+    messages: input.messages,
+    max_tokens: maxTokens,
+    stream: input.stream,
+    ...(input.stream
+      ? {
+          stream_options: {
+            ...(isRecord(streamOptions) ? streamOptions : {}),
+            include_usage: true,
+          },
+        }
+      : {}),
   };
 }
 

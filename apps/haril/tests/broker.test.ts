@@ -448,11 +448,16 @@ describe("upstream stream release (M2-T6)", () => {
     const released: string[] = [];
     // A stand-in upstream whose stream records its own cleanup: a completed reply must run it.
     const stream: UpstreamClient = {
-      chat() {
+      chatRaw() {
         return (async function* () {
           try {
-            yield { type: "text" as const, delta: "hi" };
-            yield { type: "done" as const, usage: null, finishReason: "stop" };
+            yield {
+              json: { choices: [{ index: 0, message: { role: "assistant", content: "hi" } }] },
+              outputBytes: 2,
+              usage: null,
+              finishReason: "stop",
+              error: null,
+            };
           } finally {
             released.push("upstream");
           }
@@ -488,6 +493,194 @@ describe("upstream stream release (M2-T6)", () => {
     } finally {
       await own.close();
     }
+  });
+});
+
+// An agent (Pi) uses tools through the Broker: the request carries tools and tool messages, and the reply carries
+// tool_calls. The Broker is a controlled transparent proxy for these shapes, so none of them may be dropped.
+const TOOL = {
+  type: "function",
+  function: {
+    name: "read_file",
+    description: "Read a file",
+    parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+  },
+};
+const TOOL_HISTORY = [
+  { role: "user", content: "read a.ts" },
+  {
+    role: "assistant",
+    content: null,
+    tool_calls: [
+      {
+        id: "call_1",
+        type: "function",
+        function: { name: "read_file", arguments: '{"path":"a.ts"}' },
+      },
+    ],
+  },
+  { role: "tool", tool_call_id: "call_1", content: "export const a = 1;" },
+];
+
+interface ToolCallChunk {
+  readonly choices: {
+    readonly delta?: {
+      readonly tool_calls?: {
+        readonly function?: { readonly name?: string; readonly arguments?: string };
+      }[];
+    };
+    readonly finish_reason?: string | null;
+  }[];
+  readonly usage?: unknown;
+}
+
+function sseChunks(text: string): ToolCallChunk[] {
+  return text
+    .split("\n\n")
+    .filter((block) => block.startsWith("data: ") && block !== "data: [DONE]")
+    .map((block) => JSON.parse(block.slice("data: ".length)) as ToolCallChunk);
+}
+
+describe("tools through the Broker (Pi agent)", () => {
+  it("forwards tools and tool_choice to the upstream unchanged", async () => {
+    const key = issue(scopeFor(1000));
+    const reply = await send(portOf(), {
+      path: "/v1/chat/completions",
+      headers: bearer(key),
+      body: chatBody({ stream: false, messages: TOOL_HISTORY, tools: [TOOL], tool_choice: "auto" }),
+    });
+    expect(reply.status).toBe(200);
+    const forwarded = upstream.requests.at(-1)?.body as Record<string, unknown>;
+    expect(forwarded.tools).toEqual([TOOL]);
+    expect(forwarded.tool_choice).toBe("auto");
+  });
+
+  it("forwards assistant tool_calls and tool messages verbatim", async () => {
+    const key = issue(scopeFor(1000));
+    await send(portOf(), {
+      path: "/v1/chat/completions",
+      headers: bearer(key),
+      body: chatBody({ stream: false, messages: TOOL_HISTORY, tools: [TOOL] }),
+    });
+    const forwarded = upstream.requests.at(-1)?.body as { messages: unknown };
+    expect(forwarded.messages).toEqual(TOOL_HISTORY);
+  });
+
+  it("streams tool_calls deltas intact, with the arguments reassembled and finish_reason tool_calls", async () => {
+    upstream.setCompletion({
+      toolCalls: [
+        {
+          id: "call_1",
+          name: "read_file",
+          argumentFragments: ['{"pa', 'th":"a.', 'ts"}'],
+        },
+      ],
+      usage: { prompt_tokens: 12, completion_tokens: 7 },
+    });
+    const scope = scopeFor(1000);
+    const key = issue(scope);
+    const reply = await send(portOf(), {
+      path: "/v1/chat/completions",
+      headers: bearer(key),
+      body: chatBody({ stream: true, messages: MESSAGES, tools: [TOOL] }),
+    });
+    expect(reply.status).toBe(200);
+    expect(reply.text.trimEnd().endsWith("data: [DONE]")).toBe(true);
+    const chunks = sseChunks(reply.text);
+    const calls = chunks.flatMap((chunk) =>
+      chunk.choices.flatMap((choice) => choice.delta?.tool_calls ?? []),
+    );
+    expect(calls[0]?.function?.name).toBe("read_file");
+    const args = calls.map((call) => call.function?.arguments ?? "").join("");
+    expect(args).toBe('{"path":"a.ts"}');
+    const finish = chunks.flatMap((chunk) => chunk.choices.map((c) => c.finish_reason ?? null));
+    expect(finish).toContain("tool_calls");
+    expect(reply.text).toContain('"usage"');
+    expect(taskBudget(scope.taskBudget)).toMatchObject({ spent: 19, reserved: 0 });
+  });
+
+  it("returns a non-streamed tool call as message.tool_calls, with usage settled", async () => {
+    upstream.setCompletion({
+      toolCalls: [{ id: "call_9", name: "read_file", argumentFragments: ['{"path":"b.ts"}'] }],
+      usage: { prompt_tokens: 12, completion_tokens: 7 },
+    });
+    const scope = scopeFor(1000);
+    const key = issue(scope);
+    const reply = await send(portOf(), {
+      path: "/v1/chat/completions",
+      headers: bearer(key),
+      body: chatBody({ stream: false, messages: MESSAGES, tools: [TOOL] }),
+    });
+    expect(reply.status).toBe(200);
+    const body = JSON.parse(reply.text) as {
+      choices: { message: { tool_calls: unknown[] }; finish_reason: string }[];
+      usage: unknown;
+    };
+    expect(body.choices[0]?.finish_reason).toBe("tool_calls");
+    expect(body.choices[0]?.message.tool_calls).toEqual([
+      {
+        id: "call_9",
+        type: "function",
+        function: { name: "read_file", arguments: '{"path":"b.ts"}' },
+      },
+    ]);
+    expect(body.usage).toBeDefined();
+    expect(taskBudget(scope.taskBudget)).toMatchObject({ spent: 19, reserved: 0 });
+  });
+
+  it("drops fields outside the allowlist and keeps the allowlisted ones", async () => {
+    const key = issue(scopeFor(1000));
+    await send(portOf(), {
+      path: "/v1/chat/completions",
+      headers: bearer(key),
+      body: chatBody({
+        stream: false,
+        user: "someone",
+        metadata: { run: "x" },
+        logprobs: true,
+        temperature: 0.2,
+        reasoning_effort: "low",
+      }),
+    });
+    const forwarded = upstream.requests.at(-1)?.body as Record<string, unknown>;
+    expect(forwarded).not.toHaveProperty("user");
+    expect(forwarded).not.toHaveProperty("metadata");
+    expect(forwarded).not.toHaveProperty("logprobs");
+    expect(forwarded).toMatchObject({ temperature: 0.2, reasoning_effort: "low", stream: false });
+  });
+
+  it("refuses tools that are not an array with 400 before contacting the upstream", async () => {
+    const key = issue(scopeFor(1000));
+    const reply = await send(portOf(), {
+      path: "/v1/chat/completions",
+      headers: bearer(key),
+      body: chatBody({ stream: false, tools: "read_file" }),
+    });
+    expect(reply.status).toBe(400);
+    expect(upstreamChats()).toBe(0);
+  });
+
+  it("cuts the stream when the streamed tool-call argument bytes reach the reservation", async () => {
+    const big = "x".repeat(30);
+    upstream.setCompletion({
+      toolCalls: [
+        { id: "call_1", name: "f", argumentFragments: Array.from({ length: 6 }, () => big) },
+      ],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    });
+    const scope = scopeFor(40);
+    const key = issue(scope);
+    const reply = await send(portOf(), {
+      path: "/v1/chat/completions",
+      headers: bearer(key),
+      body: chatBody({ stream: true }),
+    });
+    expect(reply.status).toBe(200);
+    expect(reply.text).toContain("insufficient_quota");
+    expect(reply.text.trimEnd().endsWith("data: [DONE]")).toBe(true);
+    // Input 11 plus the name and the arguments bytes / 4: the fourth fragment takes the output past the 29 left
+    expect(reply.text.split(big)).toHaveLength(4);
+    expect(taskBudget(scope.taskBudget)).toMatchObject({ spent: 40, reserved: 0 });
   });
 });
 

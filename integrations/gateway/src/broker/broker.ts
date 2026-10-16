@@ -10,37 +10,24 @@ import {
   parseGrant,
   type RouteGrant,
   readBody,
+  upstreamBody,
   upstreamCode,
 } from "./guards.js";
 import { hashVirtualKey, newVirtualKey } from "./keys.js";
-import type { Broker, BrokerOptions, IssueKeyInput } from "./types.js";
-import {
-  completion,
-  contentEvent,
-  DONE_EVENT,
-  errorBody,
-  errorEvent,
-  finishEvent,
-  type ReplyContext,
-  type UsageCounts,
-  usageEvent,
-} from "./wire.js";
+import type { Broker, BrokerOptions, IssueKeyInput, UpstreamChunk } from "./types.js";
+import { chunkEvent, DONE_EVENT, errorBody, errorEvent } from "./wire.js";
 
-// The OpenAI-compatible Broker (ADR-0005 BR-1..BR-13, M2-D7). It sits between Pi and the upstream: it checks
-// the virtual key, reserves the worst case before contacting the upstream, caps max_tokens, cuts a stream at
-// the reservation and settles the ledger exactly once per reservation.
+// The OpenAI-compatible Broker (ADR-0005 BR-1..BR-13, M2-D7). It is a controlled transparent proxy for chat
+// completions: it checks the virtual key, reserves the worst case before contacting the upstream, caps max_tokens,
+// cuts a stream at the reservation and settles the ledger exactly once per reservation. Tools, tool calls and tool
+// messages pass through unchanged, so an agent can use them through the Broker.
 
 const CHAT_PATH = "/v1/chat/completions";
 const MODELS_PATH = "/v1/models";
 const HOST = "127.0.0.1";
 
 type Outcome =
-  | {
-      readonly kind: "done";
-      readonly text: string;
-      readonly finishReason: string;
-      readonly usage: Usage | null;
-    }
+  | { readonly kind: "done" }
   | { readonly kind: "cut" }
   | { readonly kind: "failed"; readonly code: string };
 
@@ -119,7 +106,7 @@ export async function startBroker(options: BrokerOptions): Promise<Broker> {
     budgetIds: readonly string[],
     input: ChatInput,
   ): Promise<void> {
-    const inputTokens = estimateInputTokens(input.messages);
+    const inputTokens = estimateInputTokens(input.messages, input.fields.tools);
     // The ledger records the route as <provider>/<model>: Pi only sees the bare model id (M3-T7).
     const routeId = `${grant.providerId}/${input.model}`;
     const rooms = budgetIds.map((id) => {
@@ -159,11 +146,6 @@ export async function startBroker(options: BrokerOptions): Promise<Broker> {
     response.on("close", () => {
       if (!response.writableFinished) controller.abort();
     });
-    const context: ReplyContext = {
-      id: `chatcmpl-${randomUUID()}`,
-      created: Math.floor(clock.now() / 1000),
-      model: input.model,
-    };
     const reserved = inputTokens + maxTokens;
     let started = false;
     const startStream = (): void => {
@@ -172,57 +154,60 @@ export async function startBroker(options: BrokerOptions): Promise<Broker> {
       response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
     };
     let bytes = 0;
-    let text = "";
+    let usage: Usage | null = null;
+    // The newest chunk is held back until the next one arrives or the reply ends: it is written after settlement,
+    // so a client that reads to the end sees the final ledger state. For a non-stream request it is the reply.
+    let last: UpstreamChunk | undefined;
     let outcome: Outcome = { kind: "failed", code: "unknown" };
     const iterator = resolveUpstream(grant.providerId)
-      .chat({ model: input.model, messages: input.messages, maxTokens, signal: controller.signal })
+      .chatRaw(upstreamBody(input, maxTokens), controller.signal)
       [Symbol.asyncIterator]();
     try {
-      let next = await iterator.next();
-      while (next.done !== true) {
-        const event = next.value;
-        if (event.type === "done") {
-          outcome = {
-            kind: "done",
-            text,
-            finishReason: event.finishReason ?? "stop",
-            usage: event.usage,
-          };
+      for (;;) {
+        const next = await iterator.next();
+        if (next.done === true) {
+          outcome = { kind: "done" };
+          break;
+        }
+        const chunk = next.value;
+        if (chunk.error !== null) {
+          outcome = { kind: "failed", code: "upstream_stream_error" };
           break;
         }
         // BR-7: the output counted so far, as an upper bound, may not take the reservation past its amount.
-        const nextBytes = bytes + Buffer.byteLength(event.delta, "utf8");
+        // Tool-call names and arguments count like content (the chunk already carries their bytes).
+        const nextBytes = bytes + chunk.outputBytes;
         if (inputTokens + streamedOutputTokens(nextBytes) > reserved) {
           outcome = { kind: "cut" };
           break;
         }
         bytes = nextBytes;
-        text += event.delta;
+        if (chunk.usage !== null) usage = chunk.usage;
+        const previous = last;
+        last = chunk;
         if (input.stream) {
           startStream();
-          response.write(contentEvent(context, event.delta));
+          if (previous !== undefined) response.write(chunkEvent(previous.json));
         }
-        next = await iterator.next();
       }
     } catch (error) {
       outcome = { kind: "failed", code: upstreamCode(error) };
     } finally {
       untrack(grant.runId, controller);
     }
-    // Every path returns the upstream stream: a completed reply leaves the generator suspended at its done event,
+    // Every path returns the upstream stream: a completed reply leaves the generator suspended at its last event,
     // and only return() runs its cleanup (the request deadline and the reader). Without it the timer stays armed
     // and keeps the runtime process alive until the timeout (M2-T6).
     if (outcome.kind === "cut") controller.abort();
     await iterator.return?.(undefined).catch(() => undefined);
 
     // Settle before the last bytes: a client that reads to the end then sees the final ledger state.
-    const usage =
-      outcome.kind === "done" && outcome.usage !== null
-        ? { inputTokens: outcome.usage.inputTokens, outputTokens: outcome.usage.outputTokens }
-        : null;
     ledger.budgets.commit({
       reservationId: reservation.reservationId,
-      usage,
+      usage:
+        outcome.kind === "done" && usage !== null
+          ? { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }
+          : null,
       // The upstream was capped at max_tokens, so real use never exceeds the reservation: bound the estimate by it.
       upperBound: Math.min(reserved, inputTokens + tokensForBytes(bytes)),
       modelRequested: routeId,
@@ -230,25 +215,24 @@ export async function startBroker(options: BrokerOptions): Promise<Broker> {
     });
 
     if (outcome.kind === "done") {
-      if (input.stream) {
-        startStream();
-        response.write(finishEvent(context, outcome.finishReason));
-        const counts = countsOf(outcome.usage);
-        if (counts !== undefined) response.write(usageEvent(context, counts));
-        response.end(DONE_EVENT);
-      } else {
-        sendJson(
-          response,
-          200,
-          completion(context, outcome.text, outcome.finishReason, countsOf(outcome.usage)),
-        );
+      if (!input.stream) {
+        if (last === undefined) {
+          sendJson(response, 502, errorBody("upstream_error", "upstream failed (empty)"));
+        } else {
+          sendJson(response, 200, last.json);
+        }
+        return;
       }
+      startStream();
+      if (last !== undefined) response.write(chunkEvent(last.json));
+      response.end(DONE_EVENT);
       return;
     }
     if (outcome.kind === "cut") {
       const message = "insufficient_quota: the token budget was reached before the reply ended";
       if (input.stream) {
         startStream();
+        if (last !== undefined) response.write(chunkEvent(last.json));
         response.write(errorEvent("insufficient_quota", message));
         response.end(DONE_EVENT);
       } else {
@@ -258,6 +242,7 @@ export async function startBroker(options: BrokerOptions): Promise<Broker> {
     }
     const message = `upstream failed (${outcome.code})`;
     if (input.stream && started) {
+      if (last !== undefined) response.write(chunkEvent(last.json));
       response.write(errorEvent("upstream_error", message));
       response.end(DONE_EVENT);
       return;
@@ -351,11 +336,6 @@ export async function startBroker(options: BrokerOptions): Promise<Broker> {
 
 function insufficientQuota(detail: string): Record<string, unknown> {
   return errorBody("insufficient_quota", `insufficient_quota: ${detail}`);
-}
-
-function countsOf(usage: Usage | null): UsageCounts | undefined {
-  if (usage === null || usage.inputTokens === null || usage.outputTokens === null) return undefined;
-  return { prompt: usage.inputTokens, completion: usage.outputTokens };
 }
 
 function sendJson(response: ServerResponse, status: number, body: unknown): void {

@@ -1,5 +1,3 @@
-import type { UpstreamMessage } from "./types.js";
-
 // Token estimates are documented upper bounds (ADR-0005 BR-5): UTF-8 bytes divided by 3, rounded up. They are
 // deliberately conservative; the upstream usage replaces them when it arrives.
 export function tokensForBytes(bytes: number): number {
@@ -13,7 +11,9 @@ export function streamedOutputTokens(bytes: number): number {
   return Math.ceil(bytes / 4);
 }
 
-// The input is the serialized messages: the role and JSON framing count too, so the bound holds.
-export function estimateInputTokens(messages: readonly UpstreamMessage[]): number {
-  return tokensForBytes(Buffer.byteLength(JSON.stringify(messages), "utf8"));
+// The input is the serialized messages and tools: the framing counts too, so the bound holds.
+export function estimateInputTokens(messages: readonly unknown[], tools?: unknown): number {
+  const messageBytes = Buffer.byteLength(JSON.stringify(messages), "utf8");
+  const toolBytes = tools === undefined ? 0 : Buffer.byteLength(JSON.stringify(tools), "utf8");
+  return tokensForBytes(messageBytes + toolBytes);
 }

@@ -6,10 +6,9 @@ export type {
   BrokerLedger,
   BrokerOptions,
   IssueKeyInput,
+  UpstreamBody,
+  UpstreamChunk,
   UpstreamClient,
-  UpstreamEvent,
-  UpstreamMessage,
-  UpstreamRequest,
   UpstreamResolver,
 } from "./broker/types.js";
 

@@ -4,26 +4,30 @@ import type { BudgetsPort, Clock, VirtualKeysPort } from "@haril/core/ports";
 // Public types of the Broker (ADR-0005 BR-1..BR-14, M2-D7). The Broker never imports providers/ (R9): the
 // composition root hands it an UpstreamClient, normally the OpenAI-compatible adapter, whose shapes match.
 
-export interface UpstreamMessage {
-  readonly role: "system" | "user" | "assistant";
-  readonly content: string;
-}
-
-export interface UpstreamRequest {
+// The chat completions body as the Broker forwards it (the allowlisted fields only, with max_tokens decided by the
+// Broker). Messages and tools are opaque to the Broker: any role, any tool_calls, passed through verbatim.
+export interface UpstreamBody {
   readonly model: string;
-  readonly messages: readonly UpstreamMessage[];
-  // Already capped by the Broker (BR-6): never the value the client sent when it is larger.
-  readonly maxTokens: number;
-  readonly signal?: AbortSignal;
+  readonly messages: readonly unknown[];
+  readonly max_tokens: number;
+  readonly stream: boolean;
+  readonly [field: string]: unknown;
 }
 
-// Text deltas as they arrive, then exactly one done event. usage is null when the upstream sent none.
-export type UpstreamEvent =
-  | { readonly type: "text"; readonly delta: string }
-  | { readonly type: "done"; readonly usage: Usage | null; readonly finishReason: string | null };
+// One upstream event: the raw JSON object of an SSE event when streaming, or the whole reply when not. The
+// Broker re-emits json unchanged; the parsed fields are the view it needs for the guard and the ledger.
+export interface UpstreamChunk {
+  readonly json: Readonly<Record<string, unknown>>;
+  // Bytes the in-flight guard counts: content, and each tool call's name and arguments.
+  readonly outputBytes: number;
+  readonly usage: Usage | null;
+  readonly finishReason: string | null;
+  // Set when the upstream reported an error in the body; such a chunk is never forwarded to the client.
+  readonly error: string | null;
+}
 
 export interface UpstreamClient {
-  chat(request: UpstreamRequest): AsyncIterable<UpstreamEvent>;
+  chatRaw(body: UpstreamBody, signal?: AbortSignal): AsyncIterable<UpstreamChunk>;
 }
 
 // Chooses the upstream of a run from the provider its virtual key was issued for (M3-T7). The composition root

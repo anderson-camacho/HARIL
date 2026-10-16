@@ -5,6 +5,7 @@ export {
   type FakeModel,
   type FakeOpenAiOptions,
   type FakeOpenAiServer,
+  type FakeToolCall,
   type FakeUsage,
   type RecordedRequest,
   startFakeOpenAiServer,

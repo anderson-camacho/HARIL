@@ -26,6 +26,13 @@ export interface FakeUsage {
   readonly completion_tokens_details?: { readonly reasoning_tokens: number };
 }
 
+export interface FakeToolCall {
+  readonly id: string;
+  readonly name: string;
+  // The arguments JSON in order: a stream sends one fragment per chunk, a reply joins them.
+  readonly argumentFragments: readonly string[];
+}
+
 export interface FakeCompletion {
   // HTTP status of the reply; any value other than 200 sends `body` as JSON and no stream.
   readonly status?: number;
@@ -33,6 +40,9 @@ export interface FakeCompletion {
   readonly body?: unknown;
   // One content delta per entry.
   readonly textChunks?: readonly string[];
+  // Tool calls after the text: streamed as tool_calls deltas (name first, then the argument fragments), or sent
+  // as message.tool_calls when the request has "stream": false. A call makes the default finish "tool_calls".
+  readonly toolCalls?: readonly FakeToolCall[];
   // A usage chunk after the finish chunk. Absent or null: the stream carries no usage.
   readonly usage?: FakeUsage | null;
   // finish_reason of the finish chunk; null: no finish chunk. Default "stop".
@@ -136,6 +146,42 @@ function chunk(model: string, choices: unknown[]): unknown {
   return { id: "chatcmpl-fake", object: "chat.completion.chunk", created: 0, model, choices };
 }
 
+function toolDelta(call: unknown): unknown {
+  return { index: 0, delta: { tool_calls: [call] }, finish_reason: null };
+}
+
+function finishReasonOf(script: FakeCompletion): string | null {
+  if (script.finishReason !== undefined) return script.finishReason;
+  return (script.toolCalls ?? []).length > 0 ? "tool_calls" : "stop";
+}
+
+// The whole reply of a request with "stream": false: the same script, as one message.
+function completionJson(model: string, script: FakeCompletion): unknown {
+  const text = (script.textChunks ?? []).join("");
+  const calls = script.toolCalls ?? [];
+  const message = {
+    role: "assistant",
+    content: text.length > 0 || calls.length === 0 ? text : null,
+    ...(calls.length === 0
+      ? {}
+      : {
+          tool_calls: calls.map((call) => ({
+            id: call.id,
+            type: "function",
+            function: { name: call.name, arguments: call.argumentFragments.join("") },
+          })),
+        }),
+  };
+  return {
+    id: "chatcmpl-fake",
+    object: "chat.completion",
+    created: 0,
+    model,
+    choices: [{ index: 0, message, finish_reason: finishReasonOf(script) }],
+    ...(script.usage === undefined || script.usage === null ? {} : { usage: script.usage }),
+  };
+}
+
 function pause(ms: number): Promise<void> {
   return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
 }
@@ -148,6 +194,34 @@ function sendJson(
 ): void {
   response.writeHead(status, { "content-type": "application/json", ...headers });
   response.end(JSON.stringify(body));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// A non-streaming reply: the script's failure status, its mid-stream error as a body, or the whole completion.
+function replyJson(
+  response: ServerResponse,
+  request: RecordedRequest,
+  script: FakeCompletion,
+): void {
+  const status = script.status ?? 200;
+  if (status !== 200) {
+    sendJson(
+      response,
+      status,
+      script.body ?? { error: { message: "scripted failure" } },
+      script.headers,
+    );
+    return;
+  }
+  if (script.errorAfterChunks !== undefined) {
+    const { message, type } = script.errorAfterChunks;
+    sendJson(response, 200, { error: { message, type: type ?? "server_error" } }, script.headers);
+    return;
+  }
+  sendJson(response, 200, completionJson(modelOf(request.body), script), script.headers);
 }
 
 // Writes the scripted stream. Stops quietly when the client has gone away.
@@ -199,7 +273,20 @@ async function streamCompletion(
     if (!response.destroyed) response.end();
     return;
   }
-  const finishReason = script.finishReason === undefined ? "stop" : script.finishReason;
+  for (const [index, call] of (script.toolCalls ?? []).entries()) {
+    const head = {
+      index,
+      id: call.id,
+      type: "function",
+      function: { name: call.name, arguments: "" },
+    };
+    if (!(await emit(JSON.stringify(chunk(model, [toolDelta(head)]))))) return;
+    for (const fragment of call.argumentFragments) {
+      const piece = { index, function: { arguments: fragment } };
+      if (!(await emit(JSON.stringify(chunk(model, [toolDelta(piece)]))))) return;
+    }
+  }
+  const finishReason = finishReasonOf(script);
   if (finishReason !== null) {
     const finish = [{ index: 0, delta: {}, finish_reason: finishReason }];
     if (!(await emit(JSON.stringify(chunk(model, finish))))) return;
@@ -245,7 +332,11 @@ export async function startFakeOpenAiServer(options: FakeOpenAiOptions): Promise
     }
     if (record.method === "POST" && record.path === CHAT_PATH) {
       const script = typeof completion === "function" ? completion(record) : completion;
-      await streamCompletion(response, record, script);
+      if (isRecord(record.body) && record.body.stream === false) {
+        replyJson(response, record, script);
+      } else {
+        await streamCompletion(response, record, script);
+      }
       return;
     }
     sendJson(response, 404, { error: { message: `no route for ${record.method} ${record.path}` } });

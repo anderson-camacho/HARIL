@@ -38,7 +38,7 @@ export function startHarilBroker(options: HarilBrokerOptions): Promise<Broker> {
     const route = clients.get(providerId);
     if (route === undefined)
       throw new Error(`no upstream is configured for provider ${providerId}`);
-    return { chat: (request) => route.client.chat(request) };
+    return route.client;
   };
   return startBroker({
     resolveUpstream,

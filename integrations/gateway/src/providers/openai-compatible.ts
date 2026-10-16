@@ -1,4 +1,5 @@
 import type { ModelDescriptor, Usage } from "@haril/contracts";
+import type { UpstreamBody, UpstreamChunk } from "../broker/types.js";
 import { ProviderError } from "./errors.js";
 import { createSseParser, type SseEvent } from "./sse.js";
 
@@ -37,6 +38,9 @@ export interface OpenAiCompatibleOptions {
 
 export interface OpenAiCompatibleClient {
   listModels(signal?: AbortSignal): Promise<ModelDescriptor[]>;
+  // The chat completions body as sent (stream true: one chunk per SSE event; false: one chunk, the reply).
+  chatRaw(body: UpstreamBody, signal?: AbortSignal): AsyncGenerator<UpstreamChunk, void, undefined>;
+  // The text-only view of chatRaw: text deltas, then one done event.
   chat(request: ChatRequest): AsyncGenerator<ChatEvent, void, undefined>;
 }
 
@@ -109,14 +113,69 @@ function toUsage(raw: Record<string, unknown>): Usage {
   };
 }
 
-interface Frame {
-  delta?: string;
-  usage?: Usage;
-  finishReason?: string;
+function byteLength(text: string): number {
+  return Buffer.byteLength(text, "utf8");
 }
 
-// One `data:` payload of a chat stream. An error object is fatal: the stream is not trusted past it.
-function parseFrame(data: string, key: string | undefined): Frame {
+// The bytes of one message or delta that the in-flight guard counts: content, and each tool call's name and arguments.
+function outputBytesOf(part: Record<string, unknown>): number {
+  let bytes = typeof part.content === "string" ? byteLength(part.content) : 0;
+  if (Array.isArray(part.tool_calls)) {
+    for (const call of part.tool_calls as unknown[]) {
+      const fn = isRecord(call) && isRecord(call.function) ? call.function : undefined;
+      if (fn === undefined) continue;
+      if (typeof fn.name === "string") bytes += byteLength(fn.name);
+      if (typeof fn.arguments === "string") bytes += byteLength(fn.arguments);
+    }
+  }
+  return bytes;
+}
+
+// The parsed view of one upstream object. An error object is reported as the chunk's error; the caller stops there.
+function toChunk(json: Record<string, unknown>, key: string | undefined): UpstreamChunk {
+  if (json.error !== undefined && json.error !== null) {
+    const raw = isRecord(json.error) ? json.error.message : json.error;
+    const detail = typeof raw === "string" ? raw : "gateway reported an error in the stream";
+    return {
+      json,
+      outputBytes: 0,
+      usage: null,
+      finishReason: null,
+      error: redact(`stream error: ${detail}`, key),
+    };
+  }
+  const choices: unknown[] = Array.isArray(json.choices) ? json.choices : [];
+  let outputBytes = 0;
+  for (const choice of choices) {
+    if (!isRecord(choice)) continue;
+    const part = isRecord(choice.delta)
+      ? choice.delta
+      : isRecord(choice.message)
+        ? choice.message
+        : undefined;
+    if (part !== undefined) outputBytes += outputBytesOf(part);
+  }
+  const first = choices[0];
+  const finishReason =
+    isRecord(first) && typeof first.finish_reason === "string" ? first.finish_reason : null;
+  return {
+    json,
+    outputBytes,
+    usage: isRecord(json.usage) ? toUsage(json.usage) : null,
+    finishReason,
+    error: null,
+  };
+}
+
+// The text delta of a streamed chunk, for the text-only view.
+function textOf(json: Record<string, unknown>): string | undefined {
+  const first: unknown = Array.isArray(json.choices) ? json.choices[0] : undefined;
+  const delta = isRecord(first) && isRecord(first.delta) ? first.delta.content : undefined;
+  return typeof delta === "string" ? delta : undefined;
+}
+
+// One `data:` payload of a chat stream. A payload that is not an object is fatal: the stream is not trusted past it.
+function parseEvent(data: string): Record<string, unknown> {
   let payload: unknown;
   try {
     payload = JSON.parse(data);
@@ -126,20 +185,7 @@ function parseFrame(data: string, key: string | undefined): Frame {
   if (!isRecord(payload)) {
     throw new ProviderError("upstream_stream_error", "stream event is not an object");
   }
-  if (payload.error !== undefined && payload.error !== null) {
-    const raw = isRecord(payload.error) ? payload.error.message : payload.error;
-    const detail = typeof raw === "string" ? raw : "gateway reported an error in the stream";
-    throw new ProviderError("upstream_stream_error", redact(`stream error: ${detail}`, key));
-  }
-  const frame: Frame = {};
-  if (isRecord(payload.usage)) frame.usage = toUsage(payload.usage);
-  const first: unknown = Array.isArray(payload.choices) ? payload.choices[0] : undefined;
-  if (isRecord(first)) {
-    const delta = isRecord(first.delta) ? first.delta.content : undefined;
-    if (typeof delta === "string" && delta.length > 0) frame.delta = delta;
-    if (typeof first.finish_reason === "string") frame.finishReason = first.finish_reason;
-  }
-  return frame;
+  return payload;
 }
 
 function parseModels(body: unknown): ModelDescriptor[] {
@@ -245,6 +291,81 @@ export function createOpenAiCompatibleClient(
     }
   }
 
+  async function* chatRaw(
+    body: UpstreamBody,
+    signal?: AbortSignal,
+  ): AsyncGenerator<UpstreamChunk, void, undefined> {
+    const deadline = openDeadline(timeoutMs, signal);
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    try {
+      const streaming = body.stream === true;
+      const response = await send(
+        `${base}/chat/completions`,
+        {
+          method: "POST",
+          headers: headers({
+            "content-type": "application/json",
+            accept: streaming ? "text/event-stream" : "application/json",
+          }),
+          body: JSON.stringify(body),
+        },
+        deadline,
+      );
+      if (!response.ok) throw await httpFailure(response);
+      if (!streaming) {
+        const json = await readJson(response, deadline);
+        if (!isRecord(json)) {
+          throw new ProviderError("upstream", "gateway returned an unexpected reply");
+        }
+        yield toChunk(json, key);
+        return;
+      }
+      if (response.body === null) {
+        throw new ProviderError("upstream_stream_error", "gateway sent no stream body");
+      }
+      reader = response.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      const parser = createSseParser();
+      let finishReason: string | null = null;
+      let sawDone = false;
+      let ended = false;
+
+      while (!sawDone && !ended) {
+        deadline.touch();
+        let events: SseEvent[];
+        try {
+          const next = await reader.read();
+          if (next.done) {
+            ended = true;
+            events = parser.push(decoder.decode()).concat(parser.end());
+          } else {
+            events = parser.push(decoder.decode(next.value, { stream: true }));
+          }
+        } catch (error) {
+          throw transportError(error, deadline, "body");
+        }
+        for (const event of events) {
+          if (event.data === "[DONE]") {
+            sawDone = true;
+            break;
+          }
+          const chunk = toChunk(parseEvent(event.data), key);
+          yield chunk;
+          // An error object ends the stream: nothing after it is trusted.
+          if (chunk.error !== null) return;
+          if (chunk.finishReason !== null) finishReason = chunk.finishReason;
+        }
+      }
+
+      if (!sawDone && finishReason === null) {
+        throw new ProviderError("upstream_stream_error", "stream ended before completion");
+      }
+    } finally {
+      deadline.dispose();
+      if (reader !== undefined) void reader.cancel().catch(() => undefined);
+    }
+  }
+
   return {
     async listModels(signal) {
       const deadline = openDeadline(timeoutMs, signal);
@@ -261,71 +382,29 @@ export function createOpenAiCompatibleClient(
       }
     },
 
+    chatRaw,
+
     async *chat(request) {
-      const deadline = openDeadline(timeoutMs, request.signal);
-      let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-      try {
-        const response = await send(
-          `${base}/chat/completions`,
-          {
-            method: "POST",
-            headers: headers({ "content-type": "application/json", accept: "text/event-stream" }),
-            body: JSON.stringify({
-              model: request.model,
-              messages: request.messages,
-              max_tokens: request.maxTokens,
-              stream: true,
-              stream_options: { include_usage: true },
-            }),
-          },
-          deadline,
-        );
-        if (!response.ok) throw await httpFailure(response);
-        if (response.body === null) {
-          throw new ProviderError("upstream_stream_error", "gateway sent no stream body");
-        }
-        reader = response.body.getReader();
-        const decoder = new TextDecoder("utf-8");
-        const parser = createSseParser();
-        let usage: Usage | null = null;
-        let finishReason: string | null = null;
-        let sawDone = false;
-        let ended = false;
-
-        while (!sawDone && !ended) {
-          deadline.touch();
-          let events: SseEvent[];
-          try {
-            const next = await reader.read();
-            if (next.done) {
-              ended = true;
-              events = parser.push(decoder.decode()).concat(parser.end());
-            } else {
-              events = parser.push(decoder.decode(next.value, { stream: true }));
-            }
-          } catch (error) {
-            throw transportError(error, deadline, "body");
-          }
-          for (const event of events) {
-            if (event.data === "[DONE]") {
-              sawDone = true;
-              break;
-            }
-            const frame = parseFrame(event.data, key);
-            if (frame.delta !== undefined) yield { type: "text", delta: frame.delta };
-            if (frame.usage !== undefined) usage = frame.usage;
-            if (frame.finishReason !== undefined) finishReason = frame.finishReason;
-          }
-        }
-
-        if (!sawDone && finishReason === null) {
-          throw new ProviderError("upstream_stream_error", "stream ended before completion");
-        }
-        yield { type: "done", usage, finishReason };
-      } finally {
-        deadline.dispose();
-        if (reader !== undefined) void reader.cancel().catch(() => undefined);
+      let usage: Usage | null = null;
+      let finishReason: string | null = null;
+      const stream = chatRaw(
+        {
+          model: request.model,
+          messages: request.messages,
+          max_tokens: request.maxTokens,
+          stream: true,
+          stream_options: { include_usage: true },
+        },
+        request.signal,
+      );
+      for await (const chunk of stream) {
+        if (chunk.error !== null) throw new ProviderError("upstream_stream_error", chunk.error);
+        const delta = textOf(chunk.json);
+        if (delta !== undefined && delta.length > 0) yield { type: "text", delta };
+        if (chunk.usage !== null) usage = chunk.usage;
+        if (chunk.finishReason !== null) finishReason = chunk.finishReason;
       }
+      yield { type: "done", usage, finishReason };
     },
   };
 }
