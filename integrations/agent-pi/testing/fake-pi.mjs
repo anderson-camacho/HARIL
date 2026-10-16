@@ -2,11 +2,13 @@
 // plays the bridge side of the handshake by connecting to HARIL_BRIDGE itself. Not a Pi build: every
 // behaviour below is a simulation chosen by FAKE_PI_SCENARIO. Run it with the host Node.
 //
-// Scenarios: ok, ok_with_read (reads FAKE_PI_READ_PATH through the bridge), wrong_hello_tools,
+// Scenarios: ok, ok_with_read (reads FAKE_PI_READ_PATH through the bridge), read_outside (asks the bridge
+// for a relative path, an absolute path from FAKE_PI_OUTSIDE_PATH and a UNC path, all outside the root, then
+// settles with the denial codes), wrong_hello_tools,
 // wrong_token, no_hello, wrong_model, crash_before_settled, nonzero_after_settled, hang (ignores abort
 // and EOF), hang_abortable (answers abort with agent_settled), ui_request, huge_line, ok_via_broker (one
-// streamed chat call to HARIL_BROKER_URL with HARIL_VKEY; the streamed text is the reply, a Broker refusal
-// becomes an assistant message with stopReason "error"). The last one is what M2-T6 runs end to end.
+// streamed chat call to HARIL_BROKER_URL with HARIL_VKEY; the streamed text is the reply, a Broker refusal or
+// stream error event becomes an assistant message with stopReason "error"). The last one is what M2-T6 runs end to end.
 // Test-only: the real Pi is never replaced outside HARIL_PI_CLI_OVERRIDE.
 
 import { connect } from "node:net";
@@ -136,6 +138,7 @@ async function brokerChat(prompt) {
     return;
   }
   let text = "";
+  let streamError;
   let pending = "";
   const decoder = new TextDecoder();
   for await (const chunk of response.body) {
@@ -146,14 +149,20 @@ async function brokerChat(prompt) {
       pending = pending.slice(lf + 1);
       lf = pending.indexOf("\n");
       if (!line.startsWith("data:") || line.slice(5).trim() === "[DONE]") continue;
-      const delta = JSON.parse(line.slice(5))?.choices?.[0]?.delta?.content;
+      const parsed = JSON.parse(line.slice(5));
+      // The Broker cuts a stream with an error event (insufficient_quota): Pi ends the message with that error.
+      if (parsed?.error !== undefined) {
+        streamError = String(parsed.error.message ?? "stream error");
+        continue;
+      }
+      const delta = parsed?.choices?.[0]?.delta?.content;
       if (typeof delta === "string") {
         text += delta;
         emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta } });
       }
     }
   }
-  emitAssistant(text);
+  emitAssistant(text, streamError);
   emit({ type: "turn_end" });
   emit({ type: "agent_settled", aborted: false });
 }
@@ -188,6 +197,19 @@ async function runPrompt() {
   if (scenario === "ok_with_read") {
     const reply = await bridgeRead(process.env.FAKE_PI_READ_PATH ?? "");
     text = reply.ok ? `read ok: ${reply.content}` : `read denied: ${reply.error}`;
+  }
+  if (scenario === "read_outside") {
+    const requests = [
+      "../outside.txt",
+      process.env.FAKE_PI_OUTSIDE_PATH ?? "",
+      "\\\\server\\share\\x.txt",
+    ];
+    const outcomes = [];
+    for (const path of requests) {
+      const reply = await bridgeRead(path);
+      outcomes.push(reply.ok ? "allowed" : reply.error);
+    }
+    text = `read denials ${outcomes.length}: ${outcomes.join(", ")}`;
   }
   if (scenario === "ui_request") {
     const ui = await uiRequest("ui-1");

@@ -132,6 +132,9 @@ function taskShow(args: readonly string[], io: CliIo, host: HostInfo): number {
       return EXIT_USAGE;
     }
     const usage = store.budgets.usageSummary({ taskId });
+    const permissionDenials = store.events
+      .list({ taskId })
+      .filter((event) => event.type === "tool.denied").length;
     const view = {
       taskId: detail.taskId,
       goal: detail.goal,
@@ -142,6 +145,7 @@ function taskShow(args: readonly string[], io: CliIo, host: HostInfo): number {
       attempts: { used: detail.attemptsUsed, max: detail.maxAttempts },
       result: detail.result,
       error: detail.error,
+      permissionDenials,
       tokens:
         usage === null
           ? null
@@ -160,6 +164,7 @@ function taskShow(args: readonly string[], io: CliIo, host: HostInfo): number {
     io.out(`attempts ${view.attempts.used}/${view.attempts.max}, max tokens ${view.maxTokens}`);
     io.out(`result: ${resultText(view.result)}`);
     if (view.error !== null) io.out(`error: ${view.error.code}: ${view.error.message}`);
+    io.out(`permission denials: ${view.permissionDenials}`);
     io.out(
       view.tokens === null
         ? "tokens: none settled"

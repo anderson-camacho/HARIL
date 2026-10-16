@@ -329,7 +329,17 @@ function recordEvent(
   }
 }
 
+// A PathGuard denial is a permission event (criterion 12): the path is hashed, never recorded.
+// Every other bridge operation keeps its tool.<op> record.
 function recordBridgeOperation(store: Store, spec: AgentSpec, event: BridgeOperationEvent): void {
+  if (event.outcome === "path_denied") {
+    recordEvent(store, spec, "tool.denied", {
+      tool: event.op,
+      reason: event.reason ?? "unknown",
+      pathHash: event.pathSha256,
+    });
+    return;
+  }
   recordEvent(store, spec, `tool.${event.op}`, {
     pathSha256: event.pathSha256,
     outcome: event.outcome,

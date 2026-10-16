@@ -42,6 +42,10 @@ const FAKE_PI = join(REPO, "integrations", "agent-pi", "testing", "fake-pi.mjs")
 const E2E_GATEWAY_KEY = "e2e-gateway-key-0123456789";
 const E2E_MODEL = "e2e-model";
 const E2E_REPLY = "Hello from the e2e model.";
+const E2E_LONG_MARKER = "E2E-LONG-REPLY";
+const E2E_LONG_CHUNKS = 400;
+const E2E_OUTSIDE_SECRET = "e2e outside secret: must never reach the store";
+const E2E_TOKEN_CAP = 40;
 
 const session = {
   root: "",
@@ -183,7 +187,11 @@ function serveUpstream() {
       response.end(JSON.stringify({ error: { type: "not_found", message: "no route" } }));
       return;
     }
-    request.resume();
+    let body = "";
+    request.setEncoding("utf8");
+    request.on("data", (chunk) => {
+      body += chunk;
+    });
     request.on("end", () => {
       const base = {
         id: "chatcmpl-e2e",
@@ -194,8 +202,15 @@ function serveUpstream() {
       const send = (choices, extra = {}) =>
         response.write(`data: ${JSON.stringify({ ...base, choices, ...extra })}\n\n`);
       response.writeHead(200, { "content-type": "text/event-stream" });
-      send([{ index: 0, delta: { content: "Hello " }, finish_reason: null }]);
-      send([{ index: 0, delta: { content: "from the e2e model." }, finish_reason: null }]);
+      if (body.includes(E2E_LONG_MARKER)) {
+        // A reply longer than any e2e token cap: the Broker must cut the stream at its reservation.
+        for (let index = 0; index < E2E_LONG_CHUNKS; index++) {
+          send([{ index: 0, delta: { content: "long " }, finish_reason: null }]);
+        }
+      } else {
+        send([{ index: 0, delta: { content: "Hello " }, finish_reason: null }]);
+        send([{ index: 0, delta: { content: "from the e2e model." }, finish_reason: null }]);
+      }
       send([{ index: 0, delta: {}, finish_reason: "stop" }]);
       send([], { usage: { prompt_tokens: 12, completion_tokens: 5 } });
       response.end("data: [DONE]\n\n");
@@ -203,6 +218,43 @@ function serveUpstream() {
   });
   server.listen(0, "127.0.0.1", () => parentPort.postMessage(server.address().port));
   parentPort.on("message", () => server.close());
+}
+
+// Runs fn with HARIL_PI_CLI_OVERRIDE pointing at one fake-pi scenario, then restores the M2 wrapper.
+function withPiWrapper(wrapper, fn) {
+  const previous = session.env.HARIL_PI_CLI_OVERRIDE;
+  session.env = { ...session.env, HARIL_PI_CLI_OVERRIDE: wrapper };
+  try {
+    return fn();
+  } finally {
+    session.env = { ...session.env, HARIL_PI_CLI_OVERRIDE: previous };
+  }
+}
+
+// A wrapper that selects one fake-pi scenario (and its environment) and runs fake-pi.mjs with the current Node.
+function writeFakePiWrapper(name, scenario, env = {}) {
+  const path = join(session.root, name);
+  const assignments = Object.entries({ FAKE_PI_SCENARIO: scenario, ...env })
+    .map(([key, value]) => `process.env[${JSON.stringify(key)}] = ${JSON.stringify(value)};\n`)
+    .join("");
+  writeFileSync(
+    path,
+    `${assignments}await import(${JSON.stringify(pathToFileURL(FAKE_PI).href)});\n`,
+  );
+  return path;
+}
+
+// True when a file under one of the directories contains the text: the store, its logs and the project's .haril.
+function anyFileContains(dirs, text) {
+  for (const dir of dirs) {
+    if (!existsSync(dir)) continue;
+    for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
+      if (entry.isFile() && readFileSync(join(entry.parentPath, entry.name)).includes(text)) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 const steps = [
@@ -495,6 +547,69 @@ const steps = [
       expect(metrics.tokens !== null, "no ledger tokens");
       expect(metrics.tokens.input > 0 && metrics.tokens.output > 0, "tokens are not counted");
       return `input ${metrics.tokens.input}, output ${metrics.tokens.output}`;
+    },
+  ],
+  [
+    "ESC-05: reads outside the project are denied and recorded",
+    () => {
+      const outside = join(session.root, "outside.txt");
+      writeFileSync(outside, E2E_OUTSIDE_SECRET, "utf8");
+      const wrapper = writeFakePiWrapper("pi-read-outside.mjs", "read_outside", {
+        FAKE_PI_OUTSIDE_PATH: outside,
+      });
+      const output = withPiWrapper(wrapper, () => {
+        expectCode(
+          ["task", "add", "Read outside the project", "--agent", "analyst", "--project", "demo"],
+          [0],
+        );
+        return expectCode(["start", "--project", "demo"], [0]).out;
+      });
+      expect(
+        /^completed \S+ Read outside the project$/m.test(output),
+        "the task with denied reads did not complete",
+      );
+      const taskId = statusReport().taskList.find(
+        (task) => task.goal === "Read outside the project",
+      )?.taskId;
+      expect(taskId !== undefined, "no read-outside task in status");
+      const shown = expectCode(["task", "show", taskId], [0]).out;
+      expect(/^permission denials: 3$/m.test(shown), "task show does not count 3 denials");
+      const metrics = expectJson(["metrics", "--json", "--project", "demo"]);
+      expect(metrics.permissionDenials === 3, `permissionDenials ${metrics.permissionDenials}`);
+      expect(!`${output}${shown}`.includes(E2E_OUTSIDE_SECRET), "the outside content was printed");
+      expect(
+        !anyFileContains([session.projectDir, join(session.root, "home")], E2E_OUTSIDE_SECRET),
+        "the outside content reached the store or the logs",
+      );
+    },
+  ],
+  [
+    "budget: a task over its token cap fails with insufficient_quota",
+    () => {
+      expectCode(
+        [
+          "task",
+          "add",
+          `LONG REPLY ${E2E_LONG_MARKER}`,
+          "--agent",
+          "analyst",
+          "--max-tokens",
+          String(E2E_TOKEN_CAP),
+          "--project",
+          "demo",
+        ],
+        [0],
+      );
+      expectCode(["start", "--project", "demo"], [1]);
+      const taskId = statusReport().taskList.find((task) =>
+        task.goal.startsWith("LONG REPLY"),
+      )?.taskId;
+      expect(taskId !== undefined, "no budget task in status");
+      const view = expectJson(["task", "show", taskId, "--json"]);
+      expect(view.state === "failed", `state ${view.state}`);
+      expect(view.error?.code === "insufficient_quota", `error ${view.error?.code}`);
+      const spent = (view.tokens?.input ?? 0) + (view.tokens?.output ?? 0);
+      expect(spent <= E2E_TOKEN_CAP, `spent ${spent} tokens over the cap ${E2E_TOKEN_CAP}`);
     },
   ],
   [

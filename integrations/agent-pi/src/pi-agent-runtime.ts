@@ -35,11 +35,13 @@ export type BridgeOperationOutcome =
   | "unsupported";
 
 // Event-friendly record of one bridge operation: the path is hashed and the content is never included.
+// A path_denied operation carries the PathGuard reason (a fixed code such as outside_root), never the path.
 export interface BridgeOperationEvent {
   readonly runId: string;
   readonly op: string;
   readonly pathSha256: string;
   readonly outcome: BridgeOperationOutcome;
+  readonly reason?: string;
 }
 
 export interface PiAgentRuntimeOptions {
@@ -495,7 +497,7 @@ class PiRun implements PiAgentHandle {
     const pathSha256 = sha256(requested);
     const check = this.guard(requested);
     if (!check.ok) {
-      this.recordOperation("read", pathSha256, "path_denied");
+      this.recordOperation("read", pathSha256, "path_denied", check.reason);
       this.replyBridge(id, { ok: false, error: "path_denied" });
       return;
     }
@@ -521,9 +523,20 @@ class PiRun implements PiAgentHandle {
     }
   }
 
-  private recordOperation(op: string, pathSha256: string, outcome: BridgeOperationOutcome): void {
+  private recordOperation(
+    op: string,
+    pathSha256: string,
+    outcome: BridgeOperationOutcome,
+    reason?: string,
+  ): void {
     try {
-      this.options.onBridgeOperation?.({ runId: this.runId, op, pathSha256, outcome });
+      this.options.onBridgeOperation?.({
+        runId: this.runId,
+        op,
+        pathSha256,
+        outcome,
+        ...(reason === undefined ? {} : { reason }),
+      });
     } catch {
       // A failing observer must not change the operation's answer.
     }

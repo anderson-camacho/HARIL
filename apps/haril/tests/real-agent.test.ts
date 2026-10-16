@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -41,12 +41,15 @@ afterEach(async () => {
 });
 
 // A wrapper that selects one fake-pi scenario and then runs fake-pi.mjs with the current Node.
-function piWrapper(scenario: string): string {
+function piWrapper(scenario: string, env: Record<string, string> = {}): string {
   const path = join(sb.root, `pi-${scenario}.mjs`);
   const fakePi = pathToFileURL(fileURLToPath(FAKE_PI)).href;
+  const extra = Object.entries(env)
+    .map(([key, value]) => `process.env[${JSON.stringify(key)}] = ${JSON.stringify(value)};\n`)
+    .join("");
   writeFileSync(
     path,
-    `process.env.FAKE_PI_SCENARIO = ${JSON.stringify(scenario)};\nawait import(${JSON.stringify(fakePi)});\n`,
+    `process.env.FAKE_PI_SCENARIO = ${JSON.stringify(scenario)};\n${extra}await import(${JSON.stringify(fakePi)});\n`,
   );
   return path;
 }
@@ -205,6 +208,55 @@ describe("haril start with an analyst task (M2-T6)", () => {
       expect(view.state).toBe("failed");
       expect(view.error?.code).toBe("insufficient_quota");
       expect((view.tokens?.input ?? 0) + (view.tokens?.output ?? 0)).toBeLessThanOrEqual(1);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "records each PathGuard denial as tool.denied, counts it in metrics and task show, and keeps the path and content out of the store",
+    async () => {
+      const outside = join(sb.root, "outside.txt");
+      writeFileSync(outside, "secret outside", "utf8");
+      addAnalyst("Read outside the project", ["--model", "fake-model"]);
+      const host = realHost("read_outside");
+      host.env.HARIL_PI_CLI_OVERRIDE = piWrapper("read_outside", {
+        FAKE_PI_OUTSIDE_PATH: outside,
+      });
+
+      const result = await startRuntime(host);
+
+      expect(result.code).toBe(0);
+      const taskId = taskIdOf("Read outside the project");
+      const db = ledgerDb();
+      const denied = db
+        .prepare("SELECT payload FROM events WHERE type = 'tool.denied' AND task_id = ?")
+        .all(taskId) as Array<{ payload: string }>;
+      db.close();
+      expect(denied).toHaveLength(3);
+      const payloads = denied.map((row) => JSON.parse(row.payload) as Record<string, unknown>);
+      expect(payloads.map((payload) => payload.reason)).toEqual([
+        "outside_root",
+        "outside_root",
+        "unc_or_device_path",
+      ]);
+      for (const payload of payloads) {
+        expect(payload).toMatchObject({ tool: "read" });
+        expect(typeof payload.pathHash).toBe("string");
+      }
+
+      const metrics = harness();
+      expect(run(["metrics", "--json"], metrics.io, sb.host)).toBe(0);
+      expect(parseJson<{ permissionDenials: number }>(metrics.out).permissionDenials).toBe(3);
+
+      const show = harness();
+      expect(run(["task", "show", taskId, "--json"], show.io, sb.host)).toBe(0);
+      expect(parseJson<{ permissionDenials: number }>(show.out).permissionDenials).toBe(3);
+
+      for (const entry of readdirSync(sb.dataDir, { withFileTypes: true })) {
+        if (!entry.isFile()) continue;
+        const bytes = readFileSync(join(sb.dataDir, entry.name));
+        expect(bytes.includes("secret outside")).toBe(false);
+      }
     },
     TEST_TIMEOUT_MS,
   );

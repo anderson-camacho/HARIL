@@ -46,7 +46,7 @@ interface Harness {
   }[];
   runtime(
     scenario: string,
-    overrides?: Partial<PiAgentRuntimeOptions> & { readPath?: string },
+    overrides?: Partial<PiAgentRuntimeOptions> & { readPath?: string; outsidePath?: string },
   ): ReturnType<typeof createPiAgentRuntime>;
 }
 
@@ -76,7 +76,7 @@ function harness(): Harness {
     events,
     spawnCalls,
     runtime(scenario, overrides = {}) {
-      const { readPath, ...rest } = overrides;
+      const { readPath, outsidePath, ...rest } = overrides;
       return createPiAgentRuntime({
         nodePath: process.execPath,
         piCliPath: FAKE_PI,
@@ -94,6 +94,7 @@ function harness(): Harness {
           const scenarioEnv: Record<string, string> = {
             FAKE_PI_SCENARIO: scenario,
             FAKE_PI_READ_PATH: readPath ?? "",
+            FAKE_PI_OUTSIDE_PATH: outsidePath ?? "",
           };
           return nodeSpawn(command, args, {
             ...options,
@@ -234,6 +235,26 @@ describe("createPiAgentRuntime lifecycle", () => {
     const serialized = JSON.stringify(h.events);
     expect(serialized).not.toContain("hello from project");
     expect(serialized).not.toContain("notes.txt");
+  });
+
+  it("records each denial with its guard reason and never the path or the content (ESC-05)", async () => {
+    const h = harness();
+    const handle = await startHandle(
+      h.runtime("read_outside", { outsidePath: join(h.root, "..", "outside.txt") }),
+    );
+    await handle.prompt("go");
+    expect(await handle.settled).toEqual({
+      status: "succeeded",
+      summary: "read denials 3: path_denied, path_denied, path_denied",
+    });
+    expect(h.events).toEqual([
+      expect.objectContaining({ op: "read", outcome: "path_denied", reason: "outside_root" }),
+      expect.objectContaining({ op: "read", outcome: "path_denied", reason: "outside_root" }),
+      expect.objectContaining({ op: "read", outcome: "path_denied", reason: "unc_or_device_path" }),
+    ]);
+    const serialized = JSON.stringify(h.events);
+    expect(serialized).not.toContain("secret outside");
+    expect(serialized).not.toContain("outside.txt");
   });
 
   it("denies a read outside the project root with path_denied and no content", async () => {

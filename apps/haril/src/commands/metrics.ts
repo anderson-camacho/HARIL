@@ -10,6 +10,7 @@ const NOT_INITIALIZED =
   "store not initialized (run haril project init <path> --name <name> --yes first)";
 const NOT_YET = "tokens and cost are available from M2 (Broker)";
 const NO_COST = "cost is not tracked in M2 (token budgets only)";
+const PERMISSION_DENIED = "tool.denied";
 const TASK_STATES = [
   "pending",
   "ready",
@@ -32,6 +33,8 @@ interface MetricsView {
   };
   readonly retries: number;
   readonly orphanedRecoveries: number;
+  // PathGuard denials recorded as tool.denied events (criterion 12).
+  readonly permissionDenials: number;
   readonly successRate: number | null;
   readonly duration: { readonly totalMs: number; readonly averageMs: number | null };
   readonly agents: ReadonlyArray<{
@@ -86,7 +89,14 @@ export function metrics(args: readonly string[], io: CliIo, host: HostInfo): num
     }
     const usage = store.budgets.usageSummary(projectId === undefined ? undefined : { projectId });
     const breakdown = store.budgets.usageBreakdown(projectId);
-    const view = toView(slug ?? null, store.metrics.snapshot(projectId), usage, breakdown);
+    const events = store.events.list(projectId === undefined ? undefined : { projectId });
+    const view = toView(
+      slug ?? null,
+      store.metrics.snapshot(projectId),
+      usage,
+      breakdown,
+      countPermissionDenials(events),
+    );
     if (parsed.flags.has("--json")) {
       io.out(JSON.stringify(view));
     } else {
@@ -98,11 +108,17 @@ export function metrics(args: readonly string[], io: CliIo, host: HostInfo): num
   }
 }
 
+// Derived from the event log (the M1-T6 rule: every number is recomputable from events).
+function countPermissionDenials(events: readonly { readonly type: string }[]): number {
+  return events.filter((event) => event.type === PERMISSION_DENIED).length;
+}
+
 function toView(
   project: string | null,
   snapshot: MetricsSnapshot,
   usage: UsageSummary | null,
   breakdown: readonly UsageBreakdownRow[],
+  permissionDenials: number,
 ): MetricsView {
   const count = (status: string): number => snapshot.runsByStatus[status] ?? 0;
   const completed = count("completed");
@@ -120,6 +136,7 @@ function toView(
     },
     retries: snapshot.retries,
     orphanedRecoveries: snapshot.orphanedRecoveries,
+    permissionDenials,
     // Success counts the attempts the agent settled; an orphaned attempt is the runtime's loss, not the agent's.
     successRate: completed + failed === 0 ? null : completed / (completed + failed),
     duration: {
@@ -162,6 +179,7 @@ function printText(io: CliIo, view: MetricsView): void {
   );
   io.out(`retries: ${view.retries}`);
   io.out(`orphaned recoveries: ${view.orphanedRecoveries}`);
+  io.out(`permission denials: ${view.permissionDenials}`);
   io.out(
     `success rate: ${view.successRate === null ? "n/a (no settled runs)" : `${(view.successRate * 100).toFixed(1)}%`}`,
   );
