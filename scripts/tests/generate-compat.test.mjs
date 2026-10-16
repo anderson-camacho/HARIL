@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -188,6 +188,38 @@ test("generate and check fail with exit 1 when the document has no markers", () 
     const run = capture();
     assert.equal(main([], { root: sb.root, stdout: run.stdout, stderr: run.stderr }), 1);
     assert.equal(readFileSync(join(sb.root, "docs/COMPATIBILITY.md"), "utf8"), "# No markers\n");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("check passes with a one-line notice when the document is absent (public export)", () => {
+  const sb = sandbox();
+  try {
+    fixtureRoot(sb.root);
+    rmSync(join(sb.root, "docs"), { recursive: true, force: true });
+    const check = capture();
+    assert.equal(
+      main(["--check"], { root: sb.root, stdout: check.stdout, stderr: check.stderr }),
+      0,
+    );
+    assert.equal(check.out.length, 1);
+    assert.match(check.out[0], /docs\/COMPATIBILITY\.md.*no existe/);
+    assert.deepEqual(check.err, []);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("generate still fails when the document is absent", () => {
+  const sb = sandbox();
+  try {
+    fixtureRoot(sb.root);
+    rmSync(join(sb.root, "docs"), { recursive: true, force: true });
+    const run = capture();
+    assert.equal(main([], { root: sb.root, stdout: run.stdout, stderr: run.stderr }), 1);
+    assert.match(run.err.join("\n"), /generate-compat/);
+    assert.equal(existsSync(join(sb.root, "docs")), false);
   } finally {
     sb.cleanup();
   }

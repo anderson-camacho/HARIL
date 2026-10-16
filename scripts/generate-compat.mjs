@@ -2,9 +2,10 @@
 // Generates the pinned-versions table of docs/COMPATIBILITY.md (M3-T5, criterion 14). The pins stay where they
 // are: root package.json (packageManager, devDependencies), packages/contracts/package.json (typebox) and the
 // bootstrap constants (Node and Pi, read with a strict regex). Usage: generate-compat.mjs [--check]
-// `--check` writes nothing and exits 1 when the generated section no longer matches the pins.
+// `--check` writes nothing and exits 1 when the generated section no longer matches the pins; it passes with a
+// notice when the document is absent (public export without docs/).
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -158,6 +159,11 @@ export function main(
   }
   const check = argv.includes("--check");
   const docPath = join(root, DOC);
+  // The public export carries no docs/ tree: the check is skipped there, while generation still fails.
+  if (check && !existsSync(docPath)) {
+    stdout(`${DOC} no existe en este árbol: comprobación de versiones omitida.`);
+    return 0;
+  }
   try {
     const doc = readFileSync(docPath, "utf8");
     const next = replaceSection(doc, renderSection(readPins(root)));
