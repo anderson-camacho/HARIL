@@ -9,6 +9,8 @@ Un núcleo propio controla la ejecución; Pi, Engram, Herdr y los proveedores de
 > **Estado real (2026-10-16).** Fases 0 a 2 completadas en diseño. **Fase 3 (monorepo)** y **Fase 4 (MVP: M1, M2, M3) implementadas y verificadas en carril hermético** (rama `feat/phase-4-m3`): Store SQLite, runtime en primer plano con recuperación tras caída, proyectos, tareas y planes, Broker con tope de tokens, proveedores configurables, adaptador de Pi y puente, criterios de aceptación, metodologías como bloques, instalador sin tocar el PATH.
 > **Carril real verificado (2026-10-16):** `npm run e2e:real` pasa en esta máquina con Pi 1.2.0 real y CLIProxyAPI (`cliproxy/gemini-3-flash`): una tarea `analyst` lee `README.md` con la herramienta del puente, responde el código pedido, HARIL lo verifica (`verified: true`) y el libro registra los tokens reales. Ollama no viene por defecto (demasiado pesado para el equipo de referencia). Bitácora: `odd/tasks/haril-phase4-real-lane.md`; matriz de criterios: `odd/tasks/haril-phase4-m3.md`.
 
+> **Nota sobre la documentación.** La documentación de diseño (`docs/`) se publicará al final del proyecto. Hasta entonces, los enlaces a `docs/` y a `odd/` de este README no están disponibles en el repositorio público.
+
 ## Cómo probarlo
 
 Requisitos: Node 24 (recomendado `^24.21.0`; con 24.19 funciona y `doctor` avisa) y `corepack` (incluido en Node 24). Los pasos son para PowerShell, desde la raíz del repositorio.
@@ -252,11 +254,15 @@ Los dossiers de `docs/research/` se leen solo bajo demanda, cuando un documento 
 | Requisitos → tareas | `docs/BACKLOG.md` (historias BL-nnn vinculadas a RF y a hitos) |
 | Requisitos → pruebas | `docs/TEST_STRATEGY.md` 11 (cobertura de requisitos) |
 
+## Versiones
+
+Versión actual: **0.4.1**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
+
 ## Licencia
 
-**Sin definir** (UA-08, `docs/DECISIONS.md` 4.2). Mientras no se decida, no se declara licencia, no se publica ni se redistribuye nada.
+HARIL se publica bajo la **Apache License 2.0**: ver [`LICENSE`](LICENSE) y [`NOTICE`](NOTICE). El código de terceros que va dentro de los bundles y la obra derivada de Gentle AI (el bloque de metodología ODD) conservan sus licencias MIT, reproducidas en [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
-## Créditos
+## Inspiraciones y créditos
 
 Herramientas estudiadas en la Fase 0 (solo lectura), con la licencia que registra `docs/COMPATIBILITY.md` 7.1. No se copió código de ninguna.
 
@@ -270,3 +276,15 @@ Herramientas estudiadas en la Fase 0 (solo lectura), con la licencia que registr
 | DC-Pi | MIT | Referencia |
 | MXC | MIT | Adaptador de sandbox (M4) |
 | Node.js, SQLite, Git | MIT, dominio público, GPL-2.0 (CLI externo) | Runtime, base embebida, CLI |
+
+### Qué toma HARIL de cada una
+
+Cada referencia aporta una idea de diseño, nunca código. HARIL no está afiliado ni respaldado por ninguna de ellas.
+
+- **Gentle AI™** (Gentleman Programming). HARIL toma de su protocolo ODD (Organic Driven Development) la idea de un flujo de trabajo por fases. El bloque de metodología `odd` de HARIL es una obra derivada, redactada a partir de la versión 4.1.1 de ese protocolo, y lleva su atribución.
+- **Gentle Shell**. Su `LICENSE` (MIT) nombra a Mario Zechner; la titularidad real está pendiente de verificar. HARIL toma de esta referencia la maquetación de la TUI: paneles, rail de estado, cambios y tareas. Los temas de HARIL usan el formato JSON de Pi, no el de Gentle Shell.
+- **Pi** (Mario Zechner, earendil-works). HARIL ejecuta Pi como proceso externo en modo RPC, sin fork, y adopta su formato de temas JSON para la interfaz.
+- **Herdr**. HARIL toma la idea de agrupar terminales y sesiones de trabajo en paneles. La integración es opcional y se hará por su CLI en M4.
+- **Engram™**. HARIL toma la idea de una memoria persistente separada del estado transaccional. La integración está prevista para M4.
+- **DC-Pi**. HARIL toma tres ideas de diseño: el lease con latido y TTL, la limpieza de procesos abandonados y el registro de viajes. También la composición de agentes con bloques de datos validados. No toma su pool de cuentas de suscripción ni la lectura de credenciales.
+- **CLIProxyAPI**. Es el gateway de modelos compatible con OpenAI al que se conecta HARIL en el carril real. HARIL no lo instala, no lo configura y no lee sus cuentas: solo usa la clave de cliente que aporta el usuario por variable de entorno.

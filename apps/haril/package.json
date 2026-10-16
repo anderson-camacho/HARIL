@@ -1,6 +1,7 @@
 {
   "name": "@haril/haril",
-  "version": "0.1.0",
+  "version": "0.4.1",
+  "license": "Apache-2.0",
   "private": true,
   "type": "module",
   "exports": {

@@ -44,5 +44,27 @@ Organic Driven Development (ODD). Follow these steps in order for every request.
 
 <!-- haril:section:attribution -->
 Derived work. Redacted from the Organic Driven Development routing protocol of Gentle AI (routing.go, v4.1.1, commit 898d3976e8049a7238eaa7de60bff325c30d2b3d), referenced by name only and not imported.
-Copyright (c) 2025 Gentleman Programming. MIT permission notice: full text pending verification (V14-8). Not affiliated with or endorsed by Gentle AI or Engram.
+Not affiliated with or endorsed by Gentle AI or Engram. The source is licensed under the MIT License (gentle-ai v4.1.1, LICENSE):
+
+MIT License
+
+Copyright (c) 2025 Gentleman Programming
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 <!-- /haril:section:attribution -->
