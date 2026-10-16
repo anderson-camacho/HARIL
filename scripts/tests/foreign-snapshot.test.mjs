@@ -185,3 +185,40 @@ test("an ignored subtree is not recorded, so writes by the host itself do not co
     cleanup();
   }
 });
+
+test("live tool state (transcripts, log databases, global state) is ignored, while config changes still count", () => {
+  const { dir, cleanup } = sandbox();
+  try {
+    const claude = join(dir, "claude");
+    const codex = join(dir, "codex");
+    writeAt(join(claude, "settings.json"), "{}");
+    writeAt(join(claude, "projects", "repo", "session.jsonl"), "1");
+    writeAt(join(codex, "config.toml"), "a");
+    writeAt(join(codex, "logs_2.sqlite-wal"), "1");
+    writeAt(join(codex, ".codex-global-state.json"), "1");
+    writeAt(join(codex, "sqlite", "codex-dev.db"), "1");
+    const roots = foreignRoots({ homeDir: dir, env: {}, platform: "linux" })
+      .filter((root) => root.name === "~/.claude" || root.name === "~/.codex")
+      .map((root) => ({ ...root, path: root.name === "~/.claude" ? claude : codex }));
+    const before = snapshotForeignInstalls({ roots, readUserPath: noPath });
+
+    writeAt(join(claude, "projects", "repo", "session.jsonl"), "12");
+    writeAt(join(codex, "logs_2.sqlite-wal"), "12");
+    writeAt(join(codex, "logs_2.sqlite-shm"), "1");
+    writeAt(join(codex, ".codex-global-state.json.bak"), "1");
+    writeAt(join(codex, "sqlite", "codex-dev.db-wal"), "1");
+    assert.deepEqual(
+      diffForeignSnapshots(before, snapshotForeignInstalls({ roots, readUserPath: noPath })),
+      { added: [], removed: [], changed: [] },
+    );
+
+    writeAt(join(codex, "config.toml"), "changed");
+    const diff = diffForeignSnapshots(
+      before,
+      snapshotForeignInstalls({ roots, readUserPath: noPath }),
+    );
+    assert.deepEqual(diff.changed, ["~/.codex/config.toml"]);
+  } finally {
+    cleanup();
+  }
+});

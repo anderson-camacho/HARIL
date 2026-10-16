@@ -21,9 +21,15 @@ export function foreignRoots({
   const roots = [
     { name: "~/.pi", path: join(homeDir, ".pi") },
     { name: "~/.engram", path: join(homeDir, ".engram") },
-    // backups/ is written by the host agent itself (about once a minute while it runs), not by any install.
-    { name: "~/.claude", path: join(homeDir, ".claude"), ignore: ["backups"] },
-    { name: "~/.codex", path: join(homeDir, ".codex") },
+    // Live tools write their own state while they run, not as an install: Claude Code its backups/ (about once a
+    // minute) and its session transcripts under projects/; Codex its internal databases (sqlite/), its log database
+    // and its global state. Ignoring them keeps the guard about installs; config and binaries still count.
+    { name: "~/.claude", path: join(homeDir, ".claude"), ignore: ["backups", "projects"] },
+    {
+      name: "~/.codex",
+      path: join(homeDir, ".codex"),
+      ignore: ["sqlite", /^logs_\d+\.sqlite(-wal|-shm)?$/, /^\.codex-global-state\.json(\.bak)?$/],
+    },
     { name: "~/.npmrc", path: join(homeDir, ".npmrc") },
   ];
   if (platform === "win32") {
@@ -99,7 +105,10 @@ function snapshotRoot(path, { maxDepth, maxEntries, ignore = [] }) {
         return;
       }
       const relative = prefix === "" ? child.name : `${prefix}/${child.name}`;
-      if (ignore.includes(relative)) continue;
+      if (
+        ignore.some((rule) => (typeof rule === "string" ? rule === relative : rule.test(relative)))
+      )
+        continue;
       const full = join(dir, child.name);
       const info = metaOf(full);
       if (info === null) continue;
