@@ -26,6 +26,8 @@ export interface HostInfo {
   readonly ids?: Ids;
   // Agent runtime used by `haril start`; defaults to the simulated FakeAgentRuntime (M1-D7).
   readonly agentRuntime?: AgentRuntime;
+  // Liveness of a lease holder's pid; defaults to the real process check (M1 fix c). Tests inject it.
+  readonly isPidAlive?: (pid: number) => boolean;
 }
 
 export const EXIT_OK = 0;

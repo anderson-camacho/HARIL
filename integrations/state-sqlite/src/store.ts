@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type {
   AcquireLeaseInput,
+  AgentMetrics,
   AppendEventInput,
   AppliedCommand,
   ClaimedTask,
@@ -14,8 +15,10 @@ import type {
   Ids,
   JsonObject,
   LeaseGrant,
+  MetricsSnapshot,
   ProjectRecord,
   PromoteResult,
+  RecoveredTask,
   RegisterProjectInput,
   Result,
   RunCompletion,
@@ -29,6 +32,10 @@ import type {
   TaskFilter,
   TaskRecord,
 } from "@haril/core/ports";
+
+// The task states as the Core defines them (the adapter imports types from @haril/core/ports only).
+type TaskState = TaskRecord["state"];
+
 import { readPragmas, readUserVersion } from "./connection.js";
 import { StoreError } from "./errors.js";
 
@@ -40,6 +47,7 @@ interface StoreOptions {
   readonly clock: Clock;
   readonly ids: Ids;
   readonly rules: StoreRules;
+  readonly isPidAlive: (pid: number) => boolean;
   readonly storeId: string;
   readonly sqliteVersion: string;
   readonly gates: readonly StoreGate[];
@@ -51,7 +59,7 @@ const PROJECT_COLUMNS =
 const TASK_COLUMNS =
   "task_id AS taskId, project_id AS projectId, goal, state, agent_ref AS agentRef, created_at AS createdAt";
 
-const TASK_DETAIL_COLUMNS = `${TASK_COLUMNS}, description, attempt, attempts_used AS attemptsUsed, max_attempts AS maxAttempts, timeout_ms AS timeoutMs, claim_epoch AS claimEpoch, retry_reason AS retryReason, block_reason AS blockReason, result`;
+const TASK_DETAIL_COLUMNS = `${TASK_COLUMNS}, description, attempt, attempts_used AS attemptsUsed, max_attempts AS maxAttempts, timeout_ms AS timeoutMs, claim_epoch AS claimEpoch, infra_restarts AS infraRestarts, retry_reason AS retryReason, block_reason AS blockReason, result`;
 
 const LEASE_COLUMNS =
   "instance_id AS instanceId, pid, started_at AS startedAt, heartbeat_at AS heartbeatAt, expires_at AS expiresAt, status, node_version AS nodeVersion, sqlite_version AS sqliteVersion";
@@ -94,6 +102,13 @@ interface CommandRow extends Omit<CommandRecord, "args" | "projectId"> {
 
 interface TaskDetailRow extends Omit<TaskDetail, "result"> {
   readonly result: string | null;
+}
+
+interface OrphanRow {
+  readonly taskId: string;
+  readonly projectId: string;
+  readonly goal: string;
+  readonly infraRestarts: number;
 }
 
 interface ReadyRow {
@@ -145,6 +160,7 @@ export class SqliteStore implements Store {
   private readonly clock: Clock;
   private readonly ids: Ids;
   private readonly rules: StoreRules;
+  private readonly isPidAlive: (pid: number) => boolean;
   private readonly storeId: string;
   private readonly sqliteVersion: string;
   private readonly gates: readonly StoreGate[];
@@ -155,12 +171,14 @@ export class SqliteStore implements Store {
   readonly runtime: Store["runtime"];
   readonly runs: Store["runs"];
   readonly events: Store["events"];
+  readonly metrics: Store["metrics"];
 
   constructor(options: StoreOptions) {
     this.db = options.db;
     this.clock = options.clock;
     this.ids = options.ids;
     this.rules = options.rules;
+    this.isPidAlive = options.isPidAlive;
     this.storeId = options.storeId;
     this.sqliteVersion = options.sqliteVersion;
     this.gates = options.gates;
@@ -186,6 +204,7 @@ export class SqliteStore implements Store {
       acquire: (input) => this.acquireLease(input),
       heartbeat: (epoch, ttlMs) => this.heartbeatLease(epoch, ttlMs),
       release: (epoch, cleanExit) => this.releaseLease(epoch, cleanExit),
+      reconcile: (epoch, maxInfraRestarts) => this.reconcileOrphans(epoch, maxInfraRestarts),
     };
     this.runs = {
       complete: (completion) => this.completeRun(completion),
@@ -193,6 +212,9 @@ export class SqliteStore implements Store {
     this.events = {
       append: (input) => this.appendEvent(input),
       list: (filter) => this.listEvents(filter),
+    };
+    this.metrics = {
+      snapshot: (projectId) => this.metricsSnapshot(projectId),
     };
   }
 
@@ -293,8 +315,9 @@ export class SqliteStore implements Store {
     return row;
   }
 
-  // Singleton lease: an active lease that has not expired refuses the caller; an expired one is marked lost
-  // and taken over with the next epoch (M1-D6). The decision and the insert share one transaction.
+  // Singleton lease: an active lease refuses the caller only while it has not expired AND its pid is alive.
+  // Otherwise it is marked lost and taken over with the next epoch (M1-D6, M1 fix c). The decision and the
+  // insert share one transaction.
   private acquireLease(input: AcquireLeaseInput): Result<LeaseGrant, RuntimeBusyError> {
     return this.inTransaction(() => {
       const now = this.clock.now();
@@ -304,7 +327,7 @@ export class SqliteStore implements Store {
         )
         .get() as { epoch: number; instanceId: string; pid: number; expiresAt: number } | undefined;
       if (active !== undefined) {
-        if (active.expiresAt > now) {
+        if (active.expiresAt > now && this.isPidAlive(active.pid)) {
           return {
             ok: false as const,
             error: {
@@ -677,58 +700,70 @@ export class SqliteStore implements Store {
     });
   }
 
-  // pending -> ready (all dependencies completed) or pending -> blocked(dep_failed) (one failed or cancelled).
+  // pending -> ready (all dependencies completed) or pending -> blocked(dep_failed) (a dependency failed, was
+  // cancelled or is blocked(dep_failed)). Rounds repeat until nothing changes, so the block propagates down any
+  // chain inside this one transaction (M1 fix b).
   private promoteTasks(): PromoteResult {
     return this.inTransaction(() => {
-      const pending = this.db
-        .prepare(
-          "SELECT task_id AS taskId, goal, project_id AS projectId FROM tasks WHERE state = 'pending' ORDER BY created_seq",
-        )
-        .all() as unknown as Array<{ taskId: string; goal: string; projectId: string }>;
+      const pendingTasks = this.db.prepare(
+        "SELECT task_id AS taskId, goal, project_id AS projectId FROM tasks WHERE state = 'pending' ORDER BY created_seq",
+      );
       const dependencyStates = this.db.prepare(
-        "SELECT t.state AS state FROM task_dependencies d JOIN tasks t ON t.task_id = d.depends_on_task_id WHERE d.task_id = ?",
+        "SELECT t.state AS state, t.block_reason AS blockReason FROM task_dependencies d JOIN tasks t ON t.task_id = d.depends_on_task_id WHERE d.task_id = ?",
       );
       const ready: Array<{ taskId: string; goal: string }> = [];
       const blocked: Array<{ taskId: string; goal: string }> = [];
       const now = this.clock.now();
-      for (const task of pending) {
-        const states = (dependencyStates.all(task.taskId) as Array<{ state: string }>).map(
-          (row) => row.state,
-        );
-        if (states.some((state) => state === "failed" || state === "cancelled")) {
-          this.transition("pending", "blocked");
-          this.db
-            .prepare(
-              "UPDATE tasks SET state = 'blocked', block_reason = 'dep_failed', updated_at = ? WHERE task_id = ?",
-            )
-            .run(now, task.taskId);
-          this.appendEvent({
-            aggregateType: "task",
-            aggregateId: task.taskId,
-            type: "task.blocked",
-            actorKind: "system",
-            actorId: "runtime",
-            payload: { reason: "dep_failed" },
-            projectId: task.projectId,
-            taskId: task.taskId,
-          });
-          blocked.push({ taskId: task.taskId, goal: task.goal });
-        } else if (states.every((state) => state === "completed")) {
-          this.transition("pending", "ready");
-          this.db
-            .prepare("UPDATE tasks SET state = 'ready', updated_at = ? WHERE task_id = ?")
-            .run(now, task.taskId);
-          this.appendEvent({
-            aggregateType: "task",
-            aggregateId: task.taskId,
-            type: "task.ready",
-            actorKind: "system",
-            actorId: "runtime",
-            payload: {},
-            projectId: task.projectId,
-            taskId: task.taskId,
-          });
-          ready.push({ taskId: task.taskId, goal: task.goal });
+      let changed = true;
+      while (changed) {
+        changed = false;
+        const pending = pendingTasks.all() as unknown as Array<{
+          taskId: string;
+          goal: string;
+          projectId: string;
+        }>;
+        for (const task of pending) {
+          const dependencies = dependencyStates.all(task.taskId) as Array<{
+            state: string;
+            blockReason: string | null;
+          }>;
+          if (dependencies.some(isDependencyFailure)) {
+            this.transition("pending", "blocked");
+            this.db
+              .prepare(
+                "UPDATE tasks SET state = 'blocked', block_reason = 'dep_failed', updated_at = ? WHERE task_id = ?",
+              )
+              .run(now, task.taskId);
+            this.appendEvent({
+              aggregateType: "task",
+              aggregateId: task.taskId,
+              type: "task.blocked",
+              actorKind: "system",
+              actorId: "runtime",
+              payload: { reason: "dep_failed" },
+              projectId: task.projectId,
+              taskId: task.taskId,
+            });
+            blocked.push({ taskId: task.taskId, goal: task.goal });
+            changed = true;
+          } else if (dependencies.every((dependency) => dependency.state === "completed")) {
+            this.transition("pending", "ready");
+            this.db
+              .prepare("UPDATE tasks SET state = 'ready', updated_at = ? WHERE task_id = ?")
+              .run(now, task.taskId);
+            this.appendEvent({
+              aggregateType: "task",
+              aggregateId: task.taskId,
+              type: "task.ready",
+              actorKind: "system",
+              actorId: "runtime",
+              payload: {},
+              projectId: task.projectId,
+              taskId: task.taskId,
+            });
+            ready.push({ taskId: task.taskId, goal: task.goal });
+            changed = true;
+          }
         }
       }
       return { ready, blocked };
@@ -785,6 +820,8 @@ export class SqliteStore implements Store {
         projectId: row.projectId,
         taskId: row.taskId,
         runId,
+        agentId: row.agentRef,
+        ts: now,
       });
       return {
         taskId: row.taskId,
@@ -858,6 +895,7 @@ export class SqliteStore implements Store {
         projectId: task.projectId,
         taskId: run.taskId,
         runId: completion.runId,
+        ts: now,
       };
 
       if (completion.outcome === "succeeded") {
@@ -920,6 +958,164 @@ export class SqliteStore implements Store {
     });
   }
 
+  // ARCH 7.5 (M1-T7): tasks still running under another epoch lost their runtime. The attempt is orphaned:
+  // its run is closed as orphaned and the task returns to ready without charging attempts_used, or fails once
+  // infra_restarts would exceed maxInfraRestarts. Events carry the time of the reconciliation.
+  private reconcileOrphans(epoch: number, maxInfraRestarts: number): RecoveredTask[] {
+    return this.inTransaction(() => {
+      this.assertActiveEpoch(epoch);
+      const orphans = this.db
+        .prepare(
+          "SELECT task_id AS taskId, project_id AS projectId, goal, infra_restarts AS infraRestarts FROM tasks WHERE state = 'running' AND claimed_runtime_epoch <> ? ORDER BY created_seq",
+        )
+        .all(epoch) as unknown as OrphanRow[];
+      const openRun = this.db.prepare(
+        "SELECT run_id AS runId FROM runs WHERE task_id = ? AND status IN ('prepared','running','settled') ORDER BY attempt DESC LIMIT 1",
+      );
+      const recovered: RecoveredTask[] = [];
+      const now = this.clock.now();
+      for (const orphan of orphans) {
+        const run = openRun.get(orphan.taskId) as { runId: string } | undefined;
+        const infraRestarts = orphan.infraRestarts + 1;
+        const exhausted = infraRestarts > maxInfraRestarts;
+        const toState = exhausted ? "failed" : "ready";
+        this.transition("running", toState);
+        if (run !== undefined) {
+          this.db
+            .prepare(
+              "UPDATE runs SET status = 'orphaned', ended_at = ?, error = ? WHERE run_id = ?",
+            )
+            .run(
+              now,
+              JSON.stringify({
+                code: "orphaned",
+                message: "the runtime that owned the attempt stopped without a clean exit",
+              }),
+              run.runId,
+            );
+        }
+        if (exhausted) {
+          this.db
+            .prepare(
+              "UPDATE tasks SET state = 'failed', phase = NULL, retry_reason = NULL, claimed_runtime_epoch = NULL, infra_restarts = ?, completed_at = ?, updated_at = ? WHERE task_id = ?",
+            )
+            .run(infraRestarts, now, now, orphan.taskId);
+        } else {
+          this.db
+            .prepare(
+              "UPDATE tasks SET state = 'ready', phase = NULL, retry_reason = 'orphaned', claimed_runtime_epoch = NULL, infra_restarts = ?, updated_at = ? WHERE task_id = ?",
+            )
+            .run(infraRestarts, now, orphan.taskId);
+        }
+        this.appendEvent({
+          aggregateType: "task",
+          aggregateId: orphan.taskId,
+          type: "task.orphaned",
+          actorKind: "system",
+          actorId: `runtime:${epoch}`,
+          payload: { toState, infraRestarts, maxInfraRestarts },
+          projectId: orphan.projectId,
+          taskId: orphan.taskId,
+          runId: run?.runId,
+          ts: now,
+        });
+        if (exhausted) {
+          // No runId: the failure belongs to the task, the attempt itself was already recorded as orphaned.
+          this.appendEvent({
+            aggregateType: "task",
+            aggregateId: orphan.taskId,
+            type: "task.failed",
+            actorKind: "system",
+            actorId: `runtime:${epoch}`,
+            payload: { reason: "infra_restarts_exhausted", infraRestarts },
+            projectId: orphan.projectId,
+            taskId: orphan.taskId,
+            ts: now,
+          });
+        }
+        recovered.push({
+          taskId: orphan.taskId,
+          goal: orphan.goal,
+          runId: run?.runId ?? null,
+          outcome: exhausted ? "failed" : "ready",
+          infraRestarts,
+          maxInfraRestarts,
+        });
+      }
+      return recovered;
+    });
+  }
+
+  // Counts for `haril metrics`. Each number is also derivable from the events and runs rows alone (ACE-11).
+  private metricsSnapshot(projectId?: string): MetricsSnapshot {
+    const scope = projectId ?? null;
+    const tasksByState: Record<TaskState, number> = {
+      pending: 0,
+      ready: 0,
+      running: 0,
+      blocked: 0,
+      completed: 0,
+      failed: 0,
+      cancelled: 0,
+    };
+    const stateRows = this.db
+      .prepare(
+        "SELECT state, COUNT(*) AS n FROM tasks WHERE (? IS NULL OR project_id = ?) GROUP BY state",
+      )
+      .all(scope, scope) as Array<{ state: TaskState; n: number }>;
+    for (const row of stateRows) tasksByState[row.state] = row.n;
+
+    const statusRows = this.db
+      .prepare(
+        "SELECT status, COUNT(*) AS n FROM runs WHERE (? IS NULL OR project_id = ?) GROUP BY status",
+      )
+      .all(scope, scope) as Array<{ status: string; n: number }>;
+    const runsByStatus: Record<string, number> = {};
+    for (const row of statusRows) runsByStatus[row.status] = row.n;
+
+    const countEvents = (type: string): number =>
+      (
+        this.db
+          .prepare(
+            "SELECT COUNT(*) AS n FROM events WHERE type = ? AND (? IS NULL OR project_id = ?)",
+          )
+          .get(type, scope, scope) as { n: number }
+      ).n;
+
+    const closed = this.db
+      .prepare(
+        "SELECT COUNT(*) AS n, COALESCE(SUM(ended_at - started_at), 0) AS totalMs FROM runs WHERE ended_at IS NOT NULL AND (? IS NULL OR project_id = ?)",
+      )
+      .get(scope, scope) as { n: number; totalMs: number };
+
+    const agentRows = this.db
+      .prepare(
+        `SELECT agent_id AS agentRef, COUNT(*) AS runs,
+           SUM(status = 'completed') AS completed, SUM(status = 'failed') AS failed,
+           SUM(status = 'orphaned') AS orphaned,
+           COALESCE(SUM(CASE WHEN ended_at IS NULL THEN 0 ELSE ended_at - started_at END), 0) AS totalMs
+         FROM runs WHERE (? IS NULL OR project_id = ?) GROUP BY agent_id ORDER BY agent_id`,
+      )
+      .all(scope, scope) as unknown as AgentMetrics[];
+
+    return {
+      tasksByState,
+      runsByStatus,
+      retries: countEvents("task.retried"),
+      orphanedRecoveries: countEvents("task.orphaned"),
+      closedRuns: closed.n,
+      durationTotalMs: closed.totalMs,
+      perAgent: agentRows.map((row) => ({
+        agentRef: row.agentRef,
+        runs: Number(row.runs),
+        completed: Number(row.completed),
+        failed: Number(row.failed),
+        orphaned: Number(row.orphaned),
+        totalMs: Number(row.totalMs),
+      })),
+    };
+  }
+
   // Every task state change passes the Core transition table, injected through `rules`.
   private transition(from: TaskRecord["state"], to: TaskRecord["state"]): void {
     if (!this.rules.canTransition(from, to)) {
@@ -935,7 +1131,7 @@ export class SqliteStore implements Store {
       )
       .run(
         eventId,
-        this.clock.now(),
+        input.ts ?? this.clock.now(),
         input.aggregateType,
         input.aggregateId,
         input.type,
@@ -957,13 +1153,24 @@ export class SqliteStore implements Store {
     return toEventRecord(row);
   }
 
+  // Newest first in SQL so that `limit` keeps the tail; the result is returned oldest first.
   private listEvents(filter?: EventFilter): EventRecord[] {
     const rows = this.db
       .prepare(
-        `SELECT ${EVENT_COLUMNS} FROM events WHERE (? IS NULL OR aggregate_id = ?) ORDER BY seq`,
+        `SELECT ${EVENT_COLUMNS} FROM events
+         WHERE (? IS NULL OR aggregate_id = ?) AND (? IS NULL OR project_id = ?) AND (? IS NULL OR task_id = ?)
+         ORDER BY seq DESC LIMIT ?`,
       )
-      .all(filter?.aggregateId ?? null, filter?.aggregateId ?? null) as unknown as EventRow[];
-    return rows.map(toEventRecord);
+      .all(
+        filter?.aggregateId ?? null,
+        filter?.aggregateId ?? null,
+        filter?.projectId ?? null,
+        filter?.projectId ?? null,
+        filter?.taskId ?? null,
+        filter?.taskId ?? null,
+        filter?.limit ?? -1,
+      ) as unknown as EventRow[];
+    return rows.map(toEventRecord).reverse();
   }
 
   private inTransaction<T>(work: () => T): T {
@@ -977,6 +1184,15 @@ export class SqliteStore implements Store {
       throw error;
     }
   }
+}
+
+// A dependency that can never complete: failed, cancelled, or blocked because of an earlier failure.
+function isDependencyFailure(dependency: { state: string; blockReason: string | null }): boolean {
+  return (
+    dependency.state === "failed" ||
+    dependency.state === "cancelled" ||
+    (dependency.state === "blocked" && dependency.blockReason === "dep_failed")
+  );
 }
 
 function parseCommand(row: CommandRow): CommandRecord {

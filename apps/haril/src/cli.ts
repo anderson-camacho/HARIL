@@ -1,6 +1,8 @@
 import { homedir } from "node:os";
 import { StoreError } from "@haril/state-sqlite";
 import { doctor } from "./commands/doctor.js";
+import { events } from "./commands/events.js";
+import { metrics } from "./commands/metrics.js";
 import { plan } from "./commands/plan.js";
 import { project } from "./commands/project.js";
 import { start } from "./commands/start.js";
@@ -38,6 +40,8 @@ const HELP_LINES = [
   '  haril task add "<title>" [--project <slug>] [--depends-on <taskId>]... [--agent <ref>] [--json]',
   "  haril start [--project <slug>] [--json]   apply the queue, run the ready tasks, exit when idle",
   "  haril status [--project <slug>] [--json]   projects, tasks, queued commands and runtime",
+  "  haril metrics [--project <slug>] [--json]   runs, retries and success rate from the event log",
+  "  haril events [--project <slug>] [--task <id>] [--limit <n>] [--json]   the newest events, oldest first",
   "  haril help                       print this help",
 ];
 
@@ -93,6 +97,10 @@ function dispatch(argv: readonly string[], io: CliIo, host: HostInfo): number | 
       return task(rest, io, host);
     case "status":
       return status(rest, io, host);
+    case "metrics":
+      return metrics(rest, io, host);
+    case "events":
+      return events(rest, io, host);
     case "start":
       return start(rest, io, host);
     default:

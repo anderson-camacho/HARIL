@@ -71,8 +71,12 @@ function formatEvent(event: RunEvent): string {
       return `command ${event.commandId} ${event.commandType} rejected: ${event.reason}`;
     case "task.claimed":
       return `claimed ${event.taskId} ${event.goal} (attempt ${event.attempt}/${event.maxAttempts})`;
+    case "task.recovered":
+      return `recovered ${event.taskId} ${event.goal} (orphaned, restart ${event.infraRestarts}/${event.maxInfraRestarts})`;
     case "task.completed":
-      return `completed ${event.taskId} ${event.goal}`;
+      return event.simulated
+        ? `completed ${event.taskId} ${event.goal} (simulated: no real agent until M2)`
+        : `completed ${event.taskId} ${event.goal}`;
     case "task.retrying":
       return `failed (retrying ${event.nextAttempt}/${event.maxAttempts}) ${event.taskId} ${event.goal}: ${event.code}`;
     case "task.failed":

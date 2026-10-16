@@ -7,7 +7,7 @@ describe("summarizeRun", () => {
     const events: RunEvent[] = [
       { type: "command.applied", commandId: "c1", commandType: "task.create", taskIds: ["a"] },
       { type: "task.claimed", taskId: "a", goal: "A", attempt: 1, maxAttempts: 1 },
-      { type: "task.completed", taskId: "a", goal: "A" },
+      { type: "task.completed", taskId: "a", goal: "A", simulated: false },
       { type: "task.claimed", taskId: "b", goal: "B", attempt: 1, maxAttempts: 2 },
       {
         type: "task.retrying",
@@ -31,7 +31,11 @@ describe("summarizeRun", () => {
   });
 
   it("maps a run with no failure or block to exit 0 and any failure or block to exit 1", () => {
-    expect(runExitCode(summarizeRun([{ type: "task.completed", taskId: "a", goal: "A" }]))).toBe(0);
+    expect(
+      runExitCode(
+        summarizeRun([{ type: "task.completed", taskId: "a", goal: "A", simulated: false }]),
+      ),
+    ).toBe(0);
     expect(
       runExitCode(summarizeRun([{ type: "task.failed", taskId: "a", goal: "A", code: "x" }])),
     ).toBe(1);

@@ -20,7 +20,19 @@ export type RunEvent =
       readonly attempt: number;
       readonly maxAttempts: number;
     }
-  | { readonly type: "task.completed"; readonly taskId: string; readonly goal: string }
+  | {
+      readonly type: "task.completed";
+      readonly taskId: string;
+      readonly goal: string;
+      readonly simulated: boolean;
+    }
+  | {
+      readonly type: "task.recovered";
+      readonly taskId: string;
+      readonly goal: string;
+      readonly infraRestarts: number;
+      readonly maxInfraRestarts: number;
+    }
   | {
       readonly type: "task.retrying";
       readonly taskId: string;

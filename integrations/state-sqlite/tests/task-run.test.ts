@@ -94,7 +94,7 @@ describe("tasks.promote", () => {
     expect(store.events.list().map((event) => event.type)).toContain("task.blocked");
   });
 
-  it("propagates dep_failed only to direct dependents", () => {
+  it("propagates dep_failed transitively to every dependent (M1 fix b)", () => {
     enqueueTask("A");
     enqueueTask("B", [taskId("A")]);
     enqueueTask("C", [taskId("B")]);
@@ -107,7 +107,10 @@ describe("tasks.promote", () => {
     });
     store.tasks.promote();
     expect(store.tasks.get(taskId("B"))?.state).toBe("blocked");
-    expect(store.tasks.get(taskId("C"))?.state).toBe("pending");
+    expect(store.tasks.get(taskId("C"))).toMatchObject({
+      state: "blocked",
+      blockReason: "dep_failed",
+    });
   });
 });
 

@@ -77,6 +77,7 @@ export interface TaskDetail extends TaskRecord {
   readonly maxAttempts: number;
   readonly timeoutMs: number;
   readonly claimEpoch: number;
+  readonly infraRestarts: number;
   readonly retryReason: RetryReason | null;
   readonly blockReason: BlockReason | null;
   readonly result: JsonObject | null;
@@ -111,6 +112,37 @@ export interface AcquireLeaseInput {
 export interface LeaseGrant {
   readonly epoch: number;
   readonly instanceId: string;
+}
+
+// An attempt whose runtime epoch ended without a clean exit (M1 fix d). `ready` goes back to the queue;
+// `failed` means infra_restarts would exceed its ceiling.
+export interface RecoveredTask {
+  readonly taskId: string;
+  readonly goal: string;
+  readonly runId: string | null;
+  readonly outcome: "ready" | "failed";
+  readonly infraRestarts: number;
+  readonly maxInfraRestarts: number;
+}
+
+export interface AgentMetrics {
+  readonly agentRef: string;
+  readonly runs: number;
+  readonly completed: number;
+  readonly failed: number;
+  readonly orphaned: number;
+  readonly totalMs: number;
+}
+
+// Raw counts behind `haril metrics` (M1-T6). Every number is derivable from runs, tasks and events.
+export interface MetricsSnapshot {
+  readonly tasksByState: Readonly<Record<TaskState, number>>;
+  readonly runsByStatus: Readonly<Record<string, number>>;
+  readonly retries: number;
+  readonly orphanedRecoveries: number;
+  readonly closedRuns: number;
+  readonly durationTotalMs: number;
+  readonly perAgent: readonly AgentMetrics[];
 }
 
 export interface RuntimeBusyError extends HarilError {
@@ -206,6 +238,8 @@ export interface AppendEventInput {
   readonly actorKind: "user" | "agent" | "system";
   readonly actorId: string;
   readonly payload: Readonly<Record<string, unknown>>;
+  // Defaults to the clock. A run event shares the timestamp of the run row it describes (M1-T6).
+  readonly ts?: number;
   readonly schemaVersion?: number;
   readonly audit?: boolean;
   readonly projectId?: string;
@@ -224,6 +258,10 @@ export interface EventRecord extends AppendEventInput {
 
 export interface EventFilter {
   readonly aggregateId?: string;
+  readonly projectId?: string;
+  readonly taskId?: string;
+  // The newest `limit` events, returned oldest first.
+  readonly limit?: number;
 }
 
 export interface Store {
@@ -243,7 +281,8 @@ export interface Store {
   readonly tasks: {
     list(filter?: TaskFilter): readonly TaskRecord[];
     get(taskId: string): TaskDetail | undefined;
-    // pending -> ready when every dependency completed; pending -> blocked(dep_failed) when one failed or was cancelled.
+    // pending -> ready when every dependency completed; pending -> blocked(dep_failed) when one dependency
+    // failed, was cancelled or is blocked(dep_failed). Propagates transitively within the call.
     promote(): PromoteResult;
     // Highest priority, then oldest ready task: ready -> running, one run row, one claim epoch.
     claimNext(epoch: number): ClaimedTask | undefined;
@@ -253,6 +292,9 @@ export interface Store {
     acquire(input: AcquireLeaseInput): Result<LeaseGrant, RuntimeBusyError>;
     heartbeat(epoch: number, ttlMs: number): void;
     release(epoch: number, cleanExit: boolean): void;
+    // Orphans every running task claimed by another epoch: back to ready (retry_reason orphaned, no attempt
+    // charged, infra_restarts + 1) or failed when infra_restarts would exceed maxInfraRestarts. One transaction.
+    reconcile(epoch: number, maxInfraRestarts: number): readonly RecoveredTask[];
   };
   readonly runs: {
     // Closes the run and its task in one transaction. Success persists the result before `completed`.
@@ -261,6 +303,9 @@ export interface Store {
   readonly events: {
     append(input: AppendEventInput): EventRecord;
     list(filter?: EventFilter): readonly EventRecord[];
+  };
+  readonly metrics: {
+    snapshot(projectId?: string): MetricsSnapshot;
   };
   close(): void;
 }

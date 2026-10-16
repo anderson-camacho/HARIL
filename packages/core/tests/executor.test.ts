@@ -64,6 +64,20 @@ describe("completionFor", () => {
     });
   });
 
+  it("maps a simulated success to a result that marks the run as simulated (M1 fix a)", () => {
+    expect(
+      completionFor("run-1", {
+        status: "succeeded",
+        summary: "simulated: no real agent until M2",
+        simulated: true,
+      }),
+    ).toEqual({
+      runId: "run-1",
+      outcome: "succeeded",
+      result: { simulated: true },
+    });
+  });
+
   it("maps a failure to a failed completion with the exit end cause", () => {
     expect(
       completionFor("run-1", { status: "failed", code: "fake.failed", message: "boom" }),

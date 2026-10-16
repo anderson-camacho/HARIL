@@ -25,6 +25,8 @@ export interface OpenStoreOptions {
   readonly rules: StoreRules;
   // Test hook: overrides the detected Node and SQLite versions (M1-D1, INV-16).
   readonly runtime?: Partial<RuntimeVersions>;
+  // Liveness of a lease holder's pid, injected by the composition root (M1 fix c). Absent: every pid is alive.
+  readonly isPidAlive?: (pid: number) => boolean;
 }
 
 export interface OpenMemoryStoreOptions {
@@ -32,6 +34,7 @@ export interface OpenMemoryStoreOptions {
   readonly ids: Ids;
   readonly rules: StoreRules;
   readonly runtime?: Partial<RuntimeVersions>;
+  readonly isPidAlive?: (pid: number) => boolean;
 }
 
 // Opens (and migrates) the file database. The gates run before any directory or file is created.
@@ -111,6 +114,7 @@ function openConnection(
       clock,
       ids,
       rules,
+      isPidAlive: options.isPidAlive ?? (() => true),
       storeId,
       sqliteVersion: versions.sqliteVersion,
       gates,

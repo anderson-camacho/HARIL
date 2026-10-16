@@ -2,6 +2,7 @@ import {
   buildAgentSpec,
   checkHandshake,
   completionFor,
+  MAX_INFRA_RESTARTS,
   type RunEvent,
   type RunSummary,
   summarizeRun,
@@ -12,6 +13,7 @@ import type {
   AgentRuntime,
   ClaimedTask,
   Clock,
+  RecoveredTask,
   Store,
 } from "@haril/core/ports";
 import { StoreError } from "@haril/state-sqlite";
@@ -53,6 +55,10 @@ export async function runUntilIdle(options: RunLoopOptions): Promise<RunLoopResu
   };
   let cleanExit = false;
   try {
+    // M1-T7: attempts orphaned by a previous runtime go back to the queue before anything is claimed.
+    for (const recovered of store.runtime.reconcile(epoch, MAX_INFRA_RESTARTS)) {
+      emit(recoveryEvent(recovered));
+    }
     await drainQueue(options, epoch, emit);
     cleanExit = true;
   } finally {
@@ -112,7 +118,12 @@ async function drainQueue(
     const result = store.runs.complete(completion);
     const code = completion.outcome === "failed" ? completion.error.code : "";
     if (result.taskState === "completed") {
-      emit({ type: "task.completed", taskId: result.taskId, goal: result.goal });
+      emit({
+        type: "task.completed",
+        taskId: result.taskId,
+        goal: result.goal,
+        simulated: outcome.status === "succeeded" && outcome.simulated === true,
+      });
     } else if (result.taskState === "ready") {
       emit({
         type: "task.retrying",
@@ -126,6 +137,24 @@ async function drainQueue(
       emit({ type: "task.failed", taskId: result.taskId, goal: result.goal, code });
     }
   }
+}
+
+function recoveryEvent(recovered: RecoveredTask): RunEvent {
+  if (recovered.outcome === "failed") {
+    return {
+      type: "task.failed",
+      taskId: recovered.taskId,
+      goal: recovered.goal,
+      code: "infra_restarts_exhausted",
+    };
+  }
+  return {
+    type: "task.recovered",
+    taskId: recovered.taskId,
+    goal: recovered.goal,
+    infraRestarts: recovered.infraRestarts,
+    maxInfraRestarts: recovered.maxInfraRestarts,
+  };
 }
 
 // The lease is renewed between tasks and while an attempt runs, so a long attempt does not expire it.

@@ -118,11 +118,18 @@ describe("AgentRuntime contract (FakeAgentRuntime)", () => {
     expect(await handle.settled).toEqual({ status: "aborted" });
   });
 
-  it("start rejects an agentRef the fake does not know, with a typed error", async () => {
+  it("any other agentRef runs as a simulated success until M2 (M1 fix a)", async () => {
     const { runtime } = setup();
-    const result = await runtime.start(spec("fake:teleport"));
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("agent.unknown_ref");
+    const result = await runtime.start(spec("developer-block"));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect((await result.value.hello).tools).toEqual(TOOLS);
+    await result.value.prompt("go");
+    expect(await result.value.settled).toEqual({
+      status: "succeeded",
+      summary: "simulated: no real agent until M2",
+      simulated: true,
+    });
   });
 });
 

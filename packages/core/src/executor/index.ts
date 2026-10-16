@@ -5,6 +5,9 @@ import type { AgentOutcome, AgentSpec, HarilError, Result, RunCompletion } from 
 // M1 gives every agent the same single tool; the real tool policy arrives with Pi (M2).
 export const M1_ALLOWED_TOOLS: readonly string[] = ["read"];
 
+// ARCH 7.5: infra_restarts ceiling per task. The fourth orphaning fails the task (M1-T7).
+export const MAX_INFRA_RESTARTS = 3;
+
 export interface ExecutableTask {
   readonly taskId: string;
   readonly goal: string;
@@ -52,7 +55,9 @@ export function checkHandshake(
 export function completionFor(runId: string, outcome: AgentOutcome): RunCompletion {
   switch (outcome.status) {
     case "succeeded":
-      return { runId, outcome: "succeeded", result: { summary: outcome.summary } };
+      return outcome.simulated === true
+        ? { runId, outcome: "succeeded", result: { simulated: true } }
+        : { runId, outcome: "succeeded", result: { summary: outcome.summary } };
     case "failed":
       return {
         runId,

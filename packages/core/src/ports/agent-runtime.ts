@@ -18,7 +18,8 @@ export interface AgentHello {
 }
 
 export type AgentOutcome =
-  | { readonly status: "succeeded"; readonly summary: string }
+  // `simulated` marks a run of a non-fake agentRef, which M1 completes without a real agent (M1-D7).
+  | { readonly status: "succeeded"; readonly summary: string; readonly simulated?: true }
   | { readonly status: "failed"; readonly code: string; readonly message: string }
   | { readonly status: "timed_out" }
   | { readonly status: "aborted" };

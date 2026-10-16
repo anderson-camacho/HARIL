@@ -11,7 +11,7 @@ import type {
 } from "../src/ports/index.js";
 
 // Simulated agent (M1-D7). The behaviour is chosen by agentRef:
-//   fake:succeed (default), fake:fail, fake:slow:<ms>.
+//   fake:succeed (default), fake:fail, fake:slow:<ms>; any other ref succeeds as a simulated run until M2.
 // Work starts when prompt() is accepted; a slow run settles at its completion time or at timeoutMs.
 
 export interface FakeAgentRuntimeOptions {
@@ -23,15 +23,18 @@ export interface FakeAgentRuntimeOptions {
 type Behaviour =
   | { readonly kind: "succeed" }
   | { readonly kind: "fail" }
-  | { readonly kind: "slow"; readonly ms: number };
+  | { readonly kind: "slow"; readonly ms: number }
+  | { readonly kind: "simulated" };
 
 const SLOW_REF = /^fake:slow:(\d+)$/;
 
-function parseAgentRef(agentRef: string): Behaviour | null {
+// M1 fix (a): an unknown ref is not an error in M1; it is a simulated success until a real agent exists (M2).
+function parseAgentRef(agentRef: string): Behaviour {
   if (agentRef === "fake:succeed") return { kind: "succeed" };
   if (agentRef === "fake:fail") return { kind: "fail" };
   const slow = SLOW_REF.exec(agentRef);
-  return slow === null ? null : { kind: "slow", ms: Number(slow[1]) };
+  if (slow !== null) return { kind: "slow", ms: Number(slow[1]) };
+  return { kind: "simulated" };
 }
 
 function sameTools(a: readonly string[], b: readonly string[]): boolean {
@@ -49,10 +52,6 @@ export class FakeAgentRuntime implements AgentRuntime {
 
   async start(spec: AgentSpec): Promise<Result<AgentHandle, HarilError>> {
     const behaviour = parseAgentRef(spec.agentRef);
-    if (behaviour === null) {
-      const message = `fake agent has no behaviour for "${spec.agentRef}"`;
-      return { ok: false, error: { code: "agent.unknown_ref", message } };
-    }
     return { ok: true, value: new FakeAgentHandle(spec, behaviour, this.options) };
   }
 }
@@ -106,6 +105,12 @@ class FakeAgentHandle implements AgentHandle {
     const { behaviour, options, spec } = this;
     if (behaviour.kind === "succeed") {
       this.finish({ status: "succeeded", summary: "fake agent succeeded" });
+    } else if (behaviour.kind === "simulated") {
+      this.finish({
+        status: "succeeded",
+        summary: "simulated: no real agent until M2",
+        simulated: true,
+      });
     } else if (behaviour.kind === "fail") {
       this.finish({
         status: "failed",

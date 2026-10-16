@@ -133,8 +133,9 @@ describe("haril start", async () => {
       ids: { next: () => `holder-${++counter}` },
       rules: { canTransition, checkPlan: checkPlanSubmission },
     });
+    // A live holder (this process) keeps the lease; a dead one would be taken over (M1 fix c).
     const grant = store.runtime.acquire({
-      pid: 4242,
+      pid: process.pid,
       nodeVersion: "v24.19.0",
       sqliteVersion: "3.53.3",
       ttlMs: 60_000,
@@ -143,7 +144,7 @@ describe("haril start", async () => {
     store.close();
 
     expect(await start()).toBe(2);
-    expect(h.err.join("\n")).toContain("another runtime is active (pid 4242)");
+    expect(h.err.join("\n")).toContain(`another runtime is active (pid ${process.pid})`);
   });
 
   it("does not send the prompt when the handshake announces other tools (handshake_mismatch)", async () => {

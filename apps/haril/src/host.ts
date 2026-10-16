@@ -18,6 +18,16 @@ const systemClock: Clock = {
   },
 };
 
+// Liveness of a lease holder (M1 fix c). EPERM means the process exists but belongs to another user.
+function defaultPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
 // ULID: 48 bits of time (10 characters) and 80 random bits (16 characters), Crockford base32.
@@ -61,6 +71,15 @@ export function storeAccess(host: HostInfo): StoreAccess {
     inspect:
       host.inspectStore ??
       ((dataDir) => inspectStore({ dataDir, runtime: { nodeVersion: host.nodeVersion } })),
-    open: host.openStore ?? ((dataDir) => openStore({ dataDir, clock, ids, rules: STORE_RULES })),
+    open:
+      host.openStore ??
+      ((dataDir) =>
+        openStore({
+          dataDir,
+          clock,
+          ids,
+          rules: STORE_RULES,
+          isPidAlive: host.isPidAlive ?? defaultPidAlive,
+        })),
   };
 }
