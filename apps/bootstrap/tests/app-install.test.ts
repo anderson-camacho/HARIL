@@ -38,6 +38,7 @@ function sourceTree(fs: MemoryFs): void {
     `${SRC}\\apps\\bootstrap\\dist\\haril-bootstrap.mjs`,
     encoder.encode("// bootstrap"),
   );
+  fs.files.set(`${SRC}\\apps\\shell\\dist\\shell.mjs`, encoder.encode("// shell"));
 }
 
 function installDeps(fs: MemoryFs, overrides: { sourceRoot?: string } = {}) {
@@ -84,6 +85,7 @@ describe("installApp", () => {
     expect(fs.files.has(`${APP}\\blocks\\methodologies\\odd\\block.md`)).toBe(true);
     expect(fs.files.has(`${APP}\\integrations\\agent-pi-bridge\\dist\\bridge.mjs`)).toBe(true);
     expect(fs.files.has(`${APP}\\haril-bootstrap.mjs`)).toBe(true);
+    expect(fs.files.has(`${APP}\\shell.mjs`)).toBe(true);
     for (const shim of ["haril.cmd", "haril.ps1", "haril"]) {
       expect(fs.files.has(`${ROOT}\\bin\\${shim}`)).toBe(true);
     }
@@ -96,6 +98,9 @@ describe("installApp", () => {
     );
     expect(haril.sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(current.files.map((file: { path: string }) => file.path)).toContain("bin/haril.cmd");
+    expect(current.files.map((file: { path: string }) => file.path)).toContain(
+      `app/${VERSION}/shell.mjs`,
+    );
   });
 
   it("points the shims at the isolated Node of runtime/manifest.json when it exists", async () => {
@@ -145,6 +150,18 @@ describe("installApp", () => {
     expect(second.ok).toBe(true);
     expect(text(fs, `${APP}\\haril.mjs`)).toBe("// haril bundle");
     expect(second.steps[0]?.status).toBe("ok");
+  });
+
+  it("fails without writing anything when the shell bundle is not built", async () => {
+    const fs = createMemoryFs();
+    sourceTree(fs);
+    fs.files.delete(`${SRC}\\apps\\shell\\dist\\shell.mjs`);
+
+    const result = await installApp(installDeps(fs));
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[0]?.detail).toContain("apps/shell/dist/shell.mjs");
+    expect(keysUnder(fs, ROOT)).toEqual([]);
   });
 
   it("fails without writing anything when the build output is missing", async () => {

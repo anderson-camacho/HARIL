@@ -64,12 +64,13 @@ export interface AppUninstallResult {
   readonly refusal?: "runtime_active" | "runtime_unknown";
 }
 
-// Build output the payload needs. `npm run build` produces all of it (apps/haril, bridge and bootstrap).
+// Build output the payload needs. `npm run build` produces all of it (apps/haril, bridge, bootstrap and shell).
 const BUILD_OUTPUTS: readonly (readonly string[])[] = [
   ["apps", "haril", "dist", "haril.mjs"],
   ["apps", "haril", "dist", "blocks", "methodologies"],
   ["integrations", "agent-pi-bridge", "dist", "bridge.mjs"],
   ["apps", "bootstrap", "dist", "haril-bootstrap.mjs"],
+  ["apps", "shell", "dist", "shell.mjs"],
 ];
 
 interface PayloadFile {
@@ -316,6 +317,11 @@ async function readPayload(
   sources.push({
     segments: ["haril-bootstrap.mjs"],
     source: ops.join(deps.sourceRoot, "apps", "bootstrap", "dist", "haril-bootstrap.mjs"),
+  });
+  // The shell bundle sits beside haril.mjs, where `haril shell` looks for it (TUI-T2).
+  sources.push({
+    segments: ["shell.mjs"],
+    source: ops.join(deps.sourceRoot, "apps", "shell", "dist", "shell.mjs"),
   });
 
   const files: PayloadFile[] = [];
