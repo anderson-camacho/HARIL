@@ -6,8 +6,8 @@ Una consola, múltiples inteligencias, un solo propósito.
 HARIL es una plataforma **local** de orquestación de agentes de IA, desarrollo de software y automatización, con un solo comando: `haril`.
 Un núcleo propio controla la ejecución; Pi, Engram, Herdr y los proveedores de modelos quedan detrás de puertos reemplazables.
 
-> **Estado real (2026-10-16).** Fases 0 a 2 completadas en diseño. **Fase 3 (monorepo) implementada** en `feat/phase-3-monorepo`. **M1 implementado** en `feat/phase-4-m1`: Store SQLite (`node:sqlite`), runtime en primer plano (`haril start`), agente simulado y recuperación tras una caída (`kill -9`).
-> Aún no existen Pi, Broker ni proveedores reales: llegan en M2 y M3. Hasta entonces los agentes son simulados.
+> **Estado real (2026-10-16).** Fases 0 a 2 completadas en diseño. **Fase 3 (monorepo)** y **Fase 4 (MVP: M1, M2, M3) implementadas y verificadas en carril hermético** (rama `feat/phase-4-m3`): Store SQLite, runtime en primer plano con recuperación tras caída, proyectos, tareas y planes, Broker con tope de tokens, proveedores configurables, adaptador de Pi y puente, criterios de aceptación, metodologías como bloques, instalador sin tocar el PATH.
+> **Carril real pendiente:** nada se ha ejecutado todavía contra Pi 1.2.0 real ni contra CLIProxyAPI con clave. Para cerrarlo: `npm run runtime:install`, definir `HARIL_CLIPROXYAPI_KEY` y `HARIL_DEFAULT_MODEL`, y `npm run e2e:real`. Matriz de criterios: `odd/tasks/haril-phase4-m3.md`.
 
 ## Cómo probarlo
 
