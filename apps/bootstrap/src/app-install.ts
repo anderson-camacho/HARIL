@@ -2,6 +2,7 @@ import type { PlatformPath } from "node:path";
 import { parseManifest } from "./manifest.js";
 import { pathOps } from "./platform.js";
 import type { FsPort } from "./ports.js";
+import type { RuntimeCheck } from "./runtime-lease.js";
 import { sha256Hex } from "./shasums.js";
 import { SHIM_NAMES, shimContents } from "./shims.js";
 import { messageOf } from "./text.js";
@@ -49,6 +50,8 @@ export interface AppUninstallDeps {
   readonly root: string;
   readonly platform: string;
   readonly fs: FsPort;
+  // Criterion 15: consulted before anything is removed. Absent in tests that do not cover the guard.
+  readonly activeRuntime?: () => Promise<RuntimeCheck>;
 }
 
 export interface AppUninstallResult {
@@ -57,6 +60,8 @@ export interface AppUninstallResult {
   readonly removed: readonly string[];
   readonly kept: readonly string[];
   readonly detail: string;
+  // Set when uninstall refused before removing anything: a runtime is active, or its state is unknown.
+  readonly refusal?: "runtime_active" | "runtime_unknown";
 }
 
 // Build output the payload needs. `npm run build` produces all of it (apps/haril, bridge and bootstrap).
@@ -180,6 +185,28 @@ export async function installApp(deps: AppInstallDeps): Promise<AppInstallResult
 export async function uninstallApp(deps: AppUninstallDeps): Promise<AppUninstallResult> {
   const ops = pathOps(deps.platform);
   const currentPath = ops.join(deps.root, "app", "current.json");
+
+  const runtime = deps.activeRuntime === undefined ? undefined : await deps.activeRuntime();
+  if (runtime?.state === "active") {
+    return {
+      ok: false,
+      root: deps.root,
+      removed: [],
+      kept: await keptEntries(deps.fs, ops, deps.root),
+      detail: `a HARIL runtime is active (pid ${runtime.pid}): stop haril start, then run uninstall again; nothing was removed`,
+      refusal: "runtime_active",
+    };
+  }
+  if (runtime?.state === "unknown") {
+    return {
+      ok: false,
+      root: deps.root,
+      removed: [],
+      kept: await keptEntries(deps.fs, ops, deps.root),
+      detail: `could not read haril.db to check for an active runtime (${runtime.reason}); nothing was removed`,
+      refusal: "runtime_unknown",
+    };
+  }
 
   if (!(await deps.fs.exists(currentPath))) {
     return {

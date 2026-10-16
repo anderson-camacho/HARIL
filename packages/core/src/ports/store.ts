@@ -1,7 +1,7 @@
 // Store port for M1 (M1-D3): schema info, projects, the command queue, tasks, the runtime lease,
 // the run lifecycle and the event log. Operations are synchronous because node:sqlite is
 // synchronous. Errors carry a `store.*` code, except lease refusals, which are typed results.
-import type { BlockReason, Plan, RetryReason, TaskState } from "@haril/contracts";
+import type { Acceptance, BlockReason, Plan, RetryReason, TaskState } from "@haril/contracts";
 import type { HarilError, Result } from "./result.js";
 
 export type GateStatus = "ok" | "warn" | "error";
@@ -35,7 +35,13 @@ export type JsonObject = Readonly<Record<string, unknown>>;
 export interface StoreRules {
   canTransition(from: TaskState, to: TaskState): boolean;
   checkPlan(value: unknown): PlanCheck;
+  // Acceptance checks of a task.create command (M3-D7); a reason names what is wrong.
+  checkAcceptance(value: unknown): AcceptanceRuleResult;
 }
+
+export type AcceptanceRuleResult =
+  | { readonly ok: true; readonly acceptance: Acceptance }
+  | { readonly ok: false; readonly reason: string };
 
 export type PlanCheck =
   | { readonly ok: true; readonly plan: Plan; readonly order: readonly string[] }
@@ -74,8 +80,13 @@ export interface TaskDetail extends TaskRecord {
   readonly description: string;
   readonly model: string | null;
   readonly maxTokens: number;
-  // The error of the newest failed attempt of the task, if any (M2-T6, haril task show).
-  readonly error: { readonly code: string; readonly message: string } | null;
+  // The error of the newest failed attempt of the task, if any (M2-T6, haril task show). A verification_failed
+  // attempt keeps its host evidence in `verification` (M3-D7).
+  readonly error: {
+    readonly code: string;
+    readonly message: string;
+    readonly verification?: JsonObject;
+  } | null;
   readonly attempt: number;
   readonly attemptsUsed: number;
   readonly maxAttempts: number;
@@ -147,6 +158,9 @@ export interface MetricsSnapshot {
   readonly closedRuns: number;
   readonly durationTotalMs: number;
   readonly perAgent: readonly AgentMetrics[];
+  // Completed tasks whose host checks all passed, and completed tasks without a passing verification (M3-D7).
+  readonly verifiedCompletions: number;
+  readonly unverifiedCompletions: number;
 }
 
 export interface RuntimeBusyError extends HarilError {
@@ -211,6 +225,8 @@ export interface ClaimedTask {
   // Real agents (M2-T6): the requested model (null when none) and the task token ceiling (0 when none).
   readonly model: string | null;
   readonly maxTokens: number;
+  // Host acceptance checks of the task (M3-D7), evaluated after the agent settles.
+  readonly acceptance: Acceptance;
   readonly attempt: number;
   readonly attemptsUsed: number;
   readonly maxAttempts: number;
@@ -226,6 +242,8 @@ export type RunCompletion =
       readonly outcome: "failed";
       readonly error: { readonly code: string; readonly message: string };
       readonly endCause: "exit" | "timeout";
+      // Host evidence of a verification_failed attempt (M3-D7); stored with the run error.
+      readonly verification?: JsonObject;
     };
 
 export interface CompletedRun {

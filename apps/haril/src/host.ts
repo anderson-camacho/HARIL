@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { canTransition, checkPlanSubmission } from "@haril/core";
+import { canTransition, checkAcceptance, checkPlanSubmission } from "@haril/core";
 import type { AgentRuntime, Clock, Ids, Store } from "@haril/core/ports";
 import { FakeAgentRuntime } from "@haril/core/testing";
 import { inspectStore, openStore, type StoreInspection } from "@haril/state-sqlite";
@@ -8,7 +8,7 @@ import type { HostInfo } from "./context.js";
 // Production wiring of the Clock, Ids and Core rules. The Core never reads the clock or randomness (R7);
 // the composition root does.
 
-const STORE_RULES = { canTransition, checkPlan: checkPlanSubmission };
+const STORE_RULES = { canTransition, checkPlan: checkPlanSubmission, checkAcceptance };
 
 const systemClock: Clock = {
   now: () => Date.now(),

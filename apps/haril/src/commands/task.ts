@@ -1,4 +1,5 @@
-import { isRealAgent } from "@haril/core";
+import type { AcceptanceCheck } from "@haril/contracts";
+import { isRealAgent, type Verification } from "@haril/core";
 import { allValues, argsProblem, lastValue, type ParsedArgs, parseArgs } from "../args.js";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
 import { storeAccess } from "../host.js";
@@ -13,7 +14,7 @@ const DEFAULT_TIMEOUT_MS = 120000;
 const DEFAULT_MAX_TOKENS = 20000; // M2-D5
 const MODEL_ENV = "HARIL_DEFAULT_MODEL";
 const TASK_ADD_USAGE =
-  'usage: haril task add "<title>" [--project <slug>] [--depends-on <taskId>]... [--agent <agentRef>] [--model <id>] [--max-tokens <n>] [--max-attempts <n>] [--timeout-ms <n>] [--idempotency-key <key>] [--json] [--data-dir <path>]';
+  'usage: haril task add "<title>" [--project <slug>] [--depends-on <taskId>]... [--agent <agentRef>] [--model <id>] [--max-tokens <n>] [--max-attempts <n>] [--timeout-ms <n>] [--accept-file <path>]... [--accept-contains <path>=<text>]... [--accept-output <text>]... [--idempotency-key <key>] [--json] [--data-dir <path>]';
 const TASK_SHOW_USAGE = "usage: haril task show <taskId> [--json] [--data-dir <path>]";
 const NOT_INITIALIZED =
   "store not initialized (run haril project init <path> --name <name> --yes first)";
@@ -38,6 +39,9 @@ function taskAdd(args: readonly string[], io: CliIo, host: HostInfo): number {
       "--max-tokens",
       "--max-attempts",
       "--timeout-ms",
+      "--accept-file",
+      "--accept-contains",
+      "--accept-output",
       "--idempotency-key",
       "--data-dir",
     ],
@@ -83,6 +87,8 @@ function taskAdd(args: readonly string[], io: CliIo, host: HostInfo): number {
   const timeoutMs = intOption(io, parsed, "--timeout-ms", DEFAULT_TIMEOUT_MS);
   const maxTokens = intOption(io, parsed, "--max-tokens", DEFAULT_MAX_TOKENS);
   if (maxAttempts === null || timeoutMs === null || maxTokens === null) return EXIT_USAGE;
+  const acceptance = acceptanceFromFlags(io, parsed);
+  if (acceptance === null) return EXIT_USAGE;
   const explicitKey = lastValue(parsed, "--idempotency-key");
   if (explicitKey !== undefined && explicitKey.trim() === "") {
     io.err("haril: --idempotency-key needs a value");
@@ -103,6 +109,7 @@ function taskAdd(args: readonly string[], io: CliIo, host: HostInfo): number {
         timeoutMs,
         model: model ?? null,
         maxTokens,
+        acceptance,
       },
       idempotencyKey,
     }),
@@ -145,6 +152,8 @@ function taskShow(args: readonly string[], io: CliIo, host: HostInfo): number {
       attempts: { used: detail.attemptsUsed, max: detail.maxAttempts },
       result: detail.result,
       error: detail.error,
+      // The host verification of the settled attempt: the result of a completed task, the evidence of a failed one.
+      verification: verificationOf(detail.result, detail.error),
       permissionDenials,
       tokens:
         usage === null
@@ -164,6 +173,7 @@ function taskShow(args: readonly string[], io: CliIo, host: HostInfo): number {
     io.out(`attempts ${view.attempts.used}/${view.attempts.max}, max tokens ${view.maxTokens}`);
     io.out(`result: ${resultText(view.result)}`);
     if (view.error !== null) io.out(`error: ${view.error.code}: ${view.error.message}`);
+    printVerification(io, view.verification);
     io.out(`permission denials: ${view.permissionDenials}`);
     io.out(
       view.tokens === null
@@ -183,6 +193,59 @@ function resultText(result: Readonly<Record<string, unknown>> | null): string {
   if (typeof result.summary === "string") return result.summary;
   if (result.simulated === true) return "simulated (no real agent)";
   return JSON.stringify(result);
+}
+
+// The acceptance checks of `task add` (M3-D7). Each flag repeats; a problem prints and returns null.
+function acceptanceFromFlags(io: CliIo, parsed: ParsedArgs): AcceptanceCheck[] | null {
+  const checks: AcceptanceCheck[] = [];
+  for (const raw of allValues(parsed, "--accept-file")) {
+    const path = raw.trim();
+    if (path === "") {
+      io.err("haril: --accept-file needs a path relative to the project root");
+      return null;
+    }
+    checks.push({ kind: "file_exists", path });
+  }
+  for (const raw of allValues(parsed, "--accept-contains")) {
+    const separator = raw.indexOf("=");
+    const path = separator < 0 ? "" : raw.slice(0, separator).trim();
+    const text = separator < 0 ? "" : raw.slice(separator + 1);
+    if (path === "" || text === "") {
+      io.err("haril: --accept-contains needs <path>=<text> with a path and a non-empty text");
+      return null;
+    }
+    checks.push({ kind: "file_contains", path, text });
+  }
+  for (const text of allValues(parsed, "--accept-output")) {
+    if (text.trim() === "") {
+      io.err("haril: --accept-output needs a non-empty text");
+      return null;
+    }
+    checks.push({ kind: "output_contains", text });
+  }
+  return checks;
+}
+
+// The verification stored with the settled attempt, read from the result or from the failed attempt's evidence.
+function verificationOf(
+  result: Readonly<Record<string, unknown>> | null,
+  error: { readonly verification?: unknown } | null,
+): Verification | null {
+  const candidate = result?.verification ?? error?.verification;
+  return candidate === undefined || candidate === null ? null : (candidate as Verification);
+}
+
+function printVerification(io: CliIo, verification: Verification | null): void {
+  if (verification === null) return;
+  const state = verification.verified
+    ? "verified"
+    : verification.checks.length === 0
+      ? "unverified (no acceptance checks)"
+      : "not verified";
+  io.out(`verification: ${state}`);
+  for (const check of verification.checks) {
+    io.out(`  ${check.ok ? "ok" : "failed"} ${check.kind}: ${check.detail}`);
+  }
 }
 
 function nonEmpty(value: string | undefined): string | undefined {

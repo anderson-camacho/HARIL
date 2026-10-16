@@ -1,4 +1,5 @@
 import { Type } from "typebox";
+import { AcceptanceSchema } from "./acceptance.js";
 import { TaskKindSchema } from "./enums.js";
 
 // Shared task-spec fields used by Task (schemas.md section 5) and PlanTask (section 6).
@@ -16,17 +17,6 @@ export const ArtifactRefSchema = Type.String({ minLength: 1 });
 const GlobSchema = Type.String({ minLength: 1 });
 // TODO(ARCH 5.3): the currency and unit of maxCostMicros are not defined.
 const MicrosSchema = Type.Integer({ minimum: 0 });
-
-// VerifierRef is `{ blockId, checkId, params? }` (schemas.md section 4); the type of params is a guess.
-const VerifierRefSchema = Type.Object(
-  {
-    blockId: Type.String({ minLength: 1 }),
-    checkId: Type.String({ minLength: 1 }),
-    // TODO(schemas.md section 4): params type not defined; open record assumed.
-    params: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
-  },
-  { additionalProperties: false },
-);
 
 const SurfaceSchema = Type.Object(
   { write: Type.Array(GlobSchema), read: Type.Array(GlobSchema) },
@@ -54,5 +44,5 @@ export const TaskSpecFields = {
   budget: BudgetSchema,
   timeoutMs: Type.Integer({ exclusiveMinimum: 0 }),
   maxAttempts: Type.Integer({ minimum: 1 }),
-  acceptance: Type.Array(VerifierRefSchema),
+  acceptance: AcceptanceSchema,
 };

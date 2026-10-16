@@ -35,6 +35,9 @@ interface MetricsView {
   readonly orphanedRecoveries: number;
   // PathGuard denials recorded as tool.denied events (criterion 12).
   readonly permissionDenials: number;
+  // Completed tasks whose host checks all passed, and the ones completed without a passing verification (M3-D7).
+  readonly verifiedCompletions: number;
+  readonly unverifiedCompletions: number;
   readonly successRate: number | null;
   readonly duration: { readonly totalMs: number; readonly averageMs: number | null };
   readonly agents: ReadonlyArray<{
@@ -137,6 +140,8 @@ function toView(
     retries: snapshot.retries,
     orphanedRecoveries: snapshot.orphanedRecoveries,
     permissionDenials,
+    verifiedCompletions: snapshot.verifiedCompletions,
+    unverifiedCompletions: snapshot.unverifiedCompletions,
     // Success counts the attempts the agent settled; an orphaned attempt is the runtime's loss, not the agent's.
     successRate: completed + failed === 0 ? null : completed / (completed + failed),
     duration: {
@@ -180,6 +185,9 @@ function printText(io: CliIo, view: MetricsView): void {
   io.out(`retries: ${view.retries}`);
   io.out(`orphaned recoveries: ${view.orphanedRecoveries}`);
   io.out(`permission denials: ${view.permissionDenials}`);
+  io.out(
+    `completions: verified ${view.verifiedCompletions}, unverified ${view.unverifiedCompletions}`,
+  );
   io.out(
     `success rate: ${view.successRate === null ? "n/a (no settled runs)" : `${(view.successRate * 100).toFixed(1)}%`}`,
   );

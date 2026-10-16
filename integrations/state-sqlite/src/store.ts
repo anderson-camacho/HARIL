@@ -122,6 +122,7 @@ interface ReadyRow {
   readonly agentRef: string;
   readonly model: string | null;
   readonly maxTokens: number;
+  readonly acceptance: string;
   readonly attempt: number;
   readonly attemptsUsed: number;
   readonly maxAttempts: number;
@@ -542,7 +543,7 @@ export class SqliteStore implements Store {
 
   private applyTaskCreate(command: CommandRecord, now: number): ApplyVerdict {
     const projectId = command.projectId ?? "";
-    const parsed = parseTaskCreateArgs(command.args);
+    const parsed = parseTaskCreateArgs(command.args, this.rules.checkAcceptance);
     if (typeof parsed === "string") return { ok: false, reason: parsed };
 
     const dependsOn = [...new Set(parsed.dependsOn)];
@@ -572,7 +573,7 @@ export class SqliteStore implements Store {
         budget: { maxCostMicros: 0, maxTokens: parsed.maxTokens, maxWallMs: parsed.timeoutMs },
         timeoutMs: parsed.timeoutMs,
         maxAttempts: parsed.maxAttempts,
-        acceptance: [],
+        acceptance: parsed.acceptance,
         state: dependsOn.length === 0 ? "ready" : "pending",
       },
       now,
@@ -809,7 +810,7 @@ export class SqliteStore implements Store {
           : ` AND agent_ref NOT IN (${excluded.map(() => "?").join(", ")})`;
       const row = this.db
         .prepare(
-          `SELECT task_id AS taskId, project_id AS projectId, goal, description, agent_ref AS agentRef, model, budget_max_tokens AS maxTokens, attempt, attempts_used AS attemptsUsed, max_attempts AS maxAttempts, timeout_ms AS timeoutMs, claim_epoch AS claimEpoch FROM tasks WHERE state = 'ready'${notExcluded} ORDER BY priority DESC, created_seq LIMIT 1`,
+          `SELECT task_id AS taskId, project_id AS projectId, goal, description, agent_ref AS agentRef, model, budget_max_tokens AS maxTokens, acceptance, attempt, attempts_used AS attemptsUsed, max_attempts AS maxAttempts, timeout_ms AS timeoutMs, claim_epoch AS claimEpoch FROM tasks WHERE state = 'ready'${notExcluded} ORDER BY priority DESC, created_seq LIMIT 1`,
         )
         .get(...excluded) as unknown as ReadyRow | undefined;
       if (row === undefined) return undefined;
@@ -865,6 +866,7 @@ export class SqliteStore implements Store {
         agentRef: row.agentRef,
         model: row.model,
         maxTokens: row.maxTokens,
+        acceptance: JSON.parse(row.acceptance) as ClaimedTask["acceptance"],
         attempt,
         attemptsUsed: row.attemptsUsed,
         maxAttempts: row.maxAttempts,
@@ -958,7 +960,18 @@ export class SqliteStore implements Store {
         .prepare(
           "UPDATE runs SET status = 'failed', ended_at = ?, end_cause = ?, error = ? WHERE run_id = ?",
         )
-        .run(now, completion.endCause, JSON.stringify(completion.error), completion.runId);
+        .run(
+          now,
+          completion.endCause,
+          // The host evidence of a verification_failed attempt rides in the error (M3-D7).
+          JSON.stringify({
+            ...completion.error,
+            ...(completion.verification === undefined
+              ? {}
+              : { verification: completion.verification }),
+          }),
+          completion.runId,
+        );
       if (attemptsUsed < task.maxAttempts) {
         this.transition("running", "ready");
         this.db
@@ -1133,9 +1146,26 @@ export class SqliteStore implements Store {
       )
       .all(scope, scope) as unknown as AgentMetrics[];
 
+    const completedTotal = (
+      this.db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM tasks WHERE state = 'completed' AND (? IS NULL OR project_id = ?)",
+        )
+        .get(scope, scope) as { n: number }
+    ).n;
+    const verifiedCompletions = (
+      this.db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM tasks WHERE state = 'completed' AND json_extract(result, '$.verification.verified') = 1 AND (? IS NULL OR project_id = ?)",
+        )
+        .get(scope, scope) as { n: number }
+    ).n;
+
     return {
       tasksByState,
       runsByStatus,
+      verifiedCompletions,
+      unverifiedCompletions: completedTotal - verifiedCompletions,
       retries: countEvents("task.retried"),
       orphanedRecoveries: countEvents("task.orphaned"),
       closedRuns: closed.n,
@@ -1235,7 +1265,10 @@ function parseCommand(row: CommandRow): CommandRecord {
 }
 
 // Validates the task.create arguments written by `haril task add`; a string is the rejection reason.
-function parseTaskCreateArgs(args: Readonly<Record<string, unknown>>):
+function parseTaskCreateArgs(
+  args: Readonly<Record<string, unknown>>,
+  checkAcceptance: StoreRules["checkAcceptance"],
+):
   | {
       goal: string;
       dependsOn: string[];
@@ -1244,6 +1277,7 @@ function parseTaskCreateArgs(args: Readonly<Record<string, unknown>>):
       maxAttempts: number;
       timeoutMs: number;
       maxTokens: number;
+      acceptance: ClaimedTask["acceptance"];
     }
   | string {
   const goal = args.goal;
@@ -1271,6 +1305,9 @@ function parseTaskCreateArgs(args: Readonly<Record<string, unknown>>):
   if (!Number.isSafeInteger(timeoutMs) || (timeoutMs as number) < 1) {
     return "timeoutMs must be a whole number of at least 1";
   }
+  // Optional (M3-D7): absent means no acceptance checks; the rule names the first problem.
+  const acceptance = checkAcceptance(args.acceptance ?? []);
+  if (!acceptance.ok) return acceptance.reason;
   return {
     goal,
     dependsOn: dependsOn as string[],
@@ -1279,6 +1316,7 @@ function parseTaskCreateArgs(args: Readonly<Record<string, unknown>>):
     maxAttempts: maxAttempts as number,
     timeoutMs: timeoutMs as number,
     maxTokens: maxTokens as number,
+    acceptance: acceptance.acceptance,
   };
 }
 

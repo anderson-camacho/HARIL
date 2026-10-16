@@ -1,6 +1,7 @@
 // Executor rules (M1-T5): the AgentSpec built from a claimed task, the handshake check that runs
 // before any prompt is sent, and the mapping of an agent outcome to the run completion. Pure.
 import type { AgentOutcome, AgentSpec, HarilError, Result, RunCompletion } from "../ports/index.js";
+import { hasFailedCheck, type Verification, verificationFailureMessage } from "./verification.js";
 
 // M1 gives every agent the same single tool; the real tool policy arrives with Pi (M2).
 export const M1_ALLOWED_TOOLS: readonly string[] = ["read"];
@@ -67,11 +68,31 @@ export function checkHandshake(
   };
 }
 
-export function completionFor(runId: string, outcome: AgentOutcome): RunCompletion {
+// `verification` is the host evaluation of the acceptance checks after a succeeded outcome (M3-D7). A failed
+// check turns the attempt into a verification_failed failure that keeps the evidence; a passing or unverified
+// success keeps it in the result.
+export function completionFor(
+  runId: string,
+  outcome: AgentOutcome,
+  verification?: Verification,
+): RunCompletion {
   switch (outcome.status) {
-    case "succeeded":
+    case "succeeded": {
+      if (verification !== undefined && hasFailedCheck(verification)) {
+        return {
+          runId,
+          outcome: "failed",
+          error: {
+            code: "verification_failed",
+            message: verificationFailureMessage(verification),
+          },
+          endCause: "exit",
+          verification: { ...verification },
+        };
+      }
+      const evidence = verification === undefined ? {} : { verification: { ...verification } };
       if (outcome.simulated === true) {
-        return { runId, outcome: "succeeded", result: { simulated: true } };
+        return { runId, outcome: "succeeded", result: { simulated: true, ...evidence } };
       }
       if (outcome.model !== undefined) {
         return {
@@ -81,10 +102,12 @@ export function completionFor(runId: string, outcome: AgentOutcome): RunCompleti
             text: outcome.summary,
             model: outcome.model,
             warnings: [...(outcome.warnings ?? [])],
+            ...evidence,
           },
         };
       }
-      return { runId, outcome: "succeeded", result: { summary: outcome.summary } };
+      return { runId, outcome: "succeeded", result: { summary: outcome.summary, ...evidence } };
+    }
     case "failed":
       return {
         runId,
@@ -108,3 +131,5 @@ export function completionFor(runId: string, outcome: AgentOutcome): RunCompleti
       };
   }
 }
+
+export * from "./verification.js";

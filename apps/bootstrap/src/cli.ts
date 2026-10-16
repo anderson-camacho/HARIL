@@ -4,12 +4,14 @@ import { installRuntime } from "./install.js";
 import { pathOps } from "./platform.js";
 import type { ExecPort, FetchPort, FsPort } from "./ports.js";
 import { resolveRuntimeRoot } from "./root.js";
+import { checkActiveRuntime, pidIsAlive } from "./runtime-lease.js";
 
 // Command line of haril-bootstrap:
 //   install-runtime [--root <dir>] [--json]              Node and Pi (M2-T3)
 //   install [--root <dir>] [--from <repo dir>] [--json]  HARIL itself into <root>/app and <root>/bin (M3-T3)
 //   uninstall [--root <dir>] [--json]                    removes only what install recorded (M3-T3)
-// Exit 0 when no step failed, 1 otherwise (usage errors included).
+// Exit 0 when no step failed, 2 when uninstall refuses because a runtime is active (M3-T6b), 1 otherwise
+// (usage errors included).
 
 export interface CliIo {
   out(line: string): void;
@@ -174,10 +176,22 @@ async function uninstallCommand(
     return 1;
   }
 
+  const root = rootFrom(options, host);
+  // The data directory is HARIL_HOME when set (haril's own rule), else the data/ directory under the root.
+  const ops = pathOps(host.platform);
+  const home = host.env.HARIL_HOME;
+  const dataDir = home === undefined || home === "" ? ops.join(root, "data") : home;
   const result = await uninstallApp({
-    root: rootFrom(options, host),
+    root,
     platform: host.platform,
     fs: host.fs,
+    activeRuntime: () =>
+      checkActiveRuntime({
+        dbPath: ops.join(dataDir, "haril.db"),
+        fs: host.fs,
+        now: Date.now(),
+        isAlive: pidIsAlive,
+      }),
   });
 
   if (options.json) {
@@ -190,5 +204,6 @@ async function uninstallCommand(
       io.err(result.detail);
     }
   }
+  if (result.refusal !== undefined) return 2;
   return result.ok ? 0 : 1;
 }

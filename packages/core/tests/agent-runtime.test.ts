@@ -131,6 +131,18 @@ describe("AgentRuntime contract (FakeAgentRuntime)", () => {
       simulated: true,
     });
   });
+
+  it("fake:say:<text> succeeds with exactly that text as its final output (M3-T6a)", async () => {
+    const { runtime } = setup();
+    const result = await runtime.start(spec("fake:say:Hello from fake, with spaces"));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    await result.value.prompt("go");
+    expect(await result.value.settled).toEqual({
+      status: "succeeded",
+      summary: "Hello from fake, with spaces",
+    });
+  });
 });
 
 describe("FakeClock", () => {

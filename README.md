@@ -63,6 +63,14 @@ Requisitos: Node 24 (recomendado `^24.21.0`; con 24.19 funciona y `doctor` avisa
 
 8. Limpiar la variable de sesión: `Remove-Item Env:HARIL_HOME`.
 
+`task add` admite comprobaciones que el host ejecuta tras el agente; una comprobación fallida hace fallar el intento:
+
+| Flag | Comprobación |
+|---|---|
+| `--accept-file <ruta>` | El archivo existe dentro de la raíz del proyecto |
+| `--accept-contains <ruta>=<texto>` | El archivo contiene el texto |
+| `--accept-output <texto>` | La respuesta final del agente contiene el texto |
+
 ### Instalar HARIL en tu usuario
 
 El instalador copia la CLI compilada a `%LOCALAPPDATA%\HARIL\app\<versión>\` y crea los lanzadores en `%LOCALAPPDATA%\HARIL\bin\`. No edita el PATH ni el registro: se llama al lanzador por su ruta completa.

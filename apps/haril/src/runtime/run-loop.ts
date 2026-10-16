@@ -2,12 +2,14 @@ import {
   buildAgentSpec,
   checkHandshake,
   completionFor,
+  evaluateAcceptance,
   isRealAgent,
   MAX_INFRA_RESTARTS,
   REAL_AGENT_REFS,
   type RunEvent,
   type RunSummary,
   summarizeRun,
+  type Verification,
 } from "@haril/core";
 import type {
   AgentHandle,
@@ -20,6 +22,7 @@ import type {
   Store,
 } from "@haril/core/ports";
 import { StoreError } from "@haril/state-sqlite";
+import { projectFileReader, verificationPayload } from "./acceptance.js";
 import type { RealAgentReadiness, RealAgents } from "./real-agent.js";
 
 // Foreground runtime loop (M1-D6): acquire the lease, apply the queue, promote, claim, run, complete,
@@ -129,7 +132,11 @@ async function drainQueue(
     });
 
     const outcome = await executeAttempt(options, epoch, claimed);
-    const completion = completionFor(claimed.runId, outcome);
+    // M3-D7: the host checks the acceptance of a succeeded attempt; the agent never judges its own work.
+    const verification =
+      outcome.status === "succeeded" ? verifyAttempt(store, claimed, outcome.summary) : undefined;
+    if (verification !== undefined) recordVerification(store, claimed, verification);
+    const completion = completionFor(claimed.runId, outcome, verification);
     const result = store.runs.complete(completion);
     const code = completion.outcome === "failed" ? completion.error.code : "";
     if (result.taskState === "completed") {
@@ -152,6 +159,29 @@ async function drainQueue(
       emit({ type: "task.failed", taskId: result.taskId, goal: result.goal, code });
     }
   }
+}
+
+function verifyAttempt(store: Store, claimed: ClaimedTask, outputText: string): Verification {
+  return evaluateAcceptance(claimed.acceptance, {
+    readFile: projectFileReader(store, claimed.projectId),
+    outputText,
+  });
+}
+
+// A task without checks leaves no verify event: its unverified completion is in the result (M3-D7).
+function recordVerification(store: Store, claimed: ClaimedTask, verification: Verification): void {
+  if (verification.checks.length === 0) return;
+  store.events.append({
+    aggregateType: "task",
+    aggregateId: claimed.taskId,
+    type: verification.verified ? "verify.passed" : "verify.failed",
+    actorKind: "system",
+    actorId: "runtime",
+    payload: { attempt: claimed.attempt, ...verificationPayload(verification) },
+    projectId: claimed.projectId,
+    taskId: claimed.taskId,
+    runId: claimed.runId,
+  });
 }
 
 // Each ready task of a real agent is reported once per run, with what is missing and how to add it.

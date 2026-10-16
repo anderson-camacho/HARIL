@@ -11,7 +11,8 @@ import type {
 } from "../src/ports/index.js";
 
 // Simulated agent (M1-D7). The behaviour is chosen by agentRef:
-//   fake:succeed (default), fake:fail, fake:slow:<ms>; any other ref succeeds as a simulated run until M2.
+//   fake:succeed (default), fake:fail, fake:slow:<ms>, fake:say:<text> (its final output is <text>, M3-T6a);
+//   any other ref succeeds as a simulated run until M2.
 // Work starts when prompt() is accepted; a slow run settles at its completion time or at timeoutMs.
 
 export interface FakeAgentRuntimeOptions {
@@ -24,9 +25,11 @@ type Behaviour =
   | { readonly kind: "succeed" }
   | { readonly kind: "fail" }
   | { readonly kind: "slow"; readonly ms: number }
-  | { readonly kind: "simulated" };
+  | { readonly kind: "simulated" }
+  | { readonly kind: "say"; readonly text: string };
 
 const SLOW_REF = /^fake:slow:(\d+)$/;
+const SAY_REF = /^fake:say:(.+)$/s;
 
 // M1 fix (a): an unknown ref is not an error in M1; it is a simulated success until a real agent exists (M2).
 function parseAgentRef(agentRef: string): Behaviour {
@@ -34,6 +37,8 @@ function parseAgentRef(agentRef: string): Behaviour {
   if (agentRef === "fake:fail") return { kind: "fail" };
   const slow = SLOW_REF.exec(agentRef);
   if (slow !== null) return { kind: "slow", ms: Number(slow[1]) };
+  const say = SAY_REF.exec(agentRef);
+  if (say !== null) return { kind: "say", text: say[1] ?? "" };
   return { kind: "simulated" };
 }
 
@@ -105,6 +110,8 @@ class FakeAgentHandle implements AgentHandle {
     const { behaviour, options, spec } = this;
     if (behaviour.kind === "succeed") {
       this.finish({ status: "succeeded", summary: "fake agent succeeded" });
+    } else if (behaviour.kind === "say") {
+      this.finish({ status: "succeeded", summary: behaviour.text });
     } else if (behaviour.kind === "simulated") {
       this.finish({
         status: "succeeded",

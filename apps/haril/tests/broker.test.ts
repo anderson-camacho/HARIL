@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { request } from "node:http";
 import { connect } from "node:net";
 import { join } from "node:path";
-import { canTransition, checkPlanSubmission } from "@haril/core";
+import { canTransition, checkAcceptance, checkPlanSubmission } from "@haril/core";
 import type { Clock, Store } from "@haril/core/ports";
 import { type Broker, startBroker, type UpstreamClient } from "@haril/gateway";
 import { type FakeOpenAiServer, startFakeOpenAiServer } from "@haril/gateway/testing";
@@ -96,7 +96,7 @@ beforeEach(async () => {
     dataDir: sb.dataDir,
     clock,
     ids: { next: () => `id-${String(++n).padStart(6, "0")}` },
-    rules: { canTransition, checkPlan: checkPlanSubmission },
+    rules: { canTransition, checkPlan: checkPlanSubmission, checkAcceptance },
   });
   projectId = store.projects.register({ slug: "demo", name: "Demo", rootPath: sb.root }).projectId;
   const grant = store.runtime.acquire({

@@ -46,6 +46,10 @@ const E2E_LONG_MARKER = "E2E-LONG-REPLY";
 const E2E_LONG_CHUNKS = 400;
 const E2E_OUTSIDE_SECRET = "e2e outside secret: must never reach the store";
 const E2E_TOKEN_CAP = 40;
+const E2E_SAY = "e2e agent reply: verified";
+const E2E_VERIFIED_TEXT = "E2E-VERIFIED-TEXT";
+const E2E_SLOW_MS = 6_000;
+const E2E_STOP_TIMEOUT_MS = 30_000;
 
 const session = {
   root: "",
@@ -613,6 +617,71 @@ const steps = [
     },
   ],
   [
+    "criterion 8: a failed host check fails the task",
+    () => {
+      expectCode(
+        [
+          "task",
+          "add",
+          "Unmet check",
+          "--agent",
+          `fake:say:${E2E_SAY}`,
+          "--accept-output",
+          "text the agent never says",
+          "--project",
+          "demo",
+        ],
+        [0],
+      );
+      expectCode(["start", "--project", "demo"], [1]);
+      const taskId = statusReport().taskList.find((task) => task.goal === "Unmet check")?.taskId;
+      expect(taskId !== undefined, "no unmet-check task in status");
+      const view = expectJson(["task", "show", taskId, "--json"]);
+      expect(view.state === "failed", `state ${view.state}`);
+      expect(view.error?.code === "verification_failed", `error ${view.error?.code}`);
+      expect(view.verification?.verified === false, "the failed evidence says verified");
+    },
+  ],
+  [
+    "criterion 8: passing checks mark the task verified",
+    () => {
+      writeFileSync(
+        join(session.projectDir, "verified.txt"),
+        `${E2E_VERIFIED_TEXT}
+`,
+      );
+      expectCode(
+        [
+          "task",
+          "add",
+          "Verified check",
+          "--agent",
+          `fake:say:${E2E_SAY}`,
+          "--accept-file",
+          "verified.txt",
+          "--accept-contains",
+          `verified.txt=${E2E_VERIFIED_TEXT}`,
+          "--accept-output",
+          E2E_SAY,
+          "--project",
+          "demo",
+        ],
+        [0],
+      );
+      expectCode(["start", "--project", "demo"], [0]);
+      const taskId = statusReport().taskList.find((task) => task.goal === "Verified check")?.taskId;
+      expect(taskId !== undefined, "no verified-check task in status");
+      const view = expectJson(["task", "show", taskId, "--json"]);
+      expect(view.state === "completed", `state ${view.state}`);
+      expect(view.verification?.verified === true, "the passing checks are not verified");
+      const metrics = expectJson(["metrics", "--json", "--project", "demo"]);
+      expect(
+        metrics.verifiedCompletions >= 1,
+        `verifiedCompletions ${metrics.verifiedCompletions}`,
+      );
+    },
+  ],
+  [
     "installer: haril-bootstrap install into a temp root",
     () => {
       const result = bootstrap(["install", "--root", session.installRoot, "--from", REPO]);
@@ -647,6 +716,44 @@ const steps = [
       const doctor = launcher(["doctor"]);
       expect(doctor.code === 0 || doctor.code === 1, `doctor exited ${doctor.code}`);
       return `haril ${packageVersion()}, doctor exit ${doctor.code}`;
+    },
+  ],
+  [
+    "criterion 15: uninstall refuses while a runtime is active",
+    async () => {
+      expectCode(
+        ["task", "add", "Long run", "--agent", `fake:slow:${E2E_SLOW_MS}`, "--project", "demo"],
+        [0],
+      );
+      const logFd = openSync(session.runtimeLog, "w");
+      const child = spawn(process.execPath, [ENTRY, "start", "--project", "demo"], {
+        cwd: session.root,
+        env: session.env,
+        detached: true,
+        stdio: ["ignore", logFd, logFd],
+        windowsHide: true,
+      });
+      closeSync(logFd);
+      child.unref();
+      session.runtimePid = child.pid;
+      await waitFor(
+        () => statusReport().runtime.status === "active",
+        CRASH_POLL_TIMEOUT_MS,
+        "the runtime lease to be active",
+      );
+      const refused = bootstrap(["uninstall", "--root", session.installRoot]);
+      expect(refused.code === 2, `uninstall exited ${refused.code}, expected 2`);
+      expect(/runtime is active/.test(refused.err), `no refusal message: ${refused.err}`);
+      expect(
+        existsSync(join(session.installRoot, "bin")) &&
+          existsSync(join(session.installRoot, "app")),
+        "uninstall removed the install while a runtime was active",
+      );
+      await waitFor(
+        () => statusReport().runtime.status !== "active",
+        E2E_STOP_TIMEOUT_MS,
+        "the slow run to release the lease",
+      );
     },
   ],
   [
