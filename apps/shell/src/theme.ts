@@ -51,6 +51,9 @@ const NATIVE: Readonly<Record<string, unknown>> = {
   "haril-light": lightTheme,
 };
 
+// The themes built into the bundle, in the order the Themes panel lists them.
+export const NATIVE_THEME_NAMES: readonly string[] = Object.keys(NATIVE);
+
 const HEX = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
 const PLAIN_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const MAX_REFERENCE_DEPTH = 16;

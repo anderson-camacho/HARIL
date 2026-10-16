@@ -8,7 +8,10 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@earendil-works/pi-tui": "1.3.0"
+    "@earendil-works/pi-tui": "1.3.0",
+    "@haril/contracts": "workspace:*",
+    "@haril/core": "workspace:*",
+    "@haril/state-sqlite": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "24.19.2"

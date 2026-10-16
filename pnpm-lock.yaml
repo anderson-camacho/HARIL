@@ -218,6 +218,15 @@ importers:
       '@earendil-works/pi-tui':
         specifier: 1.3.0
         version: 1.3.0
+      '@haril/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@haril/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@haril/state-sqlite':
+        specifier: workspace:*
+        version: link:../../integrations/state-sqlite
     devDependencies:
       '@types/node':
         specifier: 24.19.2

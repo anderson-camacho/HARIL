@@ -1,8 +1,17 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "tsdown";
 
-// One self-contained ESM file: pi-tui and its JavaScript dependencies are inlined, so the installed release needs
-// no node_modules. Its optional native addon is not shipped; pi-tui loads it fail-soft (TUI-D11).
+// One self-contained ESM file: pi-tui, the @haril/* workspace packages and typebox are inlined, node:* builtins stay
+// external, so the installed release needs no node_modules. pi-tui's optional native addon is not shipped; pi-tui
+// loads it fail-soft (TUI-D11).
+const BUNDLED = [
+  /^@earendil-works\/pi-tui(\/|$)/,
+  /^@haril\//,
+  /^marked(\/|$)/,
+  /^get-east-asian-width(\/|$)/,
+  /^typebox(\/|$)/,
+];
+
 export default defineConfig({
   entry: { shell: fileURLToPath(new URL("./src/main.ts", import.meta.url)) },
   format: "esm",
@@ -11,11 +20,8 @@ export default defineConfig({
   fixedExtension: true,
   clean: true,
   deps: {
-    alwaysBundle: [
-      /^@earendil-works\/pi-tui(\/|$)/,
-      /^marked(\/|$)/,
-      /^get-east-asian-width(\/|$)/,
-    ],
+    alwaysBundle: BUNDLED,
+    onlyBundle: BUNDLED,
   },
   banner: "#!/usr/bin/env node",
 });

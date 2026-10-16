@@ -1,0 +1,196 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { openShellData, type ShellSnapshot } from "../src/data.js";
+import { buildPanelView, buildTaskDetailView, type PanelContext } from "../src/panels/index.js";
+import { SEED_TITLES, seedStore } from "./seed.js";
+
+// Pure panel builders (TUI-D6): data in, lines out. No terminal is involved.
+
+let root: string;
+let dataDir: string;
+
+beforeEach(() => {
+  root = mkdtempSync(join(tmpdir(), "haril-shell-panels-"));
+  dataDir = join(root, "data");
+});
+
+afterEach(() => {
+  rmSync(root, { recursive: true, force: true });
+});
+
+const settings = {
+  dataDir: "/data",
+  runtimeRoot: "/runtime",
+  configPath: "/runtime/config/haril.json",
+  themeName: "haril-dark",
+  themeLabel: "haril-dark",
+};
+
+function loadSnapshot(scope: string | undefined): ShellSnapshot {
+  const data = openShellData({
+    paths: { dataDir, runtimeRoot: undefined, configPath: undefined },
+    env: {},
+  });
+  try {
+    return data.load(scope);
+  } finally {
+    data.close();
+  }
+}
+
+function contextFor(snapshot: ShellSnapshot, scope: string | undefined): PanelContext {
+  return { snapshot, settings, scope };
+}
+
+function texts(view: { items: readonly { text: string }[] }): string[] {
+  return view.items.map((item) => item.text);
+}
+
+describe("panel builders with a seeded store", () => {
+  it("projects: the all-projects row comes first, then each project with its slug", () => {
+    seedStore(dataDir);
+    const snapshot = loadSnapshot(undefined);
+    const view = buildPanelView("projects", contextFor(snapshot, undefined));
+    expect(view.items[0]?.text).toContain("all projects");
+    expect(texts(view).some((text) => text.includes("demo") && text.includes("/work/demo"))).toBe(
+      true,
+    );
+    expect(texts(view).some((text) => text.includes("other"))).toBe(true);
+  });
+
+  it("tasks: scoped to the chosen project, with state, agent, model and dependency status", () => {
+    const seeded = seedStore(dataDir);
+    const snapshot = loadSnapshot(seeded.demoId);
+    const view = buildPanelView("tasks", contextFor(snapshot, seeded.demoId));
+    const lines = texts(view);
+    expect(lines).toHaveLength(3);
+    expect(lines.some((line) => line.includes(SEED_TITLES.unrelated))).toBe(false);
+    const completed = lines.find((line) => line.includes(SEED_TITLES.completed));
+    expect(completed).toContain("completed");
+    expect(completed).toContain("fake-agent");
+    const pending = lines.find((line) => line.includes(SEED_TITLES.pending));
+    expect(pending).toContain("waiting");
+    expect(view.items.map((item) => item.value)).toContain(seeded.pendingTaskId);
+  });
+
+  it("tasks: without a scope the tasks of every project are listed", () => {
+    seedStore(dataDir);
+    const snapshot = loadSnapshot(undefined);
+    expect(texts(buildPanelView("tasks", contextFor(snapshot, undefined)))).toHaveLength(4);
+  });
+
+  it("task detail mirrors task show: result, verification checks, settled tokens and denials", () => {
+    const seeded = seedStore(dataDir);
+    const data = openShellData({
+      paths: { dataDir, runtimeRoot: undefined, configPath: undefined },
+      env: {},
+    });
+    try {
+      const view = data.taskDetail(seeded.completedTaskId);
+      if (view === undefined) throw new Error("completed task not found");
+      const lines = buildTaskDetailView(view);
+      expect(lines).toContain("result: Logs summarized");
+      expect(lines).toContain("verification: verified");
+      expect(lines).toContain("  ok file_exists: summary.md");
+      expect(lines).toContain("tokens: input 40, output 12, unreconciled 0");
+      expect(lines).toContain("permission denials: 1");
+    } finally {
+      data.close();
+    }
+  });
+
+  it("agents: the runtime lease summary and the tasks running now", () => {
+    seedStore(dataDir);
+    const snapshot = loadSnapshot(undefined);
+    const view = buildPanelView("agents", contextFor(snapshot, undefined));
+    expect(view.header.some((line) => line.startsWith("runtime active"))).toBe(true);
+    expect(texts(view)).toEqual([expect.stringContaining(SEED_TITLES.running)]);
+  });
+
+  it("events: one line per event, each with its type", () => {
+    seedStore(dataDir);
+    const snapshot = loadSnapshot(undefined);
+    const lines = texts(buildPanelView("events", contextFor(snapshot, undefined)));
+    expect(lines.some((line) => line.includes("task.created"))).toBe(true);
+    expect(lines.some((line) => line.includes("tool.denied"))).toBe(true);
+  });
+
+  it("tokens: a block per project with runs, success rate and ledger tokens", () => {
+    seedStore(dataDir);
+    const snapshot = loadSnapshot(undefined);
+    const lines = buildPanelView("tokens", contextFor(snapshot, undefined)).header;
+    expect(
+      lines.some(
+        (line) => line.includes("demo") && line.includes("in 40") && line.includes("out 12"),
+      ),
+    ).toBe(true);
+    expect(lines.some((line) => line.includes("success 100.0%"))).toBe(true);
+  });
+});
+
+describe("panel builders without a store or with unusual inputs", () => {
+  it("data panels show the empty state when no store exists", () => {
+    const snapshot = loadSnapshot(undefined);
+    const message =
+      "No HARIL data yet. Create a project with: haril project init <path> --name <name>";
+    for (const id of ["projects", "tasks", "agents", "tokens", "events"] as const) {
+      const view = buildPanelView(id, contextFor(snapshot, undefined));
+      expect([...view.header, view.empty ?? ""].join("\n")).toContain(message);
+    }
+  });
+
+  it("models: set or not set for each key variable, with the hint to query live catalogs", () => {
+    const snapshot = loadSnapshot(undefined);
+    const withKeys: ShellSnapshot = {
+      ...snapshot,
+      providers: {
+        source: "file",
+        error: undefined,
+        rows: [
+          {
+            id: "gateway",
+            baseUrl: "http://127.0.0.1:8317/v1",
+            keyEnv: "SHELL_TEST_KEY",
+            keySet: true,
+          },
+          {
+            id: "local",
+            baseUrl: "http://localhost:11434/v1",
+            keyEnv: "SHELL_TEST_MISSING",
+            keySet: false,
+          },
+        ],
+      },
+    };
+    const view = buildPanelView("models", contextFor(withKeys, undefined));
+    const lines = texts(view);
+    expect(lines[0]).toContain("gateway");
+    expect(lines[0]).toContain("SHELL_TEST_KEY: set");
+    expect(lines[1]).toContain("SHELL_TEST_MISSING: not set");
+    expect(view.header.join("\n")).toContain("Run haril models to query live catalogs");
+  });
+
+  it("config and themes work without a store", () => {
+    const snapshot = loadSnapshot(undefined);
+    const config = texts(buildPanelView("config", contextFor(snapshot, undefined))).join("\n");
+    expect(config).toContain("/data");
+    expect(config).toContain("/runtime/config/haril.json");
+    expect(config).toContain("haril-dark");
+    const themes = texts(buildPanelView("themes", contextFor(snapshot, undefined)));
+    expect(themes.some((line) => line.includes("haril-dark") && line.includes("current"))).toBe(
+      true,
+    );
+    expect(themes.some((line) => line.includes("haril-light"))).toBe(true);
+  });
+
+  it("memory, services and terminals say the feature is not available in this version", () => {
+    const snapshot = loadSnapshot(undefined);
+    for (const id of ["memory", "services", "terminals"] as const) {
+      const view = buildPanelView(id, contextFor(snapshot, undefined));
+      expect(view.header).toEqual(["Not available in this version."]);
+      expect(view.items).toEqual([]);
+    }
+  });
+});

@@ -8,5 +8,6 @@ process.exitCode = await runShell(process.argv.slice(2), {
   stdoutIsTTY: process.stdout.isTTY,
   stderr: (line) => console.error(line),
   readFile: readOptionalFile,
+  env: process.env,
   createTerminal: () => new ProcessTerminal(),
 });

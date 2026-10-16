@@ -1,9 +1,12 @@
 import type { Terminal } from "@earendil-works/pi-tui";
 import { createShellApp } from "./app.js";
+import { openShellData } from "./data.js";
+import type { ShellSettings } from "./panels/index.js";
 import { DEFAULT_THEME_NAME, readOptionalFile, resolveTheme } from "./theme.js";
 
-// Entry logic of the shell (TUI-D3, TUI-D8). The CLI passes resolved paths; this process never opens the store and
-// never starts the runtime. main.ts wires the real process; tests inject the streams and the terminal.
+// Entry logic of the shell (TUI-D3, TUI-D8). The CLI passes resolved paths; this process opens the store read-only
+// (never creates it) and never starts the runtime. main.ts wires the real process; tests inject the streams, the
+// terminal, the environment and the files.
 
 const EXIT_OK = 0;
 const EXIT_USAGE = 2;
@@ -18,6 +21,10 @@ export interface ShellRunDeps {
   readonly stderr: (line: string) => void;
   // Reads a file as text, or undefined when it does not exist.
   readonly readFile?: (path: string) => string | undefined;
+  // Names of the entries of a directory; empty when it does not exist.
+  readonly listFiles?: (dir: string) => readonly string[];
+  // The environment, read only to tell whether provider key variables are set. Defaults to none.
+  readonly env?: Readonly<Record<string, string | undefined>>;
   readonly createTerminal: () => Terminal;
 }
 
@@ -53,14 +60,34 @@ export async function runShell(argv: readonly string[], deps: ShellRunDeps): Pro
   });
   const notices = [requested.warning, warning].filter((notice) => notice !== undefined);
 
-  const app = createShellApp({
-    terminal: deps.createTerminal(),
-    theme,
-    warning: notices.length > 0 ? notices.join("; ") : undefined,
-    banner: { isolation: "N0", pendingApprovals: 0 },
+  const data = openShellData({
+    paths: { dataDir: args.dataDir, runtimeRoot: args.runtimeRoot, configPath: args.config },
+    env: deps.env ?? {},
+    readFile,
+    ...(deps.listFiles === undefined ? {} : { listFiles: deps.listFiles }),
   });
-  app.start();
-  await app.done;
+  const settings: ShellSettings = {
+    dataDir: args.dataDir,
+    runtimeRoot: args.runtimeRoot,
+    configPath: args.config,
+    themeName: requested.name,
+    themeLabel: theme.name,
+  };
+  try {
+    const app = createShellApp({
+      terminal: deps.createTerminal(),
+      theme,
+      warning: notices.length > 0 ? notices.join("; ") : undefined,
+      // Approvals do not exist in this version: the count is always 0.
+      banner: { isolation: "N0", pendingApprovals: 0 },
+      data,
+      settings,
+    });
+    app.start();
+    await app.done;
+  } finally {
+    data.close();
+  }
   return EXIT_OK;
 }
 
