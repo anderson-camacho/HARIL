@@ -216,6 +216,9 @@ importers:
       '@haril/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@haril/core':
+        specifier: workspace:*
+        version: link:../../packages/core
     devDependencies:
       '@types/node':
         specifier: 24.19.2

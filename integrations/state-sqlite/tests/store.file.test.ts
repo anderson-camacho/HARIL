@@ -56,13 +56,13 @@ describe("file store lifecycle", () => {
 
     const second = open();
     expect(second.info().storeId).toBe(storeId);
-    expect(second.info().schemaVersion).toBe(1);
+    expect(second.info().schemaVersion).toBe(2);
     second.close();
 
     const connection = raw();
     const rows = connection.prepare("SELECT COUNT(*) AS n FROM schema_migrations").get();
     connection.close();
-    expect(rows).toEqual({ n: 1 });
+    expect(rows).toEqual({ n: 2 });
   });
 
   it("keeps committed commands and events across a reopen", () => {
@@ -122,7 +122,7 @@ describe("file store lifecycle", () => {
     connection.close();
 
     const store = open();
-    expect(store.info().schemaVersion).toBe(1);
+    expect(store.info().schemaVersion).toBe(2);
     store.close();
 
     const check = raw();

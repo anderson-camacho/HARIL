@@ -264,6 +264,112 @@ export interface EventFilter {
   readonly limit?: number;
 }
 
+// Token budgets (M2-T2, ADR-0005 BR-5, BR-8, BR-12). M2 budgets count tokens only; money is not stored.
+export type BudgetScopeType = "project" | "task";
+
+export interface EnsureBudgetInput {
+  readonly scopeType: BudgetScopeType;
+  readonly scopeId: string;
+  readonly projectId: string;
+  readonly hardLimit: number;
+}
+
+export interface BudgetRecord {
+  readonly budgetId: string;
+  readonly scopeType: BudgetScopeType;
+  readonly scopeId: string;
+  readonly projectId: string;
+  readonly hardLimit: number;
+  readonly spent: number;
+  readonly reserved: number;
+  // Spend above hard_limit that a settlement could not fit in `spent` (kept apart so the CHECK holds).
+  readonly overrun: number;
+}
+
+export interface ReserveInput {
+  readonly budgetIds: readonly string[];
+  readonly amount: number;
+  readonly idempotencyKey: string;
+  readonly runId: string;
+  readonly taskId: string;
+  readonly routeId: string;
+}
+
+// All-or-nothing: either every named budget holds the amount, or none changes.
+export type ReserveResult =
+  | { readonly ok: true; readonly reservationId: string }
+  | {
+      readonly ok: false;
+      readonly reason: "insufficient" | "unknown_budget";
+      readonly budgetId: string;
+    };
+
+// Token counts of an upstream reply; a null count is one the provider did not report.
+export interface SettleUsage {
+  readonly inputTokens: number | null;
+  readonly outputTokens: number | null;
+}
+
+export interface CommitInput {
+  readonly reservationId: string;
+  readonly usage: SettleUsage | null;
+  // Worst case known when the reply carries no usage (the estimate of the input plus the output so far).
+  readonly upperBound: number;
+  readonly modelRequested: string;
+  readonly modelServed: string | null;
+}
+
+export type CommitStatus = "committed" | "already_settled" | "unknown_reservation";
+export type ReleaseStatus = "released" | "already_settled" | "unknown_reservation";
+
+export interface UsageSummaryFilter {
+  readonly projectId?: string;
+  readonly taskId?: string;
+}
+
+// Settled token totals from the ledger; `unreconciled` counts commits that charged an upper bound.
+export interface UsageSummary {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly settled: number;
+  readonly unreconciled: number;
+}
+
+export interface BudgetsPort {
+  ensure(input: EnsureBudgetInput): BudgetRecord;
+  get(budgetId: string): BudgetRecord | undefined;
+  reserve(input: ReserveInput): ReserveResult;
+  commit(input: CommitInput): CommitStatus;
+  release(reservationId: string): ReleaseStatus;
+  // Null when the ledger holds no settled entry for the filter.
+  usageSummary(filter?: UsageSummaryFilter): UsageSummary | null;
+}
+
+// Virtual keys (ADR-0005 BR-3). Only the SHA-256 hash of a key is ever given to the store.
+export interface IssueKeyInput {
+  readonly runId: string;
+  readonly keyHash: string;
+  readonly routeGrant: JsonObject;
+  readonly budgetIds: readonly string[];
+  readonly expiresAt: number;
+}
+
+export interface ActiveVirtualKey {
+  readonly keyId: string;
+  readonly runId: string;
+  readonly routeGrant: JsonObject;
+  readonly budgetIds: readonly string[];
+  readonly expiresAt: number;
+}
+
+export interface VirtualKeysPort {
+  // Returns the key id. A second active key for the same run is a store.conflict.
+  issue(input: IssueKeyInput): string;
+  findActiveByHash(keyHash: string): ActiveVirtualKey | undefined;
+  // Revokes every active key of the run; returns how many were revoked.
+  revoke(runId: string, reason: string): number;
+}
+
 export interface Store {
   info(): StoreInfo;
   readonly projects: {
@@ -307,5 +413,7 @@ export interface Store {
   readonly metrics: {
     snapshot(projectId?: string): MetricsSnapshot;
   };
+  readonly budgets: BudgetsPort;
+  readonly virtualKeys: VirtualKeysPort;
   close(): void;
 }

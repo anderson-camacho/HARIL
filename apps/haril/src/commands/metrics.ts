@@ -1,14 +1,15 @@
-import type { MetricsSnapshot } from "@haril/core/ports";
+import type { MetricsSnapshot, UsageSummary } from "@haril/core/ports";
 import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
 import { dataDirFor, openExisting } from "./common.js";
 
-// `haril metrics` (M1-T6): read-only. Derived from runs, tasks and events only (ACE-11). Tokens and cost
-// arrive with the Broker in M2, so they are reported as null.
+// `haril metrics` (M1-T6): read-only. Runs, tasks and events give the counts (ACE-11). Tokens come from the
+// budget ledger once the Broker has settled a request (M2-T2); cost stays null because M2 budgets count tokens.
 const USAGE = "usage: haril metrics [--project <slug>] [--json] [--data-dir <path>]";
 const NOT_INITIALIZED =
   "store not initialized (run haril project init <path> --name <name> --yes first)";
 const NOT_YET = "tokens and cost are available from M2 (Broker)";
+const NO_COST = "cost is not tracked in M2 (token budgets only)";
 const TASK_STATES = [
   "pending",
   "ready",
@@ -41,7 +42,11 @@ interface MetricsView {
     readonly orphaned: number;
     readonly totalMs: number;
   }>;
-  readonly tokens: null;
+  readonly tokens: {
+    readonly input: number;
+    readonly output: number;
+    readonly unreconciled: number;
+  } | null;
   readonly cost: null;
   readonly note: string;
 }
@@ -71,7 +76,8 @@ export function metrics(args: readonly string[], io: CliIo, host: HostInfo): num
       }
       projectId = project.projectId;
     }
-    const view = toView(slug ?? null, store.metrics.snapshot(projectId));
+    const usage = store.budgets.usageSummary(projectId === undefined ? undefined : { projectId });
+    const view = toView(slug ?? null, store.metrics.snapshot(projectId), usage);
     if (parsed.flags.has("--json")) {
       io.out(JSON.stringify(view));
     } else {
@@ -83,7 +89,11 @@ export function metrics(args: readonly string[], io: CliIo, host: HostInfo): num
   }
 }
 
-function toView(project: string | null, snapshot: MetricsSnapshot): MetricsView {
+function toView(
+  project: string | null,
+  snapshot: MetricsSnapshot,
+  usage: UsageSummary | null,
+): MetricsView {
   const count = (status: string): number => snapshot.runsByStatus[status] ?? 0;
   const completed = count("completed");
   const failed = count("failed");
@@ -114,9 +124,16 @@ function toView(project: string | null, snapshot: MetricsSnapshot): MetricsView 
       orphaned: agent.orphaned,
       totalMs: agent.totalMs,
     })),
-    tokens: null,
+    tokens:
+      usage === null
+        ? null
+        : {
+            input: usage.inputTokens,
+            output: usage.outputTokens,
+            unreconciled: usage.unreconciled,
+          },
     cost: null,
-    note: NOT_YET,
+    note: usage === null ? NOT_YET : NO_COST,
   };
 }
 
@@ -144,5 +161,11 @@ function printText(io: CliIo, view: MetricsView): void {
       );
     }
   }
-  io.out(`tokens: null, cost: null (${NOT_YET})`);
+  if (view.tokens === null) {
+    io.out(`tokens: null, cost: null (${NOT_YET})`);
+  } else {
+    io.out(
+      `tokens: input ${view.tokens.input}, output ${view.tokens.output}, unreconciled ${view.tokens.unreconciled}; cost: null (${NO_COST})`,
+    );
+  }
 }

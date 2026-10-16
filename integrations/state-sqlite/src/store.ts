@@ -36,6 +36,7 @@ import type {
 // The task states as the Core defines them (the adapter imports types from @haril/core/ports only).
 type TaskState = TaskRecord["state"];
 
+import { createBudgetFacets } from "./budgets.js";
 import { readPragmas, readUserVersion } from "./connection.js";
 import { StoreError } from "./errors.js";
 
@@ -172,6 +173,8 @@ export class SqliteStore implements Store {
   readonly runs: Store["runs"];
   readonly events: Store["events"];
   readonly metrics: Store["metrics"];
+  readonly budgets: Store["budgets"];
+  readonly virtualKeys: Store["virtualKeys"];
 
   constructor(options: StoreOptions) {
     this.db = options.db;
@@ -216,6 +219,14 @@ export class SqliteStore implements Store {
     this.metrics = {
       snapshot: (projectId) => this.metricsSnapshot(projectId),
     };
+    const facets = createBudgetFacets({
+      db: this.db,
+      clock: this.clock,
+      ids: this.ids,
+      transaction: (work) => this.inTransaction(work),
+    });
+    this.budgets = facets.budgets;
+    this.virtualKeys = facets.virtualKeys;
   }
 
   info(): StoreInfo {
