@@ -11,9 +11,10 @@
     "check": "npm run check:biome && npm run check:types && npm run check:scripts && npm run check:deps",
     "check:biome": "biome ci .",
     "check:types": "tsc --noEmit -p packages/contracts && tsc --noEmit -p packages/core && tsc --noEmit -p integrations/os && tsc --noEmit -p integrations/git && tsc --noEmit -p integrations/state-sqlite && tsc --noEmit -p integrations/gateway && tsc --noEmit -p integrations/agent-pi && tsc --noEmit -p integrations/agent-pi-bridge && tsc --noEmit -p apps/haril && tsc --noEmit -p apps/bootstrap && tsc --noEmit -p tsconfig.check.json",
-    "check:scripts": "node -e \"process.exit(0)\"",
+    "check:scripts": "node scripts/check-layers.mjs && node scripts/check-purity.mjs && node scripts/check-forbidden.mjs",
     "check:deps": "knip",
-    "test": "vitest run"
+    "test": "vitest run && npm run test:scripts",
+    "test:scripts": "node --test \"scripts/tests/**/*.test.mjs\""
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
