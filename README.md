@@ -7,7 +7,7 @@ HARIL es una plataforma **local** de orquestación de agentes de IA, desarrollo 
 Un núcleo propio controla la ejecución; Pi, Engram, Herdr y los proveedores de modelos quedan detrás de puertos reemplazables.
 
 > **Estado real (2026-10-16).** Fases 0 a 2 completadas en diseño. **Fase 3 (monorepo)** y **Fase 4 (MVP: M1, M2, M3) implementadas y verificadas en carril hermético** (rama `feat/phase-4-m3`): Store SQLite, runtime en primer plano con recuperación tras caída, proyectos, tareas y planes, Broker con tope de tokens, proveedores configurables, adaptador de Pi y puente, criterios de aceptación, metodologías como bloques, instalador sin tocar el PATH.
-> **Carril real pendiente:** nada se ha ejecutado todavía contra Pi 1.2.0 real ni contra CLIProxyAPI con clave. Para cerrarlo: `npm run runtime:install`, definir `HARIL_CLIPROXYAPI_KEY` y `HARIL_DEFAULT_MODEL`, y `npm run e2e:real`. Matriz de criterios: `odd/tasks/haril-phase4-m3.md`.
+> **Carril real verificado (2026-10-16):** `npm run e2e:real` pasa en esta máquina con Pi 1.2.0 real y CLIProxyAPI (`cliproxy/gemini-3-flash`): una tarea `analyst` lee `README.md` con la herramienta del puente, responde el código pedido, HARIL lo verifica (`verified: true`) y el libro registra los tokens reales. Ollama no viene por defecto (demasiado pesado para el equipo de referencia). Bitácora: `odd/tasks/haril-phase4-real-lane.md`; matriz de criterios: `odd/tasks/haril-phase4-m3.md`.
 
 ## Cómo probarlo
 
@@ -90,7 +90,7 @@ node apps/bootstrap/dist/haril-bootstrap.mjs install
 ```powershell
 npm run runtime:install
 $env:HARIL_CLIPROXYAPI_KEY = "<tu clave de cliente de CLIProxyAPI>"
-$env:HARIL_DEFAULT_MODEL = "<id de haril models>"
+$env:HARIL_DEFAULT_MODEL = "<id de haril models, por ejemplo cliproxy/gemini-3-flash>"
 .\bin\haril.ps1 models
 .\bin\haril.ps1 task add "Lee README.md y resúmelo en una frase" --project demo --agent analyst
 .\bin\haril.ps1 start --project demo
@@ -99,7 +99,7 @@ $env:HARIL_DEFAULT_MODEL = "<id de haril models>"
 npm run e2e:real
 ```
 
-Si falta el runtime, `start` no reclama la tarea: la muestra como `skipped` con lo que falta y sale con 1; las tareas `fake:*` siguen su curso. Si falta la clave del proveedor del modelo, la tarea falla con `agent.not_ready` y nombra la variable. `task add --agent analyst` sin `--model` ni `HARIL_DEFAULT_MODEL` sale con 2. `npm run e2e:real` imprime `SKIP real lane` y sale con 0 cuando algo falta; si todo está listo, ejecuta una tarea real y comprueba los tokens registrados.
+Si falta el runtime, `start` no reclama la tarea: la muestra como `skipped` con lo que falta y sale con 1; las tareas `fake:*` siguen su curso. Si falta la clave del proveedor del modelo, la tarea falla con `agent.not_ready` y nombra la variable. `task add --agent analyst` sin `--model` ni `HARIL_DEFAULT_MODEL` sale con 2. `npm run e2e:real` imprime `SKIP real lane` y sale con 0 cuando algo falta; si todo está listo, ejecuta una tarea real que lee `README.md` y responde un código secreto, y comprueba que la tarea queda completada y verificada, que el libro registra tokens y que hubo al menos una lectura por el puente.
 
 Notas:
 
