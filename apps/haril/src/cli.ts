@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { StoreError } from "@haril/state-sqlite";
 import { doctor } from "./commands/doctor.js";
 import { events } from "./commands/events.js";
+import { methodology } from "./commands/methodology.js";
 import { metrics } from "./commands/metrics.js";
 import { models } from "./commands/models.js";
 import { plan } from "./commands/plan.js";
@@ -37,8 +38,9 @@ const HELP_LINES = [
   "  haril states                     print the task states and legal transitions",
   "  haril plan validate <file> [--json]   validate a plan file",
   "  haril plan import <file> [--project <slug>] [--json]   queue a plan (applied by start)",
-  "  haril project init [path] --name <name> [--slug <slug>] [--methodology odd|tdd|custom] [--yes] [--json]",
+  "  haril project init [path] --name <name> [--slug <slug>] [--methodology <name>] [--yes] [--json]",
   "  haril project list [--json]      list the registered projects",
+  "  haril methodology list [--json]  list the native methodology blocks (id, version, sha256, summary)",
   '  haril task add "<title>" [--project <slug>] [--depends-on <taskId>]... [--agent <ref>] [--model <id>] [--max-tokens <n>] [--json]',
   "  haril task show <taskId> [--json]   one task with its result, error and settled tokens",
   "  haril start [--project <slug>] [--json]   apply the queue, run the ready tasks, exit when idle",
@@ -98,6 +100,8 @@ function dispatch(argv: readonly string[], io: CliIo, host: HostInfo): number | 
       return plan(rest, io, host);
     case "project":
       return project(rest, io, host);
+    case "methodology":
+      return methodology(rest, io, host);
     case "task":
       return task(rest, io, host);
     case "status":

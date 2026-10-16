@@ -1,18 +1,24 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { canonicalJson } from "@haril/core";
 import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
 import { storeAccess } from "../host.js";
 import { dataDirFor, openExisting, sha256 } from "./common.js";
+import { loadNativeRegistry, METHODOLOGY_PREFIX, methodologyNames } from "./methodology.js";
 
 // `haril project init|list` (M1-T3). init previews by default; --yes applies (M1-D9).
 
-const METHODOLOGIES = ["odd", "tdd", "custom"] as const;
-type Methodology = (typeof METHODOLOGIES)[number];
-
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const INIT_USAGE =
-  "usage: haril project init [path] --name <name> [--slug <slug>] [--methodology odd|tdd|custom] [--yes] [--json] [--data-dir <path>]";
+  "usage: haril project init [path] --name <name> [--slug <slug>] [--methodology <name>] [--yes] [--json] [--data-dir <path>]";
+
+// The methodology a manifest records: the native block it was validated against (M3-T1).
+interface MethodologyRef {
+  readonly id: string;
+  readonly version: string;
+  readonly sha256: string;
+}
 
 export function project(args: readonly string[], io: CliIo, host: HostInfo): number {
   const [subcommand, ...rest] = args;
@@ -22,10 +28,6 @@ export function project(args: readonly string[], io: CliIo, host: HostInfo): num
   else io.err(`haril: unknown project subcommand "${subcommand}"`);
   io.err("usage: haril project init|list");
   return EXIT_USAGE;
-}
-
-function isMethodology(value: string): value is Methodology {
-  return (METHODOLOGIES as readonly string[]).includes(value);
 }
 
 // Lowercase words joined with dashes; the result still has to pass SLUG_PATTERN.
@@ -38,7 +40,7 @@ function slugify(name: string): string {
 }
 
 // The manifest is declarative and carries no machine-specific paths (PROJECTS.md 3.2).
-function manifestText(name: string, slug: string, methodology: Methodology): string {
+function manifestText(name: string, slug: string, methodology: MethodologyRef): string {
   const manifest = {
     schemaVersion: 1,
     name,
@@ -59,7 +61,8 @@ interface InitPlan {
   readonly projectId: string;
   readonly name: string;
   readonly slug: string;
-  readonly methodology: Methodology;
+  // Short name as typed with --methodology; the manifest stores the block reference.
+  readonly methodology: string;
   readonly rootPath: string;
   readonly dataDir: string;
   readonly manifestPath: string;
@@ -92,9 +95,14 @@ function projectInit(args: readonly string[], io: CliIo, host: HostInfo): number
     io.err(`haril: slug "${slug}" must be lowercase letters, digits and dashes (at most 63)`);
     return EXIT_USAGE;
   }
+  const registry = loadNativeRegistry(host, io);
+  if (registry === undefined) return EXIT_USAGE;
   const methodology = lastValue(parsed, "--methodology") ?? "odd";
-  if (!isMethodology(methodology)) {
-    io.err(`haril: unknown methodology "${methodology}"; use odd, tdd or custom`);
+  const block = registry.get(`${METHODOLOGY_PREFIX}${methodology}`);
+  if (block === undefined) {
+    io.err(
+      `haril: unknown methodology "${methodology}"; use one of: ${methodologyNames(registry).join(", ")}`,
+    );
     return EXIT_USAGE;
   }
   const rootPath = resolve(host.cwd ?? process.cwd(), pathArg ?? ".");
@@ -107,6 +115,7 @@ function projectInit(args: readonly string[], io: CliIo, host: HostInfo): number
     name,
     slug,
     methodology,
+    ref: { id: block.id, version: block.version, sha256: block.sha256 },
     rootPath,
     dataDirFlag: lastValue(parsed, "--data-dir"),
   });
@@ -123,14 +132,15 @@ function buildPlan(
   input: {
     readonly name: string;
     readonly slug: string;
-    readonly methodology: Methodology;
+    readonly methodology: string;
+    readonly ref: MethodologyRef;
     readonly rootPath: string;
     readonly dataDirFlag: string | undefined;
   },
 ): InitPlan {
-  const text = manifestText(input.name, input.slug, input.methodology);
+  const generated = manifestText(input.name, input.slug, input.ref);
   const manifestPath = join(input.rootPath, ".haril", "project.json");
-  const manifestState = manifestStateOf(manifestPath, text);
+  const resolved = resolveManifest(manifestPath, generated, input.methodology);
   return {
     projectId: storeAccess(host).ids.next(),
     name: input.name,
@@ -139,15 +149,46 @@ function buildPlan(
     rootPath: input.rootPath,
     dataDir: dataDirFor(host, input.dataDirFlag),
     manifestPath,
-    manifestText: text,
-    manifestSha256: sha256(text),
-    manifestState,
+    manifestText: resolved.text,
+    manifestSha256: sha256(resolved.text),
+    manifestState: resolved.state,
   };
 }
 
-function manifestStateOf(path: string, text: string): InitPlan["manifestState"] {
-  if (!existsSync(path)) return "create";
-  return readFileSync(path, "utf8") === text ? "keep" : "conflict";
+// An existing manifest is kept when identical, or when it predates methodology blocks (a plain-string
+// "methodology") and everything else matches. Any other existing content is a conflict.
+function resolveManifest(
+  path: string,
+  generated: string,
+  methodology: string,
+): { readonly state: InitPlan["manifestState"]; readonly text: string } {
+  if (!existsSync(path)) return { state: "create", text: generated };
+  const existing = readFileSync(path, "utf8");
+  if (existing === generated) return { state: "keep", text: generated };
+  if (isLegacyManifestOf(existing, generated, methodology)) {
+    return { state: "keep", text: existing };
+  }
+  return { state: "conflict", text: generated };
+}
+
+function isLegacyManifestOf(existing: string, generated: string, methodology: string): boolean {
+  const old = parseObject(existing);
+  const fresh = parseObject(generated);
+  if (old === undefined || fresh === undefined) return false;
+  if (old.methodology !== methodology) return false;
+  const { methodology: _oldMethodology, ...rest } = old;
+  const { methodology: _freshMethodology, ...expected } = fresh;
+  return canonicalJson(rest) === canonicalJson(expected);
+}
+
+function parseObject(text: string): Record<string, unknown> | undefined {
+  try {
+    const value: unknown = JSON.parse(text);
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+    return value as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
 }
 
 // The preview does not assign the project id: it is generated when --yes applies (no id is promised here).

@@ -36,6 +36,8 @@ export interface HostInfo {
   readonly gatewayTimeoutMs?: number;
   // Runtime inspection for doctor (M2-T3); reads files only and never executes them. Defaults to the real reader.
   readonly inspectRuntime?: (runtimeRoot: string, platform: string) => RuntimeInspection;
+  // Directory of the native block.md files (M3-T1); defaults to the blocks beside the bundle or the repo root.
+  readonly blocksDir?: string;
 }
 
 // Gateway settings read from the environment (M2-D1). The key is only ever a presence flag in output.

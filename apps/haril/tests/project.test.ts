@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { run } from "../src/cli.js";
 import {
@@ -26,6 +27,7 @@ afterEach(() => {
 });
 
 const sha256 = (path: string) => createHash("sha256").update(readFileSync(path)).digest("hex");
+const REPO_BLOCKS = fileURLToPath(new URL("../../../blocks", import.meta.url));
 
 describe("haril project init", () => {
   it("previews the project and writes nothing without --yes (exit 0)", () => {
@@ -52,7 +54,11 @@ describe("haril project init", () => {
       schemaVersion: 1,
       name: "Demo",
       slug: "demo",
-      methodology: "odd",
+      methodology: {
+        id: "haril.methodology.odd",
+        version: "0.1.0",
+        sha256: sha256(join(REPO_BLOCKS, "methodologies", "odd", "block.md")),
+      },
       security: {
         minLevel: "N0",
         shell: "deny",

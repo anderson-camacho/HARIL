@@ -14,4 +14,15 @@ export default defineConfig({
     onlyBundle: [/^typebox(\/|$)/],
   },
   banner: "#!/usr/bin/env node",
+  // The native block.md files ship next to the bundle: `methodology list` reads dist/blocks (M3-T1).
+  copy: [
+    {
+      // Globs need forward slashes, so the absolute path is converted before the pattern is appended.
+      from: `${fileURLToPath(new URL("../../blocks", import.meta.url))
+        .split("\\")
+        .join("/")}/**/*.md`,
+      to: fileURLToPath(new URL("./dist/blocks", import.meta.url)),
+      flatten: false,
+    },
+  ],
 });

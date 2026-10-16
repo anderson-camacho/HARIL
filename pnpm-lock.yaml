@@ -202,6 +202,9 @@ importers:
       '@haril/gateway':
         specifier: workspace:*
         version: link:../../integrations/gateway
+      '@haril/os':
+        specifier: workspace:*
+        version: link:../../integrations/os
       '@haril/state-sqlite':
         specifier: workspace:*
         version: link:../../integrations/state-sqlite
@@ -253,6 +256,10 @@ importers:
       '@haril/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+    devDependencies:
+      '@types/node':
+        specifier: 24.19.2
+        version: 24.19.2
 
   integrations/state-sqlite:
     dependencies:
