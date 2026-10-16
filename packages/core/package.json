@@ -6,7 +6,8 @@
   "description": "HARIL Core: pure orchestration, state machine, budget, and domain logic",
   "exports": {
     ".": "./src/index.ts",
-    "./ports": "./src/ports/index.ts"
+    "./ports": "./src/ports/index.ts",
+    "./testing": "./testing/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

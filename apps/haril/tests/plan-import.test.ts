@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -72,5 +72,25 @@ describe("haril plan import", () => {
   it("exits 2 with usage when the file argument is missing", () => {
     expect(run(["plan", "import"], h.io, sb.host)).toBe(2);
     expect(h.err.join("\n")).toContain("usage");
+  });
+
+  it("re-importing the same plan is a duplicate and queues nothing new", () => {
+    expect(run(["plan", "import", EXAMPLE_VALID], h.io, sb.host)).toBe(0);
+    expect(run(["plan", "import", EXAMPLE_VALID], h.io, sb.host)).toBe(0);
+    expect(h.out.at(-1)).toContain("already queued");
+    expect(queued()).toHaveLength(1);
+  });
+
+  it("treats the same plan with other key order as the same plan (canonical JSON)", () => {
+    const plan = JSON.parse(readFileSync(EXAMPLE_VALID, "utf8")) as Record<string, unknown>;
+    const reordered = Object.fromEntries(Object.entries(plan).reverse());
+    const dir = join(sb.root, "plans");
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, "reordered.json");
+    writeFileSync(file, JSON.stringify(reordered));
+    expect(run(["plan", "import", EXAMPLE_VALID], h.io, sb.host)).toBe(0);
+    expect(run(["plan", "import", file], h.io, sb.host)).toBe(0);
+    expect(h.out.at(-1)).toContain("already queued");
+    expect(queued()).toHaveLength(1);
   });
 });

@@ -3,7 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import type { Store } from "@haril/core/ports";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openStore } from "../src/index.js";
-import { fixedClock, makeTempDir, removeTempDir, sequentialIds } from "./support.js";
+import { fixedClock, makeTempDir, removeTempDir, sequentialIds, testRules } from "./support.js";
 
 // Read queries used by `haril status` and `haril project init` (M1-T3, M1-T4). Rows that only the
 // scheduler writes (tasks, runtime_leases) are inserted through a second connection to the file.
@@ -12,7 +12,7 @@ let store: Store;
 
 beforeEach(() => {
   dir = makeTempDir();
-  store = openStore({ dataDir: dir, clock: fixedClock(), ids: sequentialIds() });
+  store = openStore({ dataDir: dir, clock: fixedClock(), ids: sequentialIds(), rules: testRules });
 });
 
 afterEach(() => {

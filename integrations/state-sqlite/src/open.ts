@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { Clock, Ids, Store, StoreGate } from "@haril/core/ports";
+import type { Clock, Ids, Store, StoreGate, StoreRules } from "@haril/core/ports";
 import {
   configureConnection,
   DB_FILE_NAME,
@@ -21,6 +21,8 @@ export interface OpenStoreOptions {
   readonly dataDir: string;
   readonly clock: Clock;
   readonly ids: Ids;
+  // Core rules injected by the composition root (transition table, plan checks).
+  readonly rules: StoreRules;
   // Test hook: overrides the detected Node and SQLite versions (M1-D1, INV-16).
   readonly runtime?: Partial<RuntimeVersions>;
 }
@@ -28,6 +30,7 @@ export interface OpenStoreOptions {
 export interface OpenMemoryStoreOptions {
   readonly clock: Clock;
   readonly ids: Ids;
+  readonly rules: StoreRules;
   readonly runtime?: Partial<RuntimeVersions>;
 }
 
@@ -38,7 +41,7 @@ export function openStore(options: OpenStoreOptions): Store {
   if (hasErrorGate(gates)) throw gateError(gates);
   mkdirSync(options.dataDir, { recursive: true });
   const db = new DatabaseSync(join(options.dataDir, DB_FILE_NAME));
-  return openConnection(db, options.clock, options.ids, versions, gates, "wal");
+  return openConnection(db, options, versions, gates, "wal");
 }
 
 // Same store over ":memory:", for the contract suite (M1-D3). Nothing touches the disk.
@@ -47,7 +50,7 @@ export function openMemoryStore(options: OpenMemoryStoreOptions): Store {
   const gates = evaluateGates(versions);
   if (hasErrorGate(gates)) throw gateError(gates);
   const db = new DatabaseSync(":memory:");
-  return openConnection(db, options.clock, options.ids, versions, gates, "memory");
+  return openConnection(db, options, versions, gates, "memory");
 }
 
 function resolveVersions(runtime?: Partial<RuntimeVersions>): RuntimeVersions {
@@ -69,12 +72,12 @@ function gateError(gates: readonly StoreGate[]): StoreError {
 
 function openConnection(
   db: DatabaseSync,
-  clock: Clock,
-  ids: Ids,
+  options: OpenMemoryStoreOptions,
   versions: RuntimeVersions,
   gates: readonly StoreGate[],
   journalMode: "wal" | "memory",
 ): Store {
+  const { clock, ids, rules } = options;
   try {
     const pragmas = configureConnection(db, journalMode);
     const journalOk = pragmas.journalMode === (journalMode === "wal" ? "wal" : "memory");
@@ -107,6 +110,7 @@ function openConnection(
       db,
       clock,
       ids,
+      rules,
       storeId,
       sqliteVersion: versions.sqliteVersion,
       gates,

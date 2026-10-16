@@ -1,4 +1,4 @@
-import type { Clock, Ids, Store } from "@haril/core/ports";
+import type { AgentRuntime, Clock, Ids, Store } from "@haril/core/ports";
 import type { StoreInspection } from "@haril/state-sqlite";
 
 // Shared shapes of the CLI: io, host ports and exit codes. Command modules depend on this file, never on cli.ts.
@@ -24,6 +24,8 @@ export interface HostInfo {
   readonly openStore?: (dataDir: string) => Store;
   readonly clock?: Clock;
   readonly ids?: Ids;
+  // Agent runtime used by `haril start`; defaults to the simulated FakeAgentRuntime (M1-D7).
+  readonly agentRuntime?: AgentRuntime;
 }
 
 export const EXIT_OK = 0;

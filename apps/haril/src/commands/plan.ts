@@ -1,9 +1,13 @@
 import { type Plan, validatePlanSchema } from "@haril/contracts";
-import { type PlanGraphIssue, topologicalOrder, validatePlanGraph } from "@haril/core";
+import {
+  canonicalJson,
+  type PlanGraphIssue,
+  topologicalOrder,
+  validatePlanGraph,
+} from "@haril/core";
 import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_INVALID, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
-import { storeAccess } from "../host.js";
-import { dataDirFor, queueCommand, withProject } from "./common.js";
+import { dataDirFor, queueCommand, sha256, withProject } from "./common.js";
 
 // `haril plan validate` (M1 plan contract) and `haril plan import` (M1-T4: validate, then queue plan.submit).
 
@@ -52,13 +56,14 @@ function planImport(args: readonly string[], io: CliIo, host: HostInfo): number 
   if (typeof checked === "number") return checked;
 
   const dataDir = dataDirFor(host, lastValue(parsed, "--data-dir"));
-  const idempotencyKey = `plan-import-${storeAccess(host).ids.next()}`;
+  // Idempotency key = sha256(projectId + canonical JSON of the plan) (M1-T5): re-importing the same plan
+  // is reported as already queued and does not add a command.
   return withProject(io, host, dataDir, lastValue(parsed, "--project"), (store, project) =>
     queueCommand(io, json, store, {
       type: "plan.submit",
       projectId: project.projectId,
       args: { plan: checked.plan },
-      idempotencyKey,
+      idempotencyKey: sha256(`${project.projectId}${canonicalJson(checked.plan)}`),
     }),
   );
 }

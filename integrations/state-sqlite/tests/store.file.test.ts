@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openStore, type StoreError } from "../src/index.js";
-import { fixedClock, makeTempDir, removeTempDir, sequentialIds } from "./support.js";
+import { fixedClock, makeTempDir, removeTempDir, sequentialIds, testRules } from "./support.js";
 
 // File-backed behaviour: durability across reopen, migrations, immutability and the open gates.
 let dir = "";
@@ -18,7 +18,13 @@ afterEach(() => {
 });
 
 function open(runtime?: { nodeVersion?: string; sqliteVersion?: string }, target = dir) {
-  return openStore({ dataDir: target, clock: fixedClock(), ids: sequentialIds(), runtime });
+  return openStore({
+    dataDir: target,
+    clock: fixedClock(),
+    ids: sequentialIds(),
+    rules: testRules,
+    runtime,
+  });
 }
 
 function caught(action: () => unknown): StoreError {

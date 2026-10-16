@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { canonicalJson } from "@haril/core";
 import type { ProjectRecord, Store } from "@haril/core/ports";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
 import { resolveDataDir } from "../data-dir.js";
@@ -11,8 +12,9 @@ export function sha256(text: string): string {
 }
 
 // Canonical hash of a request: the same command with the same arguments has the same hash (INV-08).
+// Canonical JSON makes key order irrelevant, so a re-ordered plan file is the same request.
 function requestHash(value: unknown): string {
-  return sha256(JSON.stringify(value));
+  return sha256(canonicalJson(value));
 }
 
 export function dataDirFor(host: HostInfo, flag: string | undefined): string {

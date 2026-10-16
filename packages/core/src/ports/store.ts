@@ -1,7 +1,8 @@
-// Minimal Store port for M1 (M1-D3): schema info, projects, the command queue, tasks (read),
-// the runtime lease (read) and the event log.
-// Operations are synchronous because node:sqlite is synchronous. Errors carry a `store.*` code.
-import type { TaskState } from "@haril/contracts";
+// Store port for M1 (M1-D3): schema info, projects, the command queue, tasks, the runtime lease,
+// the run lifecycle and the event log. Operations are synchronous because node:sqlite is
+// synchronous. Errors carry a `store.*` code, except lease refusals, which are typed results.
+import type { BlockReason, Plan, RetryReason, TaskState } from "@haril/contracts";
+import type { HarilError, Result } from "./result.js";
 
 export type GateStatus = "ok" | "warn" | "error";
 
@@ -25,6 +26,20 @@ export interface StoreInfo {
   readonly pragmas: StorePragmas;
   readonly gates: readonly StoreGate[];
 }
+
+export type JsonObject = Readonly<Record<string, unknown>>;
+
+// The Core rules the composition root injects into the adapter. The adapter never imports Core
+// values (integrations type-import @haril/core only), so the transition table and the plan checks
+// arrive through this object.
+export interface StoreRules {
+  canTransition(from: TaskState, to: TaskState): boolean;
+  checkPlan(value: unknown): PlanCheck;
+}
+
+export type PlanCheck =
+  | { readonly ok: true; readonly plan: Plan; readonly order: readonly string[] }
+  | { readonly ok: false; readonly reason: string };
 
 export interface ProjectRecord {
   readonly projectId: string;
@@ -55,6 +70,18 @@ export interface TaskRecord {
   readonly createdAt: number;
 }
 
+export interface TaskDetail extends TaskRecord {
+  readonly description: string;
+  readonly attempt: number;
+  readonly attemptsUsed: number;
+  readonly maxAttempts: number;
+  readonly timeoutMs: number;
+  readonly claimEpoch: number;
+  readonly retryReason: RetryReason | null;
+  readonly blockReason: BlockReason | null;
+  readonly result: JsonObject | null;
+}
+
 export interface TaskFilter {
   readonly projectId?: string;
 }
@@ -72,6 +99,26 @@ export type RuntimeLeaseSummary =
       readonly nodeVersion: string;
       readonly sqliteVersion: string;
     };
+
+export interface AcquireLeaseInput {
+  readonly pid: number;
+  readonly nodeVersion: string;
+  readonly sqliteVersion: string;
+  readonly ttlMs: number;
+}
+
+// The epoch is the fencing token of this runtime: every later write must name it (M1-D6).
+export interface LeaseGrant {
+  readonly epoch: number;
+  readonly instanceId: string;
+}
+
+export interface RuntimeBusyError extends HarilError {
+  readonly code: "runtime.busy";
+  readonly pid: number;
+  readonly instanceId: string;
+  readonly expiresAt: number;
+}
 
 export interface EnqueueCommandInput {
   readonly type: string;
@@ -95,6 +142,61 @@ export interface CommandRecord {
   readonly idempotencyKey: string;
   readonly requestHash: string;
   readonly enqueuedAt: number;
+}
+
+// Outcome of applying one queued command. A rejection is a normal result, not an error.
+export interface AppliedCommand {
+  readonly commandId: string;
+  readonly type: string;
+  readonly outcome: "applied" | "rejected";
+  readonly reason?: string;
+  readonly taskIds: readonly string[];
+  readonly planId?: string;
+}
+
+export interface PromotedTask {
+  readonly taskId: string;
+  readonly goal: string;
+}
+
+export interface PromoteResult {
+  readonly ready: readonly PromotedTask[];
+  readonly blocked: readonly PromotedTask[];
+}
+
+// A task handed to the runtime by claimNext. `attempt` is the attempt number of this run.
+export interface ClaimedTask {
+  readonly taskId: string;
+  readonly projectId: string;
+  readonly runId: string;
+  readonly goal: string;
+  readonly description: string;
+  readonly agentRef: string;
+  readonly attempt: number;
+  readonly attemptsUsed: number;
+  readonly maxAttempts: number;
+  readonly timeoutMs: number;
+  readonly claimEpoch: number;
+  readonly runtimeEpoch: number;
+}
+
+export type RunCompletion =
+  | { readonly runId: string; readonly outcome: "succeeded"; readonly result: JsonObject }
+  | {
+      readonly runId: string;
+      readonly outcome: "failed";
+      readonly error: { readonly code: string; readonly message: string };
+      readonly endCause: "exit" | "timeout";
+    };
+
+export interface CompletedRun {
+  readonly taskId: string;
+  readonly goal: string;
+  readonly attempt: number;
+  readonly taskState: "completed" | "ready" | "failed";
+  readonly attemptsUsed: number;
+  readonly maxAttempts: number;
+  readonly retryReason: RetryReason | null;
 }
 
 export interface AppendEventInput {
@@ -135,12 +237,26 @@ export interface Store {
   readonly commands: {
     enqueue(input: EnqueueCommandInput): EnqueueResult;
     listQueued(): readonly CommandRecord[];
+    // Applies the oldest queued command in one transaction; undefined when the queue is empty.
+    applyNext(epoch: number): AppliedCommand | undefined;
   };
   readonly tasks: {
     list(filter?: TaskFilter): readonly TaskRecord[];
+    get(taskId: string): TaskDetail | undefined;
+    // pending -> ready when every dependency completed; pending -> blocked(dep_failed) when one failed or was cancelled.
+    promote(): PromoteResult;
+    // Highest priority, then oldest ready task: ready -> running, one run row, one claim epoch.
+    claimNext(epoch: number): ClaimedTask | undefined;
   };
   readonly runtime: {
     leaseSummary(): RuntimeLeaseSummary;
+    acquire(input: AcquireLeaseInput): Result<LeaseGrant, RuntimeBusyError>;
+    heartbeat(epoch: number, ttlMs: number): void;
+    release(epoch: number, cleanExit: boolean): void;
+  };
+  readonly runs: {
+    // Closes the run and its task in one transaction. Success persists the result before `completed`.
+    complete(completion: RunCompletion): CompletedRun;
   };
   readonly events: {
     append(input: AppendEventInput): EventRecord;

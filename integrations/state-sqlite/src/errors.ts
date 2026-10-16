@@ -3,6 +3,8 @@ export type StoreErrorCode =
   | "store.gate_failed"
   | "store.migration_failed"
   | "store.conflict"
+  | "store.fenced"
+  | "store.stale"
   | "store.io";
 
 export class StoreError extends Error {

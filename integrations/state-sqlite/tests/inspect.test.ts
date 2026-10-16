@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { inspectStore, openStore } from "../src/index.js";
-import { fixedClock, makeTempDir, removeTempDir, sequentialIds } from "./support.js";
+import { fixedClock, makeTempDir, removeTempDir, sequentialIds, testRules } from "./support.js";
 
 // inspectStore backs `haril doctor`: it must describe the store without creating anything.
 let dir = "";
@@ -27,7 +27,12 @@ describe("inspectStore (read-only)", () => {
   });
 
   it("reports the schema version of an initialized database", () => {
-    openStore({ dataDir: dir, clock: fixedClock(), ids: sequentialIds() }).close();
+    openStore({
+      dataDir: dir,
+      clock: fixedClock(),
+      ids: sequentialIds(),
+      rules: testRules,
+    }).close();
     const report = inspectStore({ dataDir: dir });
     expect(report.initialized).toBe(true);
     expect(report.schemaVersion).toBe(1);

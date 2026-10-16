@@ -1,7 +1,7 @@
 import type { Store } from "@haril/core/ports";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openMemoryStore, openStore, type StoreError } from "../src/index.js";
-import { fixedClock, makeTempDir, removeTempDir, sequentialIds } from "./support.js";
+import { fixedClock, makeTempDir, removeTempDir, sequentialIds, testRules } from "./support.js";
 
 // Contract suite of the Store port (M1-D3), run against :memory: and a temporary file database.
 let dir = "";
@@ -24,8 +24,14 @@ function caught(action: () => unknown): StoreError {
 }
 
 const backends: [string, () => Store][] = [
-  ["in-memory", () => openMemoryStore({ clock: fixedClock(), ids: sequentialIds() })],
-  ["temporary file", () => openStore({ dataDir: dir, clock: fixedClock(), ids: sequentialIds() })],
+  [
+    "in-memory",
+    () => openMemoryStore({ clock: fixedClock(), ids: sequentialIds(), rules: testRules }),
+  ],
+  [
+    "temporary file",
+    () => openStore({ dataDir: dir, clock: fixedClock(), ids: sequentialIds(), rules: testRules }),
+  ],
 ];
 
 describe.each(backends)("Store contract (%s)", (_name, open) => {

@@ -3,6 +3,7 @@ import { StoreError } from "@haril/state-sqlite";
 import { doctor } from "./commands/doctor.js";
 import { plan } from "./commands/plan.js";
 import { project } from "./commands/project.js";
+import { start } from "./commands/start.js";
 import { states } from "./commands/states.js";
 import { status } from "./commands/status.js";
 import { task } from "./commands/task.js";
@@ -35,24 +36,37 @@ const HELP_LINES = [
   "  haril project init [path] --name <name> [--slug <slug>] [--methodology odd|tdd|custom] [--yes] [--json]",
   "  haril project list [--json]      list the registered projects",
   '  haril task add "<title>" [--project <slug>] [--depends-on <taskId>]... [--agent <ref>] [--json]',
+  "  haril start [--project <slug>] [--json]   apply the queue, run the ready tasks, exit when idle",
   "  haril status [--project <slug>] [--json]   projects, tasks, queued commands and runtime",
   "  haril help                       print this help",
 ];
 
-export function run(argv: readonly string[], io: CliIo, host: HostInfo = currentHost()): number {
+// `start` is the only asynchronous command, so the result is a promise only for it.
+export function run(
+  argv: readonly string[],
+  io: CliIo,
+  host: HostInfo = currentHost(),
+): number | Promise<number> {
   try {
-    return dispatch(argv, io, host);
+    const result = dispatch(argv, io, host);
+    return typeof result === "number"
+      ? result
+      : result.catch((error: unknown) => reportError(error, io));
   } catch (error) {
-    // Store refusals (gates, conflicts, stale state) are reported as usage errors with their remedy.
-    if (error instanceof StoreError) {
-      io.err(`haril: ${error.message}`);
-      return EXIT_USAGE;
-    }
-    throw error;
+    return reportError(error, io);
   }
 }
 
-function dispatch(argv: readonly string[], io: CliIo, host: HostInfo): number {
+// Store refusals (gates, conflicts, stale state, fenced epochs) are reported as usage errors with their remedy.
+function reportError(error: unknown, io: CliIo): number {
+  if (error instanceof StoreError) {
+    io.err(`haril: ${error.message}`);
+    return EXIT_USAGE;
+  }
+  throw error;
+}
+
+function dispatch(argv: readonly string[], io: CliIo, host: HostInfo): number | Promise<number> {
   const [command, ...rest] = argv;
   switch (command) {
     case undefined:
@@ -79,6 +93,8 @@ function dispatch(argv: readonly string[], io: CliIo, host: HostInfo): number {
       return task(rest, io, host);
     case "status":
       return status(rest, io, host);
+    case "start":
+      return start(rest, io, host);
     default:
       io.err(`haril: unknown command "${command}"`);
       printHelp(io.err);
