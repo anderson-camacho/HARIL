@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { validatePlanSchema } from "@haril/contracts";
 import {
   legalTargets,
@@ -6,6 +7,8 @@ import {
   topologicalOrder,
   validatePlanGraph,
 } from "@haril/core";
+import { inspectStore, type StoreInspection } from "@haril/state-sqlite";
+import { resolveDataDir } from "./data-dir.js";
 import { VERSION } from "./version.js";
 
 // Composition root of the CLI. Only this layer touches the host (process, fs); the rules come from core.
@@ -20,15 +23,29 @@ export interface HostInfo {
   readonly nodeVersion: string;
   readonly platform: string;
   readonly arch: string;
+  // Environment and home directory used to resolve the data directory (M1-D8).
+  readonly env?: Readonly<Record<string, string | undefined>>;
+  readonly homeDir?: string;
+  // Store inspection; defaults to the real read-only inspection of the data directory.
+  readonly inspectStore?: (dataDir: string) => StoreInspection;
 }
 
 function currentHost(): HostInfo {
-  return { nodeVersion: process.version, platform: process.platform, arch: process.arch };
+  return {
+    nodeVersion: process.version,
+    platform: process.platform,
+    arch: process.arch,
+    env: process.env,
+    homeDir: homedir(),
+  };
 }
 
 const EXIT_OK = 0;
+// M1-D2: 0 ok, 1 warnings, 2 errors. plan validate reports an invalid plan with 1 (its own contract).
 const EXIT_INVALID = 1;
+const EXIT_WARN = 1;
 const EXIT_USAGE = 2;
+const EXIT_ERROR = 2;
 
 const NODE_REQUIREMENT = "^24.21.0 || >=26.8.0";
 
@@ -37,7 +54,7 @@ const HELP_LINES = [
   "",
   "usage:",
   "  haril --version | version        print the CLI version",
-  "  haril doctor [--json]            check the runtime environment",
+  "  haril doctor [--json] [--data-dir <path>]   check the runtime and the store",
   "  haril states                     print the task states and legal transitions",
   "  haril plan validate <file> [--json]   validate a plan file",
   "  haril help                       print this help",
@@ -125,34 +142,114 @@ function nodeStatus(nodeVersion: string): NodeStatus {
   return satisfiesRequirement(version) ? "ok" : "warn";
 }
 
+type Status = "ok" | "warn" | "error";
+
+const RANK: Record<Status, number> = { ok: 0, warn: 1, error: 2 };
+
+function worst(...statuses: Status[]): Status {
+  return statuses.reduce((a, b) => (RANK[b] > RANK[a] ? b : a), "ok" as Status);
+}
+
+// Gate statuses from the store share the Node vocabulary: ok, warn, error.
+function storeStatus(report: StoreInspection): Status {
+  const gates = report.gates.map((gate) => gate.status);
+  if (report.error !== undefined || gates.includes("error")) return "error";
+  return gates.includes("warn") ? "warn" : "ok";
+}
+
+// Doctor is read-only: it describes the store and never creates the directory or the database.
 function doctor(args: readonly string[], io: CliIo, host: HostInfo): number {
-  const { positionals, json, unknown } = splitArgs(args);
+  const { rest, dataDirFlag, error } = takeDataDirFlag(args);
+  if (error !== undefined) {
+    io.err(error);
+    return EXIT_USAGE;
+  }
+  const { positionals, json, unknown } = splitArgs(rest);
   const usage = reportUnknownOptions(unknown, io);
   if (usage !== null) return usage;
   if (positionals.length > 0) {
-    io.err("usage: haril doctor [--json]");
+    io.err("usage: haril doctor [--json] [--data-dir <path>]");
     return EXIT_USAGE;
   }
 
-  // Only one check exists so far, so the overall status is the Node status.
-  const status = nodeStatus(host.nodeVersion);
+  const { dataDir } = resolveDataDir({
+    flag: dataDirFlag,
+    env: host.env ?? {},
+    platform: host.platform,
+    homeDir: host.homeDir ?? "",
+  });
+  const inspect =
+    host.inspectStore ??
+    ((path: string) => inspectStore({ dataDir: path, runtime: { nodeVersion: host.nodeVersion } }));
+  const store = inspect(dataDir);
+
+  const node = nodeStatus(host.nodeVersion);
+  const overall = worst(node, storeStatus(store));
   if (json) {
     io.out(
       JSON.stringify({
-        status,
-        node: { version: host.nodeVersion, required: NODE_REQUIREMENT, status },
+        status: overall,
+        node: { version: host.nodeVersion, required: NODE_REQUIREMENT, status: node },
         platform: host.platform,
         arch: host.arch,
+        store: {
+          status: storeStatus(store),
+          dataDir: store.dataDir,
+          dbPath: store.dbPath,
+          initialized: store.initialized,
+          sqliteVersion: store.sqliteVersion,
+          schemaVersion: store.schemaVersion,
+          gates: store.gates,
+          ...(store.error === undefined ? {} : { error: store.error }),
+        },
       }),
     );
   } else {
     io.out(`haril ${VERSION} doctor`);
-    io.out(`  node      ${host.nodeVersion}  ${status}  requires ${NODE_REQUIREMENT}`);
+    io.out(`  node      ${host.nodeVersion}  ${node}  requires ${NODE_REQUIREMENT}`);
     io.out(`  platform  ${host.platform}`);
     io.out(`  arch      ${host.arch}`);
-    io.out(`  status    ${status}`);
+    io.out(`  store     ${storeStatus(store)}  ${store.dataDir}`);
+    io.out(`    database  ${storeDatabaseLine(store)}`);
+    io.out(`    sqlite    ${store.sqliteVersion}`);
+    for (const gate of store.gates) io.out(`    gate ${gate.name}  ${gate.status}  ${gate.detail}`);
+    if (store.error !== undefined) io.out(`    error     ${store.error}`);
+    io.out(`  status    ${overall}`);
   }
-  return status === "error" ? EXIT_INVALID : EXIT_OK;
+  if (overall === "error") return EXIT_ERROR;
+  return overall === "warn" ? EXIT_WARN : EXIT_OK;
+}
+
+function storeDatabaseLine(store: StoreInspection): string {
+  if (!store.initialized)
+    return `${store.dbPath} (not initialized; the first write command creates it)`;
+  return `${store.dbPath} (schema ${store.schemaVersion ?? "unknown"})`;
+}
+
+// Extracts "--data-dir <path>" or "--data-dir=<path>" before the generic option parsing.
+function takeDataDirFlag(args: readonly string[]): {
+  rest: string[];
+  dataDirFlag?: string;
+  error?: string;
+} {
+  const rest: string[] = [];
+  let dataDirFlag: string | undefined;
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index] as string;
+    if (arg === "--data-dir") {
+      const value = args[index + 1];
+      if (value === undefined || value.startsWith("-")) {
+        return { rest, error: "haril: --data-dir needs a path" };
+      }
+      dataDirFlag = value;
+      index++;
+    } else if (arg.startsWith("--data-dir=")) {
+      dataDirFlag = arg.slice("--data-dir=".length);
+    } else {
+      rest.push(arg);
+    }
+  }
+  return { rest, dataDirFlag };
 }
 
 function states(args: readonly string[], io: CliIo): number {

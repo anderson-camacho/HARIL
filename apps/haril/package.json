@@ -12,7 +12,8 @@
   },
   "dependencies": {
     "@haril/contracts": "workspace:*",
-    "@haril/core": "workspace:*"
+    "@haril/core": "workspace:*",
+    "@haril/state-sqlite": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "24.19.2"

@@ -1,8 +1,26 @@
+import type { StoreInspection } from "@haril/state-sqlite";
 import { describe, expect, it } from "vitest";
 import { type CliIo, type HostInfo, run } from "../src/cli.js";
 import { VERSION } from "../src/version.js";
 
-const HOST: HostInfo = { nodeVersion: "v24.21.0", platform: "linux", arch: "x64" };
+// Store inspection is faked here; the real filesystem path is covered by doctor-store.test.ts.
+const HEALTHY_STORE = {
+  dataDir: "/home/tester/.local/share/haril",
+  dbPath: "/home/tester/.local/share/haril/haril.db",
+  initialized: false,
+  sqliteVersion: "3.53.3",
+  schemaVersion: null,
+  gates: [{ name: "sqlite", status: "ok", detail: "SQLite 3.53.3" }],
+} as const;
+
+const HOST: HostInfo = {
+  nodeVersion: "v24.21.0",
+  platform: "linux",
+  arch: "x64",
+  homeDir: "/home/tester",
+  env: {},
+  inspectStore: () => HEALTHY_STORE,
+};
 
 // Fake io: captures every line and serves files from an in-memory map.
 function harness(files: Record<string, string> = {}) {
@@ -107,25 +125,23 @@ describe("doctor", () => {
   );
 
   it.each(["v24.19.0", "v25.1.0", "v26.7.9"])(
-    "reports warn on %s and still exits 0",
+    "reports warn on %s and exits 1 (M1-D2: warnings)",
     (nodeVersion) => {
       const { code, report } = doctorJson(nodeVersion);
-      expect(code).toBe(0);
+      expect(code).toBe(1);
       expect(report.status).toBe("warn");
     },
   );
 
-  it("reports error and exits 1 below Node 24", () => {
+  it("reports error and exits 2 below Node 24 (M1-D2: errors)", () => {
     const { code, report } = doctorJson("v22.12.0");
-    expect(code).toBe(1);
+    expect(code).toBe(2);
     expect(report.status).toBe("error");
   });
 
   it("prints node, platform and arch in text form", () => {
     const { io, out } = harness();
-    expect(run(["doctor"], io, { nodeVersion: "v24.19.0", platform: "win32", arch: "x64" })).toBe(
-      0,
-    );
+    expect(run(["doctor"], io, { ...HOST, nodeVersion: "v24.19.0", platform: "win32" })).toBe(1);
     const text = out.join("\n");
     expect(text).toContain("v24.19.0");
     expect(text).toContain("win32");
@@ -133,9 +149,9 @@ describe("doctor", () => {
     expect(text).toContain("warn");
   });
 
-  it("prints a JSON report with node, platform, arch and status", () => {
+  it("prints a JSON report with node, platform, arch, store and status", () => {
     const { io, out } = harness();
-    run(["doctor", "--json"], io, { nodeVersion: "v24.19.0", platform: "win32", arch: "x64" });
+    run(["doctor", "--json"], io, { ...HOST, nodeVersion: "v24.19.0", platform: "win32" });
     expect(JSON.parse(out.join("\n"))).toEqual({
       status: "warn",
       node: {
@@ -145,6 +161,15 @@ describe("doctor", () => {
       },
       platform: "win32",
       arch: "x64",
+      store: {
+        status: "ok",
+        dataDir: HEALTHY_STORE.dataDir,
+        dbPath: HEALTHY_STORE.dbPath,
+        initialized: false,
+        sqliteVersion: "3.53.3",
+        schemaVersion: null,
+        gates: HEALTHY_STORE.gates,
+      },
     });
   });
 
@@ -248,5 +273,58 @@ describe("plan validate", () => {
     const { io, err } = harness({ "plan.json": VALID_PLAN });
     expect(run(["plan", "validate", "plan.json", "--strict"], io, HOST)).toBe(2);
     expect(err.join("\n")).toContain("--strict");
+  });
+});
+
+describe("doctor store section", () => {
+  it("prints the data directory and says the store is not initialized, exit 0", () => {
+    const { io, out } = harness();
+    expect(run(["doctor"], io, HOST)).toBe(0);
+    const text = out.join("\n");
+    expect(text).toContain(HEALTHY_STORE.dataDir);
+    expect(text).toContain("not initialized");
+    expect(text).toContain("3.53.3");
+  });
+
+  it("reports the schema version of an initialized store", () => {
+    const { io, out } = harness();
+    const inspectStore = () => ({ ...HEALTHY_STORE, initialized: true, schemaVersion: 1 });
+    expect(run(["doctor"], io, { ...HOST, inspectStore })).toBe(0);
+    expect(out.join("\n")).toContain("schema 1");
+  });
+
+  it("a SQLite gate error makes doctor exit 2 with the remedy in the text", () => {
+    const { io, out } = harness();
+    const inspectStore = (): StoreInspection => ({
+      ...HEALTHY_STORE,
+      sqliteVersion: "3.50.7",
+      gates: [
+        {
+          name: "sqlite",
+          status: "error",
+          detail: "SQLite 3.50.7 is older than 3.51.3. Remedy: use a newer Node.",
+        },
+      ],
+    });
+    expect(run(["doctor"], io, { ...HOST, inspectStore })).toBe(2);
+    expect(out.join("\n")).toContain("Remedy");
+  });
+
+  it("accepts --data-dir and passes it to the store inspection", () => {
+    const { io } = harness();
+    const seen: string[] = [];
+    const inspectStore = (dataDir: string) => {
+      seen.push(dataDir);
+      return HEALTHY_STORE;
+    };
+    expect(run(["doctor", "--data-dir", "/tmp/custom"], io, { ...HOST, inspectStore })).toBe(0);
+    expect(run(["doctor", "--data-dir=/tmp/other"], io, { ...HOST, inspectStore })).toBe(0);
+    expect(seen).toEqual(["/tmp/custom", "/tmp/other"]);
+  });
+
+  it("exits 2 with usage when --data-dir has no value", () => {
+    const { io, err } = harness();
+    expect(run(["doctor", "--data-dir"], io, HOST)).toBe(2);
+    expect(err.join("\n")).toContain("--data-dir");
   });
 });

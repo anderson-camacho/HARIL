@@ -1,0 +1,80 @@
+import { createHash } from "node:crypto";
+import type { DatabaseSync } from "node:sqlite";
+import type { Clock, Ids } from "@haril/core/ports";
+import { HARIL_APPLICATION_ID } from "./connection.js";
+import { StoreError } from "./errors.js";
+import { MIGRATION_0001 } from "./migrations/0001_init.js";
+import type { Migration } from "./migrations/types.js";
+
+// Known migrations, in order. Adding one is an additive change; never edit an applied one (INV-12).
+const KNOWN_MIGRATIONS: readonly Migration[] = [MIGRATION_0001];
+export const KNOWN_SCHEMA_VERSION = Math.max(...KNOWN_MIGRATIONS.map((m) => m.version));
+const STORE_RELEASE = "0.1.0";
+
+function checksumOf(sql: string): string {
+  return createHash("sha256").update(sql, "utf8").digest("hex");
+}
+
+// One transaction per migration (BEGIN IMMEDIATE). A known version with a different checksum is corruption.
+export function migrate(db: DatabaseSync, clock: Clock, ids: Ids): void {
+  for (const migration of KNOWN_MIGRATIONS) {
+    applyOne(db, migration, clock, ids);
+  }
+}
+
+function applyOne(db: DatabaseSync, migration: Migration, clock: Clock, ids: Ids): void {
+  const checksum = checksumOf(migration.sql);
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const applied = appliedChecksum(db, migration.version);
+    if (applied !== undefined) {
+      db.exec("ROLLBACK");
+      if (applied !== checksum) {
+        throw new StoreError(
+          "store.migration_failed",
+          `migration ${migration.name} was applied with a different checksum. Remedy: restore the last backup; the database was changed outside HARIL.`,
+          { version: migration.version, expected: checksum, found: applied },
+        );
+      }
+      return;
+    }
+    if (migration.version === 1) {
+      // A fresh database claims the HRIL application id; a foreign one was refused by the gates.
+      db.exec(`PRAGMA application_id = ${HARIL_APPLICATION_ID}`);
+    }
+    db.exec(migration.sql);
+    db.prepare(
+      "INSERT INTO schema_migrations (version, name, checksum, kind, applied_at, applied_by_release) VALUES (?, ?, ?, ?, ?, ?)",
+    ).run(migration.version, migration.name, checksum, migration.kind, clock.now(), STORE_RELEASE);
+    if (migration.version === 1) seedMeta(db, clock, ids);
+    db.exec(`PRAGMA user_version = ${migration.version}`);
+    db.exec("COMMIT");
+  } catch (error) {
+    if (db.isTransaction) db.exec("ROLLBACK");
+    if (error instanceof StoreError) throw error;
+    throw new StoreError(
+      "store.migration_failed",
+      `migration ${migration.name} failed and was rolled back. Remedy: restore the last backup and report the release.`,
+      { version: migration.version, cause: error instanceof Error ? error.message : String(error) },
+    );
+  }
+}
+
+function appliedChecksum(db: DatabaseSync, version: number): string | undefined {
+  const table = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'")
+    .get();
+  if (table === undefined) return undefined;
+  const row = db.prepare("SELECT checksum FROM schema_migrations WHERE version = ?").get(version) as
+    | { checksum: string }
+    | undefined;
+  return row?.checksum;
+}
+
+function seedMeta(db: DatabaseSync, clock: Clock, ids: Ids): void {
+  const now = clock.now();
+  const insert = db.prepare("INSERT INTO meta (key, value, updated_at) VALUES (?, ?, ?)");
+  insert.run("store_id", ids.next(), now);
+  insert.run("created_at", String(now), now);
+  insert.run("created_by_release", STORE_RELEASE, now);
+}
