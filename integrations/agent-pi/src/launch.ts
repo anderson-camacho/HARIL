@@ -35,6 +35,11 @@ export function buildPiArgv(input: PiArgvInput): string[] {
   ];
 }
 
+// Limits the bridge registers for the model when the runtime does not set them (Pi needs a context window and a
+// max output for every model it knows).
+export const DEFAULT_MODEL_CONTEXT_WINDOW = 32_768;
+export const DEFAULT_MODEL_MAX_TOKENS = 4_096;
+
 export interface PiEnvInput {
   readonly nodePath: string;
   readonly agentDir: string;
@@ -43,6 +48,8 @@ export interface PiEnvInput {
   readonly tools: readonly string[];
   readonly brokerUrl: string;
   readonly model: string;
+  readonly modelContextWindow: number;
+  readonly modelMaxTokens: number;
   readonly virtualKey: string;
   readonly osEnv: NodeJS.ProcessEnv;
 }
@@ -58,6 +65,8 @@ export function buildPiEnv(input: PiEnvInput): Record<string, string> {
     HARIL_TOOLS: input.tools.join(","),
     HARIL_BROKER_URL: input.brokerUrl,
     HARIL_MODEL: input.model,
+    HARIL_MODEL_CONTEXT: String(input.modelContextWindow),
+    HARIL_MODEL_MAX_TOKENS: String(input.modelMaxTokens),
     HARIL_VKEY: input.virtualKey,
     PATH: dirname(input.nodePath),
   };

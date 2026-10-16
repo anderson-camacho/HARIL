@@ -1,18 +1,27 @@
 // HARIL bridge: a Pi extension loaded with `-e` (ADR-0004 decision 5, ARCHITECTURE 9.4). It sends the
 // handshake `hello` over the run's pipe, registers the `haril` provider and the `read` tool, and forwards
 // every tool operation to the Runtime, which decides. Self-contained: node:* imports and local types only
-// (R6), so it bundles into one file. The Pi ExtensionAPI shapes below are UNVERIFIED against Pi 1.2.0.
+// (R6), so it bundles into one file. The shapes below follow Pi 1.2.0's ExtensionAPI types (ProviderConfig,
+// ProviderChatModelConfig, ToolDefinition, AgentToolResult), which are read-only under vendor/pi/1.2.0.
 
 import { connect, type Socket } from "node:net";
 
 export const BRIDGE_VERSION = "0.1.0";
 
-// Declared locally: the real types come from Pi's ExtensionAPI, which is not installed here (UNVERIFIED).
+// Declared locally to keep the bridge self-contained (R6); the shapes mirror Pi 1.2.0's types.
 export interface ProviderModel {
   readonly id: string;
+  readonly name: string;
+  readonly input: readonly ("text" | "image")[];
+  readonly reasoning: boolean;
   readonly contextWindow: number;
   readonly maxTokens: number;
-  readonly cost: { readonly input: number; readonly output: number };
+  readonly cost: {
+    readonly input: number;
+    readonly output: number;
+    readonly cacheRead: number;
+    readonly cacheWrite: number;
+  };
 }
 
 export interface ProviderConfig {
@@ -24,11 +33,13 @@ export interface ProviderConfig {
 
 export interface BridgeToolResult {
   readonly content: readonly { readonly type: "text"; readonly text: string }[];
+  readonly details: Record<string, unknown>;
   readonly isError?: boolean;
 }
 
 export interface BridgeToolDefinition {
   readonly name: string;
+  readonly label: string;
   readonly description: string;
   readonly parameters: Record<string, unknown>;
   execute(toolCallId: string, params: { readonly path?: unknown }): Promise<BridgeToolResult>;
@@ -39,13 +50,15 @@ export interface BridgePiApi {
   registerTool(tool: BridgeToolDefinition): void;
 }
 
-// UNVERIFIED placeholders until the route grant carries the real limits for the model.
-const CONTEXT_WINDOW = 128_000;
-const MAX_TOKENS = 4_096;
+// The runtime sets both limits (launch.ts); these defaults only apply when they are absent or not positive integers.
+const DEFAULT_CONTEXT_WINDOW = 32_768;
+const DEFAULT_MAX_TOKENS = 4_096;
 
 const BRIDGE_ENV = "HARIL_BRIDGE";
 const TOOLS_ENV = "HARIL_TOOLS";
 const VKEY_ENV = "HARIL_VKEY";
+const CONTEXT_ENV = "HARIL_MODEL_CONTEXT";
+const MAX_TOKENS_ENV = "HARIL_MODEL_MAX_TOKENS";
 const LF = "\n";
 
 interface Channel {
@@ -91,9 +104,12 @@ export default async function harilBridge(pi: BridgePiApi): Promise<void> {
     models: [
       {
         id: model,
-        contextWindow: CONTEXT_WINDOW,
-        maxTokens: MAX_TOKENS,
-        cost: { input: 0, output: 0 },
+        name: model,
+        input: ["text"],
+        reasoning: false,
+        contextWindow: positiveIntegerEnv(process.env[CONTEXT_ENV], DEFAULT_CONTEXT_WINDOW),
+        maxTokens: positiveIntegerEnv(process.env[MAX_TOKENS_ENV], DEFAULT_MAX_TOKENS),
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
     ],
   });
@@ -101,6 +117,7 @@ export default async function harilBridge(pi: BridgePiApi): Promise<void> {
   let sequence = 0;
   pi.registerTool({
     name: "read",
+    label: "Read",
     description: "Read a UTF-8 text file inside the project. The runtime decides what may be read.",
     parameters: {
       type: "object",
@@ -111,12 +128,22 @@ export default async function harilBridge(pi: BridgePiApi): Promise<void> {
       const path = typeof params.path === "string" ? params.path : "";
       const reply = await channel.request({ id: `op-${++sequence}`, op: "read", path });
       if (reply.ok === true && typeof reply.content === "string") {
-        return { content: [{ type: "text", text: reply.content }] };
+        return { content: [{ type: "text", text: reply.content }], details: {} };
       }
       const error = typeof reply.error === "string" ? reply.error : "denied";
-      return { content: [{ type: "text", text: `denied: ${error}` }], isError: true };
+      return {
+        content: [{ type: "text", text: `denied: ${error}` }],
+        details: {},
+        isError: true,
+      };
     },
   });
+}
+
+function positiveIntegerEnv(value: string | undefined, fallback: number): number {
+  if (value === undefined || !/^[1-9]\d*$/.test(value)) return fallback;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : fallback;
 }
 
 function openChannel(pipePath: string): Promise<Channel> {

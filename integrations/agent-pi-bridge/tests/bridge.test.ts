@@ -23,6 +23,8 @@ const ENV_KEYS = [
   "HARIL_RUN_ID",
   "HARIL_BROKER_URL",
   "HARIL_MODEL",
+  "HARIL_MODEL_CONTEXT",
+  "HARIL_MODEL_MAX_TOKENS",
 ] as const;
 
 interface RecordedPi extends BridgePiApi {
@@ -120,6 +122,8 @@ function setEnv(bridgeValue: string): void {
   process.env.HARIL_RUN_ID = "run-1";
   process.env.HARIL_BROKER_URL = BROKER;
   process.env.HARIL_MODEL = MODEL;
+  delete process.env.HARIL_MODEL_CONTEXT;
+  delete process.env.HARIL_MODEL_MAX_TOKENS;
 }
 
 function fakePi(): RecordedPi {
@@ -192,9 +196,58 @@ describe("agent-pi-bridge extension", () => {
     });
   });
 
+  it("registers each model with the full Pi model shape and the default limits", async () => {
+    const { pi } = await loadWithPipe();
+    expect(pi.providers[0]?.config.models).toEqual([
+      {
+        id: MODEL,
+        name: MODEL,
+        input: ["text"],
+        reasoning: false,
+        contextWindow: 32768,
+        maxTokens: 4096,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
+    ]);
+  });
+
+  it("takes the context window and max tokens from the environment", async () => {
+    const fake = await startFakePipe();
+    pipe = fake;
+    setEnv(`${fake.path}#${TOKEN}`);
+    process.env.HARIL_MODEL_CONTEXT = "65536";
+    process.env.HARIL_MODEL_MAX_TOKENS = "8192";
+    const pi = fakePi();
+    await bridge(pi);
+    expect(pi.providers[0]?.config.models[0]).toMatchObject({
+      contextWindow: 65536,
+      maxTokens: 8192,
+    });
+  });
+
+  it("falls back to the default limits when the environment values are not positive integers", async () => {
+    const fake = await startFakePipe();
+    pipe = fake;
+    setEnv(`${fake.path}#${TOKEN}`);
+    process.env.HARIL_MODEL_CONTEXT = "0";
+    process.env.HARIL_MODEL_MAX_TOKENS = "many";
+    const pi = fakePi();
+    await bridge(pi);
+    expect(pi.providers[0]?.config.models[0]).toMatchObject({
+      contextWindow: 32768,
+      maxTokens: 4096,
+    });
+  });
+
   it("registers exactly one tool, read, and never grep, find, ls or bash", async () => {
     const { pi } = await loadWithPipe();
     expect(pi.tools.map((tool) => tool.name)).toEqual(["read"]);
+  });
+
+  it("registers read with a label, as Pi's tool definition requires", async () => {
+    const { pi } = await loadWithPipe();
+    expect(readTool(pi).label).toEqual(expect.any(String));
+    expect(readTool(pi).label.length).toBeGreaterThan(0);
   });
 
   it("read forwards the path over the pipe and returns the content", async () => {
@@ -204,7 +257,7 @@ describe("agent-pi-bridge extension", () => {
     );
     const result = await readTool(pi).execute("call-1", { path: "a.txt" });
     expect(fake.ops).toEqual([expect.objectContaining({ op: "read", path: "a.txt" })]);
-    expect(result).toEqual({ content: [{ type: "text", text: "hello" }] });
+    expect(result).toEqual({ content: [{ type: "text", text: "hello" }], details: {} });
   });
 
   it("read maps a denial from the runtime to an error result", async () => {
@@ -213,6 +266,7 @@ describe("agent-pi-bridge extension", () => {
     const result = await readTool(pi).execute("call-2", { path: "../secret" });
     expect(result.isError).toBe(true);
     expect(result.content[0]?.text).toContain("path_denied");
+    expect(result.details).toEqual({});
   });
 
   it("throws when the pipe cannot be reached, so Pi fails to load the extension", async () => {

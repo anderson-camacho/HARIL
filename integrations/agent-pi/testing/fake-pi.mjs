@@ -9,6 +9,9 @@
 // and EOF), hang_abortable (answers abort with agent_settled), ui_request, huge_line, ok_via_broker (one
 // streamed chat call to HARIL_BROKER_URL with HARIL_VKEY; the streamed text is the reply, a Broker refusal or
 // stream error event becomes an assistant message with stopReason "error"). The last one is what M2-T6 runs end to end.
+// RL-T4 scenarios: error_then_retry_ok (a failed reply, then a retry that succeeds), error_final, ended_aborted,
+// echo_prompt (the reply repeats the prompt text), prompt_handled (prompt answered "handled"), ui_notify (a notify
+// request that must not be answered; the reply says whether a stray answer arrived).
 // Test-only: the real Pi is never replaced outside HARIL_PI_CLI_OVERRIDE.
 
 import { connect } from "node:net";
@@ -27,6 +30,8 @@ let stdinBuffer = "";
 let abortRequested = false;
 let promptText = "";
 const pendingUi = new Map();
+const UI_SETTLE_MS = 200;
+let strayUiResponse = false;
 
 process.stderr.write("fake-pi stderr marker\n");
 
@@ -167,12 +172,13 @@ async function brokerChat(prompt) {
   emit({ type: "agent_settled", aborted: false });
 }
 
-function emitAssistant(text, errorMessage) {
-  const message = { role: "assistant", content: [{ type: "text", text }] };
-  if (errorMessage !== undefined) {
-    message.stopReason = "error";
-    message.errorMessage = errorMessage;
-  }
+function emitAssistant(
+  text,
+  errorMessage,
+  stopReason = errorMessage === undefined ? "stop" : "error",
+) {
+  const message = { role: "assistant", content: [{ type: "text", text }], stopReason };
+  if (errorMessage !== undefined) message.errorMessage = errorMessage;
   emit({ type: "message_end", message });
 }
 
@@ -192,8 +198,29 @@ async function runPrompt() {
     await brokerChat(promptText);
     return;
   }
+  // Pi retries a failed model call: the first assistant message ends with an error, the retry succeeds.
+  if (scenario === "error_then_retry_ok") {
+    emitAssistant("", "transient provider error");
+    emitAssistant("retry reply");
+    emit({ type: "turn_end" });
+    emit({ type: "agent_settled", aborted: false });
+    return;
+  }
+  if (scenario === "error_final") {
+    emitAssistant("", "model unavailable");
+    emit({ type: "turn_end" });
+    emit({ type: "agent_settled", aborted: false });
+    return;
+  }
+  if (scenario === "ended_aborted") {
+    emitAssistant("partial", undefined, "aborted");
+    emit({ type: "turn_end" });
+    emit({ type: "agent_settled", aborted: false });
+    return;
+  }
 
   let text = "fake reply";
+  if (scenario === "echo_prompt") text = `echo: ${promptText}`;
   if (scenario === "ok_with_read") {
     const reply = await bridgeRead(process.env.FAKE_PI_READ_PATH ?? "");
     text = reply.ok ? `read ok: ${reply.content}` : `read denied: ${reply.error}`;
@@ -215,6 +242,17 @@ async function runPrompt() {
     const ui = await uiRequest("ui-1");
     text = `ui cancelled=${ui.cancelled === true}`;
   }
+  // A notify is fire-and-forget: HARIL must not answer it. The fake waits briefly and reports any stray answer.
+  if (scenario === "ui_notify") {
+    emit({
+      type: "extension_ui_request",
+      id: "ui-notify",
+      method: "notify",
+      message: "fake notice",
+    });
+    await new Promise((resolve) => setTimeout(resolve, UI_SETTLE_MS));
+    text = strayUiResponse ? "stray ui response" : "notify ignored";
+  }
   emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "fake " } });
   emit({
     type: "message_end",
@@ -235,6 +273,11 @@ function handleCommand(message) {
       return;
     }
     case "prompt":
+      // Pi 1.2.0 answers "handled" for an input its own commands took: no run starts and no agent_settled follows.
+      if (scenario === "prompt_handled") {
+        respond("prompt", message.id, { disposition: "handled" });
+        return;
+      }
       respond("prompt", message.id, { disposition: "started" });
       promptText = typeof message.message === "string" ? message.message : "";
       void runPrompt();
@@ -246,8 +289,12 @@ function handleCommand(message) {
       }
       return;
     case "extension_ui_response":
-      pendingUi.get(message.id)?.(message);
-      pendingUi.delete(message.id);
+      if (pendingUi.has(message.id)) {
+        pendingUi.get(message.id)(message);
+        pendingUi.delete(message.id);
+      } else {
+        strayUiResponse = true;
+      }
       return;
     default:
       return;

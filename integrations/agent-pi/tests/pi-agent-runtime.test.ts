@@ -28,6 +28,8 @@ const ALLOWED_ENV = new Set([
   "HARIL_TOOLS",
   "HARIL_BROKER_URL",
   "HARIL_MODEL",
+  "HARIL_MODEL_CONTEXT",
+  "HARIL_MODEL_MAX_TOKENS",
   "HARIL_VKEY",
   "SystemRoot",
   "TEMP",
@@ -183,12 +185,32 @@ describe("createPiAgentRuntime launch", () => {
       expect(env.HARIL_TOOLS).toBe("read,write");
       expect(env.HARIL_BROKER_URL).toBe("http://127.0.0.1:9/v1");
       expect(env.HARIL_MODEL).toBe(MODEL);
+      expect(env.HARIL_MODEL_CONTEXT).toBe("32768");
+      expect(env.HARIL_MODEL_MAX_TOKENS).toBe("4096");
       expect(env.HARIL_VKEY).toBe(VKEY);
       expect(env.PATH).toBe(dirname(process.execPath));
       expect(env.HARIL_BRIDGE).toMatch(/#[0-9a-f]{64}$/);
     } finally {
       delete process.env.HARIL_LEAK_CANARY;
     }
+  });
+
+  it("passes the model limits to the bridge through the child env", async () => {
+    const h = harness();
+    const handle = await startHandle(
+      h.runtime("ok", { modelContextWindow: 65536, modelMaxTokens: 8192 }),
+    );
+    await handle.hello;
+    const env = h.spawnCalls[0]?.options.env as Record<string, string>;
+    expect(env.HARIL_MODEL_CONTEXT).toBe("65536");
+    expect(env.HARIL_MODEL_MAX_TOKENS).toBe("8192");
+  });
+
+  it("rejects a model limit that is not a positive integer before spawning anything", async () => {
+    const h = harness();
+    const result = await h.runtime("ok", { modelMaxTokens: 0 }).start(spec());
+    expect(result).toMatchObject({ ok: false, error: { code: "agent.invalid_spec" } });
+    expect(h.spawnCalls).toHaveLength(0);
   });
 
   it("rejects a relative node path before spawning anything", async () => {
@@ -274,6 +296,58 @@ describe("createPiAgentRuntime lifecycle", () => {
     const handle = await startHandle(h.runtime("ui_request"));
     await handle.prompt("go");
     expect(await handle.settled).toEqual({ status: "succeeded", summary: "ui cancelled=true" });
+  });
+
+  it("ignores a notify request without writing any answer to Pi", async () => {
+    const h = harness();
+    const handle = await startHandle(h.runtime("ui_notify"));
+    await handle.prompt("go");
+    expect(await handle.settled).toEqual({ status: "succeeded", summary: "notify ignored" });
+  });
+
+  it("judges the last assistant message: an earlier error that Pi retried does not fail the run", async () => {
+    const h = harness();
+    const handle = await startHandle(h.runtime("error_then_retry_ok"));
+    await handle.prompt("go");
+    expect(await handle.settled).toEqual({ status: "succeeded", summary: "retry reply" });
+  });
+
+  it("fails the run when the last assistant message ends with an error", async () => {
+    const h = harness();
+    const handle = await startHandle(h.runtime("error_final"));
+    await handle.prompt("go");
+    expect(await handle.settled).toEqual({
+      status: "failed",
+      code: "provider_error",
+      message: "model unavailable",
+    });
+  });
+
+  it("fails the run with reason aborted when the last assistant message ends aborted", async () => {
+    const h = harness();
+    const handle = await startHandle(h.runtime("ended_aborted"));
+    await handle.prompt("go");
+    expect(await handle.settled).toMatchObject({ status: "failed", code: "aborted" });
+  });
+
+  it("prefixes a prompt that starts with a slash so Pi does not read it as a command", async () => {
+    const h = harness();
+    const handle = await startHandle(h.runtime("echo_prompt"));
+    await handle.prompt("/plan now");
+    expect(await handle.settled).toEqual({
+      status: "succeeded",
+      summary: "echo: Task: /plan now",
+    });
+  });
+
+  it("fails the run with prompt_not_started when Pi does not start a run for the prompt", async () => {
+    const h = harness();
+    const handle = await startHandle(h.runtime("prompt_handled"));
+    expect(await handle.prompt("go")).toMatchObject({
+      ok: false,
+      error: { code: "prompt_not_started" },
+    });
+    expect(await handle.settled).toMatchObject({ status: "failed", code: "prompt_not_started" });
   });
 
   it("fails closed when the bridge announces tools different from allowedTools", async () => {

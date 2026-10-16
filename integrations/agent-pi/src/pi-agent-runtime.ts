@@ -18,7 +18,15 @@ import type {
   Result,
 } from "@haril/core/ports";
 import { JsonlReader } from "./jsonl.js";
-import { buildPiArgv, buildPiEnv, defaultSpawn, killProcessTree, type SpawnFn } from "./launch.js";
+import {
+  buildPiArgv,
+  buildPiEnv,
+  DEFAULT_MODEL_CONTEXT_WINDOW,
+  DEFAULT_MODEL_MAX_TOKENS,
+  defaultSpawn,
+  killProcessTree,
+  type SpawnFn,
+} from "./launch.js";
 import { createPathGuard, type PathGuard } from "./path-guard.js";
 
 export interface PiTimings {
@@ -55,6 +63,9 @@ export interface PiAgentRuntimeOptions {
   readonly model: string;
   // Virtual key for the Broker. Reserve delivery through HARIL_VKEY (ADR-0005 BR-4); never argv or events.
   readonly virtualKey: string;
+  // Limits the bridge registers for the model (HARIL_MODEL_CONTEXT, HARIL_MODEL_MAX_TOKENS). Positive integers.
+  readonly modelContextWindow?: number;
+  readonly modelMaxTokens?: number;
   readonly spawn?: SpawnFn;
   readonly pathGuard?: PathGuard;
   readonly timings?: PiTimings;
@@ -72,6 +83,8 @@ export interface PiAgentHandle extends AgentHandle {
 
 const RUN_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const MAX_READ_BYTES = 1024 * 1024;
+// Pi waits for an answer only to these extension dialogs; every other extension_ui_request is fire-and-forget.
+const DIALOG_METHODS: ReadonlySet<unknown> = new Set(["select", "confirm", "input", "editor"]);
 const DEFAULT_HELLO_TIMEOUT_MS = 15_000;
 const DEFAULT_STARTUP_TIMEOUT_MS = 15_000;
 const DEFAULT_GRACE_MS = 5_000;
@@ -152,7 +165,22 @@ function validate(spec: AgentSpec, options: PiAgentRuntimeOptions): HarilError |
   if (!(spec.timeoutMs > 0) || !Number.isFinite(spec.timeoutMs)) {
     return invalid("timeoutMs must be a positive number");
   }
+  if (options.modelContextWindow !== undefined && !isPositiveInteger(options.modelContextWindow)) {
+    return invalid("modelContextWindow must be a positive integer");
+  }
+  if (options.modelMaxTokens !== undefined && !isPositiveInteger(options.modelMaxTokens)) {
+    return invalid("modelMaxTokens must be a positive integer");
+  }
   return undefined;
+}
+
+function isPositiveInteger(value: number): boolean {
+  return Number.isSafeInteger(value) && value > 0;
+}
+
+// Pi 1.2.0 reads a leading "/" as one of its own commands, so a task that starts with it goes behind a fixed prefix.
+function promptMessage(text: string): string {
+  return text.startsWith("/") ? `Task: ${text}` : text;
 }
 
 function isAbsolutePath(value: string): boolean {
@@ -222,7 +250,10 @@ class PiRun implements PiAgentHandle {
   private promptStarted = false;
   private settledSeen = false;
   private finalText: string | undefined;
-  private providerError: string | undefined;
+  // The last assistant message_end before agent_settled decides the run; an earlier one may be a retried error.
+  private lastAssistant:
+    | { stopReason: string | undefined; errorMessage: string | undefined }
+    | undefined;
   private streamedText = "";
   private ignoredEvents = 0;
   private seq = 0;
@@ -283,6 +314,8 @@ class PiRun implements PiAgentHandle {
       tools: this.spec.allowedTools,
       brokerUrl: this.options.brokerUrl,
       model: this.options.model,
+      modelContextWindow: this.options.modelContextWindow ?? DEFAULT_MODEL_CONTEXT_WINDOW,
+      modelMaxTokens: this.options.modelMaxTokens ?? DEFAULT_MODEL_MAX_TOKENS,
       virtualKey: this.options.virtualKey,
       osEnv: this.osEnv,
     });
@@ -350,13 +383,18 @@ class PiRun implements PiAgentHandle {
     }
     if (this.finished) return { ok: false, error: this.closedError() };
 
-    const reply = await this.request("prompt", { message: text });
+    const reply = await this.request("prompt", { message: promptMessage(text) });
     if (reply === undefined) return { ok: false, error: this.closedError() };
-    const disposition = asRecord(reply.data)?.disposition;
-    if (reply.success !== true || (disposition !== "started" && disposition !== "queued")) {
+    if (reply.success !== true) {
       const message = "Pi did not accept the prompt";
       this.fail("agent.prompt_rejected", message);
       return { ok: false, error: { code: "agent.prompt_rejected", message } };
+    }
+    // Only "started" opens a run: "handled" and "queued" never send agent_settled (contract 4.3).
+    if (asRecord(reply.data)?.disposition !== "started") {
+      const message = "Pi did not start a run for the prompt";
+      this.fail("prompt_not_started", message);
+      return { ok: false, error: { code: "prompt_not_started", message } };
     }
     // The reply and agent_settled can arrive in one chunk: the run may already be finished, and a timer armed
     // now would never be cleared, which keeps the runtime process alive for the whole timeout (M2-T6).
@@ -567,7 +605,10 @@ class PiRun implements PiAgentHandle {
         this.onResponse(message);
         return;
       case "extension_ui_request":
-        if (typeof message.id === "string" || typeof message.id === "number") {
+        if (
+          DIALOG_METHODS.has(message.method) &&
+          (typeof message.id === "string" || typeof message.id === "number")
+        ) {
           this.writeLine({ type: "extension_ui_response", id: message.id, cancelled: true });
         }
         return;
@@ -584,11 +625,11 @@ class PiRun implements PiAgentHandle {
       case "message_end": {
         const assistant = asRecord(message.message);
         if (assistant?.role === "assistant") {
-          // A failed model call ends the assistant message with stopReason "error" and its message (UNVERIFIED
-          // against Pi 1.2.0: the field names follow the assistant message shape of the Pi SDK).
-          if (assistant.stopReason === "error" && typeof assistant.errorMessage === "string") {
-            this.providerError = assistant.errorMessage;
-          }
+          this.lastAssistant = {
+            stopReason: typeof assistant.stopReason === "string" ? assistant.stopReason : undefined,
+            errorMessage:
+              typeof assistant.errorMessage === "string" ? assistant.errorMessage : undefined,
+          };
           const text = assistantText(assistant.content);
           if (text !== undefined) this.finalText = text;
         }
@@ -650,21 +691,30 @@ class PiRun implements PiAgentHandle {
     } else if (this.stopRequest === "abort") {
       outcome = { status: "aborted" };
     } else if (aborted) {
-      outcome = { status: "failed", code: "pi_aborted", message: "Pi settled with aborted=true" };
-    } else if (this.providerError !== undefined) {
-      // The model call failed (for example a Broker refusal): the attempt fails with that cause, not a summary.
-      outcome = {
-        status: "failed",
-        code: this.providerError.includes("insufficient_quota")
-          ? "insufficient_quota"
-          : "provider_error",
-        message: this.providerError,
-      };
+      outcome = { status: "failed", code: "aborted", message: "Pi settled with aborted=true" };
     } else {
-      outcome = { status: "succeeded", summary: this.finalText ?? this.streamedText };
+      outcome = this.judgeLastAssistant();
     }
     this.finish(outcome);
     this.beginGracefulShutdown();
+  }
+
+  // Pi retries a failed model call up to 3 times, so only the last assistant message decides: stop, toolUse and
+  // length succeed, error fails with the provider's cause (a Broker refusal, for example), aborted fails as aborted.
+  private judgeLastAssistant(): AgentOutcome {
+    const last = this.lastAssistant;
+    if (last?.stopReason === "aborted") {
+      return { status: "failed", code: "aborted", message: "Pi ended the reply as aborted" };
+    }
+    if (last?.stopReason === "error") {
+      const message = last.errorMessage ?? "Pi reported a failed model call";
+      return {
+        status: "failed",
+        code: message.includes("insufficient_quota") ? "insufficient_quota" : "provider_error",
+        message,
+      };
+    }
+    return { status: "succeeded", summary: this.finalText ?? this.streamedText };
   }
 
   private stop(reason: "abort" | "timeout"): void {
