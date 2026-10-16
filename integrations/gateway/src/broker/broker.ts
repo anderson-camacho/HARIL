@@ -207,10 +207,11 @@ export async function startBroker(options: BrokerOptions): Promise<Broker> {
     } finally {
       untrack(grant.runId, controller);
     }
-    if (outcome.kind === "cut") {
-      controller.abort();
-      await iterator.return?.(undefined).catch(() => undefined);
-    }
+    // Every path returns the upstream stream: a completed reply leaves the generator suspended at its done event,
+    // and only return() runs its cleanup (the request deadline and the reader). Without it the timer stays armed
+    // and keeps the runtime process alive until the timeout (M2-T6).
+    if (outcome.kind === "cut") controller.abort();
+    await iterator.return?.(undefined).catch(() => undefined);
 
     // Settle before the last bytes: a client that reads to the end then sees the final ledger state.
     const usage =

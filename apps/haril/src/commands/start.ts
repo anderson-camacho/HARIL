@@ -2,6 +2,7 @@ import { type RunEvent, runExitCode } from "@haril/core";
 import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_ERROR, EXIT_USAGE, type HostInfo } from "../context.js";
 import { agentRuntimeFor, clockFor } from "../host.js";
+import { createRealAgents } from "../runtime/real-agent.js";
 import { runUntilIdle } from "../runtime/run-loop.js";
 import { dataDirFor, openExisting } from "./common.js";
 
@@ -26,6 +27,8 @@ export async function start(args: readonly string[], io: CliIo, host: HostInfo):
     io.err(`haril: ${NOT_INITIALIZED}`);
     return EXIT_USAGE;
   }
+  // The real lane (M2-T6): the analyst agent in Pi through one Broker, closed when the run ends.
+  const realAgents = createRealAgents({ host, store, clock: clockFor(host), dataDir });
   try {
     // M1-D6: the lease is per data root, so one runtime serves every project. --project only names one that exists.
     const slug = lastValue(parsed, "--project");
@@ -40,6 +43,7 @@ export async function start(args: readonly string[], io: CliIo, host: HostInfo):
       clock: clockFor(host),
       pid: process.pid,
       nodeVersion: host.nodeVersion,
+      realAgents,
       onEvent: (event) => {
         if (!json) io.out(formatEvent(event));
       },
@@ -53,12 +57,15 @@ export async function start(args: readonly string[], io: CliIo, host: HostInfo):
     if (json) {
       io.out(JSON.stringify({ ...result.summary, exitCode }));
     } else {
+      const skipped =
+        result.summary.skipped.length === 0 ? "" : `, ${result.summary.skipped.length} skipped`;
       io.out(
-        `done: ${result.summary.completed.length} completed, ${result.summary.failed.length} failed, ${result.summary.blocked.length} blocked`,
+        `done: ${result.summary.completed.length} completed, ${result.summary.failed.length} failed, ${result.summary.blocked.length} blocked${skipped}`,
       );
     }
     return exitCode;
   } finally {
+    await realAgents.close();
     store.close();
   }
 }
@@ -83,5 +90,7 @@ function formatEvent(event: RunEvent): string {
       return `failed ${event.taskId} ${event.goal}: ${event.code}`;
     case "task.blocked":
       return `blocked: ${event.reason} ${event.taskId} ${event.goal}`;
+    case "task.skipped":
+      return `skipped ${event.taskId} ${event.goal}: needs setup (${event.what}: ${event.fix})`;
   }
 }

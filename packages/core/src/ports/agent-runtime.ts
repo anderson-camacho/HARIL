@@ -11,6 +11,10 @@ export interface AgentSpec {
   // Task prompt, kept for the record; the work starts when AgentHandle.prompt is accepted.
   readonly prompt: string;
   readonly timeoutMs: number;
+  // Real agents (M2-T6): the owning project, the model the task asked for and its token ceiling.
+  readonly projectId?: string;
+  readonly model?: string;
+  readonly maxTokens?: number;
 }
 
 export interface AgentHello {
@@ -19,7 +23,14 @@ export interface AgentHello {
 
 export type AgentOutcome =
   // `simulated` marks a run of a non-fake agentRef, which M1 completes without a real agent (M1-D7).
-  | { readonly status: "succeeded"; readonly summary: string; readonly simulated?: true }
+  | {
+      readonly status: "succeeded";
+      readonly summary: string;
+      readonly simulated?: true;
+      // Real agents (M2-T6): the requested model and the adapter warnings, kept in the run result.
+      readonly model?: string;
+      readonly warnings?: readonly string[];
+    }
   | { readonly status: "failed"; readonly code: string; readonly message: string }
   | { readonly status: "timed_out" }
   | { readonly status: "aborted" };

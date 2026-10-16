@@ -5,10 +5,11 @@ import { HARIL_APPLICATION_ID } from "./connection.js";
 import { StoreError } from "./errors.js";
 import { MIGRATION_0001 } from "./migrations/0001_init.js";
 import { MIGRATION_0002 } from "./migrations/0002_budgets.js";
+import { MIGRATION_0003 } from "./migrations/0003_task_model.js";
 import type { Migration } from "./migrations/types.js";
 
 // Known migrations, in order. Adding one is an additive change; never edit an applied one (INV-12).
-const KNOWN_MIGRATIONS: readonly Migration[] = [MIGRATION_0001, MIGRATION_0002];
+const KNOWN_MIGRATIONS: readonly Migration[] = [MIGRATION_0001, MIGRATION_0002, MIGRATION_0003];
 export const KNOWN_SCHEMA_VERSION = Math.max(...KNOWN_MIGRATIONS.map((m) => m.version));
 const STORE_RELEASE = "0.1.0";
 

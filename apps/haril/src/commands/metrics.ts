@@ -1,4 +1,4 @@
-import type { MetricsSnapshot, UsageSummary } from "@haril/core/ports";
+import type { MetricsSnapshot, UsageBreakdownRow, UsageSummary } from "@haril/core/ports";
 import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
 import { dataDirFor, openExisting } from "./common.js";
@@ -47,6 +47,14 @@ interface MetricsView {
     readonly output: number;
     readonly unreconciled: number;
   } | null;
+  // Settled tokens per agent and model (M2-T6); empty before the first real run.
+  readonly tokensByAgentModel: ReadonlyArray<{
+    readonly agentRef: string;
+    readonly model: string;
+    readonly input: number;
+    readonly output: number;
+    readonly unreconciled: number;
+  }>;
   readonly cost: null;
   readonly note: string;
 }
@@ -77,7 +85,8 @@ export function metrics(args: readonly string[], io: CliIo, host: HostInfo): num
       projectId = project.projectId;
     }
     const usage = store.budgets.usageSummary(projectId === undefined ? undefined : { projectId });
-    const view = toView(slug ?? null, store.metrics.snapshot(projectId), usage);
+    const breakdown = store.budgets.usageBreakdown(projectId);
+    const view = toView(slug ?? null, store.metrics.snapshot(projectId), usage, breakdown);
     if (parsed.flags.has("--json")) {
       io.out(JSON.stringify(view));
     } else {
@@ -93,6 +102,7 @@ function toView(
   project: string | null,
   snapshot: MetricsSnapshot,
   usage: UsageSummary | null,
+  breakdown: readonly UsageBreakdownRow[],
 ): MetricsView {
   const count = (status: string): number => snapshot.runsByStatus[status] ?? 0;
   const completed = count("completed");
@@ -132,6 +142,13 @@ function toView(
             output: usage.outputTokens,
             unreconciled: usage.unreconciled,
           },
+    tokensByAgentModel: breakdown.map((row) => ({
+      agentRef: row.agentRef,
+      model: row.model,
+      input: row.inputTokens,
+      output: row.outputTokens,
+      unreconciled: row.unreconciled,
+    })),
     cost: null,
     note: usage === null ? NOT_YET : NO_COST,
   };
@@ -166,6 +183,11 @@ function printText(io: CliIo, view: MetricsView): void {
   } else {
     io.out(
       `tokens: input ${view.tokens.input}, output ${view.tokens.output}, unreconciled ${view.tokens.unreconciled}; cost: null (${NO_COST})`,
+    );
+  }
+  for (const row of view.tokensByAgentModel) {
+    io.out(
+      `  ${row.agentRef} ${row.model}: input ${row.input}, output ${row.output}, unreconciled ${row.unreconciled}`,
     );
   }
 }

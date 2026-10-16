@@ -21,7 +21,8 @@
     "build:bridge": "tsdown --config integrations/agent-pi-bridge/tsdown.config.ts",
     "smoke": "npm run build && npm run build:bootstrap && npm run build:bridge && node apps/haril/dist/haril.mjs --version && node apps/haril/dist/haril.mjs plan validate examples/plan.valid.json && node apps/bootstrap/dist/haril-bootstrap.mjs --help",
     "runtime:install": "npm run build:bootstrap && node apps/bootstrap/dist/haril-bootstrap.mjs install-runtime",
-    "e2e": "npm run build && node scripts/e2e.mjs"
+    "e2e": "npm run build && node scripts/e2e.mjs",
+    "e2e:real": "npm run build && npm run build:bridge && node scripts/e2e-real.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",

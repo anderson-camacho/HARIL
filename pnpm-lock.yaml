@@ -190,6 +190,9 @@ importers:
 
   apps/haril:
     dependencies:
+      '@haril/agent-pi':
+        specifier: workspace:*
+        version: link:../../integrations/agent-pi
       '@haril/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts

@@ -13,6 +13,7 @@ import type {
   ReleaseStatus,
   ReserveInput,
   ReserveResult,
+  UsageBreakdownRow,
   UsageSummary,
   UsageSummaryFilter,
   VirtualKeysPort,
@@ -315,6 +316,26 @@ export function createBudgetFacets(options: BudgetFacetOptions): BudgetFacets {
           filter?.projectId ?? null,
         ) as unknown as UsageSummary;
       return row.settled === 0 ? null : row;
+    },
+
+    // Counted on the project budget only, once per reservation, grouped by the agent of the task and the
+    // model that was requested (M2-T6). Rows are the settled commits; reserves and releases are not spend.
+    usageBreakdown(projectId?: string): readonly UsageBreakdownRow[] {
+      return db
+        .prepare(
+          `SELECT t.agent_ref AS agentRef, l.model_requested AS model,
+                  COALESCE(SUM(l.tokens_input), 0) AS inputTokens,
+                  COALESCE(SUM(l.tokens_output), 0) AS outputTokens,
+                  COALESCE(SUM(l.unreconciled), 0) AS unreconciled
+           FROM budget_ledger l
+             JOIN budgets b ON b.budget_id = l.budget_id
+             JOIN tasks t ON t.task_id = l.task_id
+           WHERE l.kind = 'commit' AND b.scope_type = 'project'
+             AND (? IS NULL OR b.project_id = ?)
+           GROUP BY t.agent_ref, l.model_requested
+           ORDER BY t.agent_ref, l.model_requested`,
+        )
+        .all(projectId ?? null, projectId ?? null) as unknown as UsageBreakdownRow[];
     },
   };
 

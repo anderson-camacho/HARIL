@@ -11,6 +11,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@haril/agent-pi": "workspace:*",
     "@haril/contracts": "workspace:*",
     "@haril/core": "workspace:*",
     "@haril/gateway": "workspace:*",

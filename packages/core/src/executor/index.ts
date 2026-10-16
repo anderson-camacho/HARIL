@@ -14,6 +14,18 @@ export interface ExecutableTask {
   readonly description: string;
   readonly agentRef: string;
   readonly timeoutMs: number;
+  // Real agents only (M2-T6).
+  readonly projectId?: string;
+  readonly model?: string | null;
+  readonly maxTokens?: number;
+}
+
+// Agent references served by a real runtime (Pi through the Broker, M2-D6). Every other reference keeps the
+// simulated behaviour of M1.
+export const REAL_AGENT_REFS: readonly string[] = ["analyst"];
+
+export function isRealAgent(agentRef: string): boolean {
+  return REAL_AGENT_REFS.includes(agentRef);
 }
 
 export interface RunIdentity {
@@ -31,6 +43,9 @@ export function buildAgentSpec(task: ExecutableTask, run: RunIdentity): AgentSpe
     allowedTools: [...M1_ALLOWED_TOOLS],
     prompt,
     timeoutMs: task.timeoutMs,
+    ...(task.projectId === undefined ? {} : { projectId: task.projectId }),
+    ...(task.model ? { model: task.model } : {}),
+    ...(task.maxTokens === undefined ? {} : { maxTokens: task.maxTokens }),
   };
 }
 
@@ -55,9 +70,21 @@ export function checkHandshake(
 export function completionFor(runId: string, outcome: AgentOutcome): RunCompletion {
   switch (outcome.status) {
     case "succeeded":
-      return outcome.simulated === true
-        ? { runId, outcome: "succeeded", result: { simulated: true } }
-        : { runId, outcome: "succeeded", result: { summary: outcome.summary } };
+      if (outcome.simulated === true) {
+        return { runId, outcome: "succeeded", result: { simulated: true } };
+      }
+      if (outcome.model !== undefined) {
+        return {
+          runId,
+          outcome: "succeeded",
+          result: {
+            text: outcome.summary,
+            model: outcome.model,
+            warnings: [...(outcome.warnings ?? [])],
+          },
+        };
+      }
+      return { runId, outcome: "succeeded", result: { summary: outcome.summary } };
     case "failed":
       return {
         runId,

@@ -220,6 +220,7 @@ class PiRun implements PiAgentHandle {
   private promptStarted = false;
   private settledSeen = false;
   private finalText: string | undefined;
+  private providerError: string | undefined;
   private streamedText = "";
   private ignoredEvents = 0;
   private seq = 0;
@@ -355,6 +356,9 @@ class PiRun implements PiAgentHandle {
       this.fail("agent.prompt_rejected", message);
       return { ok: false, error: { code: "agent.prompt_rejected", message } };
     }
+    // The reply and agent_settled can arrive in one chunk: the run may already be finished, and a timer armed
+    // now would never be cleared, which keeps the runtime process alive for the whole timeout (M2-T6).
+    if (this.finished) return { ok: true, value: undefined };
     this.deadlineTimer = setTimeout(() => this.stop("timeout"), this.spec.timeoutMs);
     return { ok: true, value: undefined };
   }
@@ -567,6 +571,11 @@ class PiRun implements PiAgentHandle {
       case "message_end": {
         const assistant = asRecord(message.message);
         if (assistant?.role === "assistant") {
+          // A failed model call ends the assistant message with stopReason "error" and its message (UNVERIFIED
+          // against Pi 1.2.0: the field names follow the assistant message shape of the Pi SDK).
+          if (assistant.stopReason === "error" && typeof assistant.errorMessage === "string") {
+            this.providerError = assistant.errorMessage;
+          }
           const text = assistantText(assistant.content);
           if (text !== undefined) this.finalText = text;
         }
@@ -629,6 +638,15 @@ class PiRun implements PiAgentHandle {
       outcome = { status: "aborted" };
     } else if (aborted) {
       outcome = { status: "failed", code: "pi_aborted", message: "Pi settled with aborted=true" };
+    } else if (this.providerError !== undefined) {
+      // The model call failed (for example a Broker refusal): the attempt fails with that cause, not a summary.
+      outcome = {
+        status: "failed",
+        code: this.providerError.includes("insufficient_quota")
+          ? "insufficient_quota"
+          : "provider_error",
+        message: this.providerError,
+      };
     } else {
       outcome = { status: "succeeded", summary: this.finalText ?? this.streamedText };
     }

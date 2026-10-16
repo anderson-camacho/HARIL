@@ -63,9 +63,27 @@ Requisitos: Node 24 (recomendado `^24.21.0`; con 24.19 funciona y `doctor` avisa
 
 8. Limpiar la variable de sesión: `Remove-Item Env:HARIL_HOME`.
 
+### M2: agente real `analyst` (opt-in)
+
+`analyst` ejecuta Pi 1.2.0, aislado en un Node propio, a través del Broker de HARIL y de un gateway compatible con OpenAI (CLIProxyAPI). Necesita un runtime instalado, una clave de cliente del gateway y un modelo de `haril models`. HARIL no guarda la clave: la lee solo de la variable de entorno de la sesión y nunca la escribe en el repositorio, en la base de datos, en los eventos ni en la salida.
+
+```powershell
+npm run runtime:install
+$env:HARIL_CLIPROXYAPI_KEY = "<tu clave de cliente de CLIProxyAPI>"
+$env:HARIL_DEFAULT_MODEL = "<id de haril models>"
+.\bin\haril.ps1 models
+.\bin\haril.ps1 task add "Lee README.md y resúmelo en una frase" --project demo --agent analyst
+.\bin\haril.ps1 start --project demo
+.\bin\haril.ps1 task show <taskId>
+.\bin\haril.ps1 metrics --project demo
+npm run e2e:real
+```
+
+Si falta el runtime, la clave o el modelo, `start` no reclama la tarea: la muestra como `skipped` con lo que falta y sale con 1; las tareas `fake:*` siguen su curso. `task add --agent analyst` sin `--model` ni `HARIL_DEFAULT_MODEL` sale con 2. `npm run e2e:real` imprime `SKIP real lane` y sale con 0 cuando algo falta; si todo está listo, ejecuta una tarea real y comprueba los tokens registrados.
+
 Notas:
 
-- **Agentes simulados hasta M2.** `fake:succeed` (por defecto), `fake:fail` y `fake:slow:<ms>` se comportan como su nombre indica. Cualquier otro agente del plan (por ejemplo `developer-block`) se ejecuta como simulado con éxito y `start` lo indica. Ningún agente real modifica el disco.
+- **Agentes simulados.** `fake:succeed` (por defecto), `fake:fail` y `fake:slow:<ms>` se comportan como su nombre indica. Cualquier otro agente del plan (por ejemplo `developer-block`) se ejecuta como simulado con éxito y `start` lo indica. Solo `analyst` es real, y solo con la configuración de la sección anterior. Ningún agente real modifica el disco en M2.
 - **Otras formas de invocar la CLI.** `bin\haril.cmd` (cmd) y `sh bin/haril` (POSIX) hacen lo mismo. No editan el `PATH`. Si falta `apps/haril/dist/haril.mjs`, avisan de que hay que ejecutar `npm run build`.
 - **Códigos de salida.** 0 correcto, 1 advertencias o tarea fallida, 2 error de uso o de entorno.
 
@@ -75,7 +93,8 @@ Calidad del repositorio:
 |---|---|
 | `corepack pnpm run check` | Biome, `tsc --noEmit` por workspace, `scripts/check-layers`, `check-purity`, `check-forbidden` y knip |
 | `corepack pnpm test` | Vitest (contratos, core, CLI) y `node:test` (scripts de control con violaciones sembradas) |
-| `npm run e2e` | Compila y recorre el flujo M1 completo con la CLI en directorios temporales, incluida una caída a mitad de run (`scripts/e2e.mjs`) |
+| `npm run e2e` | Compila y recorre el flujo M1 completo con la CLI en directorios temporales, incluida una caída a mitad de run, y el flujo M2 hermético (Pi falso detrás del Broker y un servidor OpenAI falso) (`scripts/e2e.mjs`) |
+| `npm run e2e:real` | Carril real opt-in de M2 (`scripts/e2e-real.mjs`): una tarea `analyst` contra el gateway real; sale con `SKIP real lane` si falta el runtime, la clave o el modelo |
 
 El CI (`.github/workflows/ci.yml`) ejecuta lo mismo en `windows-latest` y `ubuntu-latest`.
 

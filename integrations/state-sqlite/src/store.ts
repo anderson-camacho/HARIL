@@ -60,7 +60,8 @@ const PROJECT_COLUMNS =
 const TASK_COLUMNS =
   "task_id AS taskId, project_id AS projectId, goal, state, agent_ref AS agentRef, created_at AS createdAt";
 
-const TASK_DETAIL_COLUMNS = `${TASK_COLUMNS}, description, attempt, attempts_used AS attemptsUsed, max_attempts AS maxAttempts, timeout_ms AS timeoutMs, claim_epoch AS claimEpoch, infra_restarts AS infraRestarts, retry_reason AS retryReason, block_reason AS blockReason, result`;
+// The error column is the newest failed attempt's JSON error (M2-T6), read as text and parsed in getTask.
+const TASK_DETAIL_COLUMNS = `${TASK_COLUMNS}, description, model, budget_max_tokens AS maxTokens, attempt, attempts_used AS attemptsUsed, max_attempts AS maxAttempts, timeout_ms AS timeoutMs, claim_epoch AS claimEpoch, infra_restarts AS infraRestarts, retry_reason AS retryReason, block_reason AS blockReason, result, (SELECT r.error FROM runs r WHERE r.task_id = tasks.task_id AND r.error IS NOT NULL ORDER BY r.attempt DESC LIMIT 1) AS errorJson`;
 
 const LEASE_COLUMNS =
   "instance_id AS instanceId, pid, started_at AS startedAt, heartbeat_at AS heartbeatAt, expires_at AS expiresAt, status, node_version AS nodeVersion, sqlite_version AS sqliteVersion";
@@ -101,8 +102,9 @@ interface CommandRow extends Omit<CommandRecord, "args" | "projectId"> {
   readonly args: string;
 }
 
-interface TaskDetailRow extends Omit<TaskDetail, "result"> {
+interface TaskDetailRow extends Omit<TaskDetail, "result" | "error"> {
   readonly result: string | null;
+  readonly errorJson: string | null;
 }
 
 interface OrphanRow {
@@ -118,6 +120,8 @@ interface ReadyRow {
   readonly goal: string;
   readonly description: string;
   readonly agentRef: string;
+  readonly model: string | null;
+  readonly maxTokens: number;
   readonly attempt: number;
   readonly attemptsUsed: number;
   readonly maxAttempts: number;
@@ -141,6 +145,8 @@ interface NewTask {
   readonly priority: number;
   readonly kind: string;
   readonly agentRef: string;
+  // The model a real-agent task asks for (M2-T6); null for plan tasks and the simulated agents.
+  readonly model: string | null;
   readonly requires: readonly unknown[];
   readonly context: readonly unknown[];
   readonly surfaceWrite: readonly string[];
@@ -200,7 +206,7 @@ export class SqliteStore implements Store {
       list: (filter) => this.listTasks(filter),
       get: (taskId) => this.getTask(taskId),
       promote: () => this.promoteTasks(),
-      claimNext: (epoch) => this.claimNextTask(epoch),
+      claimNext: (epoch, excludeAgentRefs) => this.claimNextTask(epoch, excludeAgentRefs),
     };
     this.runtime = {
       leaseSummary: () => this.leaseSummary(),
@@ -311,8 +317,12 @@ export class SqliteStore implements Store {
       .prepare(`SELECT ${TASK_DETAIL_COLUMNS} FROM tasks WHERE task_id = ?`)
       .get(taskId) as unknown as TaskDetailRow | undefined;
     if (row === undefined) return undefined;
-    const { result, ...rest } = row;
-    return { ...rest, result: result === null ? null : (JSON.parse(result) as JsonObject) };
+    const { result, errorJson, ...rest } = row;
+    return {
+      ...rest,
+      result: result === null ? null : (JSON.parse(result) as JsonObject),
+      error: errorJson === null ? null : (JSON.parse(errorJson) as TaskDetail["error"]),
+    };
   }
 
   // An active lease wins; otherwise the newest lease tells whether the last runtime was released or lost.
@@ -553,12 +563,13 @@ export class SqliteStore implements Store {
         priority: 5,
         kind: "work",
         agentRef: parsed.agent,
+        model: parsed.model,
         requires: [],
         context: [],
         surfaceWrite: [],
         surfaceRead: [],
-        // M1 has no budget enforcement (M1-D4): the ceilings are the task's own wall time.
-        budget: { maxCostMicros: 0, maxTokens: 0, maxWallMs: parsed.timeoutMs },
+        // The token ceiling of a real agent (M2-D5). Simulated tasks keep 0; their wall time is the timeout.
+        budget: { maxCostMicros: 0, maxTokens: parsed.maxTokens, maxWallMs: parsed.timeoutMs },
         timeoutMs: parsed.timeoutMs,
         maxAttempts: parsed.maxAttempts,
         acceptance: [],
@@ -619,6 +630,7 @@ export class SqliteStore implements Store {
           priority: task.priority,
           kind: task.kind,
           agentRef: task.agent,
+          model: null,
           requires: task.requires,
           context: task.context,
           surfaceWrite: task.surface.write,
@@ -662,8 +674,8 @@ export class SqliteStore implements Store {
       .get() as { next: number };
     this.db
       .prepare(
-        `INSERT INTO tasks (task_id, project_id, plan_id, root_plan_id, goal, description, priority, kind, agent_ref, requires, context, surface_write, surface_read, budget_max_cost_micros, budget_max_tokens, budget_max_wall_ms, timeout_ms, max_attempts, state, acceptance, created_seq, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO tasks (task_id, project_id, plan_id, root_plan_id, goal, description, priority, kind, agent_ref, model, requires, context, surface_write, surface_read, budget_max_cost_micros, budget_max_tokens, budget_max_wall_ms, timeout_ms, max_attempts, state, acceptance, created_seq, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         task.taskId,
@@ -675,6 +687,7 @@ export class SqliteStore implements Store {
         task.priority,
         task.kind,
         task.agentRef,
+        task.model,
         JSON.stringify(task.requires),
         JSON.stringify(task.context),
         JSON.stringify(task.surfaceWrite),
@@ -782,14 +795,23 @@ export class SqliteStore implements Store {
   }
 
   // ready -> running in one transaction, with the run row and the next claim epoch (M1-D4: no budget held).
-  private claimNextTask(epoch: number): ClaimedTask | undefined {
+  private claimNextTask(
+    epoch: number,
+    excludeAgentRefs: readonly string[] = [],
+  ): ClaimedTask | undefined {
     return this.inTransaction(() => {
       this.assertActiveEpoch(epoch);
+      // Excluded agents are skipped in SQL, so the claim never touches a task that cannot run (M2-T6).
+      const excluded = [...new Set(excludeAgentRefs)];
+      const notExcluded =
+        excluded.length === 0
+          ? ""
+          : ` AND agent_ref NOT IN (${excluded.map(() => "?").join(", ")})`;
       const row = this.db
         .prepare(
-          "SELECT task_id AS taskId, project_id AS projectId, goal, description, agent_ref AS agentRef, attempt, attempts_used AS attemptsUsed, max_attempts AS maxAttempts, timeout_ms AS timeoutMs, claim_epoch AS claimEpoch FROM tasks WHERE state = 'ready' ORDER BY priority DESC, created_seq LIMIT 1",
+          `SELECT task_id AS taskId, project_id AS projectId, goal, description, agent_ref AS agentRef, model, budget_max_tokens AS maxTokens, attempt, attempts_used AS attemptsUsed, max_attempts AS maxAttempts, timeout_ms AS timeoutMs, claim_epoch AS claimEpoch FROM tasks WHERE state = 'ready'${notExcluded} ORDER BY priority DESC, created_seq LIMIT 1`,
         )
-        .get() as unknown as ReadyRow | undefined;
+        .get(...excluded) as unknown as ReadyRow | undefined;
       if (row === undefined) return undefined;
 
       this.transition("ready", "running");
@@ -841,6 +863,8 @@ export class SqliteStore implements Store {
         goal: row.goal,
         description: row.description,
         agentRef: row.agentRef,
+        model: row.model,
+        maxTokens: row.maxTokens,
         attempt,
         attemptsUsed: row.attemptsUsed,
         maxAttempts: row.maxAttempts,
@@ -1211,10 +1235,16 @@ function parseCommand(row: CommandRow): CommandRecord {
 }
 
 // Validates the task.create arguments written by `haril task add`; a string is the rejection reason.
-function parseTaskCreateArgs(
-  args: Readonly<Record<string, unknown>>,
-):
-  | { goal: string; dependsOn: string[]; agent: string; maxAttempts: number; timeoutMs: number }
+function parseTaskCreateArgs(args: Readonly<Record<string, unknown>>):
+  | {
+      goal: string;
+      dependsOn: string[];
+      agent: string;
+      model: string | null;
+      maxAttempts: number;
+      timeoutMs: number;
+      maxTokens: number;
+    }
   | string {
   const goal = args.goal;
   if (typeof goal !== "string" || goal.trim() === "") return "task goal must not be empty";
@@ -1224,6 +1254,15 @@ function parseTaskCreateArgs(
   }
   const agent = args.agent;
   if (typeof agent !== "string" || agent.trim() === "") return "agent reference must not be empty";
+  // Optional (M2-T6): absent or null means no model; a token ceiling of 0 means none was set.
+  const model = args.model ?? null;
+  if (model !== null && (typeof model !== "string" || model.trim() === "")) {
+    return "model must be a non-empty model id";
+  }
+  const maxTokens = args.maxTokens ?? 0;
+  if (!Number.isSafeInteger(maxTokens) || (maxTokens as number) < 0) {
+    return "maxTokens must be a whole number of at least 0";
+  }
   const maxAttempts = args.maxAttempts;
   if (!Number.isSafeInteger(maxAttempts) || (maxAttempts as number) < 1) {
     return "maxAttempts must be a whole number of at least 1";
@@ -1236,8 +1275,10 @@ function parseTaskCreateArgs(
     goal,
     dependsOn: dependsOn as string[],
     agent,
+    model: model as string | null,
     maxAttempts: maxAttempts as number,
     timeoutMs: timeoutMs as number,
+    maxTokens: maxTokens as number,
   };
 }
 

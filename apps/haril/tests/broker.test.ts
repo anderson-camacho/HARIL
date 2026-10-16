@@ -5,7 +5,7 @@ import { connect } from "node:net";
 import { join } from "node:path";
 import { canTransition, checkPlanSubmission } from "@haril/core";
 import type { Clock, Store } from "@haril/core/ports";
-import type { Broker } from "@haril/gateway";
+import { type Broker, startBroker, type UpstreamClient } from "@haril/gateway";
 import { type FakeOpenAiServer, startFakeOpenAiServer } from "@haril/gateway/testing";
 import { openStore } from "@haril/state-sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -438,6 +438,53 @@ describe("secrets", () => {
       expect(bytes.includes(Buffer.from(UPSTREAM_KEY, "utf8"))).toBe(false);
     }
     expect(files.some((bytes) => bytes.includes(Buffer.from(hash, "utf8")))).toBe(true);
+  });
+});
+
+describe("upstream stream release (M2-T6)", () => {
+  it("returns the upstream stream once a completed reply has been sent, so no request deadline stays armed", async () => {
+    const released: string[] = [];
+    // A stand-in upstream whose stream records its own cleanup: a completed reply must run it.
+    const stream: UpstreamClient = {
+      chat() {
+        return (async function* () {
+          try {
+            yield { type: "text" as const, delta: "hi" };
+            yield { type: "done" as const, usage: null, finishReason: "stop" };
+          } finally {
+            released.push("upstream");
+          }
+        })();
+      },
+    };
+    const own = await startBroker({
+      upstream: stream,
+      ledger: store,
+      clock,
+      host: "127.0.0.1",
+      port: 0,
+    });
+    try {
+      const scope = scopeFor(100);
+      const key = own.issueKey({
+        runId: scope.runId,
+        taskId: scope.taskId,
+        projectId,
+        models: ["m1"],
+        maxTokensPerRequest: 500,
+        budgetIds: [scope.taskBudget, projectBudget],
+        ttlMs: 60_000,
+      });
+      const reply = await send(Number(new URL(own.url).port), {
+        path: "/v1/chat/completions",
+        headers: bearer(key),
+        body: chatBody({ messages: MESSAGES }),
+      });
+      expect(reply.status).toBe(200);
+      expect(released).toEqual(["upstream"]);
+    } finally {
+      await own.close();
+    }
   });
 });
 

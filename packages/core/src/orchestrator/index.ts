@@ -52,12 +52,22 @@ export type RunEvent =
       readonly taskId: string;
       readonly goal: string;
       readonly reason: "dep_failed";
+    }
+  | {
+      // A ready task of a real agent whose prerequisites are missing: not claimed, reported with the fix.
+      readonly type: "task.skipped";
+      readonly taskId: string;
+      readonly goal: string;
+      readonly what: string;
+      readonly fix: string;
     };
 
 export interface RunSummary {
   readonly completed: readonly string[];
   readonly failed: readonly string[];
   readonly blocked: readonly string[];
+  // Tasks left ready because their real agent is not set up (M2-T6); the run then exits 1.
+  readonly skipped: readonly string[];
   readonly commandsApplied: number;
   readonly commandsRejected: number;
 }
@@ -66,6 +76,7 @@ export function summarizeRun(events: readonly RunEvent[]): RunSummary {
   const completed: string[] = [];
   const failed: string[] = [];
   const blocked: string[] = [];
+  const skipped: string[] = [];
   let commandsApplied = 0;
   let commandsRejected = 0;
   for (const event of events) {
@@ -85,14 +96,17 @@ export function summarizeRun(events: readonly RunEvent[]): RunSummary {
       case "task.blocked":
         blocked.push(event.taskId);
         break;
+      case "task.skipped":
+        skipped.push(event.taskId);
+        break;
       default:
         break;
     }
   }
-  return { completed, failed, blocked, commandsApplied, commandsRejected };
+  return { completed, failed, blocked, skipped, commandsApplied, commandsRejected };
 }
 
-// M1-D2 / start: 0 when no task failed or was blocked during the run, 1 otherwise.
+// M1-D2 / start: 0 when no task failed, was blocked or was skipped during the run, 1 otherwise.
 export function runExitCode(summary: RunSummary): 0 | 1 {
-  return summary.failed.length + summary.blocked.length === 0 ? 0 : 1;
+  return summary.failed.length + summary.blocked.length + summary.skipped.length === 0 ? 0 : 1;
 }

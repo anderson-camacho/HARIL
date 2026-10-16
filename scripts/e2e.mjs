@@ -11,10 +11,13 @@ import {
   openSync,
   readdirSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { isMainThread, parentPort, Worker } from "node:worker_threads";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
 const ENTRY = join(REPO, "apps", "haril", "dist", "haril.mjs");
@@ -24,6 +27,10 @@ const CHILD_TIMEOUT_MS = 60_000;
 const CRASH_TASK_MS = 15_000;
 const CRASH_POLL_TIMEOUT_MS = 20_000;
 const SIMULATED_NOTE = "(simulated: no real agent until M2)";
+const FAKE_PI = join(REPO, "integrations", "agent-pi", "testing", "fake-pi.mjs");
+const E2E_GATEWAY_KEY = "e2e-gateway-key-0123456789";
+const E2E_MODEL = "e2e-model";
+const E2E_REPLY = "Hello from the e2e model.";
 
 const session = {
   root: "",
@@ -32,6 +39,7 @@ const session = {
   runtime: undefined,
   runtimePid: undefined,
   runtimeLog: "",
+  upstream: undefined,
 };
 
 // Runs the CLI in a child process and returns its exit code and output. Never throws on a non-zero exit.
@@ -100,6 +108,50 @@ function killHard(pid) {
   } else {
     process.kill(pid, "SIGKILL");
   }
+}
+
+// Hermetic OpenAI-compatible upstream for the M2 steps: one streamed reply with usage, bearer key checked.
+// It runs in a worker thread, because the steps block on spawnSync and would starve an in-process server.
+function startUpstream() {
+  const worker = new Worker(fileURLToPath(import.meta.url), { workerData: { role: "upstream" } });
+  return new Promise((resolve, reject) => {
+    worker.once("message", (port) => resolve({ port, worker }));
+    worker.once("error", reject);
+  });
+}
+
+function serveUpstream() {
+  const server = createServer((request, response) => {
+    if (request.headers.authorization !== `Bearer ${E2E_GATEWAY_KEY}`) {
+      response.writeHead(401, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { type: "auth", message: "bad key" } }));
+      return;
+    }
+    if (request.method !== "POST" || request.url !== "/v1/chat/completions") {
+      response.writeHead(404, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { type: "not_found", message: "no route" } }));
+      return;
+    }
+    request.resume();
+    request.on("end", () => {
+      const base = {
+        id: "chatcmpl-e2e",
+        object: "chat.completion.chunk",
+        created: 0,
+        model: E2E_MODEL,
+      };
+      const send = (choices, extra = {}) =>
+        response.write(`data: ${JSON.stringify({ ...base, choices, ...extra })}\n\n`);
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      send([{ index: 0, delta: { content: "Hello " }, finish_reason: null }]);
+      send([{ index: 0, delta: { content: "from the e2e model." }, finish_reason: null }]);
+      send([{ index: 0, delta: {}, finish_reason: "stop" }]);
+      send([], { usage: { prompt_tokens: 12, completion_tokens: 5 } });
+      response.end("data: [DONE]\n\n");
+    });
+  });
+  server.listen(0, "127.0.0.1", () => parentPort.postMessage(server.address().port));
+  parentPort.on("message", () => server.close());
 }
 
 const steps = [
@@ -321,6 +373,79 @@ const steps = [
       return "1 orphaned recovery";
     },
   ],
+  [
+    "M2: fake upstream and Pi stand-in (hermetic, no network)",
+    async () => {
+      session.upstream = await startUpstream();
+      const port = session.upstream.port;
+      const wrapper = join(session.root, "pi-ok-via-broker.mjs");
+      writeFileSync(
+        wrapper,
+        `process.env.FAKE_PI_SCENARIO = "ok_via_broker";\nawait import(${JSON.stringify(pathToFileURL(FAKE_PI).href)});\n`,
+      );
+      session.env = {
+        ...session.env,
+        HARIL_PI_CLI_OVERRIDE: wrapper,
+        HARIL_CLIPROXYAPI_KEY: E2E_GATEWAY_KEY,
+        HARIL_GATEWAY_URL: `http://127.0.0.1:${port}/v1`,
+        HARIL_DEFAULT_MODEL: E2E_MODEL,
+      };
+      return `upstream on 127.0.0.1:${port}`;
+    },
+  ],
+  [
+    "M2: task add --agent analyst",
+    () => {
+      const result = expectCode(
+        [
+          "task",
+          "add",
+          "Read README.md and summarize it",
+          "--agent",
+          "analyst",
+          "--project",
+          "demo",
+        ],
+        [0],
+      );
+      expect(result.out.includes("queued"), "task add did not queue the command");
+    },
+  ],
+  [
+    "M2: start completes the analyst task through the Broker",
+    () => {
+      const result = expectCode(["start", "--project", "demo"], [0]);
+      expect(
+        /^completed \S+ Read README\.md and summarize it$/m.test(result.out),
+        "the analyst task did not complete",
+      );
+      expect(
+        result.out.includes("done: 1 completed, 0 failed, 0 blocked"),
+        `unexpected summary: ${result.out.split("\n").at(-2)}`,
+      );
+      return "1 completed";
+    },
+  ],
+  [
+    "M2: task show prints the reply text",
+    () => {
+      const report = statusReport();
+      const task = report.taskList.find((candidate) => candidate.goal.startsWith("Read README"));
+      expect(task !== undefined, "no analyst task in status");
+      const result = expectCode(["task", "show", task.taskId], [0]);
+      expect(result.out.includes(`result: ${E2E_REPLY}`), "the reply text is not shown");
+      return "reply shown";
+    },
+  ],
+  [
+    "M2: metrics count the ledger tokens",
+    () => {
+      const metrics = expectJson(["metrics", "--json", "--project", "demo"]);
+      expect(metrics.tokens !== null, "no ledger tokens");
+      expect(metrics.tokens.input > 0 && metrics.tokens.output > 0, "tokens are not counted");
+      return `input ${metrics.tokens.input}, output ${metrics.tokens.output}`;
+    },
+  ],
 ];
 
 async function main() {
@@ -343,9 +468,10 @@ async function main() {
         return 1;
       }
     }
-    console.log("PASS  all M1 E2E steps");
+    console.log("PASS  all E2E steps (M1 and M2 hermetic)");
     return 0;
   } finally {
+    await session.upstream?.worker.terminate();
     if (session.runtimePid !== undefined && isAlive(session.runtimePid)) {
       killHard(session.runtimePid);
     }
@@ -353,12 +479,17 @@ async function main() {
   }
 }
 
-main().then(
-  (code) => {
-    process.exitCode = code;
-  },
-  (error) => {
-    console.log(`FAIL  ${error.message}`);
-    process.exitCode = 1;
-  },
-);
+// The same file serves as the upstream worker of the M2 steps (see startUpstream).
+if (!isMainThread) {
+  serveUpstream();
+} else {
+  main().then(
+    (code) => {
+      process.exitCode = code;
+    },
+    (error) => {
+      console.log(`FAIL  ${error.message}`);
+      process.exitCode = 1;
+    },
+  );
+}

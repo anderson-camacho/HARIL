@@ -4,7 +4,10 @@
 //
 // Scenarios: ok, ok_with_read (reads FAKE_PI_READ_PATH through the bridge), wrong_hello_tools,
 // wrong_token, no_hello, wrong_model, crash_before_settled, nonzero_after_settled, hang (ignores abort
-// and EOF), hang_abortable (answers abort with agent_settled), ui_request, huge_line.
+// and EOF), hang_abortable (answers abort with agent_settled), ui_request, huge_line, ok_via_broker (one
+// streamed chat call to HARIL_BROKER_URL with HARIL_VKEY; the streamed text is the reply, a Broker refusal
+// becomes an assistant message with stopReason "error"). The last one is what M2-T6 runs end to end.
+// Test-only: the real Pi is never replaced outside HARIL_PI_CLI_OVERRIDE.
 
 import { connect } from "node:net";
 
@@ -20,6 +23,7 @@ let bridgeSocket;
 let bridgeBuffer = "";
 let stdinBuffer = "";
 let abortRequested = false;
+let promptText = "";
 const pendingUi = new Map();
 
 process.stderr.write("fake-pi stderr marker\n");
@@ -110,6 +114,59 @@ function uiRequest(id) {
   });
 }
 
+// One streamed OpenAI-style call through the Broker. Refusals (402 insufficient_quota, 401, 502) end the
+// assistant message with stopReason "error", the way Pi reports a failed model call.
+async function brokerChat(prompt) {
+  const response = await fetch(`${process.env.HARIL_BROKER_URL}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${process.env.HARIL_VKEY}`,
+    },
+    body: JSON.stringify({
+      model: process.env.HARIL_MODEL,
+      stream: true,
+      messages: [{ role: "user", content: prompt }],
+    }),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    emitAssistant("", body?.error?.message ?? `HTTP ${response.status}`);
+    emit({ type: "agent_settled", aborted: false });
+    return;
+  }
+  let text = "";
+  let pending = "";
+  const decoder = new TextDecoder();
+  for await (const chunk of response.body) {
+    pending += decoder.decode(chunk, { stream: true });
+    let lf = pending.indexOf("\n");
+    while (lf !== -1) {
+      const line = pending.slice(0, lf).trim();
+      pending = pending.slice(lf + 1);
+      lf = pending.indexOf("\n");
+      if (!line.startsWith("data:") || line.slice(5).trim() === "[DONE]") continue;
+      const delta = JSON.parse(line.slice(5))?.choices?.[0]?.delta?.content;
+      if (typeof delta === "string") {
+        text += delta;
+        emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta } });
+      }
+    }
+  }
+  emitAssistant(text);
+  emit({ type: "turn_end" });
+  emit({ type: "agent_settled", aborted: false });
+}
+
+function emitAssistant(text, errorMessage) {
+  const message = { role: "assistant", content: [{ type: "text", text }] };
+  if (errorMessage !== undefined) {
+    message.stopReason = "error";
+    message.errorMessage = errorMessage;
+  }
+  emit({ type: "message_end", message });
+}
+
 async function runPrompt() {
   emit({ type: "agent_start" });
   emit({ type: "future_event_xyz", payload: "ignored" });
@@ -122,6 +179,10 @@ async function runPrompt() {
     return;
   }
   if (scenario === "hang" || scenario === "hang_abortable") return;
+  if (scenario === "ok_via_broker") {
+    await brokerChat(promptText);
+    return;
+  }
 
   let text = "fake reply";
   if (scenario === "ok_with_read") {
@@ -153,6 +214,7 @@ function handleCommand(message) {
     }
     case "prompt":
       respond("prompt", message.id, { disposition: "started" });
+      promptText = typeof message.message === "string" ? message.message : "";
       void runPrompt();
       return;
     case "abort":

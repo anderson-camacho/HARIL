@@ -72,6 +72,10 @@ export interface TaskRecord {
 
 export interface TaskDetail extends TaskRecord {
   readonly description: string;
+  readonly model: string | null;
+  readonly maxTokens: number;
+  // The error of the newest failed attempt of the task, if any (M2-T6, haril task show).
+  readonly error: { readonly code: string; readonly message: string } | null;
   readonly attempt: number;
   readonly attemptsUsed: number;
   readonly maxAttempts: number;
@@ -204,6 +208,9 @@ export interface ClaimedTask {
   readonly goal: string;
   readonly description: string;
   readonly agentRef: string;
+  // Real agents (M2-T6): the requested model (null when none) and the task token ceiling (0 when none).
+  readonly model: string | null;
+  readonly maxTokens: number;
   readonly attempt: number;
   readonly attemptsUsed: number;
   readonly maxAttempts: number;
@@ -335,8 +342,18 @@ export interface UsageSummary {
   readonly unreconciled: number;
 }
 
+// Settled tokens per agent and model, from the project budgets (M2-T6, haril metrics).
+export interface UsageBreakdownRow {
+  readonly agentRef: string;
+  readonly model: string;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly unreconciled: number;
+}
+
 export interface BudgetsPort {
   ensure(input: EnsureBudgetInput): BudgetRecord;
+  usageBreakdown(projectId?: string): readonly UsageBreakdownRow[];
   get(budgetId: string): BudgetRecord | undefined;
   reserve(input: ReserveInput): ReserveResult;
   commit(input: CommitInput): CommitStatus;
@@ -390,8 +407,9 @@ export interface Store {
     // pending -> ready when every dependency completed; pending -> blocked(dep_failed) when one dependency
     // failed, was cancelled or is blocked(dep_failed). Propagates transitively within the call.
     promote(): PromoteResult;
-    // Highest priority, then oldest ready task: ready -> running, one run row, one claim epoch.
-    claimNext(epoch: number): ClaimedTask | undefined;
+    // Highest priority, then oldest ready task: ready -> running, one run row, one claim epoch. Tasks whose
+    // agentRef is in excludeAgentRefs are not claimed (M2-T6: a real agent without its prerequisites).
+    claimNext(epoch: number, excludeAgentRefs?: readonly string[]): ClaimedTask | undefined;
   };
   readonly runtime: {
     leaseSummary(): RuntimeLeaseSummary;

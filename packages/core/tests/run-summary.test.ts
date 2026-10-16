@@ -25,12 +25,25 @@ describe("summarizeRun", () => {
       completed: ["a"],
       failed: ["b"],
       blocked: ["c"],
+      skipped: [],
       commandsApplied: 1,
       commandsRejected: 0,
     });
   });
 
-  it("maps a run with no failure or block to exit 0 and any failure or block to exit 1", () => {
+  it("counts a task skipped for missing setup (M2-T6) and maps it to exit 1", () => {
+    const skip: RunEvent = {
+      type: "task.skipped",
+      taskId: "s",
+      goal: "S",
+      what: "HARIL_CLIPROXYAPI_KEY is not set",
+      fix: "set it to your CLIProxyAPI client key",
+    };
+    expect(summarizeRun([skip]).skipped).toEqual(["s"]);
+    expect(runExitCode(summarizeRun([skip]))).toBe(1);
+  });
+
+  it("maps a run with no failure, block or skip to exit 0 and any failure or block to exit 1", () => {
     expect(
       runExitCode(
         summarizeRun([{ type: "task.completed", taskId: "a", goal: "A", simulated: false }]),
