@@ -10,14 +10,14 @@ import type { HostInfo } from "./context.js";
 import { runtimeRootFor } from "./runtime.js";
 
 // Providers of HARIL (M3-T7, ACE-06). They come from haril.json (HARIL_CONFIG, else <runtime root>/config/haril.json);
-// without a file, two defaults apply: cliproxy (keyed, HARIL_GATEWAY_URL may move it) and a keyless ollama.
+// without a file, one default applies: cliproxy (keyed, HARIL_GATEWAY_URL may move it). Ollama is not a default:
+// local inference is too heavy for the reference machine (RL-D4); a user may still add it in haril.json.
 // Keys are read from the environment named by keyEnv here only; no output ever prints a key value.
 
 const CONFIG_ENV = "HARIL_CONFIG";
 const GATEWAY_URL_ENV = "HARIL_GATEWAY_URL";
 const GATEWAY_KEY_ENV = "HARIL_CLIPROXYAPI_KEY";
 const DEFAULT_CLIPROXY_URL = "http://127.0.0.1:8317/v1";
-const DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434/v1";
 export const PROBE_TIMEOUT_MS = 3000;
 export const MODELS_TIMEOUT_MS = 10000;
 export const KEY_REJECTED = "key rejected";
@@ -124,7 +124,6 @@ function defaultProviders(
         keyEnv: GATEWAY_KEY_ENV,
         apiKey: nonEmpty(env[GATEWAY_KEY_ENV]),
       },
-      { id: "ollama", baseUrl: DEFAULT_OLLAMA_URL, apiKey: undefined },
     ],
   };
 }

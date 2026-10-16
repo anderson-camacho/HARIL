@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type CliIo, type HostInfo, run } from "../src/cli.js";
 
 // doctor's providers section: the real catalog query against a fake server (M3-T7). Each test names one
-// provider in haril.json, so the default ollama is never probed. The key is read from the environment and
+// provider in haril.json, so no default provider is probed. The key is read from the environment and
 // must never be printed.
 const KEY = "doctor-key-value-0a9f";
 const KEY_ENV = "HARIL_CLIPROXYAPI_KEY";

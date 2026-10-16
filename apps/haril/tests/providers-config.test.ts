@@ -34,14 +34,13 @@ function writeConfig(text: string): string {
 }
 
 describe("provider defaults (no haril.json)", () => {
-  it("uses the cliproxy and ollama defaults, with the keyless ollama and no key read", () => {
+  it("uses only the cliproxy default, with no key read", () => {
     const loaded = loadProviderConfig(hostWith({}));
     expect(loaded.ok).toBe(true);
     if (!loaded.ok) return;
     expect(loaded.source).toBe("defaults");
     expect(loaded.providers.map((p) => [p.id, p.baseUrl, p.keyEnv])).toEqual([
       ["cliproxy", "http://127.0.0.1:8317/v1", "HARIL_CLIPROXYAPI_KEY"],
-      ["ollama", "http://127.0.0.1:11434/v1", undefined],
     ]);
   });
 
@@ -49,13 +48,12 @@ describe("provider defaults (no haril.json)", () => {
     const loaded = loadProviderConfig(hostWith({ HARIL_GATEWAY_URL: "http://127.0.0.1:9999/v1" }));
     expect(loaded.ok && loaded.providers.map((p) => p.baseUrl)).toEqual([
       "http://127.0.0.1:9999/v1",
-      "http://127.0.0.1:11434/v1",
     ]);
   });
 
-  it("reads the cliproxy key from its environment variable and never keeps a key for ollama", () => {
+  it("reads the cliproxy key from its environment variable", () => {
     const loaded = loadProviderConfig(hostWith({ HARIL_CLIPROXYAPI_KEY: "k-123" }));
-    expect(loaded.ok && loaded.providers.map((p) => p.apiKey)).toEqual(["k-123", undefined]);
+    expect(loaded.ok && loaded.providers.map((p) => p.apiKey)).toEqual(["k-123"]);
   });
 });
 
