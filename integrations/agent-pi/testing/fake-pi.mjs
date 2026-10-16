@@ -1,0 +1,190 @@
+// Fake Pi process for the agent-pi adapter tests. It speaks the RPC subset HARIL uses (ADR-0004) and
+// plays the bridge side of the handshake by connecting to HARIL_BRIDGE itself. Not a Pi build: every
+// behaviour below is a simulation chosen by FAKE_PI_SCENARIO. Run it with the host Node.
+//
+// Scenarios: ok, ok_with_read (reads FAKE_PI_READ_PATH through the bridge), wrong_hello_tools,
+// wrong_token, no_hello, wrong_model, crash_before_settled, nonzero_after_settled, hang (ignores abort
+// and EOF), hang_abortable (answers abort with agent_settled), ui_request, huge_line.
+
+import { connect } from "node:net";
+
+const scenario = process.env.FAKE_PI_SCENARIO ?? "ok";
+const runId = process.env.HARIL_RUN_ID ?? "";
+const allowedTools = (process.env.HARIL_TOOLS ?? "").split(",").filter((name) => name !== "");
+const [pipePath = "", token = ""] = splitBridge(process.env.HARIL_BRIDGE ?? "");
+const expectedModel = argValue("--model");
+const LARGE_LINE_BYTES = 8 * 1024 * 1024 + 1;
+
+const pendingBridge = new Map();
+let bridgeSocket;
+let bridgeBuffer = "";
+let stdinBuffer = "";
+let abortRequested = false;
+const pendingUi = new Map();
+
+process.stderr.write("fake-pi stderr marker\n");
+
+function argValue(flag) {
+  const index = process.argv.indexOf(flag);
+  return index === -1 ? undefined : process.argv[index + 1];
+}
+
+function splitBridge(raw) {
+  const index = raw.lastIndexOf("#");
+  return index === -1 ? [raw, ""] : [raw.slice(0, index), raw.slice(index + 1)];
+}
+
+function emit(message) {
+  process.stdout.write(`${JSON.stringify(message)}\n`);
+}
+
+function exitAfterFlush(code) {
+  process.stdout.write("", () => process.exit(code));
+}
+
+function splitLines(buffer, onLine) {
+  let rest = buffer;
+  let lf = rest.indexOf("\n");
+  while (lf !== -1) {
+    let line = rest.slice(0, lf);
+    if (line.endsWith("\r")) line = line.slice(0, -1);
+    onLine(line);
+    rest = rest.slice(lf + 1);
+    lf = rest.indexOf("\n");
+  }
+  return rest;
+}
+
+function connectBridge() {
+  if (scenario === "no_hello" || pipePath === "") return;
+  bridgeSocket = connect(pipePath);
+  bridgeSocket.on("connect", () => {
+    const tools = scenario === "wrong_hello_tools" ? ["read", "bash"] : allowedTools;
+    const sentToken = scenario === "wrong_token" ? "wrong-token" : token;
+    bridgeSocket.write(
+      `${JSON.stringify({
+        type: "hello",
+        runId,
+        token: sentToken,
+        tools,
+        bridgeVersion: "fake-bridge-1",
+        piVersion: "fake",
+      })}\n`,
+    );
+  });
+  bridgeSocket.on("data", (chunk) => {
+    bridgeBuffer = splitLines(bridgeBuffer + chunk.toString("utf8"), (line) => {
+      const message = JSON.parse(line);
+      pendingBridge.get(message.id)?.(message);
+    });
+  });
+  bridgeSocket.on("error", () => {});
+}
+
+function bridgeRead(path) {
+  return new Promise((resolve) => {
+    const id = "op-1";
+    pendingBridge.set(id, (message) => {
+      pendingBridge.delete(id);
+      resolve(message);
+    });
+    bridgeSocket.write(`${JSON.stringify({ id, op: "read", path })}\n`);
+  });
+}
+
+function respond(command, id, data) {
+  emit({ type: "response", id, command, success: true, data });
+}
+
+function uiRequest(id) {
+  return new Promise((resolve) => {
+    pendingUi.set(id, resolve);
+    emit({
+      type: "extension_ui_request",
+      id,
+      method: "confirm",
+      title: "Allow fake action?",
+      message: "fake confirm",
+      timeout: 5000,
+    });
+  });
+}
+
+async function runPrompt() {
+  emit({ type: "agent_start" });
+  emit({ type: "future_event_xyz", payload: "ignored" });
+  if (scenario === "crash_before_settled") {
+    process.stderr.write("fake-pi crash before settled\n", () => process.exit(1));
+    return;
+  }
+  if (scenario === "huge_line") {
+    process.stdout.write(`${"x".repeat(LARGE_LINE_BYTES)}\n`);
+    return;
+  }
+  if (scenario === "hang" || scenario === "hang_abortable") return;
+
+  let text = "fake reply";
+  if (scenario === "ok_with_read") {
+    const reply = await bridgeRead(process.env.FAKE_PI_READ_PATH ?? "");
+    text = reply.ok ? `read ok: ${reply.content}` : `read denied: ${reply.error}`;
+  }
+  if (scenario === "ui_request") {
+    const ui = await uiRequest("ui-1");
+    text = `ui cancelled=${ui.cancelled === true}`;
+  }
+  emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "fake " } });
+  emit({
+    type: "message_end",
+    message: { role: "assistant", content: [{ type: "text", text }] },
+  });
+  emit({ type: "turn_end" });
+  emit({ type: "agent_settled", aborted: false });
+}
+
+function handleCommand(message) {
+  switch (message.type) {
+    case "get_state": {
+      const model = scenario === "wrong_model" ? "other-model" : expectedModel;
+      respond("get_state", message.id, {
+        model: { id: model, provider: "haril" },
+        isStreaming: false,
+      });
+      return;
+    }
+    case "prompt":
+      respond("prompt", message.id, { disposition: "started" });
+      void runPrompt();
+      return;
+    case "abort":
+      abortRequested = true;
+      if (scenario === "hang_abortable") {
+        emit({ type: "agent_settled", aborted: true });
+      }
+      return;
+    case "extension_ui_response":
+      pendingUi.get(message.id)?.(message);
+      pendingUi.delete(message.id);
+      return;
+    default:
+      return;
+  }
+}
+
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  stdinBuffer = splitLines(stdinBuffer + chunk, (line) => {
+    if (line.trim() !== "") handleCommand(JSON.parse(line));
+  });
+});
+process.stdin.on("end", () => {
+  if (scenario === "hang") return;
+  if (scenario === "nonzero_after_settled") {
+    exitAfterFlush(3);
+    return;
+  }
+  if (scenario === "hang_abortable" && !abortRequested) return;
+  exitAfterFlush(0);
+});
+process.stdin.on("error", () => {});
+
+connectBridge();

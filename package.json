@@ -18,7 +18,8 @@
     "build": "tsdown --config apps/haril/tsdown.config.ts",
     "haril": "node apps/haril/dist/haril.mjs",
     "build:bootstrap": "tsdown --config apps/bootstrap/tsdown.config.ts",
-    "smoke": "npm run build && npm run build:bootstrap && node apps/haril/dist/haril.mjs --version && node apps/haril/dist/haril.mjs plan validate examples/plan.valid.json && node apps/bootstrap/dist/haril-bootstrap.mjs --help",
+    "build:bridge": "tsdown --config integrations/agent-pi-bridge/tsdown.config.ts",
+    "smoke": "npm run build && npm run build:bootstrap && npm run build:bridge && node apps/haril/dist/haril.mjs --version && node apps/haril/dist/haril.mjs plan validate examples/plan.valid.json && node apps/bootstrap/dist/haril-bootstrap.mjs --help",
     "runtime:install": "npm run build:bootstrap && node apps/bootstrap/dist/haril-bootstrap.mjs install-runtime",
     "e2e": "npm run build && node scripts/e2e.mjs"
   },
