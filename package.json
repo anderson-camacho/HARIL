@@ -15,7 +15,7 @@
     "check:deps": "knip",
     "test": "vitest run && npm run test:scripts",
     "test:scripts": "node --test \"scripts/tests/**/*.test.mjs\"",
-    "build": "tsdown --config apps/haril/tsdown.config.ts",
+    "build": "tsdown --config apps/haril/tsdown.config.ts && npm run build:bridge && npm run build:bootstrap",
     "haril": "node apps/haril/dist/haril.mjs",
     "build:bootstrap": "tsdown --config apps/bootstrap/tsdown.config.ts",
     "build:bridge": "tsdown --config integrations/agent-pi-bridge/tsdown.config.ts",

@@ -1,9 +1,16 @@
 // Injectable ports. The real adapters live in real.ts; tests pass fakes, so no unit test touches the disk or network.
 
+interface DirEntry {
+  readonly name: string;
+  readonly directory: boolean;
+}
+
 export interface FsPort {
   exists(path: string): Promise<boolean>;
   readText(path: string): Promise<string>;
   readBytes(path: string): Promise<Uint8Array>;
+  // Direct children only; rejects when the directory is missing.
+  readDir(path: string): Promise<readonly DirEntry[]>;
   // Creates the parent directories when needed.
   writeFile(path: string, data: string | Uint8Array): Promise<void>;
   mkdirp(path: string): Promise<void>;

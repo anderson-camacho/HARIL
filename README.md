@@ -63,6 +63,18 @@ Requisitos: Node 24 (recomendado `^24.21.0`; con 24.19 funciona y `doctor` avisa
 
 8. Limpiar la variable de sesión: `Remove-Item Env:HARIL_HOME`.
 
+### Instalar HARIL en tu usuario
+
+El instalador copia la CLI compilada a `%LOCALAPPDATA%\HARIL\app\<versión>\` y crea los lanzadores en `%LOCALAPPDATA%\HARIL\bin\`. No edita el PATH ni el registro: se llama al lanzador por su ruta completa.
+
+```powershell
+npm run build
+node apps/bootstrap/dist/haril-bootstrap.mjs install
+& "$env:LOCALAPPDATA\HARIL\bin\haril.ps1" --version
+```
+
+`uninstall` borra solo lo que `install` creó y conserva `data\`, `runtime\` y `vendor\`. Si quieres usar `haril` sin ruta completa, añade `%LOCALAPPDATA%\HARIL\bin` a tu PATH de usuario a mano; HARIL no lo hará por ti.
+
 ### M2: agente real `analyst` (opt-in)
 
 `analyst` ejecuta Pi 1.2.0, aislado en un Node propio, a través del Broker de HARIL y de un gateway compatible con OpenAI (CLIProxyAPI). Necesita un runtime instalado, una clave de cliente del gateway y un modelo de `haril models`. HARIL no guarda la clave: la lee solo de la variable de entorno de la sesión y nunca la escribe en el repositorio, en la base de datos, en los eventos ni en la salida.

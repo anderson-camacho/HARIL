@@ -2,6 +2,8 @@
 // End-to-end check of the M1 flow through the built CLI (M1-T8). It builds nothing: `npm run e2e` runs the
 // build first. Every step runs the CLI in a child process against temporary directories (HARIL_HOME and a
 // project root). Each step prints PASS or FAIL; the first failing step exits 1. Temporary directories are removed.
+// M3: the installer of HARIL (haril-bootstrap install/uninstall) runs into a temporary root, and the metadata of
+// other tools' installs must not change across the whole run (AR-G7, M3-T2).
 import { spawn, spawnSync } from "node:child_process";
 import {
   closeSync,
@@ -10,6 +12,7 @@ import {
   mkdtempSync,
   openSync,
   readdirSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -18,9 +21,17 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isMainThread, parentPort, Worker } from "node:worker_threads";
+import {
+  diffForeignSnapshots,
+  foreignRoots,
+  isEmptyDiff,
+  snapshotForeignInstalls,
+} from "./lib/foreign-snapshot.mjs";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
 const ENTRY = join(REPO, "apps", "haril", "dist", "haril.mjs");
+const BOOTSTRAP = join(REPO, "apps", "bootstrap", "dist", "haril-bootstrap.mjs");
+const PACKAGE_JSON = join(REPO, "apps", "haril", "package.json");
 const PLAN_VALID = join(REPO, "examples", "plan.valid.json");
 const PLAN_CYCLE = join(REPO, "examples", "plan.cycle.json");
 const CHILD_TIMEOUT_MS = 60_000;
@@ -36,6 +47,7 @@ const session = {
   root: "",
   env: {},
   projectDir: "",
+  installRoot: "",
   runtime: undefined,
   runtimePid: undefined,
   runtimeLog: "",
@@ -76,6 +88,45 @@ function expectJson(args, allowedCodes = [0]) {
 
 function expect(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+// Runs haril-bootstrap in a child process against the temporary install root. Never throws on a non-zero exit.
+function bootstrap(args) {
+  const result = spawnSync(process.execPath, [BOOTSTRAP, ...args], {
+    cwd: session.root,
+    env: session.env,
+    encoding: "utf8",
+    timeout: CHILD_TIMEOUT_MS,
+    windowsHide: true,
+  });
+  if (result.error) throw result.error;
+  return { code: result.status, out: result.stdout ?? "", err: result.stderr ?? "" };
+}
+
+// Runs the installed launcher the way a user would: the .cmd shim through cmd.exe on win32, the sh shim elsewhere.
+function launcher(args) {
+  const bin = join(session.installRoot, "bin");
+  const options = {
+    cwd: session.root,
+    env: session.env,
+    encoding: "utf8",
+    timeout: CHILD_TIMEOUT_MS,
+    windowsHide: true,
+  };
+  const result =
+    process.platform === "win32"
+      ? spawnSync(
+          "cmd.exe",
+          ["/d", "/s", "/c", `""${join(bin, "haril.cmd")}" ${args.join(" ")}"`],
+          { ...options, windowsVerbatimArguments: true },
+        )
+      : spawnSync(join(bin, "haril"), args, options);
+  if (result.error) throw result.error;
+  return { code: result.status, out: result.stdout ?? "", err: result.stderr ?? "" };
+}
+
+function packageVersion() {
+  return JSON.parse(readFileSync(PACKAGE_JSON, "utf8")).version;
 }
 
 function statusReport() {
@@ -446,6 +497,53 @@ const steps = [
       return `input ${metrics.tokens.input}, output ${metrics.tokens.output}`;
     },
   ],
+  [
+    "installer: haril-bootstrap install into a temp root",
+    () => {
+      const result = bootstrap(["install", "--root", session.installRoot, "--from", REPO]);
+      expect(result.code === 0, `install exited ${result.code}: ${result.err || result.out}`);
+      const app = join(session.installRoot, "app", packageVersion());
+      expect(existsSync(join(app, "haril.mjs")), "no app/<version>/haril.mjs");
+      expect(existsSync(join(session.installRoot, "bin", "haril.cmd")), "no bin/haril.cmd");
+      return `app/${packageVersion()} and bin/ created`;
+    },
+  ],
+  [
+    "installer: second install is skipped",
+    () => {
+      const result = bootstrap(["install", "--root", session.installRoot, "--from", REPO]);
+      expect(result.code === 0, `second install exited ${result.code}`);
+      const steps = result.out
+        .split("\n")
+        .filter((line) => /^(payload|shims|current)\s/.test(line));
+      expect(
+        steps.length === 3 && steps.every((line) => /\sskipped\s/.test(line)),
+        `not every step was skipped: ${steps.join(" | ")}`,
+      );
+      return "payload, shims and current skipped";
+    },
+  ],
+  [
+    "installed launcher: --version and doctor",
+    () => {
+      const version = launcher(["--version"]);
+      expect(version.code === 0, `--version exited ${version.code}: ${version.err}`);
+      expect(version.out.includes(`haril ${packageVersion()}`), `unexpected: ${version.out}`);
+      const doctor = launcher(["doctor"]);
+      expect(doctor.code === 0 || doctor.code === 1, `doctor exited ${doctor.code}`);
+      return `haril ${packageVersion()}, doctor exit ${doctor.code}`;
+    },
+  ],
+  [
+    "installer: uninstall removes the install",
+    () => {
+      const result = bootstrap(["uninstall", "--root", session.installRoot]);
+      expect(result.code === 0, `uninstall exited ${result.code}: ${result.err || result.out}`);
+      expect(!existsSync(join(session.installRoot, "bin")), "bin/ still exists");
+      expect(!existsSync(join(session.installRoot, "app")), "app/ still exists");
+      return "app/ and bin/ removed";
+    },
+  ],
 ];
 
 async function main() {
@@ -453,7 +551,10 @@ async function main() {
   session.env = { ...process.env, HARIL_HOME: join(session.root, "home") };
   session.projectDir = join(session.root, "demo-project");
   session.runtimeLog = join(session.root, "runtime.log");
+  session.installRoot = join(session.root, "install");
   mkdirSync(session.projectDir);
+  const roots = foreignRoots();
+  const foreignBefore = snapshotForeignInstalls({ roots });
 
   try {
     for (const [name, run] of steps) {
@@ -468,7 +569,17 @@ async function main() {
         return 1;
       }
     }
+    const diff = diffForeignSnapshots(foreignBefore, snapshotForeignInstalls({ roots }));
+    if (!isEmptyDiff(diff)) {
+      console.log("FAIL  foreign installs changed during the E2E run:");
+      for (const [kind, entries] of Object.entries(diff)) {
+        for (const entry of entries) console.log(`      ${kind}: ${entry}`);
+      }
+      return 1;
+    }
     console.log("PASS  all E2E steps (M1 and M2 hermetic)");
+    // One PASS line per compared root plus the user PATH.
+    console.log(`PASS  foreign installs untouched (${roots.length + 1} roots compared)`);
     return 0;
   } finally {
     await session.upstream?.worker.terminate();

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { ExecPort, FetchPort, FsPort } from "./ports.js";
 
@@ -15,6 +15,11 @@ export const realFs: FsPort = {
     ),
   readText: (path) => readFile(path, "utf8"),
   readBytes: async (path) => new Uint8Array(await readFile(path)),
+  readDir: async (path) =>
+    (await readdir(path, { withFileTypes: true })).map((entry) => ({
+      name: entry.name,
+      directory: entry.isDirectory(),
+    })),
   writeFile: async (path, data) => {
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, data);

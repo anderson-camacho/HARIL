@@ -48,6 +48,22 @@ export function createMemoryFs(): MemoryFs {
       if (bytes === undefined) throw enoent(path);
       return bytes;
     },
+    readDir: async (path) => {
+      const children = new Map<string, boolean>();
+      const add = (key: string): void => {
+        if (!underneath(key, path)) return;
+        const rest = key.slice(path.length + 1);
+        const separator = rest.search(/[\\/]/);
+        if (separator === -1) children.set(rest, children.get(rest) ?? false);
+        else children.set(rest.slice(0, separator), true);
+      };
+      for (const key of files.keys()) add(key);
+      for (const key of dirs) add(key);
+      if (children.size === 0 && !has(path)) throw enoent(path);
+      return [...children]
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([name, directory]) => ({ name, directory }));
+    },
     writeFile: async (path, data) => {
       files.set(path, typeof data === "string" ? encoder.encode(data) : data);
     },
