@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "tasks": [
+    {
+      "localId": "survey-readme",
+      "dependsOn": [],
+      "goal": "Survey the README structure",
+      "description": "List the headings of README.md and note where a new section fits.",
+      "priority": 0,
+      "kind": "work",
+      "agent": "developer-block",
+      "requires": [],
+      "context": [],
+      "surface": { "write": [], "read": ["README.md"] },
+      "budget": { "maxCostMicros": 0, "maxTokens": 20000, "maxWallMs": 120000 },
+      "timeoutMs": 120000,
+      "maxAttempts": 2,
+      "acceptance": []
+    },
+    {
+      "localId": "draft-section",
+      "dependsOn": ["survey-readme"],
+      "goal": "Draft the new README section",
+      "description": "Write a short section that explains how to run the CLI smoke test.",
+      "priority": 1,
+      "kind": "work",
+      "agent": "developer-block",
+      "requires": [],
+      "context": [],
+      "surface": { "write": [], "read": ["README.md"] },
+      "budget": { "maxCostMicros": 0, "maxTokens": 20000, "maxWallMs": 120000 },
+      "timeoutMs": 120000,
+      "maxAttempts": 2,
+      "acceptance": []
+    },
+    {
+      "localId": "insert-section",
+      "dependsOn": ["draft-section"],
+      "goal": "Insert the section into README.md",
+      "description": "Place the drafted section after the install instructions.",
+      "priority": 2,
+      "kind": "work",
+      "agent": "developer-block",
+      "requires": [],
+      "context": [],
+      "surface": { "write": ["README.md"], "read": ["README.md"] },
+      "budget": { "maxCostMicros": 0, "maxTokens": 20000, "maxWallMs": 120000 },
+      "timeoutMs": 120000,
+      "maxAttempts": 2,
+      "acceptance": []
+    },
+    {
+      "localId": "verify-readme",
+      "dependsOn": ["insert-section"],
+      "goal": "Verify the README change",
+      "description": "Check that the new section renders and that no other section changed.",
+      "priority": 3,
+      "kind": "verify",
+      "agent": "reviewer-block",
+      "requires": [],
+      "context": [],
+      "surface": { "write": [], "read": ["README.md"] },
+      "budget": { "maxCostMicros": 0, "maxTokens": 10000, "maxWallMs": 60000 },
+      "timeoutMs": 60000,
+      "maxAttempts": 1,
+      "acceptance": [{ "blockId": "markdown", "checkId": "lint" }]
+    }
+  ]
+}

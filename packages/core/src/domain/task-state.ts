@@ -14,8 +14,23 @@ const LEGAL_TRANSITIONS: Readonly<Record<TaskState, readonly TaskState[]>> = {
   cancelled: [],
 };
 
+export const TASK_STATES: readonly TaskState[] = [
+  "pending",
+  "ready",
+  "running",
+  "blocked",
+  "completed",
+  "failed",
+  "cancelled",
+];
+
 export function canTransition(from: TaskState, to: TaskState): boolean {
   return LEGAL_TRANSITIONS[from].includes(to);
+}
+
+// Outgoing edges of a state, in the order of the transition table (empty for terminal states).
+export function legalTargets(from: TaskState): readonly TaskState[] {
+  return LEGAL_TRANSITIONS[from];
 }
 
 // A terminal state has no outgoing edge. With ARCH 7.2, that is completed and cancelled;

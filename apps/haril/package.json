@@ -12,12 +12,9 @@
   },
   "dependencies": {
     "@haril/contracts": "workspace:*",
-    "@haril/core": "workspace:*",
-    "@haril/os": "workspace:*",
-    "@haril/git": "workspace:*",
-    "@haril/state-sqlite": "workspace:*",
-    "@haril/gateway": "workspace:*",
-    "@haril/agent-pi": "workspace:*",
-    "@haril/agent-pi-bridge": "workspace:*"
+    "@haril/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2"
   }
 }

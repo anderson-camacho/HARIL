@@ -14,11 +14,15 @@
     "check:scripts": "node scripts/check-layers.mjs && node scripts/check-purity.mjs && node scripts/check-forbidden.mjs",
     "check:deps": "knip",
     "test": "vitest run && npm run test:scripts",
-    "test:scripts": "node --test \"scripts/tests/**/*.test.mjs\""
+    "test:scripts": "node --test \"scripts/tests/**/*.test.mjs\"",
+    "build": "tsdown --config apps/haril/tsdown.config.ts",
+    "haril": "node apps/haril/dist/haril.mjs",
+    "smoke": "npm run build && node apps/haril/dist/haril.mjs --version && node apps/haril/dist/haril.mjs doctor && node apps/haril/dist/haril.mjs plan validate examples/plan.valid.json"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
     "knip": "6.41.0",
+    "tsdown": "0.23.1",
     "typescript": "7.0.2",
     "vitest": "5.0.4"
   }

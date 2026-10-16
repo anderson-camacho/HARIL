@@ -20,16 +20,7 @@
       "entry": ["src/**/index.ts"]
     },
     "apps/haril": {
-      "ignoreDependencies": [
-        "@haril/contracts",
-        "@haril/core",
-        "@haril/os",
-        "@haril/git",
-        "@haril/state-sqlite",
-        "@haril/gateway",
-        "@haril/agent-pi",
-        "@haril/agent-pi-bridge"
-      ]
+      "entry": ["src/**/index.ts", "src/main.ts"]
     }
   }
 }

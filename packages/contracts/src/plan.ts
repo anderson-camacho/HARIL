@@ -1,4 +1,5 @@
 import { type Static, Type } from "typebox";
+import { Value } from "typebox/value";
 import { DataClassSchema } from "./enums.js";
 import { TaskIdSchema } from "./primitives.js";
 import { TaskSpecFields } from "./task-fields.js";
@@ -41,3 +42,16 @@ export const PlanSchema = Type.Object(
   { additionalProperties: false },
 );
 export type Plan = Static<typeof PlanSchema>;
+
+export type PlanSchemaValidation =
+  | { readonly ok: true; readonly plan: Plan }
+  | { readonly ok: false; readonly errors: string[] };
+
+// Schema-level check of untrusted input. Graph rules (dependencies, cycles, limits) live in the core.
+export function validatePlanSchema(value: unknown): PlanSchemaValidation {
+  if (Value.Check(PlanSchema, value)) return { ok: true, plan: value };
+  const errors = Value.Errors(PlanSchema, value).map(
+    (error) => `${error.instancePath || "/"}: ${error.message}`,
+  );
+  return { ok: false, errors };
+}
