@@ -426,8 +426,13 @@ export interface Store {
     // failed, was cancelled or is blocked(dep_failed). Propagates transitively within the call.
     promote(): PromoteResult;
     // Highest priority, then oldest ready task: ready -> running, one run row, one claim epoch. Tasks whose
-    // agentRef is in excludeAgentRefs are not claimed (M2-T6: a real agent without its prerequisites).
-    claimNext(epoch: number, excludeAgentRefs?: readonly string[]): ClaimedTask | undefined;
+    // agentRef is in excludeAgentRefs are not claimed (M2-T6: a real agent without its prerequisites). Tasks whose
+    // id is in excludeTaskIds stay ready and are not claimed (M3-T7: a task whose model cannot run yet).
+    claimNext(
+      epoch: number,
+      excludeAgentRefs?: readonly string[],
+      excludeTaskIds?: readonly string[],
+    ): ClaimedTask | undefined;
   };
   readonly runtime: {
     leaseSummary(): RuntimeLeaseSummary;

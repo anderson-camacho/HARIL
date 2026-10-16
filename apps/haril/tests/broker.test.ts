@@ -121,7 +121,8 @@ beforeEach(async () => {
   broker = await startHarilBroker({
     store,
     clock,
-    gateway: { baseUrl: upstream.baseUrl, apiKey: UPSTREAM_KEY, timeoutMs: 5000 },
+    providers: [{ id: "upstream", baseUrl: upstream.baseUrl, apiKey: UPSTREAM_KEY }],
+    timeoutMs: 5000,
   });
   closed = new Set();
 });
@@ -172,6 +173,7 @@ function issue(
 ): string {
   return broker.issueKey({
     runId: scope.runId,
+    providerId: "upstream",
     taskId: scope.taskId,
     projectId,
     models: overrides.models ?? ["m1"],
@@ -458,7 +460,7 @@ describe("upstream stream release (M2-T6)", () => {
       },
     };
     const own = await startBroker({
-      upstream: stream,
+      resolveUpstream: () => stream,
       ledger: store,
       clock,
       host: "127.0.0.1",
@@ -468,6 +470,7 @@ describe("upstream stream release (M2-T6)", () => {
       const scope = scopeFor(100);
       const key = own.issueKey({
         runId: scope.runId,
+        providerId: "stand-in",
         taskId: scope.taskId,
         projectId,
         models: ["m1"],

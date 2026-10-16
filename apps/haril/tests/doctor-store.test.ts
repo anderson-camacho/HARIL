@@ -38,7 +38,16 @@ const host = (dataDir: string) => ({
   arch: "x64",
   homeDir: root,
   env: { HARIL_HOME: dataDir },
-  gatewayProbe: async () => ({ status: "ok" as const, detail: "reachable, 0 models", models: 0 }),
+  providerProbe: async () => [
+    {
+      id: "cliproxy",
+      url: "http://127.0.0.1:1/v1",
+      key: "set" as const,
+      status: "ok" as const,
+      detail: "reachable, 0 models",
+      models: [],
+    },
+  ],
 });
 
 describe("doctor with the real store inspection", () => {

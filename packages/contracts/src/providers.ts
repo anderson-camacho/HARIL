@@ -1,4 +1,5 @@
 import { type Static, Type } from "typebox";
+import { Value } from "typebox/value";
 
 // Provider vocabulary for M2 (docs/contracts/schemas.md sections 8.1 and 9.2). Minimal slice: only the
 // fields the OpenAI-compatible adapter fills. Adding fields is a version decision, not an edit here.
@@ -18,6 +19,11 @@ export const ModelDescriptorSchema = Type.Object(
   { additionalProperties: false },
 );
 export type ModelDescriptor = Static<typeof ModelDescriptorSchema>;
+
+// True when an untrusted value has the ModelDescriptor shape (the models command validates every entry).
+export function isValidModelDescriptor(value: unknown): value is ModelDescriptor {
+  return Value.Check(ModelDescriptorSchema, value);
+}
 
 // Usage v1. A count the provider does not report is null, never 0 (schemas.md 8.1, MPR-02).
 const NullableCount = Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]);

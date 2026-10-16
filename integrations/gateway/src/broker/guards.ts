@@ -21,6 +21,7 @@ export type ParsedChat =
 
 // What a virtual key may do, as stored with it (the store keeps it as opaque JSON).
 export interface RouteGrant {
+  readonly providerId: string;
   readonly models: readonly string[];
   readonly maxTokensPerRequest: number;
   readonly runId: string;
@@ -108,11 +109,12 @@ export function parseChat(text: string): ParsedChat {
 
 export function parseGrant(value: unknown): RouteGrant | undefined {
   if (!isRecord(value)) return undefined;
-  const { models, maxTokensPerRequest, runId, taskId, projectId } = value;
+  const { providerId, models, maxTokensPerRequest, runId, taskId, projectId } = value;
   if (!Array.isArray(models) || !models.every((model) => typeof model === "string")) {
     return undefined;
   }
   if (
+    typeof providerId !== "string" ||
     typeof maxTokensPerRequest !== "number" ||
     typeof runId !== "string" ||
     typeof taskId !== "string" ||
@@ -120,7 +122,14 @@ export function parseGrant(value: unknown): RouteGrant | undefined {
   ) {
     return undefined;
   }
-  return { models: models as string[], maxTokensPerRequest, runId, taskId, projectId };
+  return {
+    providerId,
+    models: models as string[],
+    maxTokensPerRequest,
+    runId,
+    taskId,
+    projectId,
+  };
 }
 
 // An upstream error code is echoed only when it is a plain word; any other text is replaced (no leaks).

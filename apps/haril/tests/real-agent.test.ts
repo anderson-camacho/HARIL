@@ -16,6 +16,7 @@ const TEST_TIMEOUT_MS = 30_000;
 
 let sb: Sandbox;
 let upstream: FakeOpenAiServer;
+let providersFile: string;
 
 beforeEach(async () => {
   sb = makeSandbox();
@@ -27,6 +28,14 @@ beforeEach(async () => {
       usage: { prompt_tokens: 12, completion_tokens: 5 },
     },
   });
+  // One provider, so a bare model resolves to it without touching any other address (M3-T7).
+  providersFile = join(sb.root, "haril.json");
+  writeFileSync(
+    providersFile,
+    JSON.stringify({
+      providers: [{ id: "cliproxy", baseUrl: upstream.baseUrl, keyEnv: "HARIL_CLIPROXYAPI_KEY" }],
+    }),
+  );
   const init = harness();
   run(
     ["project", "init", projectRoot(sb, "demo"), "--name", "Demo", "--slug", "demo", "--yes"],
@@ -63,6 +72,7 @@ function realHost(scenario: string, extra: Record<string, string | undefined> = 
       HARIL_CLIPROXYAPI_KEY: GATEWAY_KEY,
       HARIL_GATEWAY_URL: upstream.baseUrl,
       HARIL_DEFAULT_MODEL: "fake-model",
+      HARIL_CONFIG: providersFile,
       ...extra,
     },
   };
@@ -86,6 +96,7 @@ function taskIdOf(goal: string): string {
 
 interface TaskView {
   readonly state: string;
+  readonly attempts?: { used: number; max: number };
   readonly result: { text?: string; model?: string } | null;
   readonly error: { code: string } | null;
   readonly tokens: { input: number; output: number; unreconciled: number } | null;
@@ -123,7 +134,7 @@ describe("haril start with an analyst task (M2-T6)", () => {
       const view = taskView("Read README.md and summarize it");
       expect(view.state).toBe("completed");
       expect(view.result?.text).toBe("Hello from the model.");
-      expect(view.result?.model).toBe("fake-model");
+      expect(view.result?.model).toBe("cliproxy/fake-model");
       expect(view.tokens?.input).toBe(12);
       expect(view.tokens?.output).toBe(5);
 
@@ -135,7 +146,7 @@ describe("haril start with an analyst task (M2-T6)", () => {
       }>(metrics.out);
       expect(usage.tokens.input + usage.tokens.output).toBeGreaterThan(0);
       expect(usage.tokensByAgentModel).toEqual([
-        expect.objectContaining({ agentRef: "analyst", model: "fake-model", input: 12 }),
+        expect.objectContaining({ agentRef: "analyst", model: "cliproxy/fake-model", input: 12 }),
       ]);
     },
     TEST_TIMEOUT_MS,
@@ -275,9 +286,9 @@ describe("haril start with an analyst task (M2-T6)", () => {
   );
 
   it(
-    "skips the analyst task without claiming it when the gateway key is missing, and keeps the others",
+    "skips the analyst task whose provider key is unset before any claim, and completes it once the key is set (M3-T7)",
     async () => {
-      addAnalyst("Needs key", ["--model", "fake-model"]);
+      addAnalyst("Needs key", ["--model", "cliproxy/fake-model"]);
       const add = harness();
       run(["task", "add", "Plain succeed"], add.io, sb.host);
 
@@ -285,11 +296,59 @@ describe("haril start with an analyst task (M2-T6)", () => {
       const result = await startRuntime(host);
 
       expect(result.code).toBe(1);
-      const line = result.out.find((text) => text.startsWith("skipped "));
-      expect(line).toMatch(/^skipped \S+ Needs key: needs setup \(.*HARIL_CLIPROXYAPI_KEY.*\)$/);
       expect(result.out.join("\n")).toContain("completed");
-      expect(taskView("Needs key").state).toBe("ready");
-      expect(taskView("Needs key").error).toBeNull();
+      const skipped = result.out.filter((line) => line.startsWith("skipped "));
+      expect(skipped).toHaveLength(1);
+      expect(skipped[0]).toMatch(
+        /skipped \S+ Needs key: needs setup \(HARIL_CLIPROXYAPI_KEY is not set/,
+      );
+      expect(taskView("Needs key")).toMatchObject({
+        state: "ready",
+        attempts: { used: 0 },
+        error: null,
+      });
+      expect(upstream.requests.filter((r) => r.path === "/v1/chat/completions")).toHaveLength(0);
+
+      const again = await startRuntime(realHost("ok_via_broker"));
+
+      expect(again.code).toBe(0);
+      expect(taskView("Needs key").state).toBe("completed");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "gives Pi and the virtual key the bare model id, and keeps the namespaced ref in task show (M3-T7)",
+    async () => {
+      addAnalyst("Bare to Pi", ["--model", "fake-model"]);
+      const seen = join(sb.root, "pi-model-seen.txt");
+      const wrapper = join(sb.root, "pi-dump-model.mjs");
+      const fakePi = pathToFileURL(fileURLToPath(FAKE_PI)).href;
+      writeFileSync(
+        wrapper,
+        `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(seen)}, process.env.HARIL_MODEL ?? "");\nprocess.env.FAKE_PI_SCENARIO = "ok_via_broker";\nawait import(${JSON.stringify(fakePi)});\n`,
+      );
+      const host = realHost("ok_via_broker");
+      host.env.HARIL_PI_CLI_OVERRIDE = wrapper;
+
+      const result = await startRuntime(host);
+
+      expect(result.code).toBe(0);
+      expect(readFileSync(seen, "utf8")).toBe("fake-model");
+      const db = ledgerDb();
+      try {
+        const grants = db.prepare("SELECT route_grant AS grant FROM virtual_keys").all() as Array<{
+          grant: string;
+        }>;
+        expect(grants).toHaveLength(1);
+        expect(JSON.parse(grants[0]?.grant ?? "{}")).toMatchObject({
+          providerId: "cliproxy",
+          models: ["fake-model"],
+        });
+      } finally {
+        db.close();
+      }
+      expect(taskView("Bare to Pi").result?.model).toBe("cliproxy/fake-model");
     },
     TEST_TIMEOUT_MS,
   );

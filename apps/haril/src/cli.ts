@@ -34,7 +34,7 @@ const HELP_LINES = [
   "usage:",
   "  haril --version | version        print the CLI version",
   "  haril doctor [--json] [--data-dir <path>]   check the runtime and the store",
-  "  haril models [--json]            list the gateway models (HARIL_GATEWAY_URL, HARIL_CLIPROXYAPI_KEY)",
+  "  haril models [--json] [--provider <id>]   list the models of every provider as <provider>/<model> (haril.json)",
   "  haril states                     print the task states and legal transitions",
   "  haril plan validate <file> [--json]   validate a plan file",
   "  haril plan import <file> [--project <slug>] [--json]   queue a plan (applied by start)",

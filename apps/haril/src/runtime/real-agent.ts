@@ -20,7 +20,13 @@ import type {
 import type { Broker } from "@haril/gateway";
 import { startHarilBroker } from "../broker.js";
 import type { HostInfo, RuntimeInspection } from "../context.js";
-import { GATEWAY_KEY_ENV, GATEWAY_URL_ENV, gatewaySettings } from "../gateway.js";
+import {
+  bareModelOf,
+  loadProviderConfig,
+  MODELS_TIMEOUT_MS,
+  type ProviderEntry,
+  resolveModelRef,
+} from "../providers.js";
 import { readRuntime, runtimeRootFor } from "../runtime.js";
 
 // The real lane of `haril start` (M2-T6, M2-D1..D7): the analyst agent runs in Pi 1.2.0 on the isolated Node,
@@ -46,7 +52,12 @@ interface RealAgentPaths {
 
 // Setup problems read as `needs setup (<what>: <fix>)`; `what` names the missing piece, `fix` says how to add it.
 export type RealAgentReadiness =
-  | { readonly ok: true; readonly paths: RealAgentPaths }
+  | {
+      readonly ok: true;
+      readonly paths: RealAgentPaths;
+      // The providers of this run: a task's model is checked against them before its claim (M3-T7).
+      readonly providers: readonly ProviderEntry[];
+    }
   | { readonly ok: false; readonly what: string; readonly fix: string };
 
 export interface RealAgents {
@@ -69,18 +80,10 @@ export function createRealAgents(options: RealAgentsOptions): RealAgents {
   let brokerStart: Promise<Broker> | undefined;
 
   // One Broker per `haril start`, on the first real task (M2-T6): the upstream is the OpenAI-compatible gateway.
-  function ensureBroker(): Promise<Broker> {
+  // One upstream per configured provider (M3-T7); the providers are read once per run.
+  function ensureBroker(providers: readonly ProviderEntry[]): Promise<Broker> {
     if (brokerStart === undefined) {
-      const settings = gatewaySettings(host);
-      brokerStart = startHarilBroker({
-        store,
-        clock,
-        gateway: {
-          baseUrl: settings.url,
-          apiKey: settings.apiKey,
-          timeoutMs: UPSTREAM_TIMEOUT_MS,
-        },
-      });
+      brokerStart = startHarilBroker({ store, clock, providers, timeoutMs: UPSTREAM_TIMEOUT_MS });
     }
     return brokerStart;
   }
@@ -117,9 +120,48 @@ export function createRealAgents(options: RealAgentsOptions): RealAgents {
         };
       }
 
+      // M3-T7: the task's model names its provider (or resolves to exactly one); that provider's key must be set.
+      const loaded = loadProviderConfig(host);
+      if (!loaded.ok) {
+        return {
+          ok: false,
+          error: {
+            code: "agent.not_ready",
+            message: `${loaded.path}: ${loaded.errors.join("; ")}`,
+          },
+        };
+      }
+      const resolved = await resolveModelRef(spec.model, loaded.providers, MODELS_TIMEOUT_MS);
+      if (!resolved.ok) {
+        return { ok: false, error: { code: resolved.code, message: resolved.message } };
+      }
+      const provider = loaded.providers.find((entry) => entry.id === resolved.providerId);
+      if (provider === undefined) {
+        return {
+          ok: false,
+          error: { code: "agent.not_ready", message: "the provider is unknown" },
+        };
+      }
+      if (provider.keyEnv !== undefined && provider.apiKey === undefined) {
+        return {
+          ok: false,
+          error: {
+            code: "agent.not_ready",
+            message: `${provider.keyEnv} is not set (provider ${provider.id}): set it to the provider's key`,
+          },
+        };
+      }
+      // Pi and the virtual key get the bare id the upstream knows; the grant keeps providerId, and the Broker routes
+      // by it. The namespaced ref stays on the spec, so results and metrics show <provider>/<model>.
+      // UNVERIFIED: a bare id that itself contains "/" (for example OpenRouter's openai/gpt-4o) is not checked
+      // against Pi 1.2.0, which may parse provider/model itself. bareModelOf keeps such an id whole here, but the
+      // Broker's resolver strips a leading <provider>/ again, so the risk stays open until Pi is verified.
+      const runModel: string = bareModelOf(resolved.ref, provider.id);
+      const runSpec: AgentSpec = { ...spec, model: resolved.ref };
+
       let activeBroker: Broker;
       try {
-        activeBroker = await ensureBroker();
+        activeBroker = await ensureBroker(loaded.providers);
       } catch {
         return {
           ok: false,
@@ -143,7 +185,8 @@ export function createRealAgents(options: RealAgentsOptions): RealAgents {
         runId: spec.runId,
         taskId: spec.taskId,
         projectId,
-        models: [spec.model],
+        providerId: provider.id,
+        models: [runModel],
         maxTokensPerRequest: spec.maxTokens,
         budgetIds: [projectBudget.budgetId, taskBudget.budgetId],
         ttlMs: spec.timeoutMs + KEY_GRACE_MS,
@@ -156,17 +199,17 @@ export function createRealAgents(options: RealAgentsOptions): RealAgents {
         brokerUrl: activeBroker.url,
         projectRoot: resolve(project.rootPath),
         runsDir: join(dataDir, RUNS_DIR),
-        model: spec.model,
+        model: runModel,
         virtualKey,
         onBridgeOperation: (event) => recordBridgeOperation(store, spec, event),
       };
-      const started = await createPiAgentRuntime(piOptions).start(spec);
+      const started = await createPiAgentRuntime(piOptions).start(runSpec);
       if (!started.ok) {
-        activeBroker.revokeRun(spec.runId);
+        activeBroker.revokeRun(runSpec.runId);
         return started;
       }
-      recordEvent(store, spec, "run.started", { agentRuntime: "pi" });
-      return { ok: true, value: wrapHandle(started.value, spec, activeBroker, store) };
+      recordEvent(store, runSpec, "run.started", { agentRuntime: "pi" });
+      return { ok: true, value: wrapHandle(started.value, runSpec, activeBroker, store) };
     },
   };
 
@@ -184,7 +227,8 @@ export function createRealAgents(options: RealAgentsOptions): RealAgents {
   };
 }
 
-// What a real run needs before a task is claimed (M2-T6): the isolated runtime, the bridge and the gateway key.
+// What a real run needs before a task is claimed (M2-T6): the isolated runtime, the bridge and a valid provider file.
+// A task's model and its provider key are checked before its claim (run-loop, M3-T7) and again at start.
 function readinessOf(host: HostInfo): RealAgentReadiness {
   const env = host.env ?? {};
   const bridge = findBridge();
@@ -202,22 +246,15 @@ function readinessOf(host: HostInfo): RealAgentReadiness {
       bridgePath: bridge ?? "",
     };
   }
-  const gateway = gatewaySettings(host);
-  if (!gateway.urlValid) {
+  const providers = loadProviderConfig(host);
+  if (!providers.ok) {
     return {
       ok: false,
-      what: `${GATEWAY_URL_ENV} is not a valid URL`,
-      fix: "use an http or https URL",
+      what: `${providers.path} is not a valid provider file`,
+      fix: providers.errors.join("; "),
     };
   }
-  if (gateway.apiKey === undefined) {
-    return {
-      ok: false,
-      what: `${GATEWAY_KEY_ENV} is not set`,
-      fix: "set it to your CLIProxyAPI client key",
-    };
-  }
-  return { ok: true, paths };
+  return { ok: true, paths, providers: providers.providers };
 }
 
 function runtimeSetupProblem(

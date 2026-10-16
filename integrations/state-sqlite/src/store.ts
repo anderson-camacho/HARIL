@@ -207,7 +207,8 @@ export class SqliteStore implements Store {
       list: (filter) => this.listTasks(filter),
       get: (taskId) => this.getTask(taskId),
       promote: () => this.promoteTasks(),
-      claimNext: (epoch, excludeAgentRefs) => this.claimNextTask(epoch, excludeAgentRefs),
+      claimNext: (epoch, excludeAgentRefs, excludeTaskIds) =>
+        this.claimNextTask(epoch, excludeAgentRefs, excludeTaskIds),
     };
     this.runtime = {
       leaseSummary: () => this.leaseSummary(),
@@ -799,20 +800,26 @@ export class SqliteStore implements Store {
   private claimNextTask(
     epoch: number,
     excludeAgentRefs: readonly string[] = [],
+    excludeTaskIds: readonly string[] = [],
   ): ClaimedTask | undefined {
     return this.inTransaction(() => {
       this.assertActiveEpoch(epoch);
-      // Excluded agents are skipped in SQL, so the claim never touches a task that cannot run (M2-T6).
-      const excluded = [...new Set(excludeAgentRefs)];
-      const notExcluded =
-        excluded.length === 0
+      // Excluded agents and tasks are skipped in SQL, so the claim never touches a task that cannot run (M2-T6, M3-T7).
+      const excludedAgents = [...new Set(excludeAgentRefs)];
+      const excludedTasks = [...new Set(excludeTaskIds)];
+      const notExcludedAgents =
+        excludedAgents.length === 0
           ? ""
-          : ` AND agent_ref NOT IN (${excluded.map(() => "?").join(", ")})`;
+          : ` AND agent_ref NOT IN (${excludedAgents.map(() => "?").join(", ")})`;
+      const notExcludedTasks =
+        excludedTasks.length === 0
+          ? ""
+          : ` AND task_id NOT IN (${excludedTasks.map(() => "?").join(", ")})`;
       const row = this.db
         .prepare(
-          `SELECT task_id AS taskId, project_id AS projectId, goal, description, agent_ref AS agentRef, model, budget_max_tokens AS maxTokens, acceptance, attempt, attempts_used AS attemptsUsed, max_attempts AS maxAttempts, timeout_ms AS timeoutMs, claim_epoch AS claimEpoch FROM tasks WHERE state = 'ready'${notExcluded} ORDER BY priority DESC, created_seq LIMIT 1`,
+          `SELECT task_id AS taskId, project_id AS projectId, goal, description, agent_ref AS agentRef, model, budget_max_tokens AS maxTokens, acceptance, attempt, attempts_used AS attemptsUsed, max_attempts AS maxAttempts, timeout_ms AS timeoutMs, claim_epoch AS claimEpoch FROM tasks WHERE state = 'ready'${notExcludedAgents}${notExcludedTasks} ORDER BY priority DESC, created_seq LIMIT 1`,
         )
-        .get(...excluded) as unknown as ReadyRow | undefined;
+        .get(...excludedAgents, ...excludedTasks) as unknown as ReadyRow | undefined;
       if (row === undefined) return undefined;
 
       this.transition("ready", "running");

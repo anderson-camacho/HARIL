@@ -1,6 +1,7 @@
 import type { StoreInspection } from "@haril/state-sqlite";
 import { describe, expect, it } from "vitest";
 import { type CliIo, type HostInfo, run } from "../src/cli.js";
+import type { ProviderListing } from "../src/providers.js";
 import { VERSION } from "../src/version.js";
 
 // Store inspection is faked here; the real filesystem path is covered by doctor-store.test.ts.
@@ -14,7 +15,19 @@ const HEALTHY_STORE = {
 } as const;
 
 // The gateway probe is faked here so these tests never reach a real gateway (doctor-gateway.test.ts covers it).
-const GATEWAY_OK = { status: "ok", detail: "reachable, 2 models", models: 2 } as const;
+const PROVIDERS_OK: ProviderListing[] = [
+  {
+    id: "cliproxy",
+    url: "http://127.0.0.1:8317/v1",
+    key: "set",
+    status: "ok",
+    detail: "reachable, 2 models",
+    models: [
+      { providerId: "cliproxy", id: "a" },
+      { providerId: "cliproxy", id: "b" },
+    ],
+  },
+];
 
 // The runtime is faked too: doctor-runtime.test.ts covers the real manifest reader.
 const RUNTIME_MISSING = {
@@ -31,7 +44,7 @@ const HOST: HostInfo = {
   homeDir: "/home/tester",
   env: {},
   inspectStore: () => HEALTHY_STORE,
-  gatewayProbe: async () => GATEWAY_OK,
+  providerProbe: async () => PROVIDERS_OK,
   inspectRuntime: () => RUNTIME_MISSING,
 };
 
@@ -189,13 +202,10 @@ describe("doctor", async () => {
         schemaVersion: null,
         gates: HEALTHY_STORE.gates,
       },
-      gateway: {
+      providers: expect.objectContaining({
         status: "ok",
-        url: "http://127.0.0.1:8317/v1",
-        key: "not set",
-        detail: "reachable, 2 models",
-        models: 2,
-      },
+        entries: [expect.objectContaining({ id: "cliproxy", key: "set", status: "ok", models: 2 })],
+      }),
       runtime: RUNTIME_MISSING,
     });
   });

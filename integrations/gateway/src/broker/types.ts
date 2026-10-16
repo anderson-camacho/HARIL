@@ -26,6 +26,10 @@ export interface UpstreamClient {
   chat(request: UpstreamRequest): AsyncIterable<UpstreamEvent>;
 }
 
+// Chooses the upstream of a run from the provider its virtual key was issued for (M3-T7). The composition root
+// builds it; the Broker never names a provider or a URL itself.
+export type UpstreamResolver = (providerId: string) => UpstreamClient;
+
 // The store facets the Broker uses: the budget ledger and virtual keys (injected, never imported).
 export interface BrokerLedger {
   readonly budgets: BudgetsPort;
@@ -36,6 +40,8 @@ export interface IssueKeyInput {
   readonly runId: string;
   readonly taskId: string;
   readonly projectId: string;
+  // The provider the key is routed to; the resolver picks the upstream from it.
+  readonly providerId: string;
   readonly models: readonly string[];
   readonly maxTokensPerRequest: number;
   readonly budgetIds: readonly string[];
@@ -43,7 +49,7 @@ export interface IssueKeyInput {
 }
 
 export interface BrokerOptions {
-  readonly upstream: UpstreamClient;
+  readonly resolveUpstream: UpstreamResolver;
   readonly ledger: BrokerLedger;
   readonly clock: Clock;
   // Loopback only (GWY-01): the literal type keeps any other address out of the signature.

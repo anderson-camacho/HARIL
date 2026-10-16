@@ -4,31 +4,44 @@ import {
   type BrokerLedger,
   createOpenAiCompatibleClient,
   startBroker,
+  type UpstreamResolver,
 } from "@haril/gateway";
+import type { ProviderEntry } from "./providers.js";
 
-// Composition of the Broker (M2-D7): the OpenAI-compatible adapter is the upstream. The Broker itself never
-// imports providers/, and the key reaches the adapter only here (ADR-0005 BR-14). Not wired into `start` yet (M2-T6).
-
-interface GatewayUpstream {
-  readonly baseUrl: string;
-  readonly apiKey: string | undefined;
-  readonly timeoutMs: number;
-}
+// Composition of the Broker (M2-D7, M3-T7): one OpenAI-compatible upstream per configured provider. The Broker
+// never imports providers/, and each key reaches its adapter only here (ADR-0005 BR-14). Pi and the grant already
+// carry the bare model id, so the resolver forwards it unchanged: stripping again would break ids such as
+// "openai/gpt-4o" on a provider named "openai".
 
 export interface HarilBrokerOptions {
   readonly store: BrokerLedger;
   readonly clock: Clock;
-  readonly gateway: GatewayUpstream;
+  readonly providers: readonly ProviderEntry[];
+  readonly timeoutMs: number;
 }
 
 export function startHarilBroker(options: HarilBrokerOptions): Promise<Broker> {
-  const upstream = createOpenAiCompatibleClient({
-    baseUrl: options.gateway.baseUrl,
-    apiKey: options.gateway.apiKey,
-    timeoutMs: options.gateway.timeoutMs,
-  });
+  const clients = new Map(
+    options.providers.map((entry) => [
+      entry.id,
+      {
+        providerId: entry.id,
+        client: createOpenAiCompatibleClient({
+          baseUrl: entry.baseUrl,
+          apiKey: entry.apiKey,
+          timeoutMs: options.timeoutMs,
+        }),
+      },
+    ]),
+  );
+  const resolveUpstream: UpstreamResolver = (providerId) => {
+    const route = clients.get(providerId);
+    if (route === undefined)
+      throw new Error(`no upstream is configured for provider ${providerId}`);
+    return { chat: (request) => route.client.chat(request) };
+  };
   return startBroker({
-    upstream,
+    resolveUpstream,
     ledger: options.store,
     clock: options.clock,
     host: "127.0.0.1",

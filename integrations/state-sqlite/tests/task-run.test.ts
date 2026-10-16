@@ -114,6 +114,19 @@ describe("tasks.promote", () => {
   });
 });
 
+describe("tasks.claimNext excludeTaskIds (M3-T7)", () => {
+  it("leaves the excluded tasks ready and claims the next runnable one", () => {
+    enqueueTask("Held");
+    enqueueTask("Free");
+    const heldId = taskId("Held");
+
+    expect(store.tasks.claimNext(epoch, [], [heldId])?.goal).toBe("Free");
+    expect(store.tasks.get(heldId)?.state).toBe("ready");
+    expect(store.tasks.get(heldId)?.attemptsUsed).toBe(0);
+    expect(store.tasks.claimNext(epoch, [], [heldId])).toBeUndefined();
+  });
+});
+
 describe("tasks.claimNext", () => {
   it("returns undefined when no task is ready", () => {
     expect(store.tasks.claimNext(epoch)).toBeUndefined();

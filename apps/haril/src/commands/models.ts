@@ -1,77 +1,81 @@
 import type { ModelDescriptor } from "@haril/contracts";
-import { createOpenAiCompatibleClient, ProviderError } from "@haril/gateway";
-import { argsProblem, parseArgs } from "../args.js";
-import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
+import { argsProblem, lastValue, parseArgs } from "../args.js";
+import { type CliIo, EXIT_OK, EXIT_USAGE, EXIT_WARN, type HostInfo } from "../context.js";
 import {
-  GATEWAY_KEY_ENV,
-  GATEWAY_URL_ENV,
-  gatewaySettings,
+  listProviderModels,
+  loadProviderConfig,
   MODELS_TIMEOUT_MS,
-} from "../gateway.js";
+  namespacedRef,
+  type ProviderListing,
+} from "../providers.js";
 
-// `haril models [--json]` (M2-T1, RF-109): lists the models of the gateway. Read-only; exit 2 on any failure.
-const USAGE = "usage: haril models [--json]";
+// `haril models [--json] [--provider <id>]` (M3-T7, ACE-06, RF-109): queries every configured provider at once
+// and lists the models as <provider>/<model>. Read-only. Exit 0 when every queried provider answered, 1 when some
+// were skipped or failed but one answered, 2 when none answered (or on a usage or configuration problem).
+const USAGE = "usage: haril models [--json] [--provider <id>]";
 
 export async function models(args: readonly string[], io: CliIo, host: HostInfo): Promise<number> {
-  const parsed = parseArgs(args, { values: [], flags: ["--json"] });
+  const parsed = parseArgs(args, { values: ["--provider"], flags: ["--json"] });
   const problem = argsProblem(parsed, io);
   if (problem !== null) return problem;
   if (parsed.positionals.length > 0) {
     io.err(USAGE);
     return EXIT_USAGE;
   }
-  const settings = gatewaySettings(host);
-  if (!settings.urlValid) {
-    io.err(`haril: ${GATEWAY_URL_ENV} is not a valid URL`);
+
+  const loaded = loadProviderConfig(host);
+  if (!loaded.ok) {
+    for (const error of loaded.errors) io.err(`haril: ${loaded.path}: ${error}`);
     return EXIT_USAGE;
   }
-  if (settings.apiKey === undefined) {
-    io.err(`haril: ${GATEWAY_KEY_ENV} is not set`);
+  const only = lastValue(parsed, "--provider");
+  if (only !== undefined && only.trim() === "") {
+    io.err("haril: --provider needs a provider id");
+    return EXIT_USAGE;
+  }
+  const selected =
+    only === undefined ? loaded.providers : loaded.providers.filter((entry) => entry.id === only);
+  if (selected.length === 0) {
+    io.err(`haril: no provider with id "${only}"`);
     return EXIT_USAGE;
   }
 
-  const client = createOpenAiCompatibleClient({
-    baseUrl: settings.url,
-    apiKey: settings.apiKey,
-    timeoutMs: host.gatewayTimeoutMs ?? MODELS_TIMEOUT_MS,
-  });
-  let list: ModelDescriptor[];
-  try {
-    list = await client.listModels();
-  } catch (error) {
-    return reportFailure(error, settings.url, io);
-  }
+  const timeoutMs = host.gatewayTimeoutMs ?? MODELS_TIMEOUT_MS;
+  const listings = await Promise.all(selected.map((entry) => listProviderModels(entry, timeoutMs)));
+  const answered = listings.filter((listing) => listing.status === "ok").length;
+  const all = listings.flatMap((listing) => listing.models);
 
   if (parsed.flags.has("--json")) {
-    io.out(JSON.stringify({ gateway: settings.url, models: list }));
+    io.out(
+      JSON.stringify({
+        config: { source: loaded.source, path: loaded.path },
+        providers: listings.map(({ models: list, ...rest }) => ({ ...rest, models: list.length })),
+        models: all,
+      }),
+    );
   } else {
-    printTable(list, io);
+    for (const listing of listings) {
+      io.out(`provider ${listing.id}  ${listing.status}  ${listing.detail}`);
+    }
+    printTable(all, io);
   }
-  return EXIT_OK;
+
+  if (answered === 0) {
+    io.err("haril: no provider answered; see the provider lines and haril doctor");
+    return EXIT_USAGE;
+  }
+  return allAnswered(listings) ? EXIT_OK : EXIT_WARN;
 }
 
-function reportFailure(error: unknown, url: string, io: CliIo): number {
-  if (error instanceof ProviderError && error.code === "auth") {
-    io.err(
-      `haril: ${GATEWAY_KEY_ENV} was rejected by the gateway (HTTP ${error.httpStatus ?? 401}); check the key`,
-    );
-  } else if (error instanceof ProviderError && error.code === "unreachable") {
-    io.err(
-      `haril: gateway unreachable at ${url}; is CLIProxyAPI running? (docker start cli-proxy-api)`,
-    );
-  } else if (error instanceof ProviderError) {
-    io.err(`haril: ${error.message}`);
-  } else {
-    io.err("haril: unexpected failure while listing the gateway models");
-  }
-  return EXIT_USAGE;
+function allAnswered(listings: readonly ProviderListing[]): boolean {
+  return listings.every((listing) => listing.status === "ok");
 }
 
 function printTable(list: readonly ModelDescriptor[], io: CliIo): void {
   const rows = [
     ["id", "context", "max-output"],
     ...list.map((model) => [
-      model.id,
+      namespacedRef(model.providerId, model.id),
       String(model.contextWindow ?? "-"),
       String(model.maxOutputTokens ?? "-"),
     ]),
@@ -87,5 +91,5 @@ function printTable(list: readonly ModelDescriptor[], io: CliIo): void {
         .trimEnd(),
     );
   }
-  if (list.length === 0) io.out("no models reported by the gateway");
+  if (list.length === 0) io.out("no models reported by the answering providers");
 }

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -7,11 +7,14 @@ import { type FakeOpenAiServer, startFakeOpenAiServer } from "@haril/gateway/tes
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type CliIo, type HostInfo, run } from "../src/cli.js";
 
-// doctor's gateway section: the real probe of /v1/models against the fake server (3 s timeout).
-// The key is read from the environment and must never be printed.
+// doctor's providers section: the real catalog query against a fake server (M3-T7). Each test names one
+// provider in haril.json, so the default ollama is never probed. The key is read from the environment and
+// must never be printed.
 const KEY = "doctor-key-value-0a9f";
+const KEY_ENV = "HARIL_CLIPROXYAPI_KEY";
 let root = "";
 let server: FakeOpenAiServer;
+let configCount = 0;
 
 beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), "haril-doctor-gw-"));
@@ -36,7 +39,18 @@ function harness() {
   return { io, out, err };
 }
 
-// A fresh data dir keeps the store section "not initialized" (ok) so only the gateway decides the exit.
+// One provider named "cliproxy" that needs KEY_ENV, at the given URL.
+function configFor(baseUrl: string): string {
+  configCount += 1;
+  const path = join(root, `haril-${configCount}.json`);
+  writeFileSync(
+    path,
+    JSON.stringify({ providers: [{ id: "cliproxy", baseUrl, keyEnv: KEY_ENV }] }),
+  );
+  return path;
+}
+
+// A fresh data dir keeps the store section "not initialized" (ok) so only the providers decide the exit.
 const host = (env: Record<string, string | undefined>): HostInfo => ({
   nodeVersion: "v24.21.0",
   platform: "linux",
@@ -47,27 +61,28 @@ const host = (env: Record<string, string | undefined>): HostInfo => ({
   gatewayTimeoutMs: 30_000,
 });
 
-describe("doctor gateway section", () => {
+describe("doctor providers section", () => {
   it("reports ok with the model count when the key is set and accepted (exit 0)", async () => {
     const { io, out } = harness();
     const code = await run(
       ["doctor"],
       io,
-      host({ HARIL_GATEWAY_URL: server.baseUrl, HARIL_CLIPROXYAPI_KEY: KEY }),
+      host({ HARIL_CONFIG: configFor(server.baseUrl), [KEY_ENV]: KEY }),
     );
     expect(code).toBe(0);
     const text = out.join("\n");
-    expect(text).toMatch(/gateway\s+ok\s+/);
+    expect(text).toMatch(/providers\s+ok\s+/);
     expect(text).toContain("reachable, 2 models");
-    expect(text).toMatch(/key\s+set/);
+    expect(text).toMatch(/key set/);
     expect(text).not.toContain(KEY);
   });
 
-  it("warns 'reachable, key not set' on a 401 when no key is set (exit 1)", async () => {
+  it("warns 'key not set' and sends no request when the key is not set (exit 1)", async () => {
     const { io, out, err } = harness();
-    const code = await run(["doctor"], io, host({ HARIL_GATEWAY_URL: server.baseUrl }));
+    const code = await run(["doctor"], io, host({ HARIL_CONFIG: configFor(server.baseUrl) }));
     expect(code).toBe(1);
-    expect(out.join("\n")).toContain("reachable, key not set");
+    expect(out.join("\n")).toContain("key not set");
+    expect(server.requests).toHaveLength(0);
     expect(out.join("\n") + err.join("\n")).not.toContain(KEY);
   });
 
@@ -76,40 +91,32 @@ describe("doctor gateway section", () => {
     const code = await run(
       ["doctor"],
       io,
-      host({ HARIL_GATEWAY_URL: server.baseUrl, HARIL_CLIPROXYAPI_KEY: "not-the-key" }),
+      host({ HARIL_CONFIG: configFor(server.baseUrl), [KEY_ENV]: "not-the-key" }),
     );
     expect(code).toBe(2);
     expect(out.join("\n")).toContain("key rejected");
     expect(out.join("\n")).not.toContain("not-the-key");
   });
 
-  it("warns when the gateway is unreachable (exit 1)", async () => {
+  it("warns when the provider is unreachable (exit 1)", async () => {
     const closed = await startFakeOpenAiServer({ apiKey: KEY });
     const url = closed.baseUrl;
     await closed.close();
     const { io, out } = harness();
-    const code = await run(
-      ["doctor"],
-      io,
-      host({ HARIL_GATEWAY_URL: url, HARIL_CLIPROXYAPI_KEY: KEY }),
-    );
+    const code = await run(["doctor"], io, host({ HARIL_CONFIG: configFor(url), [KEY_ENV]: KEY }));
     expect(code).toBe(1);
-    expect(out.join("\n")).toMatch(/gateway\s+warn\s+/);
+    expect(out.join("\n")).toMatch(/providers\s+warn\s+/);
     expect(out.join("\n")).toContain("unreachable");
   });
 
   it("reports an invalid HARIL_GATEWAY_URL as an error (exit 2)", async () => {
     const { io, out } = harness();
-    const code = await run(
-      ["doctor"],
-      io,
-      host({ HARIL_GATEWAY_URL: "::nope::", HARIL_CLIPROXYAPI_KEY: KEY }),
-    );
+    const code = await run(["doctor"], io, host({ HARIL_GATEWAY_URL: "::nope::", [KEY_ENV]: KEY }));
     expect(code).toBe(2);
     expect(out.join("\n")).toContain("HARIL_GATEWAY_URL is not a valid URL");
   });
 
-  it("applies the injected probe timeout, so a slow gateway is 'unreachable' within that bound", async () => {
+  it("applies the injected probe timeout, so a slow provider is 'unreachable' within that bound", async () => {
     // A server that accepts and never answers: the probe must give up at gatewayTimeoutMs, not at 3 s.
     const hanging = createServer(() => {});
     await new Promise<void>((resolve) => hanging.listen(0, "127.0.0.1", resolve));
@@ -118,7 +125,7 @@ describe("doctor gateway section", () => {
       const { io, out } = harness();
       const started = Date.now();
       await run(["doctor"], io, {
-        ...host({ HARIL_GATEWAY_URL: `http://127.0.0.1:${port}/v1`, HARIL_CLIPROXYAPI_KEY: KEY }),
+        ...host({ HARIL_CONFIG: configFor(`http://127.0.0.1:${port}/v1`), [KEY_ENV]: KEY }),
         gatewayTimeoutMs: 200,
       });
       expect(Date.now() - started).toBeLessThan(2000);
@@ -129,27 +136,39 @@ describe("doctor gateway section", () => {
     }
   });
 
-  it("prints the gateway in the JSON report with key 'set' or 'not set', never the value", async () => {
+  it("prints each provider in the JSON report with key 'set' or 'not set', never the value", async () => {
     const withKey = harness();
     await run(
       ["doctor", "--json"],
       withKey.io,
-      host({ HARIL_GATEWAY_URL: server.baseUrl, HARIL_CLIPROXYAPI_KEY: KEY }),
+      host({ HARIL_CONFIG: configFor(server.baseUrl), [KEY_ENV]: KEY }),
     );
     const report = JSON.parse(withKey.out.join("\n")) as {
-      gateway: { status: string; url: string; key: string; models?: number };
+      providers: { status: string; entries: Record<string, unknown>[] };
     };
-    expect(report.gateway).toMatchObject({
-      status: "ok",
-      url: server.baseUrl,
-      key: "set",
-      models: 2,
-    });
+    expect(report.providers.status).toBe("ok");
+    expect(report.providers.entries).toEqual([
+      {
+        id: "cliproxy",
+        url: server.baseUrl,
+        keyEnv: KEY_ENV,
+        key: "set",
+        status: "ok",
+        detail: "reachable, 2 models",
+        models: 2,
+      },
+    ]);
     expect(withKey.out.join("\n")).not.toContain(KEY);
 
     const withoutKey = harness();
-    await run(["doctor", "--json"], withoutKey.io, host({ HARIL_GATEWAY_URL: server.baseUrl }));
-    const second = JSON.parse(withoutKey.out.join("\n")) as { gateway: { key: string } };
-    expect(second.gateway.key).toBe("not set");
+    await run(
+      ["doctor", "--json"],
+      withoutKey.io,
+      host({ HARIL_CONFIG: configFor(server.baseUrl) }),
+    );
+    const second = JSON.parse(withoutKey.out.join("\n")) as {
+      providers: { entries: { key: string }[] };
+    };
+    expect(second.providers.entries[0]?.key).toBe("not set");
   });
 });

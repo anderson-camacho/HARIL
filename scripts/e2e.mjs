@@ -20,7 +20,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { isMainThread, parentPort, Worker } from "node:worker_threads";
+import { isMainThread, parentPort, Worker, workerData } from "node:worker_threads";
 import {
   diffForeignSnapshots,
   foreignRoots,
@@ -179,11 +179,49 @@ function startUpstream() {
   });
 }
 
+// A keyless OpenAI-compatible catalog on loopback: GET /v1/models only (criterion 6). It runs in a worker
+// because the CLI calls are synchronous: a server on the main thread could not answer them.
+function startCatalogServer(modelIds) {
+  const worker = new Worker(fileURLToPath(import.meta.url), {
+    workerData: { role: "catalog", models: modelIds },
+  });
+  return new Promise((resolve, reject) => {
+    worker.once("message", (port) => {
+      resolve({
+        url: `http://127.0.0.1:${port}/v1`,
+        close: () => worker.terminate(),
+      });
+    });
+    worker.once("error", reject);
+  });
+}
+
+function serveCatalog(modelIds) {
+  const server = createServer((request, response) => {
+    if (request.method === "GET" && request.url === "/v1/models") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({ object: "list", data: modelIds.map((id) => ({ id, object: "model" })) }),
+      );
+      return;
+    }
+    response.writeHead(404, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: { type: "not_found", message: "no route" } }));
+  });
+  server.listen(0, "127.0.0.1", () => parentPort.postMessage(server.address().port));
+  parentPort.on("message", () => server.close());
+}
+
 function serveUpstream() {
   const server = createServer((request, response) => {
     if (request.headers.authorization !== `Bearer ${E2E_GATEWAY_KEY}`) {
       response.writeHead(401, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: { type: "auth", message: "bad key" } }));
+      return;
+    }
+    if (request.method === "GET" && request.url === "/v1/models") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ object: "list", data: [{ id: E2E_MODEL, object: "model" }] }));
       return;
     }
     if (request.method !== "POST" || request.url !== "/v1/chat/completions") {
@@ -617,6 +655,43 @@ const steps = [
     },
   ],
   [
+    "criterion 6: models lists two providers without keys",
+    async () => {
+      const alpha = await startCatalogServer(["alpha-model"]);
+      const beta = await startCatalogServer(["beta-model", "shared-model"]);
+      const savedEnv = session.env;
+      try {
+        const configPath = join(session.root, "providers.json");
+        writeFileSync(
+          configPath,
+          JSON.stringify({
+            providers: [
+              { id: "alpha", baseUrl: alpha.url },
+              { id: "beta", baseUrl: beta.url },
+            ],
+          }),
+        );
+        session.env = { ...savedEnv, HARIL_CONFIG: configPath };
+        const report = expectJson(["models", "--json"], [0]);
+        const ids = report.providers.map((provider) => provider.id).join(",");
+        expect(ids === "alpha,beta", `providers listed: ${ids}`);
+        expect(
+          report.providers.every((provider) => provider.status === "ok"),
+          "a keyless provider did not answer",
+        );
+        const refs = report.models.map((model) => `${model.providerId}/${model.id}`);
+        expect(
+          refs.includes("alpha/alpha-model") && refs.includes("beta/beta-model"),
+          `models listed: ${refs.join(",")}`,
+        );
+      } finally {
+        session.env = savedEnv;
+        await alpha.close();
+        await beta.close();
+      }
+    },
+  ],
+  [
     "criterion 8: a failed host check fails the task",
     () => {
       expectCode(
@@ -814,7 +889,8 @@ async function main() {
 
 // The same file serves as the upstream worker of the M2 steps (see startUpstream).
 if (!isMainThread) {
-  serveUpstream();
+  if (workerData?.role === "catalog") serveCatalog(workerData.models);
+  else serveUpstream();
 } else {
   main().then(
     (code) => {

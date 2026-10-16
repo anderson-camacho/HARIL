@@ -46,7 +46,16 @@ function host(env: Record<string, string | undefined>): HostInfo {
     homeDir: "/home/tester",
     env: { HARIL_GATEWAY_URL: "http://127.0.0.1:1/v1", ...env },
     inspectStore: () => HEALTHY_STORE,
-    gatewayProbe: async () => ({ status: "warn", detail: "unreachable" }),
+    providerProbe: async () => [
+      {
+        id: "cliproxy",
+        url: "http://127.0.0.1:1/v1",
+        key: "set" as const,
+        status: "failed" as const,
+        detail: "unreachable",
+        models: [],
+      },
+    ],
   };
 }
 

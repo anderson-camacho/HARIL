@@ -45,7 +45,7 @@ type Outcome =
   | { readonly kind: "failed"; readonly code: string };
 
 export async function startBroker(options: BrokerOptions): Promise<Broker> {
-  const { upstream, ledger, clock } = options;
+  const { resolveUpstream, ledger, clock } = options;
   const inFlight = new Map<string, Set<AbortController>>();
   const pending = new Set<Promise<void>>();
   let allowedHosts: ReadonlySet<string> = new Set();
@@ -120,6 +120,8 @@ export async function startBroker(options: BrokerOptions): Promise<Broker> {
     input: ChatInput,
   ): Promise<void> {
     const inputTokens = estimateInputTokens(input.messages);
+    // The ledger records the route as <provider>/<model>: Pi only sees the bare model id (M3-T7).
+    const routeId = `${grant.providerId}/${input.model}`;
     const rooms = budgetIds.map((id) => {
       const budget = ledger.budgets.get(id);
       return budget === undefined ? 0 : budget.hardLimit - budget.spent - budget.reserved;
@@ -141,7 +143,7 @@ export async function startBroker(options: BrokerOptions): Promise<Broker> {
       idempotencyKey: `request:${randomUUID()}`,
       runId: grant.runId,
       taskId: grant.taskId,
-      routeId: input.model,
+      routeId,
     });
     if (!reservation.ok) {
       sendJson(
@@ -172,7 +174,7 @@ export async function startBroker(options: BrokerOptions): Promise<Broker> {
     let bytes = 0;
     let text = "";
     let outcome: Outcome = { kind: "failed", code: "unknown" };
-    const iterator = upstream
+    const iterator = resolveUpstream(grant.providerId)
       .chat({ model: input.model, messages: input.messages, maxTokens, signal: controller.signal })
       [Symbol.asyncIterator]();
     try {
@@ -223,7 +225,7 @@ export async function startBroker(options: BrokerOptions): Promise<Broker> {
       usage,
       // The upstream was capped at max_tokens, so real use never exceeds the reservation: bound the estimate by it.
       upperBound: Math.min(reserved, inputTokens + tokensForBytes(bytes)),
-      modelRequested: input.model,
+      modelRequested: routeId,
       modelServed: null,
     });
 
@@ -314,6 +316,7 @@ export async function startBroker(options: BrokerOptions): Promise<Broker> {
         runId: input.runId,
         keyHash: hashVirtualKey(key),
         routeGrant: {
+          providerId: input.providerId,
           models: [...input.models],
           maxTokensPerRequest: input.maxTokensPerRequest,
           runId: input.runId,

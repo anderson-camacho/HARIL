@@ -8,7 +8,7 @@ import type { AddressInfo } from "node:net";
 
 // A scripted OpenAI-compatible HTTP server on 127.0.0.1 (node:http, port 0).
 // Routes: GET /v1/models and POST /v1/chat/completions. Every request needs `Authorization: Bearer <apiKey>`,
-// otherwise the server answers 401. Each request is recorded (method, path, lower-case headers, parsed body)
+// otherwise the server answers 401; apiKey null is a keyless server that accepts any request (M3-T7). Each request is recorded (method, path, lower-case headers, parsed body)
 // so tests can assert the wire shape. Streaming replies follow the script: text chunks, a finish chunk, a
 // usage chunk with `choices: []`, then `data: [DONE]`. Scripts can add a mid-stream error object (HTTP 200),
 // a delay before each chunk, or a non-200 status with a JSON body.
@@ -56,7 +56,8 @@ export interface RecordedRequest {
 type CompletionScript = FakeCompletion | ((request: RecordedRequest) => FakeCompletion);
 
 export interface FakeOpenAiOptions {
-  readonly apiKey: string;
+  // null: keyless; the server checks no Authorization header.
+  readonly apiKey: string | null;
   readonly models?: readonly (string | FakeModel)[];
   readonly completion?: CompletionScript;
 }
@@ -216,7 +217,7 @@ export async function startFakeOpenAiServer(options: FakeOpenAiOptions): Promise
   const requests: RecordedRequest[] = [];
   let models: readonly (string | FakeModel)[] = options.models ?? [];
   let completion: CompletionScript = options.completion ?? {};
-  const expectedAuthorization = `Bearer ${options.apiKey}`;
+  const expectedAuthorization = options.apiKey === null ? null : `Bearer ${options.apiKey}`;
 
   async function handle(incoming: IncomingMessage, response: ServerResponse): Promise<void> {
     const text = await readBody(incoming);
@@ -228,7 +229,7 @@ export async function startFakeOpenAiServer(options: FakeOpenAiOptions): Promise
     };
     requests.push(record);
 
-    if (record.headers.authorization !== expectedAuthorization) {
+    if (expectedAuthorization !== null && record.headers.authorization !== expectedAuthorization) {
       sendJson(response, 401, {
         error: {
           message: "Invalid API key",

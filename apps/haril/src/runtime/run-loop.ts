@@ -22,6 +22,7 @@ import type {
   Store,
 } from "@haril/core/ports";
 import { StoreError } from "@haril/state-sqlite";
+import { modelProblemOf } from "../providers.js";
 import { projectFileReader, verificationPayload } from "./acceptance.js";
 import type { RealAgentReadiness, RealAgents } from "./real-agent.js";
 
@@ -116,10 +117,11 @@ async function drainQueue(
       });
     }
 
-    // A real agent without its prerequisites is never claimed: its tasks stay ready and are reported as skipped.
-    const missing = setup !== undefined && !setup.ok ? setup : undefined;
-    if (missing !== undefined) reportSkipped(store, missing, reported, emit);
-    const claimed = store.tasks.claimNext(epoch, missing === undefined ? [] : REAL_AGENT_REFS);
+    // A real-agent task that cannot run yet is never claimed (M2-T6, restored by M3-T7): it stays ready and is
+    // reported once as skipped, and the claim leaves it out.
+    const notRunnable = skipUnrunnableRealTasks(store, setup, reported, emit);
+    const globalMissing = setup !== undefined && !setup.ok;
+    const claimed = store.tasks.claimNext(epoch, globalMissing ? REAL_AGENT_REFS : [], notRunnable);
     if (claimed === undefined) return;
     emit({
       type: "task.claimed",
@@ -184,25 +186,35 @@ function recordVerification(store: Store, claimed: ClaimedTask, verification: Ve
   });
 }
 
-// Each ready task of a real agent is reported once per run, with what is missing and how to add it.
-function reportSkipped(
+// The ready tasks of a real agent that cannot run now: a setup problem applies to all of them, and a task's own
+// model is checked against the providers (M3-T7). Each is reported once per run with what is missing and how to add
+// it. A bare model id needs the live catalogs, so it is resolved at start, not here.
+function skipUnrunnableRealTasks(
   store: Store,
-  missing: { readonly what: string; readonly fix: string },
+  setup: RealAgentReadiness | undefined,
   reported: Set<string>,
   emit: (event: RunEvent) => void,
-): void {
+): string[] {
+  if (setup === undefined) return [];
+  const excluded: string[] = [];
   for (const task of store.tasks.list()) {
-    if (task.state !== "ready" || !isRealAgent(task.agentRef) || reported.has(task.taskId))
-      continue;
+    if (task.state !== "ready" || !isRealAgent(task.agentRef)) continue;
+    const problem = setup.ok
+      ? modelProblemOf(store.tasks.get(task.taskId)?.model ?? null, setup.providers)
+      : setup;
+    if (problem === undefined) continue;
+    excluded.push(task.taskId);
+    if (reported.has(task.taskId)) continue;
     reported.add(task.taskId);
     emit({
       type: "task.skipped",
       taskId: task.taskId,
       goal: task.goal,
-      what: missing.what,
-      fix: missing.fix,
+      what: problem.what,
+      fix: problem.fix,
     });
   }
+  return excluded;
 }
 
 function recoveryEvent(recovered: RecoveredTask): RunEvent {

@@ -10,6 +10,7 @@ export type {
   UpstreamEvent,
   UpstreamMessage,
   UpstreamRequest,
+  UpstreamResolver,
 } from "./broker/types.js";
 
 export { ProviderError, type ProviderErrorCode } from "./providers/errors.js";

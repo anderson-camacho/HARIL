@@ -8,8 +8,14 @@ import {
   EXIT_WARN,
   type HostInfo,
 } from "../context.js";
-import { gatewaySettings, probeGateway } from "../gateway.js";
 import { storeAccess } from "../host.js";
+import {
+  KEY_REJECTED,
+  listProviderModels,
+  loadProviderConfig,
+  PROBE_TIMEOUT_MS,
+  type ProviderListing,
+} from "../providers.js";
 import { readRuntime, runtimeRootFor } from "../runtime.js";
 import { VERSION } from "../version.js";
 import { dataDirFor } from "./common.js";
@@ -58,7 +64,19 @@ function storeStatus(report: StoreInspection): Status {
   return gates.includes("warn") ? "warn" : "ok";
 }
 
-// Doctor is read-only: it describes the store and the gateway and never creates the directory or the database.
+// Providers of the section: error when a key is rejected, ok when one answered, warn otherwise (M3-T7).
+function providersStatus(loaded: boolean, listings: readonly ProviderListing[]): Status {
+  if (!loaded) return "error";
+  if (listings.some((listing) => listing.detail === KEY_REJECTED)) return "error";
+  return listings.some((listing) => listing.status === "ok") ? "ok" : "warn";
+}
+
+function providerRowStatus(listing: Pick<ProviderListing, "status" | "detail">): Status {
+  if (listing.status === "ok") return "ok";
+  return listing.detail === KEY_REJECTED ? "error" : "warn";
+}
+
+// Doctor is read-only: it describes the store and the providers and never creates the directory or the database.
 export async function doctor(args: readonly string[], io: CliIo, host: HostInfo): Promise<number> {
   const parsed = parseArgs(args, { values: ["--data-dir"], flags: ["--json"] });
   const problem = argsProblem(parsed, io);
@@ -72,14 +90,21 @@ export async function doctor(args: readonly string[], io: CliIo, host: HostInfo)
   const store = storeAccess(host).inspect(dataDir);
 
   const node = nodeStatus(host.nodeVersion);
-  const settings = gatewaySettings(host);
-  const gateway = await (host.gatewayProbe ?? ((s) => probeGateway(s, host.gatewayTimeoutMs)))(
-    settings,
-  );
-  const keyState = settings.apiKey === undefined ? "not set" : "set";
+  const loaded = loadProviderConfig(host);
+  const timeoutMs = host.gatewayTimeoutMs ?? PROBE_TIMEOUT_MS;
+  const listings: readonly ProviderListing[] = !loaded.ok
+    ? []
+    : await (
+        host.providerProbe ??
+        ((entries) => Promise.all(entries.map((entry) => listProviderModels(entry, timeoutMs))))
+      )(loaded.providers);
+  const providers = providersStatus(loaded.ok, listings);
   // The runtime is reported but does not change the exit code: it is installed by the user, not by M1 flows.
   const runtime = (host.inspectRuntime ?? readRuntime)(runtimeRootFor(host), host.platform);
-  const overall = worst(node, storeStatus(store), gateway.status);
+  const overall = worst(node, storeStatus(store), providers);
+  const configLine = loaded.ok
+    ? `${loaded.source === "file" ? "file" : "defaults"}  ${loaded.path}`
+    : `${loaded.path}`;
   if (json) {
     io.out(
       JSON.stringify({
@@ -97,12 +122,15 @@ export async function doctor(args: readonly string[], io: CliIo, host: HostInfo)
           gates: store.gates,
           ...(store.error === undefined ? {} : { error: store.error }),
         },
-        gateway: {
-          status: gateway.status,
-          url: settings.url,
-          key: keyState,
-          detail: gateway.detail,
-          ...(gateway.models === undefined ? {} : { models: gateway.models }),
+        providers: {
+          status: providers,
+          config: loaded.ok ? { source: loaded.source, path: loaded.path } : { path: loaded.path },
+          ...(loaded.ok ? {} : { errors: loaded.errors }),
+          entries: listings.map(({ models, ...listing }) => ({
+            ...listing,
+            status: providerRowStatus(listing),
+            models: models.length,
+          })),
         },
         runtime,
       }),
@@ -117,9 +145,13 @@ export async function doctor(args: readonly string[], io: CliIo, host: HostInfo)
     io.out(`    sqlite    ${store.sqliteVersion}`);
     for (const gate of store.gates) io.out(`    gate ${gate.name}  ${gate.status}  ${gate.detail}`);
     if (store.error !== undefined) io.out(`    error     ${store.error}`);
-    io.out(`  gateway   ${gateway.status}  ${settings.url}`);
-    io.out(`    key       ${keyState}`);
-    io.out(`    probe     ${gateway.detail}`);
+    io.out(`  providers  ${providers}  ${configLine}`);
+    if (!loaded.ok) for (const error of loaded.errors) io.out(`    error     ${error}`);
+    for (const listing of listings) {
+      io.out(
+        `    ${listing.id}  ${providerRowStatus(listing)}  ${listing.url}  key ${listing.key}  ${listing.detail}`,
+      );
+    }
     io.out(`  runtime   ${runtime.status}  ${runtime.root}`);
     io.out(`    detail    ${runtime.detail}`);
     if (runtime.node !== undefined)
