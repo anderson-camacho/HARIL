@@ -18,6 +18,9 @@
     "apps/*": {
       "entry": ["src/**/index.ts"]
     },
+    "apps/bootstrap": {
+      "entry": ["src/**/index.ts", "src/main.ts"]
+    },
     "apps/haril": {
       "entry": ["src/**/index.ts", "src/main.ts"]
     }

@@ -16,6 +16,14 @@ const HEALTHY_STORE = {
 // The gateway probe is faked here so these tests never reach a real gateway (doctor-gateway.test.ts covers it).
 const GATEWAY_OK = { status: "ok", detail: "reachable, 2 models", models: 2 } as const;
 
+// The runtime is faked too: doctor-runtime.test.ts covers the real manifest reader.
+const RUNTIME_MISSING = {
+  status: "warn",
+  root: "/home/tester/.local/share/haril",
+  manifest: "/home/tester/.local/share/haril/runtime/manifest.json",
+  detail: "not installed: run npm run runtime:install",
+} as const;
+
 const HOST: HostInfo = {
   nodeVersion: "v24.21.0",
   platform: "linux",
@@ -24,6 +32,7 @@ const HOST: HostInfo = {
   env: {},
   inspectStore: () => HEALTHY_STORE,
   gatewayProbe: async () => GATEWAY_OK,
+  inspectRuntime: () => RUNTIME_MISSING,
 };
 
 // Fake io: captures every line and serves files from an in-memory map.
@@ -187,6 +196,7 @@ describe("doctor", async () => {
         detail: "reachable, 2 models",
         models: 2,
       },
+      runtime: RUNTIME_MISSING,
     });
   });
 

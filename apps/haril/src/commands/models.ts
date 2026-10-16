@@ -33,7 +33,7 @@ export async function models(args: readonly string[], io: CliIo, host: HostInfo)
   const client = createOpenAiCompatibleClient({
     baseUrl: settings.url,
     apiKey: settings.apiKey,
-    timeoutMs: MODELS_TIMEOUT_MS,
+    timeoutMs: host.gatewayTimeoutMs ?? MODELS_TIMEOUT_MS,
   });
   let list: ModelDescriptor[];
   try {

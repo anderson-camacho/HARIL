@@ -1,4 +1,6 @@
 import { mkdtempSync, rmSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type FakeOpenAiServer, startFakeOpenAiServer } from "@haril/gateway/testing";
@@ -41,6 +43,8 @@ const host = (env: Record<string, string | undefined>): HostInfo => ({
   arch: "x64",
   homeDir: root,
   env: { HARIL_HOME: join(root, "data"), ...env },
+  // A generous bound: the flaky 3 s probe must never decide these tests under load (M2-T2 log).
+  gatewayTimeoutMs: 30_000,
 });
 
 describe("doctor gateway section", () => {
@@ -103,6 +107,26 @@ describe("doctor gateway section", () => {
     );
     expect(code).toBe(2);
     expect(out.join("\n")).toContain("HARIL_GATEWAY_URL is not a valid URL");
+  });
+
+  it("applies the injected probe timeout, so a slow gateway is 'unreachable' within that bound", async () => {
+    // A server that accepts and never answers: the probe must give up at gatewayTimeoutMs, not at 3 s.
+    const hanging = createServer(() => {});
+    await new Promise<void>((resolve) => hanging.listen(0, "127.0.0.1", resolve));
+    const port = (hanging.address() as AddressInfo).port;
+    try {
+      const { io, out } = harness();
+      const started = Date.now();
+      await run(["doctor"], io, {
+        ...host({ HARIL_GATEWAY_URL: `http://127.0.0.1:${port}/v1`, HARIL_CLIPROXYAPI_KEY: KEY }),
+        gatewayTimeoutMs: 200,
+      });
+      expect(Date.now() - started).toBeLessThan(2000);
+      expect(out.join("\n")).toContain("unreachable");
+    } finally {
+      hanging.closeAllConnections();
+      await new Promise<void>((resolve) => hanging.close(() => resolve()));
+    }
   });
 
   it("prints the gateway in the JSON report with key 'set' or 'not set', never the value", async () => {

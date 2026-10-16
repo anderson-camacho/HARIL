@@ -33,14 +33,17 @@ export function gatewaySettings(host: HostInfo): GatewaySettings {
 
 // The real probe behind `doctor`: GET /v1/models with a short timeout. Without a key, a 401 means the
 // gateway is reachable and the key is missing; with a key, a 401 means the key was rejected.
-export async function probeGateway(settings: GatewaySettings): Promise<GatewayStatus> {
+export async function probeGateway(
+  settings: GatewaySettings,
+  timeoutMs: number = DOCTOR_PROBE_TIMEOUT_MS,
+): Promise<GatewayStatus> {
   if (!settings.urlValid) {
     return { status: "error", detail: `${GATEWAY_URL_ENV} is not a valid URL` };
   }
   const client = createOpenAiCompatibleClient({
     baseUrl: settings.url,
     apiKey: settings.apiKey,
-    timeoutMs: DOCTOR_PROBE_TIMEOUT_MS,
+    timeoutMs,
   });
   try {
     const models = await client.listModels();

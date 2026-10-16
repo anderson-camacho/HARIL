@@ -10,6 +10,7 @@ import {
 } from "../context.js";
 import { gatewaySettings, probeGateway } from "../gateway.js";
 import { storeAccess } from "../host.js";
+import { readRuntime, runtimeRootFor } from "../runtime.js";
 import { VERSION } from "../version.js";
 import { dataDirFor } from "./common.js";
 
@@ -72,8 +73,12 @@ export async function doctor(args: readonly string[], io: CliIo, host: HostInfo)
 
   const node = nodeStatus(host.nodeVersion);
   const settings = gatewaySettings(host);
-  const gateway = await (host.gatewayProbe ?? probeGateway)(settings);
+  const gateway = await (host.gatewayProbe ?? ((s) => probeGateway(s, host.gatewayTimeoutMs)))(
+    settings,
+  );
   const keyState = settings.apiKey === undefined ? "not set" : "set";
+  // The runtime is reported but does not change the exit code: it is installed by the user, not by M1 flows.
+  const runtime = (host.inspectRuntime ?? readRuntime)(runtimeRootFor(host), host.platform);
   const overall = worst(node, storeStatus(store), gateway.status);
   if (json) {
     io.out(
@@ -99,6 +104,7 @@ export async function doctor(args: readonly string[], io: CliIo, host: HostInfo)
           detail: gateway.detail,
           ...(gateway.models === undefined ? {} : { models: gateway.models }),
         },
+        runtime,
       }),
     );
   } else {
@@ -114,6 +120,12 @@ export async function doctor(args: readonly string[], io: CliIo, host: HostInfo)
     io.out(`  gateway   ${gateway.status}  ${settings.url}`);
     io.out(`    key       ${keyState}`);
     io.out(`    probe     ${gateway.detail}`);
+    io.out(`  runtime   ${runtime.status}  ${runtime.root}`);
+    io.out(`    detail    ${runtime.detail}`);
+    if (runtime.node !== undefined)
+      io.out(`    node      ${runtime.node.version}  ${runtime.node.path}`);
+    if (runtime.pi !== undefined)
+      io.out(`    pi        ${runtime.pi.version}  ${runtime.pi.cliPath}`);
     io.out(`  status    ${overall}`);
   }
   if (overall === "error") return EXIT_ERROR;

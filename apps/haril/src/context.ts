@@ -31,6 +31,11 @@ export interface HostInfo {
   // Gateway probe used by `doctor` (M2); defaults to the real GET /v1/models. Tests that do not exercise
   // the gateway inject a fixed answer so they stay hermetic.
   readonly gatewayProbe?: (settings: GatewaySettings) => Promise<GatewayStatus>;
+  // Per-request timeout of the real gateway calls (doctor and models). Tests raise it so a cold start under
+  // load is never reported as unreachable; production keeps the defaults in gateway.ts.
+  readonly gatewayTimeoutMs?: number;
+  // Runtime inspection for doctor (M2-T3); reads files only and never executes them. Defaults to the real reader.
+  readonly inspectRuntime?: (runtimeRoot: string, platform: string) => RuntimeInspection;
 }
 
 // Gateway settings read from the environment (M2-D1). The key is only ever a presence flag in output.
@@ -44,6 +49,16 @@ export interface GatewayStatus {
   readonly status: "ok" | "warn" | "error";
   readonly detail: string;
   readonly models?: number;
+}
+
+// The runtime installed by `npm run runtime:install` (M2-T3), as doctor reports it.
+export interface RuntimeInspection {
+  readonly status: "ok" | "warn";
+  readonly root: string;
+  readonly manifest: string;
+  readonly detail: string;
+  readonly node?: { readonly version: string; readonly path: string };
+  readonly pi?: { readonly version: string; readonly cliPath: string };
 }
 
 export const EXIT_OK = 0;

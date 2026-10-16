@@ -37,6 +37,7 @@ const host = (env: Record<string, string | undefined>): HostInfo => ({
   arch: "x64",
   homeDir: "/home/tester",
   env,
+  gatewayTimeoutMs: 30_000,
 });
 
 describe("haril models", () => {
