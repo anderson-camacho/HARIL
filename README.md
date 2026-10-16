@@ -6,9 +6,39 @@ Una consola, múltiples inteligencias, un solo propósito.
 HARIL es una plataforma **local** de orquestación de agentes de IA, desarrollo de software y automatización, con un solo comando: `haril`.
 Un núcleo propio controla la ejecución; Pi, Engram, Herdr y los proveedores de modelos quedan detrás de puertos reemplazables.
 
-> **Estado real (2026-10-14).** Fases 0 a 2 completadas **en diseño** (2026-10-13/14): investigación de solo lectura, arquitectura, ADR, contratos y documentos de diseño.
-> **Nada está implementado, nada se ha ejecutado ni probado.** No existe código, ni pruebas, ni una sola ejecución de Pi, Engram, Herdr o un proveedor.
-> El directorio **aún no es un repositorio Git** (decisión U-07 a, sin tomar).
+> **Estado real (2026-10-16).** Fases 0 a 2 completadas en diseño. **Fase 3 (monorepo, hito M0 parcial) implementada** en la rama `feat/phase-3-monorepo`: 10 workspaces, contratos TypeBox de `Task`, `Plan` y `Session`, máquina de estados de tareas, validación de planes, controles de capas y una CLI mínima.
+> No existe todavía Runtime, Store, Pi, Broker ni proveedores: llegan en la Fase 4 (M1 a M3).
+
+## Cómo probarlo
+
+Requisitos: Node 24 (recomendado `^24.21.0`; con 24.19 funciona y `doctor` avisa) y `corepack` (incluido en Node 24).
+
+```bash
+corepack pnpm install
+```
+
+```bash
+npm run smoke
+```
+
+`smoke` compila la CLI en `apps/haril/dist/haril.mjs` y la ejecuta. Después puede usarse directamente:
+
+| Comando | Qué hace |
+|---|---|
+| `node apps/haril/dist/haril.mjs --version` | Versión de HARIL |
+| `node apps/haril/dist/haril.mjs doctor [--json]` | Node, plataforma y piso de versión |
+| `node apps/haril/dist/haril.mjs states` | Los 7 estados de tarea y sus transiciones legales (ARCH 7.2) |
+| `node apps/haril/dist/haril.mjs plan validate examples/plan.valid.json` | Valida un plan: esquema, dependencias, ciclos, tope de 50 tareas y profundidad de delegación; muestra el orden topológico |
+| `node apps/haril/dist/haril.mjs plan validate examples/plan.cycle.json` | Ejemplo de plan inválido (ciclo): sale con código 1 |
+
+Calidad del repositorio:
+
+| Comando | Qué ejecuta |
+|---|---|
+| `corepack pnpm run check` | Biome, `tsc --noEmit` por workspace, `scripts/check-layers`, `check-purity`, `check-forbidden` y knip |
+| `corepack pnpm test` | Vitest (contratos, core, CLI) y `node:test` (scripts de control con violaciones sembradas) |
+
+El CI (`.github/workflows/ci.yml`) ejecuta lo mismo en `windows-latest` y `ubuntu-latest`.
 
 ## Qué es y qué no es
 

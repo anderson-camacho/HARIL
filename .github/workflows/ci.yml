@@ -1,0 +1,37 @@
+name: ci
+
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # windows-latest is the primary lane; ubuntu-latest covers core, contracts and the hermetic lane (ADR-0015 D7).
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24.21.x
+      - name: Enable corepack (pnpm from packageManager)
+        run: corepack enable
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Check (biome, tsc, layer/purity/forbidden scripts, knip)
+        run: pnpm run check
+      - name: Test (vitest + node:test)
+        run: pnpm test
+      - name: Smoke (build CLI and run it)
+        run: pnpm run smoke
