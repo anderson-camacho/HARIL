@@ -340,14 +340,14 @@ describe("createPiAgentRuntime lifecycle", () => {
     });
   });
 
-  it("fails the run with prompt_not_started when Pi does not start a run for the prompt", async () => {
+  it("fails the run with agent.prompt_not_run when Pi does not start a run for the prompt", async () => {
     const h = harness();
     const handle = await startHandle(h.runtime("prompt_handled"));
     expect(await handle.prompt("go")).toMatchObject({
       ok: false,
-      error: { code: "prompt_not_started" },
+      error: { code: "agent.prompt_not_run" },
     });
-    expect(await handle.settled).toMatchObject({ status: "failed", code: "prompt_not_started" });
+    expect(await handle.settled).toMatchObject({ status: "failed", code: "agent.prompt_not_run" });
   });
 
   it("fails closed when the bridge announces tools different from allowedTools", async () => {

@@ -393,8 +393,8 @@ class PiRun implements PiAgentHandle {
     // Only "started" opens a run: "handled" and "queued" never send agent_settled (contract 4.3).
     if (asRecord(reply.data)?.disposition !== "started") {
       const message = "Pi did not start a run for the prompt";
-      this.fail("prompt_not_started", message);
-      return { ok: false, error: { code: "prompt_not_started", message } };
+      this.fail("agent.prompt_not_run", message);
+      return { ok: false, error: { code: "agent.prompt_not_run", message } };
     }
     // The reply and agent_settled can arrive in one chunk: the run may already be finished, and a timer armed
     // now would never be cleared, which keeps the runtime process alive for the whole timeout (M2-T6).
