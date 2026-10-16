@@ -13,6 +13,7 @@
   "dependencies": {
     "@haril/contracts": "workspace:*",
     "@haril/core": "workspace:*",
+    "@haril/gateway": "workspace:*",
     "@haril/state-sqlite": "workspace:*"
   },
   "devDependencies": {

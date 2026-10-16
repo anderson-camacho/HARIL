@@ -1,0 +1,331 @@
+import type { ModelDescriptor, Usage } from "@haril/contracts";
+import { ProviderError } from "./errors.js";
+import { createSseParser, type SseEvent } from "./sse.js";
+
+// OpenAI-compatible adapter (model-provider.md; MODEL_ROUTING 3.3). One client per connection. It never
+// retries and never keeps a body: each call is one request that the caller accounts for.
+
+const PROVIDER_ID = "openai-compatible";
+const DETAIL_LIMIT = 200;
+const RETRY_AFTER_SECONDS = /^\d+$/;
+
+export interface ChatMessage {
+  readonly role: "system" | "user" | "assistant";
+  readonly content: string;
+}
+
+export interface ChatRequest {
+  readonly model: string;
+  readonly messages: readonly ChatMessage[];
+  readonly maxTokens: number;
+  readonly signal?: AbortSignal;
+}
+
+// Text deltas as they arrive, then exactly one done event. usage is null when the upstream sent no usage.
+export type ChatEvent =
+  | { readonly type: "text"; readonly delta: string }
+  | { readonly type: "done"; readonly usage: Usage | null; readonly finishReason: string | null };
+
+export interface OpenAiCompatibleOptions {
+  readonly baseUrl: string;
+  // Omitted means no Authorization header (used by the doctor probe to tell "key not set" apart).
+  readonly apiKey?: string | undefined;
+  // Connect/first-byte timeout for a request; for a stream, the maximum silence between two reads.
+  readonly timeoutMs: number;
+  readonly fetch?: typeof fetch;
+}
+
+export interface OpenAiCompatibleClient {
+  listModels(signal?: AbortSignal): Promise<ModelDescriptor[]>;
+  chat(request: ChatRequest): AsyncGenerator<ChatEvent, void, undefined>;
+}
+
+interface Deadline {
+  readonly signal: AbortSignal;
+  touch(): void;
+  dispose(): void;
+  timedOut(): boolean;
+  callerAborted(): boolean;
+}
+
+function openDeadline(timeoutMs: number, parent: AbortSignal | undefined): Deadline {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+  const arm = (): void => {
+    if (timer !== undefined) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
+  };
+  const onParentAbort = (): void => controller.abort();
+  if (parent?.aborted === true) controller.abort();
+  parent?.addEventListener("abort", onParentAbort, { once: true });
+  arm();
+  return {
+    signal: controller.signal,
+    touch: arm,
+    dispose() {
+      if (timer !== undefined) clearTimeout(timer);
+      parent?.removeEventListener("abort", onParentAbort);
+    },
+    timedOut: () => timedOut,
+    callerAborted: () => parent?.aborted === true,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function count(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+// A key echoed back by the upstream must not reach an error message, a log or the output.
+function redact(text: string, key: string | undefined): string {
+  return key === undefined ? text : text.split(key).join("[redacted]");
+}
+
+function parseRetryAfter(value: string | null): number | undefined {
+  if (value === null) return undefined;
+  if (RETRY_AFTER_SECONDS.test(value)) return Number(value) * 1000;
+  const at = Date.parse(value);
+  return Number.isNaN(at) ? undefined : Math.max(0, at - Date.now());
+}
+
+function toUsage(raw: Record<string, unknown>): Usage {
+  const promptDetails = isRecord(raw.prompt_tokens_details) ? raw.prompt_tokens_details : {};
+  const completionDetails = isRecord(raw.completion_tokens_details)
+    ? raw.completion_tokens_details
+    : {};
+  return {
+    schemaVersion: 1,
+    inputTokens: count(raw.prompt_tokens),
+    outputTokens: count(raw.completion_tokens),
+    cachedInputTokens: count(promptDetails.cached_tokens),
+    reasoningTokens: count(completionDetails.reasoning_tokens),
+  };
+}
+
+interface Frame {
+  delta?: string;
+  usage?: Usage;
+  finishReason?: string;
+}
+
+// One `data:` payload of a chat stream. An error object is fatal: the stream is not trusted past it.
+function parseFrame(data: string, key: string | undefined): Frame {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(data);
+  } catch {
+    throw new ProviderError("upstream_stream_error", "stream event is not valid JSON");
+  }
+  if (!isRecord(payload)) {
+    throw new ProviderError("upstream_stream_error", "stream event is not an object");
+  }
+  if (payload.error !== undefined && payload.error !== null) {
+    const raw = isRecord(payload.error) ? payload.error.message : payload.error;
+    const detail = typeof raw === "string" ? raw : "gateway reported an error in the stream";
+    throw new ProviderError("upstream_stream_error", redact(`stream error: ${detail}`, key));
+  }
+  const frame: Frame = {};
+  if (isRecord(payload.usage)) frame.usage = toUsage(payload.usage);
+  const first: unknown = Array.isArray(payload.choices) ? payload.choices[0] : undefined;
+  if (isRecord(first)) {
+    const delta = isRecord(first.delta) ? first.delta.content : undefined;
+    if (typeof delta === "string" && delta.length > 0) frame.delta = delta;
+    if (typeof first.finish_reason === "string") frame.finishReason = first.finish_reason;
+  }
+  return frame;
+}
+
+function parseModels(body: unknown): ModelDescriptor[] {
+  if (!isRecord(body) || !Array.isArray(body.data)) {
+    throw new ProviderError("upstream", "gateway returned an unexpected model list");
+  }
+  const byId = new Map<string, ModelDescriptor>();
+  for (const item of body.data) {
+    if (!isRecord(item) || typeof item.id !== "string" || item.id.length === 0) continue;
+    if (byId.has(item.id)) continue;
+    const descriptor: ModelDescriptor = { providerId: PROVIDER_ID, id: item.id };
+    const contextWindow = count(item.context_length);
+    if (contextWindow !== null && contextWindow > 0) descriptor.contextWindow = contextWindow;
+    const maxOutputTokens = count(item.max_output_tokens);
+    if (maxOutputTokens !== null && maxOutputTokens > 0)
+      descriptor.maxOutputTokens = maxOutputTokens;
+    byId.set(item.id, descriptor);
+  }
+  return [...byId.values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+export function createOpenAiCompatibleClient(
+  options: OpenAiCompatibleOptions,
+): OpenAiCompatibleClient {
+  const base = options.baseUrl.replace(/\/+$/, "");
+  const origin = new URL(options.baseUrl).origin;
+  const key =
+    options.apiKey !== undefined && options.apiKey.length > 0 ? options.apiKey : undefined;
+  const timeoutMs = options.timeoutMs;
+  const fetchImpl = options.fetch ?? ((input: string, init: RequestInit) => fetch(input, init));
+
+  const headers = (extra: Record<string, string>): Record<string, string> =>
+    key === undefined ? extra : { ...extra, authorization: `Bearer ${key}` };
+
+  function transportError(error: unknown, deadline: Deadline, phase: "connect" | "body"): unknown {
+    if (deadline.callerAborted()) return error;
+    if (deadline.timedOut()) {
+      return new ProviderError(
+        "unreachable",
+        `gateway timed out after ${timeoutMs} ms (${origin})`,
+      );
+    }
+    if (phase === "connect")
+      return new ProviderError("unreachable", `gateway unreachable at ${origin}`);
+    return new ProviderError("upstream_stream_error", "stream interrupted before completion");
+  }
+
+  async function send(url: string, init: RequestInit, deadline: Deadline): Promise<Response> {
+    try {
+      return await fetchImpl(url, { ...init, signal: deadline.signal });
+    } catch (error) {
+      throw transportError(error, deadline, "connect");
+    }
+  }
+
+  async function errorDetail(response: Response): Promise<string | undefined> {
+    try {
+      const body: unknown = JSON.parse(await response.text());
+      const error = isRecord(body) ? body.error : undefined;
+      const message = isRecord(error) ? error.message : error;
+      return typeof message === "string" && message.length > 0
+        ? redact(message, key).slice(0, DETAIL_LIMIT)
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  async function httpFailure(response: Response): Promise<ProviderError> {
+    const status = response.status;
+    if (status === 401 || status === 403) {
+      return new ProviderError("auth", `gateway rejected the credentials (HTTP ${status})`, {
+        httpStatus: status,
+      });
+    }
+    const detail = await errorDetail(response);
+    const suffix = detail === undefined ? "" : `: ${detail}`;
+    if (status === 402) {
+      return new ProviderError("quota", `gateway quota exhausted (HTTP 402)${suffix}`, {
+        httpStatus: status,
+      });
+    }
+    if (status === 429) {
+      const retryAfterMs = parseRetryAfter(response.headers.get("retry-after"));
+      return new ProviderError("rate_limited", `gateway rate limit (HTTP 429)${suffix}`, {
+        httpStatus: status,
+        ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+      });
+    }
+    return new ProviderError("upstream", `gateway returned HTTP ${status}${suffix}`, {
+      httpStatus: status,
+    });
+  }
+
+  async function readJson(response: Response, deadline: Deadline): Promise<unknown> {
+    try {
+      return (await response.json()) as unknown;
+    } catch (error) {
+      if (deadline.callerAborted() || deadline.timedOut()) {
+        throw transportError(error, deadline, "body");
+      }
+      throw new ProviderError("upstream", "gateway returned a body that is not JSON");
+    }
+  }
+
+  return {
+    async listModels(signal) {
+      const deadline = openDeadline(timeoutMs, signal);
+      try {
+        const response = await send(
+          `${base}/models`,
+          { method: "GET", headers: headers({ accept: "application/json" }) },
+          deadline,
+        );
+        if (!response.ok) throw await httpFailure(response);
+        return parseModels(await readJson(response, deadline));
+      } finally {
+        deadline.dispose();
+      }
+    },
+
+    async *chat(request) {
+      const deadline = openDeadline(timeoutMs, request.signal);
+      let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+      try {
+        const response = await send(
+          `${base}/chat/completions`,
+          {
+            method: "POST",
+            headers: headers({ "content-type": "application/json", accept: "text/event-stream" }),
+            body: JSON.stringify({
+              model: request.model,
+              messages: request.messages,
+              max_tokens: request.maxTokens,
+              stream: true,
+              stream_options: { include_usage: true },
+            }),
+          },
+          deadline,
+        );
+        if (!response.ok) throw await httpFailure(response);
+        if (response.body === null) {
+          throw new ProviderError("upstream_stream_error", "gateway sent no stream body");
+        }
+        reader = response.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        const parser = createSseParser();
+        let usage: Usage | null = null;
+        let finishReason: string | null = null;
+        let sawDone = false;
+        let ended = false;
+
+        while (!sawDone && !ended) {
+          deadline.touch();
+          let events: SseEvent[];
+          try {
+            const next = await reader.read();
+            if (next.done) {
+              ended = true;
+              events = parser.push(decoder.decode()).concat(parser.end());
+            } else {
+              events = parser.push(decoder.decode(next.value, { stream: true }));
+            }
+          } catch (error) {
+            throw transportError(error, deadline, "body");
+          }
+          for (const event of events) {
+            if (event.data === "[DONE]") {
+              sawDone = true;
+              break;
+            }
+            const frame = parseFrame(event.data, key);
+            if (frame.delta !== undefined) yield { type: "text", delta: frame.delta };
+            if (frame.usage !== undefined) usage = frame.usage;
+            if (frame.finishReason !== undefined) finishReason = frame.finishReason;
+          }
+        }
+
+        if (!sawDone && finishReason === null) {
+          throw new ProviderError("upstream_stream_error", "stream ended before completion");
+        }
+        yield { type: "done", usage, finishReason };
+      } finally {
+        deadline.dispose();
+        if (reader !== undefined) void reader.cancel().catch(() => undefined);
+      }
+    },
+  };
+}

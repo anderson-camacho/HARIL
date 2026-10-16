@@ -28,6 +28,22 @@ export interface HostInfo {
   readonly agentRuntime?: AgentRuntime;
   // Liveness of a lease holder's pid; defaults to the real process check (M1 fix c). Tests inject it.
   readonly isPidAlive?: (pid: number) => boolean;
+  // Gateway probe used by `doctor` (M2); defaults to the real GET /v1/models. Tests that do not exercise
+  // the gateway inject a fixed answer so they stay hermetic.
+  readonly gatewayProbe?: (settings: GatewaySettings) => Promise<GatewayStatus>;
+}
+
+// Gateway settings read from the environment (M2-D1). The key is only ever a presence flag in output.
+export interface GatewaySettings {
+  readonly url: string;
+  readonly urlValid: boolean;
+  readonly apiKey: string | undefined;
+}
+
+export interface GatewayStatus {
+  readonly status: "ok" | "warn" | "error";
+  readonly detail: string;
+  readonly models?: number;
 }
 
 export const EXIT_OK = 0;

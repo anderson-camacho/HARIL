@@ -8,6 +8,7 @@ import {
   EXIT_WARN,
   type HostInfo,
 } from "../context.js";
+import { gatewaySettings, probeGateway } from "../gateway.js";
 import { storeAccess } from "../host.js";
 import { VERSION } from "../version.js";
 import { dataDirFor } from "./common.js";
@@ -56,8 +57,8 @@ function storeStatus(report: StoreInspection): Status {
   return gates.includes("warn") ? "warn" : "ok";
 }
 
-// Doctor is read-only: it describes the store and never creates the directory or the database.
-export function doctor(args: readonly string[], io: CliIo, host: HostInfo): number {
+// Doctor is read-only: it describes the store and the gateway and never creates the directory or the database.
+export async function doctor(args: readonly string[], io: CliIo, host: HostInfo): Promise<number> {
   const parsed = parseArgs(args, { values: ["--data-dir"], flags: ["--json"] });
   const problem = argsProblem(parsed, io);
   if (problem !== null) return problem;
@@ -70,7 +71,10 @@ export function doctor(args: readonly string[], io: CliIo, host: HostInfo): numb
   const store = storeAccess(host).inspect(dataDir);
 
   const node = nodeStatus(host.nodeVersion);
-  const overall = worst(node, storeStatus(store));
+  const settings = gatewaySettings(host);
+  const gateway = await (host.gatewayProbe ?? probeGateway)(settings);
+  const keyState = settings.apiKey === undefined ? "not set" : "set";
+  const overall = worst(node, storeStatus(store), gateway.status);
   if (json) {
     io.out(
       JSON.stringify({
@@ -88,6 +92,13 @@ export function doctor(args: readonly string[], io: CliIo, host: HostInfo): numb
           gates: store.gates,
           ...(store.error === undefined ? {} : { error: store.error }),
         },
+        gateway: {
+          status: gateway.status,
+          url: settings.url,
+          key: keyState,
+          detail: gateway.detail,
+          ...(gateway.models === undefined ? {} : { models: gateway.models }),
+        },
       }),
     );
   } else {
@@ -100,6 +111,9 @@ export function doctor(args: readonly string[], io: CliIo, host: HostInfo): numb
     io.out(`    sqlite    ${store.sqliteVersion}`);
     for (const gate of store.gates) io.out(`    gate ${gate.name}  ${gate.status}  ${gate.detail}`);
     if (store.error !== undefined) io.out(`    error     ${store.error}`);
+    io.out(`  gateway   ${gateway.status}  ${settings.url}`);
+    io.out(`    key       ${keyState}`);
+    io.out(`    probe     ${gateway.detail}`);
     io.out(`  status    ${overall}`);
   }
   if (overall === "error") return EXIT_ERROR;

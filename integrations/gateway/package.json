@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./testing": "./src/testing/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -12,5 +13,8 @@
   },
   "dependencies": {
     "@haril/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2"
   }
 }

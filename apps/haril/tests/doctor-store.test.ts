@@ -31,24 +31,26 @@ function harness() {
 }
 
 // Node 24.21 keeps the Node check at "ok", so the exit code depends only on the store.
+// The gateway probe is faked: this file covers the store, doctor-gateway.test.ts covers the gateway.
 const host = (dataDir: string) => ({
   nodeVersion: "v24.21.0",
   platform: "linux",
   arch: "x64",
   homeDir: root,
   env: { HARIL_HOME: dataDir },
+  gatewayProbe: async () => ({ status: "ok" as const, detail: "reachable, 0 models", models: 0 }),
 });
 
 describe("doctor with the real store inspection", () => {
-  it("reports not initialized and creates neither the directory nor the database", () => {
+  it("reports not initialized and creates neither the directory nor the database", async () => {
     const dataDir = join(root, "fresh", "data");
     const { io, out } = harness();
-    expect(run(["doctor"], io, host(dataDir))).toBe(0);
+    expect(await run(["doctor"], io, host(dataDir))).toBe(0);
     expect(out.join("\n")).toContain("not initialized");
     expect(existsSync(dataDir)).toBe(false);
   });
 
-  it("reports the schema of an initialized store (exit 0)", () => {
+  it("reports the schema of an initialized store (exit 0)", async () => {
     const dataDir = join(root, "data");
     let n = 0;
     openStore({
@@ -59,7 +61,7 @@ describe("doctor with the real store inspection", () => {
     }).close();
 
     const { io, out } = harness();
-    expect(run(["doctor", "--json"], io, host(dataDir))).toBe(0);
+    expect(await run(["doctor", "--json"], io, host(dataDir))).toBe(0);
     const report = JSON.parse(out.join("\n")) as {
       status: string;
       store: { initialized: boolean; schemaVersion: number; status: string };

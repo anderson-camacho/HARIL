@@ -14,7 +14,6 @@
     "integrations/os": { "ignoreDependencies": ["@haril/contracts"] },
     "integrations/git": { "ignoreDependencies": ["@haril/contracts"] },
     "integrations/state-sqlite": { "ignoreDependencies": ["@haril/contracts"] },
-    "integrations/gateway": { "ignoreDependencies": ["@haril/contracts"] },
     "integrations/agent-pi": { "ignoreDependencies": ["@haril/contracts"] },
     "apps/*": {
       "entry": ["src/**/index.ts"]

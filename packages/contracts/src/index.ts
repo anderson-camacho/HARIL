@@ -2,5 +2,6 @@
 export * from "./enums.js";
 export * from "./plan.js";
 export * from "./primitives.js";
+export * from "./providers.js";
 export * from "./session.js";
 export * from "./task.js";

@@ -13,6 +13,9 @@ const HEALTHY_STORE = {
   gates: [{ name: "sqlite", status: "ok", detail: "SQLite 3.53.3" }],
 } as const;
 
+// The gateway probe is faked here so these tests never reach a real gateway (doctor-gateway.test.ts covers it).
+const GATEWAY_OK = { status: "ok", detail: "reachable, 2 models", models: 2 } as const;
+
 const HOST: HostInfo = {
   nodeVersion: "v24.21.0",
   platform: "linux",
@@ -20,6 +23,7 @@ const HOST: HostInfo = {
   homeDir: "/home/tester",
   env: {},
   inspectStore: () => HEALTHY_STORE,
+  gatewayProbe: async () => GATEWAY_OK,
 };
 
 // Fake io: captures every line and serves files from an in-memory map.
@@ -112,17 +116,17 @@ describe("version and help", () => {
   });
 });
 
-describe("doctor", () => {
-  const doctorJson = (nodeVersion: string) => {
+describe("doctor", async () => {
+  const doctorJson = async (nodeVersion: string) => {
     const { io, out } = harness();
-    const code = run(["doctor", "--json"], io, { ...HOST, nodeVersion });
+    const code = await run(["doctor", "--json"], io, { ...HOST, nodeVersion });
     return { code, report: JSON.parse(out.join("\n")) as { status: string } };
   };
 
   it.each(["v24.21.0", "v24.22.1", "v26.8.0", "v27.0.0"])(
     "reports ok on %s, which satisfies ^24.21.0 || >=26.8.0",
-    (nodeVersion) => {
-      const { code, report } = doctorJson(nodeVersion);
+    async (nodeVersion) => {
+      const { code, report } = await doctorJson(nodeVersion);
       expect(code).toBe(0);
       expect(report.status).toBe("ok");
     },
@@ -130,22 +134,24 @@ describe("doctor", () => {
 
   it.each(["v24.19.0", "v25.1.0", "v26.7.9"])(
     "reports warn on %s and exits 1 (M1-D2: warnings)",
-    (nodeVersion) => {
-      const { code, report } = doctorJson(nodeVersion);
+    async (nodeVersion) => {
+      const { code, report } = await doctorJson(nodeVersion);
       expect(code).toBe(1);
       expect(report.status).toBe("warn");
     },
   );
 
-  it("reports error and exits 2 below Node 24 (M1-D2: errors)", () => {
-    const { code, report } = doctorJson("v22.12.0");
+  it("reports error and exits 2 below Node 24 (M1-D2: errors)", async () => {
+    const { code, report } = await doctorJson("v22.12.0");
     expect(code).toBe(2);
     expect(report.status).toBe("error");
   });
 
-  it("prints node, platform and arch in text form", () => {
+  it("prints node, platform and arch in text form", async () => {
     const { io, out } = harness();
-    expect(run(["doctor"], io, { ...HOST, nodeVersion: "v24.19.0", platform: "win32" })).toBe(1);
+    expect(await run(["doctor"], io, { ...HOST, nodeVersion: "v24.19.0", platform: "win32" })).toBe(
+      1,
+    );
     const text = out.join("\n");
     expect(text).toContain("v24.19.0");
     expect(text).toContain("win32");
@@ -153,9 +159,9 @@ describe("doctor", () => {
     expect(text).toContain("warn");
   });
 
-  it("prints a JSON report with node, platform, arch, store and status", () => {
+  it("prints a JSON report with node, platform, arch, store and status", async () => {
     const { io, out } = harness();
-    run(["doctor", "--json"], io, { ...HOST, nodeVersion: "v24.19.0", platform: "win32" });
+    await run(["doctor", "--json"], io, { ...HOST, nodeVersion: "v24.19.0", platform: "win32" });
     expect(JSON.parse(out.join("\n"))).toEqual({
       status: "warn",
       node: {
@@ -174,12 +180,19 @@ describe("doctor", () => {
         schemaVersion: null,
         gates: HEALTHY_STORE.gates,
       },
+      gateway: {
+        status: "ok",
+        url: "http://127.0.0.1:8317/v1",
+        key: "not set",
+        detail: "reachable, 2 models",
+        models: 2,
+      },
     });
   });
 
-  it("rejects an unknown flag with exit 2", () => {
+  it("rejects an unknown flag with exit 2", async () => {
     const { io, err } = harness();
-    expect(run(["doctor", "--verbose"], io, HOST)).toBe(2);
+    expect(await run(["doctor", "--verbose"], io, HOST)).toBe(2);
     expect(err.join("\n")).toContain("--verbose");
   });
 });
@@ -280,24 +293,24 @@ describe("plan validate", () => {
   });
 });
 
-describe("doctor store section", () => {
-  it("prints the data directory and says the store is not initialized, exit 0", () => {
+describe("doctor store section", async () => {
+  it("prints the data directory and says the store is not initialized, exit 0", async () => {
     const { io, out } = harness();
-    expect(run(["doctor"], io, HOST)).toBe(0);
+    expect(await run(["doctor"], io, HOST)).toBe(0);
     const text = out.join("\n");
     expect(text).toContain(HEALTHY_STORE.dataDir);
     expect(text).toContain("not initialized");
     expect(text).toContain("3.53.3");
   });
 
-  it("reports the schema version of an initialized store", () => {
+  it("reports the schema version of an initialized store", async () => {
     const { io, out } = harness();
     const inspectStore = () => ({ ...HEALTHY_STORE, initialized: true, schemaVersion: 1 });
-    expect(run(["doctor"], io, { ...HOST, inspectStore })).toBe(0);
+    expect(await run(["doctor"], io, { ...HOST, inspectStore })).toBe(0);
     expect(out.join("\n")).toContain("schema 1");
   });
 
-  it("a SQLite gate error makes doctor exit 2 with the remedy in the text", () => {
+  it("a SQLite gate error makes doctor exit 2 with the remedy in the text", async () => {
     const { io, out } = harness();
     const inspectStore = (): StoreInspection => ({
       ...HEALTHY_STORE,
@@ -310,25 +323,27 @@ describe("doctor store section", () => {
         },
       ],
     });
-    expect(run(["doctor"], io, { ...HOST, inspectStore })).toBe(2);
+    expect(await run(["doctor"], io, { ...HOST, inspectStore })).toBe(2);
     expect(out.join("\n")).toContain("Remedy");
   });
 
-  it("accepts --data-dir and passes it to the store inspection", () => {
+  it("accepts --data-dir and passes it to the store inspection", async () => {
     const { io } = harness();
     const seen: string[] = [];
     const inspectStore = (dataDir: string) => {
       seen.push(dataDir);
       return HEALTHY_STORE;
     };
-    expect(run(["doctor", "--data-dir", "/tmp/custom"], io, { ...HOST, inspectStore })).toBe(0);
-    expect(run(["doctor", "--data-dir=/tmp/other"], io, { ...HOST, inspectStore })).toBe(0);
+    expect(await run(["doctor", "--data-dir", "/tmp/custom"], io, { ...HOST, inspectStore })).toBe(
+      0,
+    );
+    expect(await run(["doctor", "--data-dir=/tmp/other"], io, { ...HOST, inspectStore })).toBe(0);
     expect(seen).toEqual(["/tmp/custom", "/tmp/other"]);
   });
 
-  it("exits 2 with usage when --data-dir has no value", () => {
+  it("exits 2 with usage when --data-dir has no value", async () => {
     const { io, err } = harness();
-    expect(run(["doctor", "--data-dir"], io, HOST)).toBe(2);
+    expect(await run(["doctor", "--data-dir"], io, HOST)).toBe(2);
     expect(err.join("\n")).toContain("--data-dir");
   });
 });
