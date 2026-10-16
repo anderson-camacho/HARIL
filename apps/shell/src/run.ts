@@ -1,4 +1,5 @@
 import type { Terminal } from "@earendil-works/pi-tui";
+import { createHarilActions } from "./actions.js";
 import { createShellApp } from "./app.js";
 import { openShellData } from "./data.js";
 import type { ShellSettings } from "./panels/index.js";
@@ -11,7 +12,8 @@ import { DEFAULT_THEME_NAME, readOptionalFile, resolveTheme } from "./theme.js";
 const EXIT_OK = 0;
 const EXIT_USAGE = 2;
 
-const USAGE = "usage: shell [--data-dir <path>] [--runtime-root <path>] [--config <path>]";
+const USAGE =
+  "usage: shell [--data-dir <path>] [--runtime-root <path>] [--config <path>] [--haril <path>]";
 const NOT_A_TERMINAL =
   "haril shell needs an interactive terminal: stdin and stdout must both be a TTY. Run it in a terminal window.";
 
@@ -32,13 +34,18 @@ interface ShellArgs {
   readonly dataDir: string | undefined;
   readonly runtimeRoot: string | undefined;
   readonly config: string | undefined;
+  // The running haril bundle; the shell's actions run its CLI (TUI-D13).
+  readonly haril: string | undefined;
 }
 
 const VALUE_FLAGS: Readonly<Record<string, keyof ShellArgs>> = {
   "--data-dir": "dataDir",
   "--runtime-root": "runtimeRoot",
   "--config": "config",
+  "--haril": "haril",
 };
+
+const DEFAULT_MODEL_ENV = "HARIL_DEFAULT_MODEL";
 
 export async function runShell(argv: readonly string[], deps: ShellRunDeps): Promise<number> {
   const args = parseArgs(argv);
@@ -82,6 +89,8 @@ export async function runShell(argv: readonly string[], deps: ShellRunDeps): Pro
       banner: { isolation: "N0", pendingApprovals: 0 },
       data,
       settings,
+      actions: createHarilActions({ harilEntry: args.haril }),
+      defaultModel: nonEmpty(deps.env?.[DEFAULT_MODEL_ENV]),
     });
     app.start();
     await app.done;
@@ -97,6 +106,7 @@ function parseArgs(argv: readonly string[]): ShellArgs | undefined {
     dataDir: undefined,
     runtimeRoot: undefined,
     config: undefined,
+    haril: undefined,
   };
   for (let index = 0; index < argv.length; index++) {
     const flag = argv[index];
@@ -107,6 +117,10 @@ function parseArgs(argv: readonly string[]): ShellArgs | undefined {
     index++;
   }
   return values;
+}
+
+function nonEmpty(value: string | undefined): string | undefined {
+  return value === undefined || value.trim() === "" ? undefined : value.trim();
 }
 
 // The theme named by haril.json (ui.theme). A missing file means the default; an unreadable one is a warning.

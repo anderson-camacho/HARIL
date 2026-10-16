@@ -23,6 +23,8 @@ export interface ShellPorts {
   readonly stdoutIsTTY: boolean;
   // Directory of the running haril bundle: apps/haril/dist in the repository, app/<version> when installed.
   readonly bundleDir: string;
+  // The running haril bundle itself (haril.mjs). The shell runs its actions through it (TUI-D13).
+  readonly harilEntry: string;
 }
 
 function defaultShellPorts(): ShellPorts {
@@ -30,6 +32,7 @@ function defaultShellPorts(): ShellPorts {
     stdinIsTTY: process.stdin.isTTY === true,
     stdoutIsTTY: process.stdout.isTTY === true,
     bundleDir: dirname(fileURLToPath(import.meta.url)),
+    harilEntry: fileURLToPath(import.meta.url),
   };
 }
 
@@ -63,7 +66,16 @@ export async function shell(
   const dataDir = dataDirFor(host, lastValue(parsed, "--data-dir"));
   return runChild(
     entry,
-    ["--data-dir", dataDir, "--runtime-root", runtimeRoot, "--config", config],
+    [
+      "--data-dir",
+      dataDir,
+      "--runtime-root",
+      runtimeRoot,
+      "--config",
+      config,
+      "--haril",
+      ports.harilEntry,
+    ],
     io,
   );
 }

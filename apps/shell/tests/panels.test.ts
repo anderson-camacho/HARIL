@@ -71,8 +71,29 @@ describe("panel builders with a seeded store", () => {
     expect(completed).toContain("completed");
     expect(completed).toContain("fake-agent");
     const pending = lines.find((line) => line.includes(SEED_TITLES.pending));
-    expect(pending).toContain("waiting");
+    expect(pending).toContain(seeded.runningTaskId.slice(0, 8));
+    expect(pending).not.toContain("waiting");
     expect(view.items.map((item) => item.value)).toContain(seeded.pendingTaskId);
+  });
+
+  it("task detail: the dependency ids in short form, or none", () => {
+    const seeded = seedStore(dataDir);
+    const data = openShellData({
+      paths: { dataDir, runtimeRoot: undefined, configPath: undefined },
+      env: {},
+    });
+    try {
+      const pending = data.taskDetail(seeded.pendingTaskId);
+      if (pending === undefined) throw new Error("pending task not found");
+      expect(buildTaskDetailView(pending)).toContain(
+        `depends on: ${seeded.runningTaskId.slice(0, 8)}`,
+      );
+      const completed = data.taskDetail(seeded.completedTaskId);
+      if (completed === undefined) throw new Error("completed task not found");
+      expect(buildTaskDetailView(completed)).toContain("depends on: none");
+    } finally {
+      data.close();
+    }
   });
 
   it("tasks: without a scope the tasks of every project are listed", () => {

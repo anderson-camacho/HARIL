@@ -219,21 +219,26 @@ function readProviders(
   readFile: (path: string) => string | undefined,
 ): ProviderSnapshot {
   const text = configPath === undefined ? undefined : readFile(configPath);
-  if (text === undefined) {
-    const url = nonEmpty(env[GATEWAY_URL_ENV]) ?? DEFAULT_GATEWAY_URL;
-    return {
-      source: "defaults",
-      error: undefined,
-      rows: [providerRow(DEFAULT_GATEWAY_ID, url, GATEWAY_KEY_ENV, env)],
-    };
-  }
+  if (text === undefined) return readProvidersDefaults(env);
   let parsed: unknown;
   try {
     parsed = JSON.parse(text) as unknown;
   } catch {
     return { source: "file", error: "the file is not valid JSON", rows: [] };
   }
-  const checked = validateHarilConfig(parsed);
+  // The same rules as the CLI (TUI-D14): ui is allowed, and a file without providers gives the built-in defaults.
+  if (!isRecord(parsed))
+    return { source: "file", error: "the file is not a JSON object", rows: [] };
+  const unknownKeys = Object.keys(parsed).filter((key) => key !== "providers" && key !== "ui");
+  if (unknownKeys.length > 0) {
+    return {
+      source: "file",
+      error: unknownKeys.map((key) => `/${key}: unknown key`).join("; "),
+      rows: [],
+    };
+  }
+  if (!("providers" in parsed)) return readProvidersDefaults(env);
+  const checked = validateHarilConfig({ providers: parsed.providers });
   if (!checked.ok) return { source: "file", error: checked.errors.join("; "), rows: [] };
   return {
     source: "file",
@@ -242,6 +247,21 @@ function readProviders(
       providerRow(entry.id, entry.baseUrl, entry.keyEnv, env),
     ),
   };
+}
+
+function readProvidersDefaults(
+  env: Readonly<Record<string, string | undefined>>,
+): ProviderSnapshot {
+  const url = nonEmpty(env[GATEWAY_URL_ENV]) ?? DEFAULT_GATEWAY_URL;
+  return {
+    source: "defaults",
+    error: undefined,
+    rows: [providerRow(DEFAULT_GATEWAY_ID, url, GATEWAY_KEY_ENV, env)],
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function providerRow(

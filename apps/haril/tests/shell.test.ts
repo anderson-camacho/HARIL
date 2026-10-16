@@ -41,10 +41,13 @@ function host(env: Record<string, string | undefined>): HostInfo {
   };
 }
 
+// The running haril bundle, passed to the shell as --haril so its actions run the CLI (TUI-D13).
+const HARIL_ENTRY = "/nonexistent-haril-bundle/haril.mjs";
 const TTY: ShellPorts = {
   stdinIsTTY: true,
   stdoutIsTTY: true,
   bundleDir: "/nonexistent-haril-bundle",
+  harilEntry: HARIL_ENTRY,
 };
 
 // A bundle stand-in: writes its argv beside itself and exits with 7, so exit-code propagation is observable.
@@ -111,6 +114,8 @@ describe("haril shell", () => {
       runtimeRoot,
       "--config",
       join(runtimeRoot, "config", "haril.json"),
+      "--haril",
+      HARIL_ENTRY,
     ]);
   });
 
@@ -125,7 +130,7 @@ describe("haril shell", () => {
       TTY,
     );
     const argv = JSON.parse(readFileSync(join(root, "bundle", "argv.json"), "utf8")) as string[];
-    expect(argv.slice(argv.indexOf("--config") + 1)).toEqual([config]);
+    expect(argv[argv.indexOf("--config") + 1]).toBe(config);
     expect(argv).toContain("--data-dir");
   });
 

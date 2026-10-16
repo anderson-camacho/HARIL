@@ -1,4 +1,7 @@
 import { type Component, matchesKey, type Terminal, TuiMainScreen } from "@earendil-works/pi-tui";
+import { createHarilActions, type ShellActions } from "./actions.js";
+import { AddTaskForm, addTaskArgs } from "./add-task.js";
+import { saveThemeChoice } from "./config-file.js";
 import type { ShellData, ShellSnapshot, TaskDetailView } from "./data.js";
 import { fit, runtimeState, wrap } from "./format.js";
 import { HELP_LINES } from "./help.js";
@@ -11,7 +14,7 @@ import {
   type PanelView,
   type ShellSettings,
 } from "./panels/index.js";
-import type { Theme } from "./theme.js";
+import { readOptionalFile, resolveTheme, type Theme } from "./theme.js";
 
 // The shell app (TUI-T3): header, banner, tab strip, the active panel's body and a footer with its keys. The app only
 // reads through ShellData; its state is the selected panel, one cursor and scroll offset per panel, the project filter,
@@ -30,6 +33,10 @@ export interface ShellAppOptions {
   readonly warning?: string;
   readonly data: ShellData;
   readonly settings: ShellSettings;
+  // Runs the CLI for the actions (TUI-D13). Without it, an action reports that it is not available.
+  readonly actions?: ShellActions;
+  // HARIL_DEFAULT_MODEL as the shell received it: prefills the model of the add-task form.
+  readonly defaultModel?: string;
 }
 
 export interface ShellApp {
@@ -65,15 +72,26 @@ function motionOf(input: string, pages: number): Motion | undefined {
 
 const NUMBER_KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9"] as const;
 const FOOTER_TAIL = ["r reload", "? help", "q quit"] as const;
+const FORM_FOOTER = "Enter add task · Tab next field · Esc cancel · Ctrl+C quit";
+const THEMES_PANEL = PANELS.findIndex((entry) => entry.id === "themes");
+const NO_PROJECT_MESSAGE =
+  "no project yet; create one with: haril project init <path> --name <name>";
+const SEVERAL_PROJECTS_MESSAGE =
+  "several projects: choose one on Projects (Enter), then press a to add a task";
+const NO_ACTIONS: ShellActions = createHarilActions({ harilEntry: undefined });
 
 export function createShellApp(options: ShellAppOptions): ShellApp {
-  const { terminal, theme, banner, data, settings, warning } = options;
+  const { terminal, banner, data, warning } = options;
+  const actions = options.actions ?? NO_ACTIONS;
   const tui = new TuiMainScreen(terminal);
   let resolveDone: () => void = () => {};
   const done = new Promise<void>((resolve) => {
     resolveDone = resolve;
   });
 
+  // The theme and the settings change when the user applies a theme (TUI-D14), so they are state of the app.
+  let theme: Theme = options.theme;
+  let settings: ShellSettings = options.settings;
   let snapshot: ShellSnapshot = data.load(undefined);
   let panel = 0;
   let scope: string | undefined;
@@ -83,6 +101,10 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
   let textOffset = 0;
   let helpOpen = false;
   let quitting = false;
+  // The add-task form while it is open, and one line of outcome under the tabs (TUI-D13).
+  let form: AddTaskForm | undefined;
+  let pending = false;
+  let status: string | undefined;
 
   const activeId = () => PANELS[panel]?.id ?? "projects";
   const context = (): PanelContext => ({ snapshot, settings, scope });
@@ -95,9 +117,17 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
     // Approvals do not exist in this version, so the count is always 0 (the caller passes it).
     `isolation ${banner.isolation} · ${banner.pendingApprovals} pending approvals · runtime ${runtimeState(snapshot.runtime, snapshot.loadedAt)} · project ${projectSlug()}`;
   const footerText = (): string => {
+    if (form !== undefined) return FORM_FOOTER;
     if (helpOpen) return "↑↓ scroll · Esc close help · q quit";
     if (detail !== undefined) return "↑↓ scroll · Esc back · r reload · q quit";
-    return [...activeView().keys, "↑↓ move", "Tab next panel", ...FOOTER_TAIL].join(" · ");
+    return [
+      ...activeView().keys,
+      "↑↓ move",
+      "Tab next panel",
+      "a add task",
+      "t themes",
+      ...FOOTER_TAIL,
+    ].join(" · ");
   };
   const pageSize = (columns: number, rows: number): number =>
     Math.max(1, bodyHeight(columns, rows) - 1);
@@ -109,16 +139,24 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
         PANELS.map((entry) => entry.label),
         columns,
       ).length +
-      (warning === undefined ? 0 : wrap(warning, columns).length)
+      (warning === undefined ? 0 : wrap(warning, columns).length) +
+      (status === undefined ? 0 : wrap(status, columns).length)
     );
   }
 
+  // The footer takes as many lines as its keys need, so the body gives up the same lines.
   function bodyHeight(columns: number, rows: number): number {
-    return Math.max(1, rows - chromeTop(columns) - 1);
+    return Math.max(1, rows - chromeTop(columns) - wrap(footerText(), columns).length);
   }
 
-  // The body: help or task detail as text, otherwise the active panel with its cursor.
+  // The body: the add-task form, help or task detail as text, otherwise the active panel with its cursor.
   function bodyLines(columns: number, height: number): FrameLine[] {
+    if (form !== undefined) {
+      return form
+        .lines()
+        .slice(0, height)
+        .map((line) => [segment(fit(line, columns), line.startsWith("> ") ? "accent" : "text")]);
+    }
     if (helpOpen || detail !== undefined) {
       const lines = (
         helpOpen || detail === undefined ? [...HELP_LINES] : buildTaskDetailView(detail)
@@ -173,11 +211,14 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
     if (warning !== undefined) {
       for (const part of wrap(warning, columns)) lines.push([segment(part, "warning")]);
     }
+    if (status !== undefined) {
+      for (const part of wrap(status, columns)) lines.push([segment(part, "accent")]);
+    }
     const height = bodyHeight(columns, rows);
     const body = bodyLines(columns, height);
     while (body.length < height) body.push([segment("", "text")]);
     lines.push(...body);
-    lines.push([segment(fit(footerText(), columns), "muted")]);
+    for (const part of wrap(footerText(), columns)) lines.push([segment(part, "muted")]);
     return lines;
   }
 
@@ -215,10 +256,87 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
     if (detail !== undefined) detail = data.taskDetail(detail.detail.taskId);
   }
 
-  // Enter: on Projects it sets the filter (the first row is all projects); on Tasks and Agents it opens the detail.
+  // a: the add-task form for the project the filter names, or for the only project. Several projects and no filter
+  // is a message: the shell never guesses where a task goes (TUI-D13).
+  function openAddTask(): void {
+    helpOpen = false;
+    detail = undefined;
+    textOffset = 0;
+    if (pending) return;
+    if (snapshot.projects.length === 0) {
+      status = NO_PROJECT_MESSAGE;
+      return;
+    }
+    const chosen =
+      snapshot.projects.find((project) => project.projectId === scope) ??
+      (snapshot.projects.length === 1 ? snapshot.projects[0] : undefined);
+    if (chosen === undefined) {
+      status = SEVERAL_PROJECTS_MESSAGE;
+      return;
+    }
+    form = new AddTaskForm({ projectSlug: chosen.slug, defaultModel: options.defaultModel });
+    status = undefined;
+  }
+
+  // Runs haril task add in the background. The outcome is one line; then the store is read again (TUI-D13).
+  function submitForm(): void {
+    const current = form;
+    if (current === undefined || pending) return;
+    const built = addTaskArgs(current.values(), {
+      slug: current.projectSlug,
+      dataDir: settings.dataDir,
+    });
+    if (!built.ok) {
+      status = built.message;
+      return;
+    }
+    pending = true;
+    status = "adding task...";
+    void actions.run(built.args).then((outcome) => {
+      pending = false;
+      if (quitting) return;
+      if (outcome.ok && form === current) form = undefined;
+      status = outcome.message;
+      reload();
+      tui.requestRender();
+    });
+  }
+
+  // Applies a theme now and writes ui.theme (TUI-D14). A theme that cannot be loaded is reported and not saved.
+  function applyTheme(name: string): void {
+    if (settings.configPath === undefined) {
+      status = `theme ${name} not saved: the shell has no config file (start it with haril shell)`;
+      return;
+    }
+    const resolution = resolveTheme({
+      name,
+      runtimeRoot: settings.runtimeRoot,
+      readFile: readOptionalFile,
+    });
+    if (resolution.warning !== undefined) {
+      status = resolution.warning;
+      return;
+    }
+    try {
+      saveThemeChoice(settings.configPath, name);
+    } catch (error) {
+      status = `theme ${name} not saved: ${error instanceof Error ? error.message : String(error)}`;
+      return;
+    }
+    theme = resolution.theme;
+    settings = { ...settings, themeName: name, themeLabel: resolution.theme.name };
+    status = `theme ${name} saved`;
+  }
+
+  // Enter: on Projects it sets the filter (the first row is all projects); on Tasks and Agents it opens the detail;
+  // on Themes it applies the theme.
   function enter(): void {
     const item = activeView().items[cursors[panel] ?? 0];
     if (item === undefined || item.value === undefined) return;
+    if (activeId() === "themes") {
+      applyTheme(item.value);
+      return;
+    }
     if (activeId() === "projects") {
       scope = item.value === "" ? undefined : item.value;
       snapshot = data.load(scope);
@@ -247,6 +365,15 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
       applyMotion(motion);
       return;
     }
+    if (matchesKey(input, "a")) {
+      openAddTask();
+      return;
+    }
+    if (matchesKey(input, "t")) {
+      helpOpen = false;
+      selectPanel(THEMES_PANEL);
+      return;
+    }
     if (helpOpen) return;
     if (matchesKey(input, "r")) {
       reload();
@@ -269,6 +396,30 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
     if (matchesKey(input, "enter")) enter();
   }
 
+  // While the form is open every key is the form's, except Ctrl+C: q and the digits are text in the title.
+  function handleFormKey(input: string): void {
+    const current = form;
+    if (current === undefined || pending) return;
+    if (matchesKey(input, "escape")) {
+      form = undefined;
+      status = "add task cancelled";
+      return;
+    }
+    if (matchesKey(input, "enter")) {
+      submitForm();
+      return;
+    }
+    if (matchesKey(input, "tab")) {
+      current.next();
+      return;
+    }
+    if (matchesKey(input, "shift+tab")) {
+      current.previous();
+      return;
+    }
+    current.handleInput(input);
+  }
+
   function applyMotion(motion: Motion): void {
     if (motion.kind === "step") move(motion.delta);
     else jump(motion.toEnd);
@@ -289,11 +440,12 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
   tui.addChild(root);
   tui.addInputListener((input) => {
     if (quitting) return { consume: true };
-    if (matchesKey(input, "q") || matchesKey(input, "ctrl+c")) {
+    if (matchesKey(input, "ctrl+c") || (form === undefined && matchesKey(input, "q"))) {
       quit();
       return { consume: true };
     }
-    handleKey(input, terminal.columns, terminal.rows);
+    if (form !== undefined) handleFormKey(input);
+    else handleKey(input, terminal.columns, terminal.rows);
     tui.requestRender();
     return { consume: true };
   });

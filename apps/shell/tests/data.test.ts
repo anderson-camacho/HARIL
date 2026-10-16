@@ -163,6 +163,34 @@ describe("providers and themes", () => {
     }
   });
 
+  it("reads a haril.json with only ui.theme as the defaults, the same as the CLI (TUI-D14)", () => {
+    mkdirSync(join(runtimeRoot, "config"), { recursive: true });
+    writeFileSync(
+      join(runtimeRoot, "config", "haril.json"),
+      JSON.stringify({ ui: { theme: "haril-light" } }),
+    );
+    const data = openShellData({ paths: paths(), env: {} });
+    try {
+      const snapshot = data.load(undefined);
+      expect(snapshot.providers.error).toBeUndefined();
+      expect(snapshot.providers.source).toBe("defaults");
+      expect(snapshot.providers.rows.map((row) => row.id)).toEqual(["cliproxy"]);
+    } finally {
+      data.close();
+    }
+  });
+
+  it("names an unknown top-level key as a config error", () => {
+    mkdirSync(join(runtimeRoot, "config"), { recursive: true });
+    writeFileSync(join(runtimeRoot, "config", "haril.json"), JSON.stringify({ bogus: 1 }));
+    const data = openShellData({ paths: paths(), env: {} });
+    try {
+      expect(data.load(undefined).providers.error).toContain("/bogus: unknown key");
+    } finally {
+      data.close();
+    }
+  });
+
   it("lists user theme names from config/themes", () => {
     writeFileSync(join(runtimeRoot, "config", "themes", "ocean.json"), "{}");
     writeFileSync(join(runtimeRoot, "config", "themes", "notes.txt"), "not a theme");

@@ -67,8 +67,9 @@ export function themesView(context: PanelContext): PanelView {
     header: [`theme in use: ${settings.themeLabel} (ui.theme in haril.json)`],
     items: names.map(({ name, origin }) => ({
       text: `${name}  ${origin}${name === settings.themeLabel ? "  (current)" : ""}`,
+      value: name,
     })),
-    keys: [],
+    keys: ["Enter apply theme and save it"],
   };
 }
 
