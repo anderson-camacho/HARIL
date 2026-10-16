@@ -96,6 +96,8 @@ export interface TaskDetail extends TaskRecord {
   readonly retryReason: RetryReason | null;
   readonly blockReason: BlockReason | null;
   readonly result: JsonObject | null;
+  // The ids of the tasks this task depends on, in the order they were declared (TUI-D4). Empty when it has none.
+  readonly dependsOn: readonly string[];
 }
 
 export interface TaskFilter {

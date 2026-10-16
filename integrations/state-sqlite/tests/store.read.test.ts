@@ -148,3 +148,40 @@ describe("runtime.leaseSummary", () => {
     });
   });
 });
+
+describe("tasks.get dependsOn (TUI-D4 dependencies)", () => {
+  it("returns the dependency task ids in the order they were stored, and [] when there are none", () => {
+    const alpha = store.projects.register({ slug: "alpha", name: "Alpha", rootPath: "/a" });
+    rawWrite((db) => {
+      insertTask(db, {
+        taskId: "T-1",
+        projectId: alpha.projectId,
+        goal: "base",
+        state: "ready",
+        seq: 1,
+      });
+      insertTask(db, {
+        taskId: "T-2",
+        projectId: alpha.projectId,
+        goal: "middle",
+        state: "ready",
+        seq: 2,
+      });
+      insertTask(db, {
+        taskId: "T-3",
+        projectId: alpha.projectId,
+        goal: "last",
+        state: "pending",
+        seq: 3,
+      });
+      const link = db.prepare(
+        "INSERT INTO task_dependencies (task_id, depends_on_task_id) VALUES (?, ?)",
+      );
+      link.run("T-3", "T-2");
+      link.run("T-3", "T-1");
+    });
+    expect(store.tasks.get("T-3")?.dependsOn).toEqual(["T-2", "T-1"]);
+    expect(store.tasks.get("T-1")?.dependsOn).toEqual([]);
+    expect(store.tasks.get("T-missing")).toBeUndefined();
+  });
+});

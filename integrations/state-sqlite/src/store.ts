@@ -102,7 +102,7 @@ interface CommandRow extends Omit<CommandRecord, "args" | "projectId"> {
   readonly args: string;
 }
 
-interface TaskDetailRow extends Omit<TaskDetail, "result" | "error"> {
+interface TaskDetailRow extends Omit<TaskDetail, "result" | "error" | "dependsOn"> {
   readonly result: string | null;
   readonly errorJson: string | null;
 }
@@ -320,10 +320,16 @@ export class SqliteStore implements Store {
       .get(taskId) as unknown as TaskDetailRow | undefined;
     if (row === undefined) return undefined;
     const { result, errorJson, ...rest } = row;
+    const dependencies = this.db
+      .prepare(
+        "SELECT depends_on_task_id AS taskId FROM task_dependencies WHERE task_id = ? ORDER BY rowid",
+      )
+      .all(taskId) as unknown as Array<{ taskId: string }>;
     return {
       ...rest,
       result: result === null ? null : (JSON.parse(result) as JsonObject),
       error: errorJson === null ? null : (JSON.parse(errorJson) as TaskDetail["error"]),
+      dependsOn: dependencies.map((dependency) => dependency.taskId),
     };
   }
 
