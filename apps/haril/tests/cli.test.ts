@@ -84,6 +84,10 @@ describe("version and help", () => {
     expect(text).toContain("doctor");
     expect(text).toContain("states");
     expect(text).toContain("plan validate");
+    expect(text).toContain("project init");
+    expect(text).toContain("task add");
+    expect(text).toContain("plan import");
+    expect(text).toContain("status");
   });
 
   it("--help is the same as help", () => {

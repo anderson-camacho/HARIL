@@ -10,9 +10,12 @@ import type {
   Ids,
   ProjectRecord,
   RegisterProjectInput,
+  RuntimeLeaseSummary,
   Store,
   StoreGate,
   StoreInfo,
+  TaskFilter,
+  TaskRecord,
 } from "@haril/core/ports";
 import { readPragmas, readUserVersion } from "./connection.js";
 import { StoreError } from "./errors.js";
@@ -29,7 +32,13 @@ interface StoreOptions {
 }
 
 const PROJECT_COLUMNS =
-  "project_id AS projectId, slug, name, root_path AS rootPath, created_at AS createdAt";
+  "project_id AS projectId, slug, name, root_path AS rootPath, manifest_sha256 AS manifestSha256, created_at AS createdAt";
+
+const TASK_COLUMNS =
+  "task_id AS taskId, project_id AS projectId, goal, state, agent_ref AS agentRef, created_at AS createdAt";
+
+const LEASE_COLUMNS =
+  "instance_id AS instanceId, pid, started_at AS startedAt, heartbeat_at AS heartbeatAt, expires_at AS expiresAt, status, node_version AS nodeVersion, sqlite_version AS sqliteVersion";
 
 const COMMAND_COLUMNS =
   "command_id AS commandId, project_id AS projectId, type, args, idempotency_key AS idempotencyKey, request_hash AS requestHash, enqueued_at AS enqueuedAt";
@@ -59,6 +68,8 @@ interface EventRow
   readonly agentId: string | null;
 }
 
+type LeaseRow = Extract<RuntimeLeaseSummary, { status: "active" | "released" | "lost" }>;
+
 export class SqliteStore implements Store {
   private readonly db: DatabaseSync;
   private readonly clock: Clock;
@@ -69,6 +80,8 @@ export class SqliteStore implements Store {
 
   readonly projects: Store["projects"];
   readonly commands: Store["commands"];
+  readonly tasks: Store["tasks"];
+  readonly runtime: Store["runtime"];
   readonly events: Store["events"];
 
   constructor(options: StoreOptions) {
@@ -81,11 +94,18 @@ export class SqliteStore implements Store {
     this.projects = {
       register: (input) => this.registerProject(input),
       list: () => this.listProjects(),
-      getBySlug: (slug) => this.findProject(slug),
+      getBySlug: (slug) => this.findProject("slug", slug),
+      getByRootPath: (rootPath) => this.findProject("root_path", rootPath),
     };
     this.commands = {
       enqueue: (input) => this.enqueueCommand(input),
       listQueued: () => this.listQueuedCommands(),
+    };
+    this.tasks = {
+      list: (filter) => this.listTasks(filter),
+    };
+    this.runtime = {
+      leaseSummary: () => this.leaseSummary(),
     };
     this.events = {
       append: (input) => this.appendEvent(input),
@@ -108,14 +128,25 @@ export class SqliteStore implements Store {
   }
 
   private registerProject(input: RegisterProjectInput): ProjectRecord {
-    const projectId = this.ids.next();
+    const projectId = input.projectId ?? this.ids.next();
     const createdAt = this.clock.now();
+    const manifestSha256 = input.manifestSha256 ?? null;
+    const trustedAt = manifestSha256 === null ? null : createdAt;
     try {
       this.db
         .prepare(
-          "INSERT INTO projects (project_id, slug, name, root_path, created_at) VALUES (?, ?, ?, ?, ?)",
+          "INSERT INTO projects (project_id, slug, name, root_path, manifest_sha256, manifest_json, trusted_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
-        .run(projectId, input.slug, input.name, input.rootPath, createdAt);
+        .run(
+          projectId,
+          input.slug,
+          input.name,
+          input.rootPath,
+          manifestSha256,
+          input.manifestJson ?? null,
+          trustedAt,
+          createdAt,
+        );
     } catch (error) {
       if (isUniqueViolation(error)) {
         throw new StoreError(
@@ -128,7 +159,14 @@ export class SqliteStore implements Store {
       }
       throw error;
     }
-    return { projectId, slug: input.slug, name: input.name, rootPath: input.rootPath, createdAt };
+    return {
+      projectId,
+      slug: input.slug,
+      name: input.name,
+      rootPath: input.rootPath,
+      manifestSha256,
+      createdAt,
+    };
   }
 
   private listProjects(): ProjectRecord[] {
@@ -137,10 +175,30 @@ export class SqliteStore implements Store {
       .all() as unknown as ProjectRecord[];
   }
 
-  private findProject(slug: string): ProjectRecord | undefined {
+  // `column` is one of two fixed names chosen by the Store, never caller input.
+  private findProject(column: "slug" | "root_path", value: string): ProjectRecord | undefined {
     return this.db
-      .prepare(`SELECT ${PROJECT_COLUMNS} FROM projects WHERE slug = ?`)
-      .get(slug) as unknown as ProjectRecord | undefined;
+      .prepare(`SELECT ${PROJECT_COLUMNS} FROM projects WHERE ${column} = ?`)
+      .get(value) as unknown as ProjectRecord | undefined;
+  }
+
+  private listTasks(filter?: TaskFilter): TaskRecord[] {
+    return this.db
+      .prepare(
+        `SELECT ${TASK_COLUMNS} FROM tasks WHERE (? IS NULL OR project_id = ?) ORDER BY created_seq`,
+      )
+      .all(filter?.projectId ?? null, filter?.projectId ?? null) as unknown as TaskRecord[];
+  }
+
+  // An active lease wins; otherwise the newest lease tells whether the last runtime was released or lost.
+  private leaseSummary(): RuntimeLeaseSummary {
+    const row = this.db
+      .prepare(
+        `SELECT ${LEASE_COLUMNS} FROM runtime_leases ORDER BY (status = 'active') DESC, runtime_epoch DESC LIMIT 1`,
+      )
+      .get() as unknown as LeaseRow | undefined;
+    if (row === undefined) return { status: "none" };
+    return row;
   }
 
   private enqueueCommand(input: EnqueueCommandInput): EnqueueResult {

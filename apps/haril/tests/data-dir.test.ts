@@ -50,11 +50,29 @@ describe("resolveDataDir", () => {
     expect(result.dataDir).toBe("C:\\Users\\tester\\AppData\\Local\\HARIL\\data");
   });
 
-  it("other platforms default to ~/.local/share/haril", () => {
+  it("other platforms default to ~/.local/share/haril/data", () => {
     const result = resolveDataDir({ env: {}, platform: "linux", homeDir: "/home/tester" });
     expect(result).toEqual({
-      dataDir: "/home/tester/.local/share/haril",
+      dataDir: "/home/tester/.local/share/haril/data",
       source: "platform-default",
     });
+  });
+
+  it("other platforms respect XDG_DATA_HOME: $XDG_DATA_HOME/haril/data", () => {
+    const result = resolveDataDir({
+      env: { XDG_DATA_HOME: "/srv/xdg" },
+      platform: "linux",
+      homeDir: "/home/tester",
+    });
+    expect(result).toEqual({ dataDir: "/srv/xdg/haril/data", source: "platform-default" });
+  });
+
+  it("an empty XDG_DATA_HOME is ignored", () => {
+    const result = resolveDataDir({
+      env: { XDG_DATA_HOME: "" },
+      platform: "linux",
+      homeDir: "/home/tester",
+    });
+    expect(result.dataDir).toBe("/home/tester/.local/share/haril/data");
   });
 });

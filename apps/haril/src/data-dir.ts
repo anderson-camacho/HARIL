@@ -35,5 +35,8 @@ function platformDefault(input: DataDirInput): string {
         : win32.join(input.homeDir, "AppData", "Local");
     return win32.join(base, "HARIL", "data");
   }
-  return posix.join(input.homeDir, ".local", "share", "haril");
+  // XDG base directory: $XDG_DATA_HOME/haril/data when set, else ~/.local/share/haril/data (M1-D8).
+  const xdg = input.env.XDG_DATA_HOME;
+  const base = xdg !== undefined && xdg !== "" ? xdg : posix.join(input.homeDir, ".local", "share");
+  return posix.join(base, "haril", "data");
 }
