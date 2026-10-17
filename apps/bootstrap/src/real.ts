@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { ExecPort, FetchPort, FsPort } from "./ports.js";
 
@@ -23,6 +23,9 @@ export const realFs: FsPort = {
   writeFile: async (path, data) => {
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, data);
+  },
+  setExecutable: async (path) => {
+    if (process.platform !== "win32") await chmod(path, 0o755);
   },
   mkdirp: async (path) => {
     await mkdir(path, { recursive: true });

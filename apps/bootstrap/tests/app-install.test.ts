@@ -103,6 +103,19 @@ describe("installApp", () => {
     );
   });
 
+  it("marks only the sh launcher executable, also when a repeated install skips unchanged files", async () => {
+    const fs = createMemoryFs();
+    sourceTree(fs);
+
+    await installApp(installDeps(fs));
+    expect([...fs.executables]).toEqual([`${ROOT}\\bin\\haril`]);
+
+    // An install from before this rule left the launcher without the mode bit: the same bytes still get it.
+    fs.executables.clear();
+    await installApp(installDeps(fs));
+    expect([...fs.executables]).toEqual([`${ROOT}\\bin\\haril`]);
+  });
+
   it("points the shims at the isolated Node of runtime/manifest.json when it exists", async () => {
     const fs = createMemoryFs();
     sourceTree(fs);
