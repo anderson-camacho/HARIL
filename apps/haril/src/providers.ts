@@ -90,7 +90,12 @@ export function loadProviderConfig(host: HostInfo): ProviderLoad {
   } catch {
     return { ok: false, path, errors: ["the file is not valid JSON"] };
   }
-  const checked = validateHarilConfig(parsed);
+  if (!isRecord(parsed)) return { ok: false, path, errors: ["/: must be a JSON object"] };
+  const ownErrors = ownKeyErrors(parsed);
+  if (ownErrors.length > 0) return { ok: false, path, errors: ownErrors };
+  // A file without providers (for example one that only holds ui.theme) gives the same defaults as no file.
+  if (!("providers" in parsed)) return defaultProviders(env, path);
+  const checked = validateHarilConfig({ providers: parsed.providers });
   if (!checked.ok) return { ok: false, path, errors: checked.errors };
   return {
     ok: true,
@@ -103,6 +108,42 @@ export function loadProviderConfig(host: HostInfo): ProviderLoad {
       apiKey: entry.keyEnv === undefined ? undefined : nonEmpty(env[entry.keyEnv]),
     })),
   };
+}
+
+// The top-level keys haril.json may hold: providers (the provider schema) and ui (TUI-D14). Anything else is refused.
+const TOP_LEVEL_KEYS: ReadonlySet<string> = new Set(["providers", "ui"]);
+const THEME_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const UI_KEYS: ReadonlySet<string> = new Set(["theme"]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// The rules the provider schema does not own: the top-level keys, the literal apiKey refusal and the ui object.
+function ownKeyErrors(value: Record<string, unknown>): string[] {
+  const errors: string[] = [];
+  if ("apiKey" in value) {
+    errors.push("/apiKey: keys are never stored in haril.json; use keyEnv");
+  }
+  for (const key of Object.keys(value)) {
+    if (key !== "apiKey" && !TOP_LEVEL_KEYS.has(key)) errors.push(`/${key}: unknown key`);
+  }
+  if ("ui" in value) errors.push(...uiErrors(value.ui));
+  return errors;
+}
+
+function uiErrors(ui: unknown): string[] {
+  if (!isRecord(ui)) return ["/ui: must be an object"];
+  const errors: string[] = [];
+  for (const key of Object.keys(ui)) {
+    if (!UI_KEYS.has(key)) errors.push(`/ui/${key}: unknown key`);
+  }
+  if ("theme" in ui && (typeof ui.theme !== "string" || !THEME_NAME_PATTERN.test(ui.theme))) {
+    errors.push(
+      "/ui/theme: must be a theme name (letters, digits, '.', '_' or '-', starting with a letter or digit)",
+    );
+  }
+  return errors;
 }
 
 function defaultProviders(

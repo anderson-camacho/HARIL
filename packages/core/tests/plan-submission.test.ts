@@ -59,7 +59,7 @@ describe("checkPlanSubmission", () => {
 
   it("rejects a dependency cycle and names the cycle in the reason", () => {
     const plan = validPlan();
-    const tasks = plan["tasks"] as FixtureTask[];
+    const tasks = plan.tasks as FixtureTask[];
     tasks[0] = { ...tasks[0], dependsOn: ["verify-readme"] } as FixtureTask;
     const result = checkPlanSubmission(plan);
     expect(result.ok).toBe(false);

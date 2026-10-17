@@ -1,0 +1,16 @@
+{
+  "name": "haril-light",
+  "appearance": "light",
+  "vars": {
+    "text": "#1f2430",
+    "muted": "#5b6474",
+    "violet": "#6d3fd1",
+    "amber": "#9a5b00"
+  },
+  "colors": {
+    "accent": "violet",
+    "text": "text",
+    "muted": "muted",
+    "warning": "amber"
+  }
+}

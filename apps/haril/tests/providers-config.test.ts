@@ -149,3 +149,65 @@ describe("haril.json", () => {
     expect(providers.find((p) => p.id === "openrouter")?.keyEnv).toBeUndefined();
   });
 });
+
+// The ui object (TUI-D14): the shell stores ui.theme here. A file without providers means the built-in defaults.
+describe("haril.json ui object (TUI-D14)", () => {
+  it("accepts ui.theme next to providers", () => {
+    const path = writeConfig(
+      JSON.stringify({
+        ui: { theme: "haril-light" },
+        providers: [{ id: "lan", baseUrl: "http://127.0.0.1:8000/v1" }],
+      }),
+    );
+    const loaded = loadProviderConfig(hostWith({ HARIL_CONFIG: path }));
+    expect(loaded.ok && loaded.source).toBe("file");
+    expect(loaded.ok && loaded.providers.map((p) => p.id)).toEqual(["lan"]);
+  });
+
+  it("a file with only ui gives the same built-in defaults as no file", () => {
+    const withoutFile = loadProviderConfig(hostWith({}));
+    const path = writeConfig(JSON.stringify({ ui: { theme: "haril-dark" } }));
+    const loaded = loadProviderConfig(hostWith({ HARIL_CONFIG: path }));
+    expect(loaded).toEqual({ ...withoutFile, path });
+    expect(loaded.ok && loaded.source).toBe("defaults");
+  });
+
+  it("an empty object gives the built-in defaults too", () => {
+    const path = writeConfig("{}");
+    const loaded = loadProviderConfig(hostWith({ HARIL_CONFIG: path }));
+    expect(loaded.ok && loaded.providers.map((p) => p.id)).toEqual(["cliproxy"]);
+  });
+
+  it("still refuses an unknown top-level key and a literal apiKey", () => {
+    const unknown = loadProviderConfig(
+      hostWith({
+        HARIL_CONFIG: writeConfig(
+          JSON.stringify({
+            providers: [{ id: "lan", baseUrl: "http://127.0.0.1:8000/v1" }],
+            bogus: 1,
+          }),
+        ),
+      }),
+    );
+    expect(unknown.ok).toBe(false);
+    expect(!unknown.ok && unknown.errors.join("\n")).toContain("/bogus");
+    const apiKey = loadProviderConfig(
+      hostWith({ HARIL_CONFIG: writeConfig(JSON.stringify({ apiKey: "sk-x", ui: {} })) }),
+    );
+    expect(apiKey.ok).toBe(false);
+    expect(!apiKey.ok && apiKey.errors.join("\n")).toContain("keys are never stored in haril.json");
+  });
+
+  it("refuses an invalid ui.theme, an unknown ui key and a ui that is not an object", () => {
+    for (const ui of [{ theme: "../evil" }, { theme: "" }, { theme: 3 }, { colour: "x" }, "dark"]) {
+      const loaded = loadProviderConfig(
+        hostWith({ HARIL_CONFIG: writeConfig(JSON.stringify({ ui })) }),
+      );
+      expect(loaded.ok, JSON.stringify(ui)).toBe(false);
+    }
+    const loaded = loadProviderConfig(
+      hostWith({ HARIL_CONFIG: writeConfig(JSON.stringify({ ui: { theme: "a b" } })) }),
+    );
+    expect(!loaded.ok && loaded.errors.join("\n")).toContain("/ui/theme");
+  });
+});

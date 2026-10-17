@@ -7,6 +7,7 @@ import { metrics } from "./commands/metrics.js";
 import { models } from "./commands/models.js";
 import { plan } from "./commands/plan.js";
 import { project } from "./commands/project.js";
+import { shell } from "./commands/shell.js";
 import { start } from "./commands/start.js";
 import { states } from "./commands/states.js";
 import { status } from "./commands/status.js";
@@ -47,6 +48,7 @@ const HELP_LINES = [
   "  haril status [--project <slug>] [--json]   projects, tasks, queued commands and runtime",
   "  haril metrics [--project <slug>] [--json]   runs, retries and success rate from the event log",
   "  haril events [--project <slug>] [--task <id>] [--limit <n>] [--json]   the newest events, oldest first",
+  "  haril shell [--data-dir <path>]   open the interactive terminal UI",
   "  haril help                       print this help",
 ];
 
@@ -112,6 +114,8 @@ function dispatch(argv: readonly string[], io: CliIo, host: HostInfo): number | 
       return events(rest, io, host);
     case "start":
       return start(rest, io, host);
+    case "shell":
+      return shell(rest, io, host);
     default:
       io.err(`haril: unknown command "${command}"`);
       printHelp(io.err);
