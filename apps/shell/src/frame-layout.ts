@@ -5,7 +5,7 @@ import type { ThemeToken } from "./theme.js";
 // Layout helpers of the console frame (LD-T6b-1). pi-tui's main screen takes one component that renders whole lines,
 // so boxes and columns are drawn here, by hand, as lines of segments: a text and the theme token it is painted with.
 // Pure: they take widths, never the terminal. Every text goes through fit, the render boundary of format.ts, so a
-// line built here is never wider than asked and keeps no control character; the app colors it afterwards.
+// line built here is never wider than asked and keeps no control or format character; the app colors it afterwards.
 
 export type Tone = ThemeToken;
 

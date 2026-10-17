@@ -173,6 +173,31 @@ describe("add task with a seeded store (TUI-D13)", () => {
     await mounted.app.done;
   });
 
+  it("sends the title as its line shows it: a format character a paste brought goes as ? (LD-T6c)", async () => {
+    const entry = fakeHaril("command c-9: queued (applied by `haril start`)", 0);
+    const mounted = mount({ harilEntry: entry });
+    mounted.app.start();
+    chooseDemo(mounted);
+    mounted.terminal.send("a");
+    mounted.terminal.send("\x1b[200~Write\u{200B}docs\u{202E}now\u{E0041}\x1b[201~");
+    expect(frame(mounted)).toContain("title   Write?docs?now?_");
+    mounted.terminal.send(ENTER);
+    await waitForFrame(mounted, "queued (applied by");
+    expect(argvOf(entry)).toEqual([
+      "task",
+      "add",
+      "Write?docs?now?",
+      "--project",
+      "demo",
+      "--agent",
+      "fake:succeed",
+      "--data-dir",
+      dataDir,
+    ]);
+    mounted.terminal.send("q");
+    await mounted.app.done;
+  });
+
   it("Esc cancels the form and runs nothing", async () => {
     const entry = fakeHaril("never printed", 0);
     const mounted = mount({ harilEntry: entry });
