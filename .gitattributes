@@ -1,1 +1,3 @@
 * text=auto eol=lf
+# cmd.exe parses batch files with CRLF line endings.
+install.cmd text eol=crlf
