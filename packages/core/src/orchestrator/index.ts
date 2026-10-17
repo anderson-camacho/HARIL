@@ -71,6 +71,12 @@ export type RunEvent =
       readonly type: "task.returned";
       readonly taskId: string;
       readonly goal: string;
+    }
+  | {
+      // A decision on an approval was applied by the runtime (LD-T3). A granted plan is queued in the same turn.
+      readonly type: "approval.applied";
+      readonly approvalId: string;
+      readonly outcome: "granted" | "denied";
     };
 
 export interface RunSummary {

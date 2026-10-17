@@ -159,5 +159,7 @@ function formatEvent(event: RunEvent): string {
       return `stopping (${event.reason}): the in-flight run returns to ready`;
     case "task.returned":
       return `returned ${event.taskId} ${event.goal} to ready (stopped, no attempt charged)`;
+    case "approval.applied":
+      return `approval ${event.approvalId} ${event.outcome}: applied`;
   }
 }

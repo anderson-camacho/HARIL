@@ -14,7 +14,7 @@ export function sha256(text: string): string {
 
 // Canonical hash of a request: the same command with the same arguments has the same hash (INV-08).
 // Canonical JSON makes key order irrelevant, so a re-ordered plan file is the same request.
-function requestHash(value: unknown): string {
+export function requestHash(value: unknown): string {
   return sha256(canonicalJson(value));
 }
 

@@ -23,7 +23,6 @@ import { readOptionalFile, resolveTheme, type Theme } from "./theme.js";
 
 interface ShellBanner {
   readonly isolation: string;
-  readonly pendingApprovals: number;
 }
 
 export interface ShellAppOptions {
@@ -139,7 +138,7 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
   const bannerText = (): string =>
     // Approvals do not exist in this version, so the count is always 0 (the caller passes it). "live" shows while
     // the shell holds a subscription to the runtime (LD-T2).
-    `isolation ${banner.isolation} · ${banner.pendingApprovals} pending approvals · runtime ${runtimeState(snapshot.runtime, snapshot.loadedAt)}${liveMark()} · project ${projectSlug()}`;
+    `isolation ${banner.isolation} · ${snapshot.pendingApprovals} pending approvals · runtime ${runtimeState(snapshot.runtime, snapshot.loadedAt)}${liveMark()} · project ${projectSlug()}`;
   const footerText = (): string => {
     if (form !== undefined) return FORM_FOOTER;
     if (helpOpen) return "↑↓ scroll · Esc close help · q quit";

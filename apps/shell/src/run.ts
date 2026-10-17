@@ -86,8 +86,7 @@ export async function runShell(argv: readonly string[], deps: ShellRunDeps): Pro
       terminal: deps.createTerminal(),
       theme,
       warning: notices.length > 0 ? notices.join("; ") : undefined,
-      // Approvals do not exist in this version: the count is always 0.
-      banner: { isolation: "N0", pendingApprovals: 0 },
+      banner: { isolation: "N0" },
       data,
       settings,
       actions: createHarilActions({ harilEntry: args.haril }),

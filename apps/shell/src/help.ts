@@ -12,5 +12,5 @@ export const HELP_LINES: readonly string[] = [
   "  ?            show or hide this help",
   "  q, Ctrl+C    quit",
   "",
-  "Banner: isolation, pending approvals (0 in this version), runtime, project.",
+  "Banner: isolation, pending approvals, runtime, project.",
 ];

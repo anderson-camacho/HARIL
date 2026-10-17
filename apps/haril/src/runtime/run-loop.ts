@@ -26,6 +26,7 @@ import type {
 import { StoreError } from "@haril/state-sqlite";
 import { modelProblemOf } from "../providers.js";
 import { projectFileReader, verificationPayload } from "./acceptance.js";
+import { applyDecidedApprovals } from "./approvals.js";
 import { controlEventOf } from "./control-events.js";
 import type { RealAgentReadiness, RealAgents } from "./real-agent.js";
 import { createShutdown, RUNTIME_STOP, type Shutdown } from "./shutdown.js";
@@ -169,7 +170,9 @@ async function serve(
   let idleSince = clock.now();
   for (;;) {
     beat();
-    const applied = applyQueuedCommands(store, epoch, emit, shutdown);
+    // Decisions first: a granted plan is queued in this turn and applied by the queue step right after it (LD-T3).
+    const decided = applyDecidedApprovals(store, epoch, emit);
+    const applied = decided + applyQueuedCommands(store, epoch, emit, shutdown);
     if (shutdown.requested) {
       store.runtime.release(epoch, true);
       return "stopped";

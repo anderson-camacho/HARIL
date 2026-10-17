@@ -1,13 +1,9 @@
 import { type Plan, validatePlanSchema } from "@haril/contracts";
-import {
-  canonicalJson,
-  type PlanGraphIssue,
-  topologicalOrder,
-  validatePlanGraph,
-} from "@haril/core";
+import { type PlanGraphIssue, topologicalOrder, validatePlanGraph } from "@haril/core";
 import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_INVALID, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
-import { dataDirFor, queueCommand, sha256, withProject } from "./common.js";
+import { planSubmitKey } from "../plan-submit.js";
+import { dataDirFor, queueCommand, withProject } from "./common.js";
 
 // `haril plan validate` (M1 plan contract) and `haril plan import` (M1-T4: validate, then queue plan.submit).
 
@@ -15,10 +11,11 @@ export function plan(args: readonly string[], io: CliIo, host: HostInfo): number
   const [subcommand, ...rest] = args;
   if (subcommand === "validate") return planValidate(rest, io);
   if (subcommand === "import") return planImport(rest, io, host);
+  if (subcommand === "propose") return planPropose(rest, io, host);
   if (subcommand === undefined) io.err("haril: plan needs a subcommand");
   else io.err(`haril: unknown plan subcommand "${subcommand}"`);
   io.err(
-    "usage: haril plan validate <file> [--json] | haril plan import <file> [--project <slug>] [--json]",
+    "usage: haril plan validate <file> [--json] | haril plan import <file> [--project <slug>] [--json] | haril plan propose <file> [--project <slug>] [--json]",
   );
   return EXIT_USAGE;
 }
@@ -67,11 +64,60 @@ function planImport(args: readonly string[], io: CliIo, host: HostInfo): number 
         type: "plan.submit",
         projectId: project.projectId,
         args: { plan: checked.plan },
-        idempotencyKey: sha256(`${project.projectId}${canonicalJson(checked.plan)}`),
+        idempotencyKey: planSubmitKey(project.projectId, checked.plan),
       },
       dataDir,
     ),
   );
+}
+
+// `haril plan propose` (LD-T3): a plan file becomes a requested approval. Nothing is queued until a person grants it.
+function planPropose(args: readonly string[], io: CliIo, host: HostInfo): number {
+  const parsed = parseArgs(args, { values: ["--project", "--data-dir"], flags: ["--json"] });
+  const problem = argsProblem(parsed, io);
+  if (problem !== null) return problem;
+  const [file, ...extra] = parsed.positionals;
+  if (file === undefined || extra.length > 0) {
+    io.err("usage: haril plan propose <file> [--project <slug>] [--json]");
+    return EXIT_USAGE;
+  }
+  const json = parsed.flags.has("--json");
+  const checked = checkPlanFile(io, file, json);
+  if (typeof checked === "number") return checked;
+
+  const dataDir = dataDirFor(host, lastValue(parsed, "--data-dir"));
+  return withProject(io, host, dataDir, lastValue(parsed, "--project"), (store, project) => {
+    const proposed = store.approvals.proposePlan({
+      projectId: project.projectId,
+      plan: checked.plan,
+      requestedBy: "cli",
+    });
+    if (!proposed.ok) {
+      io.err(`haril: ${proposed.error.message}`);
+      return EXIT_INVALID;
+    }
+    const { approval, created } = proposed.value;
+    const tasks = checked.plan.tasks.length;
+    if (json) {
+      io.out(
+        JSON.stringify({
+          approvalId: approval.approvalId,
+          projectSlug: project.slug,
+          kind: approval.kind,
+          status: approval.status,
+          tasks,
+          created,
+        }),
+      );
+    } else {
+      const note = created ? "" : " (already requested)";
+      io.out(`approval ${approval.approvalId}: pending, ${tasks} tasks in ${project.slug}${note}`);
+      io.out(
+        `decide with: haril approve ${approval.approvalId}   or   haril deny ${approval.approvalId}`,
+      );
+    }
+    return EXIT_OK;
+  });
 }
 
 interface CheckedPlan {
