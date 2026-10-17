@@ -5,6 +5,8 @@ import type {
   Acceptance,
   AcceptanceCheck,
   BlockReason,
+  MemoryOrigin,
+  MemoryProviderState,
   Plan,
   RetryReason,
   TaskKind,
@@ -576,6 +578,138 @@ export interface StoreMaintenance {
   checkpoint(): { readonly walBytes: number | null };
 }
 
+// The memory module of the Store (MC-T4; task-store.md 4.10, DATA_MODEL 5.7, memory.md 4.4): the outbox, the only way
+// a write reaches a memory provider, its pointers, and the provider state the CLI reads without a runtime. The outbox
+// is transactional state, never a consumer of events. Every write is fenced by the runtime epoch.
+export type OutboxOp = "store" | "summarize" | "forget" | "consolidate";
+export type OutboxStatus = "pending" | "sending" | "delivered" | "needs_review" | "dead";
+
+export interface OutboxEnqueue {
+  // Ids.next() at enqueue time, reused on every retry (ADR-0008 D4); the provider deduplicates by it.
+  readonly operationId: string;
+  readonly projectId: string;
+  readonly op: OutboxOp;
+  // The MemoryWrite, SummarizeWrite, ForgetRequest or ConsolidationRequest, already redacted (RF-226).
+  readonly payload: JsonObject;
+  readonly schemaVersion: number;
+  // The HARIL session of the row: a summarize waits for the other rows of its session (CM-09).
+  readonly sessionId: string | null;
+  // The domain row it mirrors (decisions): one outbox row per source row.
+  readonly source?: { readonly table: string; readonly id: string };
+}
+
+export interface OutboxRow {
+  readonly outboxSeq: number;
+  readonly operationId: string;
+  readonly projectId: string;
+  readonly op: OutboxOp;
+  readonly payload: JsonObject;
+  readonly schemaVersion: number;
+  readonly sessionId: string | null;
+  readonly status: OutboxStatus;
+  readonly attempts: number;
+  readonly nextAttemptAt: number;
+  // A redacted code, never a message.
+  readonly lastError: string | null;
+  readonly receipt: JsonObject | null;
+  readonly deliveredProvider: string | null;
+  readonly enqueuedAt: number;
+  readonly deliveredAt: number | null;
+}
+
+// A pointer to a record of a provider, without its content (13 sec4.9 rule 4).
+export interface MemoryRefInsert {
+  readonly projectId: string;
+  // Kept only when the task exists.
+  readonly taskId?: string;
+  readonly provider: string;
+  readonly providerRef: string;
+  readonly syncId?: string;
+  readonly topicKey?: string;
+  readonly direction: "out" | "in";
+  readonly kind: string;
+  readonly origin: MemoryOrigin;
+  readonly contentSha256?: string;
+}
+
+export interface MemoryRefRecord extends MemoryRefInsert {
+  readonly refId: string;
+  readonly operationId: string | null;
+  readonly createdAt: number;
+}
+
+export interface MarkDeliveredInput {
+  readonly operationId: string;
+  readonly receipt: JsonObject;
+  readonly provider: string;
+  readonly refs: readonly MemoryRefInsert[];
+  // memory.stored, memory.forgotten or memory.consolidated with its payload (memory.md 6), written with the row.
+  readonly event: { readonly type: string; readonly payload: JsonObject };
+}
+
+export interface MarkFailedInput {
+  readonly operationId: string;
+  // A MemoryErrorCode or contract.invalid.
+  readonly code: string;
+  readonly to: "pending" | "needs_review" | "dead";
+  // The backoff of a row back to pending.
+  readonly nextAttemptAt?: number;
+}
+
+export interface SetMemoryStateInput {
+  readonly provider: string;
+  readonly state: MemoryProviderState;
+  readonly persistent: boolean;
+  // Why it is not active (a MemoryErrorCode); kept as the last error after a recovery.
+  readonly code?: string;
+}
+
+export interface MemoryOutboxCounts {
+  readonly pending: number;
+  readonly sending: number;
+  readonly needsReview: number;
+  readonly dead: number;
+  readonly delivered: number;
+  // The enqueue time of the oldest pending row.
+  readonly oldestPendingAt: number | null;
+}
+
+// What `haril memory status` and the shell read (RF-132): the meta keys memory.* the last runtime wrote, null before
+// any did, and the outbox counts.
+export interface MemoryStatus {
+  readonly provider: string | null;
+  readonly persistent: boolean | null;
+  readonly lastState: MemoryProviderState | null;
+  readonly lastStateAt: number | null;
+  readonly lastError: { readonly code: string; readonly at: number } | null;
+  readonly outbox: MemoryOutboxCounts;
+}
+
+export interface MemoryStorePort {
+  // Inserts pending rows due now, each with a memory.outbox.enqueued event. The same operationId (or source row) is
+  // deduplicated; the same operationId with another payload is store.conflict.
+  enqueue(epoch: number, rows: readonly OutboxEnqueue[]): { enqueued: number; deduped: number };
+  // Claims due pending rows in outbox order: sending, attempts + 1, claimed by this epoch. A row not due is skipped
+  // without blocking the next ones; a summarize waits while another row of its session is not terminal (MEM-11).
+  claimDue(epoch: number, limit: number): readonly OutboxRow[];
+  // The row, its pointers (one per provider and providerRef) and its event, in one transaction (MEM-04). A row this
+  // epoch did not claim is store.stale.
+  markDelivered(epoch: number, input: MarkDeliveredInput): void;
+  markFailed(epoch: number, input: MarkFailedInput): void;
+  // The rows earlier epochs left sending go back to pending with the same operationId (MEM-16). Returns how many.
+  requeueStale(epoch: number): number;
+  // Writes the meta keys memory.*; memory.degraded or memory.recovered once per transition. True when it changed.
+  setState(epoch: number, input: SetMemoryStateInput): boolean;
+  // The ready tasks whose requires[] has memory go to blocked(memory_unavailable), and back (MEM-08).
+  blockTasks(epoch: number): readonly PromotedTask[];
+  releaseTasks(epoch: number): readonly PromotedTask[];
+  // The earliest next attempt of a pending row; null when none is pending.
+  nextDueAt(): number | null;
+  status(): MemoryStatus;
+  get(operationId: string): OutboxRow | undefined;
+  refs(projectId?: string): readonly MemoryRefRecord[];
+}
+
 export interface Store {
   info(): StoreInfo;
   readonly maintenance: StoreMaintenance;
@@ -638,5 +772,6 @@ export interface Store {
   readonly budgets: BudgetsPort;
   readonly virtualKeys: VirtualKeysPort;
   readonly approvals: ApprovalsPort;
+  readonly memory: MemoryStorePort;
   close(): void;
 }

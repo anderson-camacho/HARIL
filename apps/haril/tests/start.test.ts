@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -206,6 +207,88 @@ describe("haril start", async () => {
     } finally {
       fresh.cleanup();
     }
+  });
+});
+
+describe("what a run leaves for memory (MC-T4 fix)", () => {
+  // A write an earlier runtime left in its backoff, due in an hour: this run exits with it still queued.
+  function leaveWriteInBackoff(): void {
+    const store = openStore({
+      dataDir: sb.dataDir,
+      clock: systemClock,
+      ids: { next: () => randomUUID() },
+      rules: {
+        canTransition,
+        checkPlan: checkPlanSubmission,
+        checkAcceptance,
+        checkTaskKind,
+        canonicalJson,
+      },
+    });
+    try {
+      const projectId = store.projects.getBySlug("demo")?.projectId ?? "";
+      const grant = store.runtime.acquire({
+        pid: process.pid,
+        nodeVersion: "v24.21.0",
+        sqliteVersion: store.info().sqliteVersion,
+        ttlMs: 60_000,
+      });
+      if (!grant.ok) throw new Error("lease not granted");
+      const epoch = grant.value.epoch;
+      const operationId = "fake-op-backoff";
+      store.memory.enqueue(epoch, [
+        {
+          operationId,
+          projectId,
+          op: "store",
+          payload: { schemaVersion: 1, operationId },
+          schemaVersion: 1,
+          sessionId: null,
+        },
+      ]);
+      store.memory.claimDue(epoch, 1);
+      store.memory.markFailed(epoch, {
+        operationId,
+        code: "Unavailable",
+        to: "pending",
+        nextAttemptAt: Date.now() + 3_600_000,
+      });
+      store.runtime.release(epoch, true);
+    } finally {
+      store.close();
+    }
+  }
+
+  it("says how many writes wait for memory on the line before done, and that the next run resumes them", async () => {
+    leaveWriteInBackoff();
+    addTask("F");
+    expect(await start()).toBe(0);
+    const memoryAt = h.out.findIndex((line) => line.startsWith("memory "));
+    expect(h.out[memoryAt]).toBe(
+      "memory active: 1 write is queued; it resumes on the next haril start or haril run",
+    );
+    expect(h.out[memoryAt + 1]).toMatch(/^done: 1 completed, 0 failed, 0 blocked/);
+  });
+
+  it("puts what is left for memory in the JSON summary", async () => {
+    leaveWriteInBackoff();
+    expect(await start(["--json"])).toBe(0);
+    expect(parseJson<{ memory: unknown; exitCode: number }>(h.out)).toMatchObject({
+      memory: { state: "active", waitingForMemory: 0, queuedWrites: 1 },
+      exitCode: 0,
+    });
+  });
+
+  it("says nothing about memory when nothing is left for it", async () => {
+    addTask("G");
+    expect(await start()).toBe(0);
+    expect(h.out.some((line) => line.startsWith("memory "))).toBe(false);
+    expect(await start(["--json"])).toBe(0);
+    expect(parseJson<{ memory: unknown }>(h.out).memory).toEqual({
+      state: "active",
+      waitingForMemory: 0,
+      queuedWrites: 0,
+    });
   });
 });
 

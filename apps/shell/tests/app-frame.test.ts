@@ -167,6 +167,9 @@ describe("the frame at 120x40 (LD-T6b-1)", () => {
     expect(screen).toContain("none pending");
     expect(screen).toContain("0 busy · 1 free");
     expect(screen).toContain("not connected (M4)");
+    // MC-T4: the memory row shows the provider and its health, as haril memory status does.
+    expect(screen).toMatch(/memory +null · not checked/);
+    expect(screen).not.toMatch(/memory +not connected/);
     expect(screen).toContain("isolation N0");
     expect(mounted.gitReads).toEqual(["/work/solo"]);
     // The input box closes the main area (LD-T6b-2): the mode in its top border, the typed line, the keys in its bottom

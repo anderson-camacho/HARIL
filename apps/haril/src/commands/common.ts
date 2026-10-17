@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import { nudgeRuntime } from "@haril/control";
 import { canonicalJson, visibleText } from "@haril/core";
-import type { FailureReason, ProjectRecord, Store } from "@haril/core/ports";
+import type { FailureReason, ProjectRecord, RuntimeLeaseSummary, Store } from "@haril/core/ports";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
 import { resolveDataDir } from "../data-dir.js";
-import { storeAccess } from "../host.js";
+import { clockFor, defaultPidAlive, storeAccess } from "../host.js";
 
 const NO_PROJECT = "no project yet; run haril project init <path> --name <name> --yes first";
 
@@ -39,6 +39,15 @@ export function dataDirFor(host: HostInfo, flag: string | undefined): string {
     platform: host.platform,
     homeDir: host.homeDir ?? "",
   }).dataDir;
+}
+
+// A runtime holds the lease: active, unexpired and its process alive, as the shell tells it (LD-T6). memory status
+// and status read the recorded memory health as live only then (MC-T4).
+export function leaseHolderAlive(lease: RuntimeLeaseSummary, host: HostInfo): boolean {
+  const isPidAlive = host.isPidAlive ?? defaultPidAlive;
+  return (
+    lease.status === "active" && lease.expiresAt > clockFor(host).now() && isPidAlive(lease.pid)
+  );
 }
 
 // Opens an existing store. Undefined when the database does not exist: read paths never create it.

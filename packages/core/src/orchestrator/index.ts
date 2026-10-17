@@ -51,10 +51,11 @@ export type RunEvent =
       readonly verifyRetries?: number;
     }
   | {
+      // dep_failed: a dependency failed; memory_unavailable: the task requires memory and the provider is down (MC-T4).
       readonly type: "task.blocked";
       readonly taskId: string;
       readonly goal: string;
-      readonly reason: "dep_failed";
+      readonly reason: "dep_failed" | "memory_unavailable";
     }
   | {
       // A ready task of a real agent whose prerequisites are missing: not claimed, reported with the fix.

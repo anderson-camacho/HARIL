@@ -3,6 +3,7 @@ import { type RunEvent, runExitCode, visibleText } from "@haril/core";
 import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_ERROR, EXIT_USAGE, type HostInfo } from "../context.js";
 import { agentRuntimeFor, clockFor } from "../host.js";
+import { memoryLeftLine } from "../runtime/memory.js";
 import { createPlanProposals } from "../runtime/plan-proposals.js";
 import { createRealAgents } from "../runtime/real-agent.js";
 import { runUntilIdle } from "../runtime/run-loop.js";
@@ -134,8 +135,11 @@ async function serve(
 
     const exitCode = runExitCode(result.summary);
     if (json) {
-      io.out(JSON.stringify({ ...result.summary, exitCode }));
+      io.out(JSON.stringify({ ...result.summary, memory: result.memory, exitCode }));
     } else {
+      // MC-T4 fix: the tasks that wait for memory and the queued writes outlive this runtime; the next one resumes them.
+      const memoryLeft = memoryLeftLine(result.memory);
+      if (memoryLeft !== undefined) io.out(memoryLeft);
       const skipped =
         result.summary.skipped.length === 0 ? "" : `, ${result.summary.skipped.length} skipped`;
       const whose = mode === "start" ? ` (pid ${pid})` : "";

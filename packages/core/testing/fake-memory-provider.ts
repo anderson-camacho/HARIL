@@ -37,6 +37,12 @@ import type { MemoryFaultControls } from "./memory-provider.suite.js";
 // FakeMemoryProvider (memory.md 9.3; TEST_STRATEGY 4.3): InMemory that becomes unreachable at will, for ESC-09, AR-G14
 // and the outbox cases. Every injected fault is a typed result, never a throw.
 
+// persistent: the fake declares itself persistent, so core/memory queues its writes in the outbox instead of handing
+// them over at once (CM-04): the outbox cases of memory.md 8.2 need it. Absent: InMemory's capabilities, unchanged.
+export interface FakeMemoryProviderOptions extends InMemoryMemoryProviderOptions {
+  readonly persistent?: boolean;
+}
+
 export interface MemoryCall {
   readonly operation: MemoryOperation;
   readonly scope?: ScopeRef;
@@ -68,10 +74,15 @@ export class FakeMemoryProvider implements MemoryProvider, MemoryFaultControls {
   private readonly ambiguous = new Set<MemoryWriteOperation>();
   private readonly endedSessions = new Set<string>();
   private readonly log: MemoryCall[] = [];
+  private readonly persistent: boolean | undefined;
 
-  constructor(deps: MemoryProviderDeps, options?: InMemoryMemoryProviderOptions) {
+  constructor(deps: MemoryProviderDeps, options?: FakeMemoryProviderOptions) {
     this.deps = deps;
-    this.inner = new InMemoryMemoryProvider(deps, options);
+    this.persistent = options?.persistent;
+    this.inner = new InMemoryMemoryProvider(
+      deps,
+      options?.dedupeWindowMs === undefined ? {} : { dedupeWindowMs: options.dedupeWindowMs },
+    );
   }
 
   // ---- Test controls ----
@@ -112,7 +123,10 @@ export class FakeMemoryProvider implements MemoryProvider, MemoryFaultControls {
   // ---- MemoryProvider ----
 
   capabilities(): MemoryCapabilities {
-    return this.inner.capabilities();
+    const capabilities = this.inner.capabilities();
+    return this.persistent === undefined
+      ? capabilities
+      : { ...capabilities, persistent: this.persistent };
   }
 
   async health(): Promise<MemoryHealth> {

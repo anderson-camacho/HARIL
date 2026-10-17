@@ -359,3 +359,50 @@ describe("the model of a plan waiting for approval (LD-T7a)", () => {
     }
   });
 });
+
+describe("the memory status (MC-T4)", () => {
+  it("without a store: the default provider, its health not checked", () => {
+    const data = openShellData({ paths: paths(), env: {} });
+    try {
+      expect(data.load(undefined).memory).toMatchObject({
+        provider: "null",
+        providerSource: "default",
+        health: "not_checked",
+        degraded: false,
+        outbox: { depth: 0 },
+      });
+    } finally {
+      data.close();
+    }
+  });
+
+  it("reads what the runtime recorded, the same as haril memory status: live only while its lease is", () => {
+    const seeded = seedStore(dataDir);
+    const writer = openSeedStore(dataDir);
+    try {
+      writer.memory.setState(seeded.epoch, {
+        provider: "fake-provider",
+        state: "degraded",
+        persistent: true,
+        code: "Unavailable",
+      });
+    } finally {
+      writer.close();
+    }
+    const live = openShellData({ paths: paths(), env: {} });
+    const dead = openShellData({ paths: paths(), env: {}, isPidAlive: () => false });
+    try {
+      expect(live.load(undefined).memory).toMatchObject({
+        provider: "fake-provider",
+        providerSource: "recorded",
+        health: "degraded",
+        degraded: true,
+        lastError: { code: "Unavailable" },
+      });
+      expect(dead.load(undefined).memory).toMatchObject({ health: "not_checked", degraded: true });
+    } finally {
+      live.close();
+      dead.close();
+    }
+  });
+});
