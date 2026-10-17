@@ -220,10 +220,12 @@ export class SqliteStore implements Store {
       acquire: (input) => this.acquireLease(input),
       heartbeat: (epoch, ttlMs) => this.heartbeatLease(epoch, ttlMs),
       release: (epoch, cleanExit) => this.releaseLease(epoch, cleanExit),
+      releaseIfIdle: (epoch) => this.releaseLeaseIfIdle(epoch),
       reconcile: (epoch, maxInfraRestarts) => this.reconcileOrphans(epoch, maxInfraRestarts),
     };
     this.runs = {
       complete: (completion) => this.completeRun(completion),
+      cancel: (runId, reason) => this.cancelRun(runId, reason),
     };
     this.events = {
       append: (input) => this.appendEvent(input),
@@ -427,6 +429,24 @@ export class SqliteStore implements Store {
     });
   }
 
+  // ARCH 4.2: the queue check and the release share one transaction, so a command enqueued after the drain is never
+  // left behind by an exit that already happened. A queued command keeps the lease; the caller drains it.
+  private releaseLeaseIfIdle(epoch: number): boolean {
+    return this.inTransaction(() => {
+      this.assertActiveEpoch(epoch);
+      const queued = this.db
+        .prepare("SELECT COUNT(*) AS n FROM commands WHERE status = 'queued'")
+        .get() as { n: number };
+      if (queued.n > 0) return false;
+      this.db
+        .prepare(
+          "UPDATE runtime_leases SET status = 'released', clean_exit = 1, released_at = ? WHERE runtime_epoch = ?",
+        )
+        .run(this.clock.now(), epoch);
+      return true;
+    });
+  }
+
   // Every write that a runtime makes names its epoch; a lost or released epoch is fenced out.
   private assertActiveEpoch(epoch: number): void {
     const row = this.db
@@ -551,6 +571,12 @@ export class SqliteStore implements Store {
   }
 
   private applyCommandBody(command: CommandRecord, now: number): ApplyVerdict {
+    // runtime.stop belongs to the runtime, not to a project: the runtime itself acts on it after this commit (ARCH 4.2).
+    if (command.type === "runtime.stop") {
+      return Object.keys(command.args).length === 0
+        ? { ok: true, taskIds: [] }
+        : { ok: false, reason: "runtime.stop takes no arguments" };
+    }
     if (command.projectId === null) return { ok: false, reason: "command has no project" };
     if (command.type === "task.create") return this.applyTaskCreate(command, now);
     if (command.type === "plan.submit") return this.applyPlanSubmit(command, now);
@@ -1025,6 +1051,90 @@ export class SqliteStore implements Store {
         payload: { attempt: run.attempt, attemptsUsed, code: completion.error.code },
       });
       return { ...base, attemptsUsed, taskState: "failed", retryReason: null };
+    });
+  }
+
+  // ARCH 4.2 step 3 (parada ordenada): the run of a stopping runtime ends as cancelled and its task returns to ready as an
+  // orphan. Nothing is charged: attempts_used and infra_restarts stay, because the epoch closes cleanly (clean_exit = 1).
+  private cancelRun(runId: string, reason: "shutdown"): CompletedRun {
+    return this.inTransaction(() => {
+      const run = this.db
+        .prepare(
+          "SELECT task_id AS taskId, status, claim_epoch AS claimEpoch, attempt FROM runs WHERE run_id = ?",
+        )
+        .get(runId) as
+        | { taskId: string; status: string; claimEpoch: number; attempt: number }
+        | undefined;
+      if (run === undefined || run.status !== "running") {
+        throw new StoreError("store.stale", `run ${runId} is not running`, { runId });
+      }
+      const task = this.db
+        .prepare(
+          "SELECT goal, project_id AS projectId, state, claim_epoch AS claimEpoch, attempts_used AS attemptsUsed, max_attempts AS maxAttempts FROM tasks WHERE task_id = ?",
+        )
+        .get(run.taskId) as
+        | {
+            goal: string;
+            projectId: string;
+            state: string;
+            claimEpoch: number;
+            attemptsUsed: number;
+            maxAttempts: number;
+          }
+        | undefined;
+      if (task === undefined || task.state !== "running" || task.claimEpoch !== run.claimEpoch) {
+        throw new StoreError("store.stale", `task of run ${runId} is no longer claimed by it`, {
+          runId,
+        });
+      }
+      this.transition("running", "ready");
+      const now = this.clock.now();
+      this.db
+        .prepare(
+          "UPDATE runs SET status = 'cancelled', ended_at = ?, end_cause = 'cancelled', error = ? WHERE run_id = ?",
+        )
+        .run(
+          now,
+          JSON.stringify({
+            code: reason,
+            message: "the runtime stopped while the run was in flight",
+          }),
+          runId,
+        );
+      // The run's authority ends with the run: keys first, then open reservations (ARCH 13.2 CP1, CP4).
+      this.virtualKeys.revoke(runId, reason);
+      this.budgets.settleOpenForRun(runId);
+      this.db
+        .prepare(
+          "UPDATE tasks SET state = 'ready', phase = NULL, retry_reason = 'orphaned', claimed_runtime_epoch = NULL, updated_at = ? WHERE task_id = ?",
+        )
+        .run(now, run.taskId);
+      this.appendEvent({
+        aggregateType: "task",
+        aggregateId: run.taskId,
+        type: "task.retried",
+        actorKind: "system",
+        actorId: "runtime",
+        payload: {
+          attempt: run.attempt,
+          attemptsUsed: task.attemptsUsed,
+          maxAttempts: task.maxAttempts,
+          code: reason,
+        },
+        projectId: task.projectId,
+        taskId: run.taskId,
+        runId,
+        ts: now,
+      });
+      return {
+        taskId: run.taskId,
+        goal: task.goal,
+        attempt: run.attempt,
+        taskState: "ready",
+        attemptsUsed: task.attemptsUsed,
+        maxAttempts: task.maxAttempts,
+        retryReason: "orphaned",
+      };
     });
   }
 

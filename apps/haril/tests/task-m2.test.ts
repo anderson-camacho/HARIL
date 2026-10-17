@@ -26,7 +26,7 @@ function hostWith(env: Record<string, string | undefined>) {
 // `task add` only queues; `start` applies the queue. Without a gateway key an analyst task is skipped and stays
 // ready, so the task exists for `task show` and nothing reaches a real agent.
 async function applyQueue(): Promise<void> {
-  await run(["start", "--project", "demo"], harness().io, sb.host);
+  await run(["run", "--project", "demo"], harness().io, sb.host);
 }
 
 async function lastTaskId(): Promise<string> {

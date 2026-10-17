@@ -117,7 +117,7 @@ describe("host verification at run time", () => {
       "--accept-output",
       "hello",
     ]);
-    expect(await cli(["start", "--project", "demo"])).toBe(0);
+    expect(await cli(["run", "--project", "demo"])).toBe(0);
     const events = harness();
     run(["events", "--project", "demo", "--json"], events.io, sb.host);
     expect(events.out.join("\n")).toContain('"type":"verify.passed"');
@@ -145,7 +145,7 @@ describe("host verification at run time", () => {
       "--max-attempts",
       "2",
     ]);
-    expect(await cli(["start", "--project", "demo"])).toBe(1);
+    expect(await cli(["run", "--project", "demo"])).toBe(1);
     const view = showJson("Unmet");
     expect(view.state).toBe("failed");
     expect(view.error?.code).toBe("verification_failed");
@@ -159,7 +159,7 @@ describe("host verification at run time", () => {
 
   it("counts a task without checks as completed but unverified", async () => {
     await cli(["task", "add", "Unchecked", "--agent", "fake:succeed", "--project", "demo"]);
-    expect(await cli(["start", "--project", "demo"])).toBe(0);
+    expect(await cli(["run", "--project", "demo"])).toBe(0);
     const view = showJson("Unchecked");
     expect(view.state).toBe("completed");
     expect(view.verification).toEqual({ verified: false, checks: [] });
@@ -185,7 +185,7 @@ describe("host verification at run time", () => {
       "--accept-file",
       "../outside.txt",
     ]);
-    expect(await cli(["start", "--project", "demo"])).toBe(1);
+    expect(await cli(["run", "--project", "demo"])).toBe(1);
     const view = showJson("Escape");
     expect(view.verification?.checks[0]?.detail).toBe("outside_root");
     expect(view.state).toBe("failed");
@@ -207,7 +207,7 @@ describe("host verification at run time", () => {
       "--accept-file",
       "jout/secret.txt",
     ]);
-    expect(await cli(["start", "--project", "demo"])).toBe(1);
+    expect(await cli(["run", "--project", "demo"])).toBe(1);
     const view = showJson("Through link");
     expect(view.verification?.checks[0]?.detail).toBe("link");
     expect(view.state).toBe("failed");

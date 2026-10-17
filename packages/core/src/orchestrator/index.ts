@@ -60,6 +60,17 @@ export type RunEvent =
       readonly goal: string;
       readonly what: string;
       readonly fix: string;
+    }
+  | {
+      // The runtime stops: "command" when runtime.stop was applied, "signal" for Ctrl+C or SIGTERM (ARCH 4.2).
+      readonly type: "runtime.stopping";
+      readonly reason: "command" | "signal";
+    }
+  | {
+      // A run cancelled by a stop returned its task to ready; no attempt was charged (ARCH 4.2, step 3).
+      readonly type: "task.returned";
+      readonly taskId: string;
+      readonly goal: string;
     };
 
 export interface RunSummary {

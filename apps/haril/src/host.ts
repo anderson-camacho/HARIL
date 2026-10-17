@@ -19,7 +19,7 @@ const systemClock: Clock = {
 };
 
 // Liveness of a lease holder (M1 fix c). EPERM means the process exists but belongs to another user.
-function defaultPidAlive(pid: number): boolean {
+export function defaultPidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;

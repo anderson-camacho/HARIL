@@ -4,19 +4,50 @@ import { type CliIo, EXIT_ERROR, EXIT_USAGE, type HostInfo } from "../context.js
 import { agentRuntimeFor, clockFor } from "../host.js";
 import { createRealAgents } from "../runtime/real-agent.js";
 import { runUntilIdle } from "../runtime/run-loop.js";
+import { attachStopSignals, createShutdown } from "../runtime/shutdown.js";
 import { dataDirFor, openExisting } from "./common.js";
 
-// `haril start` (M1-T5): the foreground runtime. It applies the queue, runs the ready tasks and exits when idle.
-const USAGE = "usage: haril start [--project <slug>] [--json] [--data-dir <path>]";
+// `haril start` (M1-T5, LD-T1): the foreground runtime. It applies the queue, runs the ready tasks and stays up for new
+// work until --idle-exit-sec of nothing to do (ARCH 4.2). `haril run` is start until idle: it exits as soon as the
+// queue is empty. A runtime.stop, a first Ctrl+C or SIGTERM stops it in order; a second signal exits at once.
+const IDLE_EXIT_SEC = 120;
+const START_USAGE =
+  "usage: haril start [--project <slug>] [--json] [--data-dir <path>] [--idle-exit-sec <n>]";
+const RUN_USAGE = "usage: haril run [--project <slug>] [--json] [--data-dir <path>]";
 const NOT_INITIALIZED =
   "store not initialized (run haril project init <path> --name <name> --yes first)";
 
-export async function start(args: readonly string[], io: CliIo, host: HostInfo): Promise<number> {
-  const parsed = parseArgs(args, { values: ["--project", "--data-dir"], flags: ["--json"] });
+export function start(args: readonly string[], io: CliIo, host: HostInfo): Promise<number> {
+  return serve(args, io, host, "start");
+}
+
+export function runQueue(args: readonly string[], io: CliIo, host: HostInfo): Promise<number> {
+  return serve(args, io, host, "run");
+}
+
+async function serve(
+  args: readonly string[],
+  io: CliIo,
+  host: HostInfo,
+  mode: "start" | "run",
+): Promise<number> {
+  const parsed = parseArgs(args, {
+    values:
+      mode === "start"
+        ? ["--project", "--data-dir", "--idle-exit-sec"]
+        : ["--project", "--data-dir"],
+    flags: ["--json"],
+  });
   const problem = argsProblem(parsed, io);
   if (problem !== null) return problem;
   if (parsed.positionals.length > 0) {
-    io.err(USAGE);
+    io.err(mode === "start" ? START_USAGE : RUN_USAGE);
+    return EXIT_USAGE;
+  }
+
+  const idleExitSec = idleExitSecOf(parsed.values, mode);
+  if (idleExitSec === undefined) {
+    io.err("haril: --idle-exit-sec takes a whole number of seconds, 0 or more");
     return EXIT_USAGE;
   }
 
@@ -29,12 +60,24 @@ export async function start(args: readonly string[], io: CliIo, host: HostInfo):
   }
   // The real lane (M2-T6): the analyst agent in Pi through one Broker, closed when the run ends.
   const realAgents = createRealAgents({ host, store, clock: clockFor(host), dataDir });
+  // Ctrl+C and SIGTERM ask for the ordered stop; a second signal exits at once (ARCH 4.2).
+  const shutdown = createShutdown();
+  const detach = attachStopSignals(
+    host.signals ?? process,
+    shutdown,
+    host.forceExit ?? ((code) => process.exit(code)),
+  );
   try {
     // M1-D6: the lease is per data root, so one runtime serves every project. --project only names one that exists.
     const slug = lastValue(parsed, "--project");
     if (slug !== undefined && store.projects.getBySlug(slug) === undefined) {
       io.err(`haril: no project with slug "${slug}"`);
       return EXIT_USAGE;
+    }
+    if (mode === "start" && !json) {
+      io.out(
+        `runtime up: waiting for work, exits after ${idleExitSec} s idle (haril stop ends it)`,
+      );
     }
 
     const result = await runUntilIdle({
@@ -44,6 +87,8 @@ export async function start(args: readonly string[], io: CliIo, host: HostInfo):
       pid: process.pid,
       nodeVersion: host.nodeVersion,
       realAgents,
+      idleExitMs: idleExitSec * 1000,
+      shutdown,
       onEvent: (event) => {
         if (!json) io.out(formatEvent(event));
       },
@@ -65,9 +110,22 @@ export async function start(args: readonly string[], io: CliIo, host: HostInfo):
     }
     return exitCode;
   } finally {
+    detach();
     await realAgents.close();
     store.close();
   }
+}
+
+// Whole seconds from --idle-exit-sec (start only; run always exits as soon as it is idle). Undefined when malformed.
+function idleExitSecOf(
+  values: ReadonlyMap<string, readonly string[]>,
+  mode: "start" | "run",
+): number | undefined {
+  if (mode === "run") return 0;
+  const list = values.get("--idle-exit-sec");
+  const raw = list?.[list.length - 1];
+  if (raw === undefined) return IDLE_EXIT_SEC;
+  return /^\d+$/.test(raw) ? Number(raw) : undefined;
 }
 
 function formatEvent(event: RunEvent): string {
@@ -92,5 +150,9 @@ function formatEvent(event: RunEvent): string {
       return `blocked: ${event.reason} ${event.taskId} ${event.goal}`;
     case "task.skipped":
       return `skipped ${event.taskId} ${event.goal}: needs setup (${event.what}: ${event.fix})`;
+    case "runtime.stopping":
+      return `stopping (${event.reason}): the in-flight run returns to ready`;
+    case "task.returned":
+      return `returned ${event.taskId} ${event.goal} to ready (stopped, no attempt charged)`;
   }
 }
