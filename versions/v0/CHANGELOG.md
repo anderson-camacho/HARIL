@@ -4,6 +4,60 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.6.0
+
+- **Fecha:** 2026-10-17
+- **Estado:** **MVP cerrado.** Los 15 criterios de aceptación se cumplen o tienen un desvío explícito y justificado. La CI remota pasa en Windows y Linux.
+
+### Añadido
+
+- **Guardián de rutas con enlaces:**
+  - rechaza symlinks y junctions;
+  - aplica una lista de rutas denegadas para lectura (`.git`, `.env`, `.haril`, `.pi`);
+  - rechaza los nombres reservados de Windows y los segmentos que terminan en punto o espacio;
+  - compara el `realpath` con la raíz;
+  - lee con verificación de identidad (`dev`/`ino`) para evitar el cambio de archivo entre la comprobación y la lectura.
+- **Recuperación tras caída:** el reconciliador revoca las claves virtuales de los runs huérfanos y liquida sus reservas abiertas. Pruebas que matan el proceso de verdad en los puntos de caída CP1, CP3, CP4 y CP8.
+- **Durabilidad del almacén:**
+  - copia de seguridad con `VACUUM INTO` verificada antes de colocarla;
+  - WAL acotado (`wal_autocheckpoint` de 1000 páginas);
+  - prueba de `kill -9` en bucle;
+  - rechazo de raíces de datos en UNC, WSL u OneDrive.
+- **Invariantes con procesos reales:**
+  - un solo ganador por tarea entre 9 procesos;
+  - presupuesto sin sobregiro bajo concurrencia;
+  - relojes desfasados sin doble lease;
+  - p99 del event loop bajo 100 ms.
+
+  `tests/INVARIANTS.md` asocia cada invariante con su prueba, su desvío o su aplazamiento.
+
+### Cambiado
+
+- El evento de denegación se llama `security.pathguard.denied`, como indica el contrato.
+- Node 25.x y 26.0–26.7 se rechazan al abrir el almacén y en `haril doctor`. Un 24.x por debajo del rango solo avisa (desvío documentado).
+
+### Corregido
+
+- **CI:** `setup-node` v5 intentaba cachear pnpm antes de que corepack lo instalara.
+- **Instalador:** el lanzador POSIX `bin/haril` no tenía permiso de ejecución.
+- **`database is locked` al abrir el almacén mientras el runtime escribe:**
+  - `busy_timeout` se aplica antes que los demás pragmas;
+  - la apertura no toma un lock de escritura si no hay migraciones pendientes;
+  - si aún encuentra un lock, reintenta con backoff.
+
+### Desvíos y aplazamientos
+
+- **CP2, CP5 y CP6** (recuperar efectos de escritura) se aplazan al hito que introduzca un agente que escriba; el único agente real es de solo lectura.
+- **INV-02** (tareas en paralelo): el runtime del MVP es secuencial; la concurrencia es de M4.
+- **El PDP no existe todavía:** la decisión de permisos del MVP es el guardián de rutas, en N0.
+
+### Verificación
+
+- CI pública en verde en Windows y ubuntu en cada PR (#6 a #11).
+- Local: `pnpm run check` 0; `pnpm test` con 791 pruebas de Vitest y 48 de `node:test`; `npm run e2e` 38 pasos.
+
+---
+
 ## 0.5.0
 
 - **Fecha:** 2026-10-16

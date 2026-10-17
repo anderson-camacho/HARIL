@@ -9,7 +9,7 @@ import { createFakeExec, createMemoryFs, type MemoryFs } from "./fakes.js";
 
 const SRC = "C:\\src\\haril";
 const ROOT = "C:\\HARIL";
-const VERSION = "0.5.0";
+const VERSION = "0.6.0";
 const APP = `${ROOT}\\app\\${VERSION}`;
 const NOW = "2026-10-16T00:00:00.000Z";
 const encoder = new TextEncoder();
