@@ -27,6 +27,7 @@ function currentHost(): HostInfo {
     env: process.env,
     homeDir: homedir(),
     cwd: process.cwd(),
+    interactive: process.stdin.isTTY === true && process.stdout.isTTY === true,
   };
 }
 
@@ -34,6 +35,7 @@ const HELP_LINES = [
   "haril - HARIL command line",
   "",
   "usage:",
+  "  haril                            in a terminal, open the interactive terminal UI (haril shell); otherwise print this help",
   "  haril --version | version        print the CLI version",
   "  haril doctor [--json] [--data-dir <path>]   check the runtime and the store",
   "  haril models [--json] [--provider <id>]   list the models of every provider as <provider>/<model> (haril.json)",
@@ -86,6 +88,8 @@ function dispatch(argv: readonly string[], io: CliIo, host: HostInfo): number | 
   const [command, ...rest] = argv;
   switch (command) {
     case undefined:
+      // A bare `haril` in a terminal is the shell, the way people open it; scripts and pipes still get the help.
+      if (host.interactive === true) return shell([], io, host);
       printHelp(io.err);
       return EXIT_USAGE;
     case "--version":

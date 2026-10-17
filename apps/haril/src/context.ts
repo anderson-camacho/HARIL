@@ -21,6 +21,8 @@ export interface HostInfo {
   readonly homeDir?: string;
   // Working directory for relative paths; defaults to the process cwd.
   readonly cwd?: string;
+  // stdin and stdout are a terminal, so a bare `haril` opens the shell instead of printing help. Absent means no.
+  readonly interactive?: boolean;
   // Store inspection (read-only) and opening; defaults to the real SQLite store.
   readonly inspectStore?: (dataDir: string) => StoreInspection;
   readonly openStore?: (dataDir: string) => Store;

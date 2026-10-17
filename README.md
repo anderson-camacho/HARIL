@@ -140,7 +140,7 @@ HARIL lee sus proveedores de `HARIL_CONFIG` o, si no está definida, de `config\
 
 ### M4: interfaz de terminal (`haril shell`)
 
-`haril shell` abre una interfaz interactiva sobre los datos de HARIL. Necesita una terminal real (Windows Terminal o PowerShell); sin ella sale con 2. La interfaz solo lee: nunca arranca el runtime y no consulta la base en bucle. Los datos se cargan al abrir, con `r` y después de cada acción.
+`haril shell` abre una interfaz interactiva sobre los datos de HARIL. En una terminal basta con escribir `haril`, sin subcomando: abre la misma interfaz. Fuera de una terminal (un script o una tubería), `haril` solo imprime la ayuda. Necesita una terminal real (Windows Terminal o PowerShell); sin ella `haril shell` sale con 2. La interfaz solo lee: nunca arranca el runtime y no consulta la base en bucle. Los datos se cargan al abrir, con `r` y después de cada acción.
 
 ```powershell
 cd D:\github\haril
