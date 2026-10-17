@@ -56,6 +56,7 @@ interface ApprovalRow {
   readonly kind: string;
   readonly status: string;
   readonly tasks: number;
+  readonly model: string | null;
   readonly decidedBy: string | null;
   readonly reason: string | null;
   readonly appliedAt: number | null;
@@ -78,8 +79,9 @@ describe("haril plan propose", () => {
     const out = fresh();
     expect(run(["plan", "propose", EXAMPLE_VALID], out.io, sb.host)).toBe(0);
     expect(out.out.join("\n")).toContain("pending");
+    // A plan from the terminal names no model (LD-T7a): its tasks are created without one.
     expect(listed()).toMatchObject([
-      { kind: "plan", status: "requested", tasks: 4, projectSlug: "demo" },
+      { kind: "plan", status: "requested", tasks: 4, projectSlug: "demo", model: null },
     ]);
     expect(taskCount()).toBe(0);
   });
@@ -114,6 +116,7 @@ describe("haril approvals", () => {
     expect(text).toContain(id);
     expect(text).toContain("demo");
     expect(text).toContain("plan");
+    expect(text).toContain("model none");
   });
 
   it("exits 2 for an unknown project slug", () => {

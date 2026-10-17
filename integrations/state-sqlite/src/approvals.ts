@@ -29,7 +29,7 @@ interface ApprovalFacetOptions {
 }
 
 const APPROVAL_COLUMNS =
-  "approval_id AS approvalId, project_id AS projectId, kind, subject, subject_sha256 AS subjectSha256, status, requested_at AS requestedAt, requested_by AS requestedBy, decided_at AS decidedAt, decided_by AS decidedBy, reason, applied_at AS appliedAt";
+  "approval_id AS approvalId, project_id AS projectId, kind, subject, subject_sha256 AS subjectSha256, status, requested_at AS requestedAt, requested_by AS requestedBy, model, decided_at AS decidedAt, decided_by AS decidedBy, reason, applied_at AS appliedAt";
 
 // The subject is stored as canonical JSON text and parsed on read.
 interface ApprovalRow extends Omit<ApprovalRecord, "subject"> {
@@ -62,6 +62,14 @@ export function createApprovalsFacet(options: ApprovalFacetOptions): ApprovalsPo
     proposePlan(input): Result<{ approval: ApprovalRecord; created: boolean }, HarilError> {
       const check = rules.checkPlan(input.plan);
       if (!check.ok) return { ok: false, error: { code: "plan.invalid", message: check.reason } };
+      // LD-T7a: the model of the proposing task, checked like the model of a task.create.
+      const model = input.model ?? null;
+      if (model !== null && (typeof model !== "string" || model.trim() === "")) {
+        return {
+          ok: false,
+          error: { code: "model.invalid", message: "model must be a non-empty model id" },
+        };
+      }
       const subject = rules.canonicalJson(check.plan);
       const subjectSha256 = sha256(subject);
       const value = transaction(() => {
@@ -73,7 +81,8 @@ export function createApprovalsFacet(options: ApprovalFacetOptions): ApprovalsPo
             projectId: input.projectId,
           });
         }
-        // The same plan proposed again while it is still requested is the same approval (idempotent per project).
+        // The same plan proposed again while it is still requested is the same approval (idempotent per project); it
+        // keeps the model of its first proposal.
         const pending = db
           .prepare(
             `SELECT ${APPROVAL_COLUMNS} FROM approvals WHERE project_id = ? AND kind = ? AND subject_sha256 = ? AND status = 'requested'`,
@@ -84,7 +93,7 @@ export function createApprovalsFacet(options: ApprovalFacetOptions): ApprovalsPo
         const approvalId = options.ids.next();
         const now = clock.now();
         db.prepare(
-          "INSERT INTO approvals (approval_id, project_id, kind, subject, subject_sha256, status, requested_at, requested_by) VALUES (?, ?, ?, ?, ?, 'requested', ?, ?)",
+          "INSERT INTO approvals (approval_id, project_id, kind, subject, subject_sha256, status, requested_at, requested_by, model) VALUES (?, ?, ?, ?, ?, 'requested', ?, ?, ?)",
         ).run(
           approvalId,
           input.projectId,
@@ -93,6 +102,7 @@ export function createApprovalsFacet(options: ApprovalFacetOptions): ApprovalsPo
           subjectSha256,
           now,
           input.requestedBy,
+          model,
         );
         appendEvent({
           aggregateType: "approval",
@@ -100,7 +110,12 @@ export function createApprovalsFacet(options: ApprovalFacetOptions): ApprovalsPo
           type: "approval.requested",
           actorKind: input.requestedBy === "cli" ? "user" : "agent",
           actorId: input.requestedBy,
-          payload: { kind: PLAN_KIND, subjectSha256, taskCount: taskCountOf(check.plan) },
+          payload: {
+            kind: PLAN_KIND,
+            subjectSha256,
+            taskCount: taskCountOf(check.plan),
+            ...(model === null ? {} : { model }),
+          },
           projectId: input.projectId,
         });
         return { approval: requireOne(approvalId), created: true };

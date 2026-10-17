@@ -324,6 +324,7 @@ describe("shell app with a seeded store", () => {
               projectId: seeded.demoId,
               requestedAt: snapshot.loadedAt,
               requestedBy: hostile,
+              model: `Model-${hostile}`,
               tasks: [
                 {
                   localId: "step",
@@ -373,6 +374,7 @@ describe("shell app with a seeded store", () => {
       "Plan ?[2J",
       "Describe ?[2J",
       "Write ?[2J",
+      "Model-?[2J",
       "Warning ?[2J",
       "?[8mhidden?over",
     ]) {

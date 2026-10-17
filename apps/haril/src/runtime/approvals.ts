@@ -28,9 +28,10 @@ export function denyPlansOfFailedTask(store: Store, taskId: string, cause: strin
 }
 
 // Applies every decision on an approval that the runtime has not applied yet (LD-T3, ARCH 4.2 drain). A granted plan is
-// queued as the plan.submit that `haril plan import` would queue, then the decision is marked applied. Two steps, not one
-// transaction: a crash between them leaves the decision unapplied, and the next turn queues the same plan.submit again,
-// which its idempotency key turns into a duplicate. Returns how many decisions were applied.
+// queued as the plan.submit that `haril plan import` would queue, with the model of the task that proposed it for its
+// tasks (LD-T7a), then the decision is marked applied. Two steps, not one transaction: a crash between them leaves the
+// decision unapplied, and the next turn queues the same plan.submit again, which its idempotency key turns into a
+// duplicate. Returns how many decisions were applied.
 export function applyDecidedApprovals(
   store: Store,
   epoch: number,
@@ -41,7 +42,9 @@ export function applyDecidedApprovals(
     const outcome = approval.status === "granted" ? "granted" : "denied";
     const alreadySubmitted =
       outcome === "granted" &&
-      store.commands.enqueue(planSubmitCommand(approval.projectId, approval.subject)).duplicate;
+      store.commands.enqueue(
+        planSubmitCommand(approval.projectId, approval.subject, approval.model),
+      ).duplicate;
     store.approvals.markApplied(approval.approvalId, epoch);
     emit({ type: "approval.applied", approvalId: approval.approvalId, outcome, alreadySubmitted });
     applied += 1;

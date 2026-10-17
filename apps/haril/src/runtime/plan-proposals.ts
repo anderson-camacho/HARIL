@@ -4,8 +4,9 @@ import { StoreError } from "@haril/state-sqlite";
 
 // The host side of haril_propose_plan (LD-T4, ARCH 9.4). One handler serves every agent runtime: the FakeAgentRuntime
 // option in the hermetic lane, and the bridge tool of the Pi lane. A plan is recorded only for a run whose plan attempt
-// the run loop has opened, as a requested approval of the run's project (requestedBy is the run id). The loop learns of
-// every recorded proposal, so it can tell subscribers and check that a plan attempt proposed.
+// the run loop has opened, as a requested approval of the run's project (requestedBy is the run id) with the model of the
+// run's task (LD-T7a). The loop learns of every recorded proposal, so it can tell subscribers and check that a plan
+// attempt proposed.
 
 interface RecordedProposal {
   readonly approvalId: string;
@@ -19,18 +20,24 @@ export interface PlanAttemptReport {
   readonly lastRefusal?: string;
 }
 
+// One plan attempt as the run loop claimed it: its run and the model of its task, read from the store (absent or null
+// when the task names none). The agent runtime never supplies the model: its calls only name the run.
+interface PlanAttempt extends PlanProposalContext {
+  readonly model?: string | null;
+}
+
 export interface PlanProposals {
   readonly propose: PlanProposer;
   // Opens the proposal window of one plan attempt; each proposal it records is reported to onRecorded. The returned
   // function closes the window, after which the run's calls are refused, and reports what the attempt proposed.
   open(
-    attempt: PlanProposalContext,
+    attempt: PlanAttempt,
     onRecorded: (proposal: RecordedProposal) => void,
   ): () => PlanAttemptReport;
 }
 
 interface OpenAttempt {
-  readonly attempt: PlanProposalContext;
+  readonly attempt: PlanAttempt;
   readonly onRecorded: (proposal: RecordedProposal) => void;
   // The one plan of the attempt: its approval and the canonical JSON of its checked plan.
   accepted: { readonly approvalId: string; readonly canonical: string } | undefined;
@@ -83,6 +90,7 @@ export function createPlanProposals(store: Pick<Store, "approvals">): PlanPropos
           projectId: window.attempt.projectId,
           plan,
           requestedBy: window.attempt.runId,
+          model: window.attempt.model ?? null,
         });
       } catch (error) {
         // A project gone from the store, for instance: the agent hears the reason, the runtime keeps going.

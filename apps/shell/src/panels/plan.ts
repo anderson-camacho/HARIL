@@ -30,12 +30,13 @@ export function plansView(context: PanelContext): PanelView {
 // The plan as the user decides on it: each task with every field the runtime applies to the task it creates (LD-T6c).
 // The goal and the description are the agent's prompt; the agent, the dependencies, the files it may write and read,
 // the kind, the limits, the budget, the capabilities, the context and the checks decide what it may do and when it is
-// done. The app wraps each line and sends it through the render boundary like any other text.
+// done. The header names the model every task will run with, the proposing task's or none (LD-T7a). The app wraps
+// each line and sends it through the render boundary like any other text.
 export function planDetailLines(approval: PendingApproval, context: PanelContext): string[] {
   const requested = age(context.snapshot.loadedAt - approval.requestedAt);
   return [
     `plan ${approval.approvalId}`,
-    `project ${slugOf(context, approval)}, ${taskCount(approval)}, requested ${requested} ago by ${approval.requestedBy}`,
+    `project ${slugOf(context, approval)}, ${taskCount(approval)}, model ${approval.model ?? "none"}, requested ${requested} ago by ${approval.requestedBy}`,
     ...(approval.error === undefined ? [] : [`the plan could not be read: ${approval.error}`]),
     "",
     ...approval.tasks.flatMap((task, index) => planTaskLines(task, index)),

@@ -439,13 +439,17 @@ describe("haril start with a planner task (LD-T4)", () => {
       expect(first.code).toBe(0);
       const pending = harness();
       expect(run(["approvals", "--json"], pending.io, sb.host)).toBe(0);
-      const approvals = parseJson<{ approvalId: string; status: string; tasks: number }[]>(
-        pending.out,
-      );
+      const approvals = parseJson<
+        { approvalId: string; status: string; tasks: number; model: string | null }[]
+      >(pending.out);
       expect(approvals).toHaveLength(1);
       const [approval] = approvals;
-      expect(approval).toMatchObject({ status: "requested", tasks: 2 });
+      // LD-T7a: the approval names the planner task's model, which every task of the plan will run with.
+      expect(approval).toMatchObject({ status: "requested", tasks: 2, model: "fake-model" });
       if (approval === undefined) return;
+      const pendingText = harness();
+      expect(run(["approvals"], pendingText.io, sb.host)).toBe(0);
+      expect(pendingText.out.join("\n")).toContain("model fake-model");
       expect(first.out.join("\n")).toContain(`approval ${approval.approvalId} requested`);
       const view = taskView("Plan the docs");
       expect(view.state).toBe("completed");
@@ -494,9 +498,17 @@ describe("haril start with a planner task (LD-T4)", () => {
       expect(second.code).toBe(0);
       const status = harness();
       run(["status", "--json"], status.io, sb.host);
-      const tasks = parseJson<{ taskList: { state: string }[] }>(status.out).taskList;
+      const tasks = parseJson<{ taskList: { taskId: string; state: string }[] }>(
+        status.out,
+      ).taskList;
       expect(tasks).toHaveLength(1 + approval.tasks);
       expect(tasks.every((task) => task.state === "completed")).toBe(true);
+      // Every task, the planner and the two of its plan, shows the planner's model.
+      for (const task of tasks) {
+        const show = harness();
+        expect(run(["task", "show", task.taskId, "--json"], show.io, sb.host)).toBe(0);
+        expect(parseJson<{ model: string | null }>(show.out).model).toBe("fake-model");
+      }
     },
     TEST_TIMEOUT_MS,
   );

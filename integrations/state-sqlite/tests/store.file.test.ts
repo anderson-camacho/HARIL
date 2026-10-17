@@ -2,7 +2,13 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { configureConnection } from "../src/connection.js";
 import { openStore, type StoreError } from "../src/index.js";
+import { migrate } from "../src/migrate.js";
+import { MIGRATION_0001 } from "../src/migrations/0001_init.js";
+import { MIGRATION_0002 } from "../src/migrations/0002_budgets.js";
+import { MIGRATION_0003 } from "../src/migrations/0003_task_model.js";
+import { MIGRATION_0004 } from "../src/migrations/0004_approvals.js";
 import { fixedClock, makeTempDir, removeTempDir, sequentialIds, testRules } from "./support.js";
 
 // File-backed behaviour: durability across reopen, migrations, immutability and the open gates.
@@ -56,13 +62,13 @@ describe("file store lifecycle", () => {
 
     const second = open();
     expect(second.info().storeId).toBe(storeId);
-    expect(second.info().schemaVersion).toBe(4);
+    expect(second.info().schemaVersion).toBe(5);
     second.close();
 
     const connection = raw();
     const rows = connection.prepare("SELECT COUNT(*) AS n FROM schema_migrations").get();
     connection.close();
-    expect(rows).toEqual({ n: 4 });
+    expect(rows).toEqual({ n: 5 });
   });
 
   it("keeps committed commands and events across a reopen", () => {
@@ -122,7 +128,7 @@ describe("file store lifecycle", () => {
     connection.close();
 
     const store = open();
-    expect(store.info().schemaVersion).toBe(4);
+    expect(store.info().schemaVersion).toBe(5);
     store.close();
 
     const check = raw();
@@ -132,6 +138,38 @@ describe("file store lifecycle", () => {
       n: 1,
     });
     check.close();
+  });
+
+  it("[INV-12] an approval written at schema 4 reads with no model after the upgrade (LD-T7a)", () => {
+    // The release before schema 5: the first four migrations only, with one project and one requested approval.
+    const before = raw();
+    configureConnection(before, "wal");
+    migrate(before, fixedClock(), sequentialIds(), [
+      MIGRATION_0001,
+      MIGRATION_0002,
+      MIGRATION_0003,
+      MIGRATION_0004,
+    ]);
+    before.exec(
+      "INSERT INTO projects (project_id, slug, name, root_path, created_at) VALUES ('p-old', 'demo', 'Demo', 'D:/demo', 0)",
+    );
+    before.exec(
+      `INSERT INTO approvals (approval_id, project_id, kind, subject, subject_sha256, status, requested_at, requested_by) VALUES ('a-old', 'p-old', 'plan', '{}', '${"0".repeat(64)}', 'requested', 0, 'cli')`,
+    );
+    before.close();
+
+    const store = open();
+    expect(store.info().schemaVersion).toBe(5);
+    expect(store.approvals.get("a-old")).toMatchObject({ approvalId: "a-old", model: null });
+    expect(store.approvals.list()).toEqual([expect.objectContaining({ model: null })]);
+    store.close();
+
+    // The new column takes a model id or nothing, never a blank one.
+    const after = raw();
+    expect(() =>
+      after.exec("UPDATE approvals SET model = '  ' WHERE approval_id = 'a-old'"),
+    ).toThrow(/CHECK/);
+    after.close();
   });
 });
 

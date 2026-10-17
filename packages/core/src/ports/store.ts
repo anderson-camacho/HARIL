@@ -87,6 +87,9 @@ export interface ApprovalRecord {
   readonly requestedAt: number;
   // "cli" for a human at the terminal, otherwise the id of the proposing run or task.
   readonly requestedBy: string;
+  // The model of the task that proposed the plan (LD-T7a); null when it named none, and for a plan from the terminal.
+  // A granted plan gives it to every task it creates: a plan never names a model itself (ADR-0016 D10).
+  readonly model: string | null;
   readonly decidedAt: number | null;
   readonly decidedBy: string | null;
   readonly reason: string | null;
@@ -107,11 +110,13 @@ export interface ProposePlanInput {
   // Untrusted until it passes the Core rules of plan.submit.
   readonly plan: unknown;
   readonly requestedBy: string;
+  // The model of the proposing task (LD-T7a). Absent or null means none; a blank one is a model.invalid error.
+  readonly model?: string | null;
 }
 
 export interface ProposePlanResult {
   readonly approval: ApprovalRecord;
-  // False when the same plan already has a requested approval in this project: that one is returned.
+  // False when the same plan already has a requested approval in this project: that one is returned, with its model.
   readonly created: boolean;
 }
 
@@ -125,6 +130,7 @@ export interface DecideApprovalInput {
 
 export interface ApprovalsPort {
   // Validates the plan with the plan.submit rules; an invalid plan is a plan.invalid error that carries the same reason.
+  // A blank model is a model.invalid error. Neither stores anything.
   proposePlan(input: ProposePlanInput): Result<ProposePlanResult, HarilError>;
   // An admin write, only on a requested approval: a second decision is store.conflict, an unknown id store.not_found.
   decide(input: DecideApprovalInput): ApprovalRecord;

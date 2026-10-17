@@ -69,7 +69,7 @@ El plan también se le puede pedir a un agente: `task add --kind plan` crea una 
 .\bin\haril.ps1 run --project demo
 ```
 
-Con un modelo real, el agente `planner` lee el proyecto en Pi y propone el plan con la misma herramienta del puente: `haril task add --kind plan --agent planner --model cliproxy/gemini-3-flash "<objetivo>"`. Si el runtime rechaza el plan, el modelo recibe el motivo y puede corregirlo; los eventos guardan solo el hash y el tamaño del plan, y el resto del flujo (`approvals`, `approve`, `run`) es el mismo.
+Con un modelo real, el agente `planner` lee el proyecto en Pi y propone el plan con la misma herramienta del puente: `haril task add --kind plan --agent planner --model cliproxy/gemini-3-flash "<objetivo>"`. Si el runtime rechaza el plan, el modelo recibe el motivo y puede corregirlo; los eventos guardan solo el hash y el tamaño del plan, y el resto del flujo (`approvals`, `approve`, `run`) es el mismo. El plan nunca nombra un modelo: al aprobarlo, todas sus tareas heredan el modelo de la tarea de plan que lo propuso, así que un `analyst` dentro del plan corre con ese modelo. `haril approvals` y el detalle del plan en la interfaz muestran ese modelo (o `model none`) antes de decidir; un plan de `haril plan propose` o de `plan import` no lleva modelo.
 
 7. Consultar el resultado:
 

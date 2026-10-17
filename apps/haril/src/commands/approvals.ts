@@ -4,7 +4,8 @@ import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
 import { dataDirFor, nudgeQueued, openExisting } from "./common.js";
 
 // `haril approvals` lists the approvals of the plans (LD-T3); `haril approve` and `haril deny` decide one. A decision is
-// a declaration: decidedBy is the operator's OS user name, not an authenticated identity (ARCH 9.12).
+// a declaration: decidedBy is the operator's OS user name, not an authenticated identity (ARCH 9.12). Each approval names
+// the model its plan's tasks will run with (LD-T7a): the model of the task that proposed it, or none.
 
 export function approvals(args: readonly string[], io: CliIo, host: HostInfo): number {
   const parsed = parseArgs(args, {
@@ -46,7 +47,7 @@ export function approvals(args: readonly string[], io: CliIo, host: HostInfo): n
     }
     for (const row of listing) {
       io.out(
-        `${row.approvalId}  ${row.projectSlug}  ${row.kind}  ${row.tasks} tasks  ${row.status}  requested ${new Date(row.requestedAt).toISOString()}`,
+        `${row.approvalId}  ${row.projectSlug}  ${row.kind}  ${row.tasks} tasks  model ${row.model ?? "none"}  ${row.status}  requested ${new Date(row.requestedAt).toISOString()}`,
       );
     }
     return EXIT_OK;
@@ -115,6 +116,7 @@ interface ApprovalRow {
   readonly kind: string;
   readonly status: ApprovalStatus;
   readonly tasks: number;
+  readonly model: string | null;
   readonly requestedAt: number;
   readonly requestedBy: string;
   readonly decidedAt: number | null;
@@ -131,6 +133,7 @@ function toRow(approval: ApprovalRecord, slugs: ReadonlyMap<string, string>): Ap
     kind: approval.kind,
     status: approval.status,
     tasks: Array.isArray(tasks) ? tasks.length : 0,
+    model: approval.model,
     requestedAt: approval.requestedAt,
     requestedBy: approval.requestedBy,
     decidedAt: approval.decidedAt,

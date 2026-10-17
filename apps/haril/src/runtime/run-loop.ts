@@ -385,7 +385,8 @@ function recoveryEvent(recovered: RecoveredTask): RunEvent {
 }
 
 // A plan attempt (LD-T4) runs inside a proposal window: each proposal it records is told to subscribers at once, and a
-// success that recorded none fails as plan.not_proposed. Every other attempt runs as it is.
+// success that recorded none fails as plan.not_proposed. The window carries the task's model, which the plan's tasks
+// inherit once it is granted (LD-T7a). Every other attempt runs as it is.
 async function executePlannedAttempt(
   options: RunLoopOptions,
   shutdown: Shutdown,
@@ -395,7 +396,7 @@ async function executePlannedAttempt(
 ): Promise<AgentOutcome> {
   if (task.kind !== "plan") return await executeAttempt(options, shutdown, lease, emit, task);
   const close = options.planProposals?.open(
-    { projectId: task.projectId, taskId: task.taskId, runId: task.runId },
+    { projectId: task.projectId, taskId: task.taskId, runId: task.runId, model: task.model },
     (proposal) => emit({ type: "approval.requested", ...proposal }),
   );
   let report: PlanAttemptReport = { proposed: false };
