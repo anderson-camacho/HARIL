@@ -110,6 +110,11 @@ export interface ShellSnapshot {
   // Newest events for the scope, oldest first.
   readonly events: readonly EventRecord[];
   readonly runtime: RuntimeLeaseSummary;
+  // True while a runtime holds the lease: active, unexpired and its process alive (LD-T6).
+  readonly runtimeAlive: boolean;
+  // Work that waits for a runtime, across every project (LD-T6): queued commands, ready tasks and decided approvals
+  // the runtime has not applied yet.
+  readonly waitingWork: number;
   // Approvals waiting for a decision, across every project (LD-T3): the banner shows this count.
   readonly pendingApprovals: number;
   // The same approvals with their plans, oldest request first (LD-T5).
@@ -142,12 +147,15 @@ export interface OpenShellDataOptions {
   readonly readFile?: (path: string) => string | undefined;
   // Names of the entries of a directory; empty when it does not exist.
   readonly listFiles?: (dir: string) => readonly string[];
+  // Whether a lease holder's process exists, as the CLI checks it. Injected so tests can fake a process.
+  readonly isPidAlive?: (pid: number) => boolean;
 }
 
 export function openShellData(options: OpenShellDataOptions): ShellData {
   const now = options.now ?? (() => Date.now());
   const readFile = options.readFile ?? readOptionalFile;
   const listFiles = options.listFiles ?? listDirectory;
+  const isPidAlive = options.isPidAlive ?? defaultPidAlive;
   const { paths, env } = options;
   const clock: Clock = {
     now,
@@ -175,7 +183,7 @@ export function openShellData(options: OpenShellDataOptions): ShellData {
             checkTaskKind,
             canonicalJson,
           },
-          isPidAlive: defaultPidAlive,
+          isPidAlive,
         });
       }
     } catch (error) {
@@ -196,14 +204,17 @@ export function openShellData(options: OpenShellDataOptions): ShellData {
   return {
     load(scope) {
       const providers = readProviders(paths.configPath, env, readFile);
+      const loadedAt = now();
       const base = {
         initialized,
         storeError,
-        loadedAt: now(),
+        loadedAt,
         projects: [],
         tasks: [],
         events: [],
         runtime: { status: "none" } as const,
+        runtimeAlive: false,
+        waitingWork: 0,
         pendingApprovals: 0,
         approvals: [],
         live: [],
@@ -220,12 +231,19 @@ export function openShellData(options: OpenShellDataOptions): ShellData {
           .map((task) => open.tasks.get(task.taskId))
           .filter((task): task is TaskDetail => task !== undefined);
         const approvals = open.approvals.list({ status: "requested" }).map(pendingApproval);
+        const runtime = open.runtime.leaseSummary();
         return {
           ...base,
           projects,
           tasks,
           events: open.events.list({ projectId: scope, limit: EVENT_LIMIT }),
-          runtime: open.runtime.leaseSummary(),
+          runtime,
+          runtimeAlive:
+            runtime.status === "active" && runtime.expiresAt > loadedAt && isPidAlive(runtime.pid),
+          waitingWork:
+            open.commands.listQueued().length +
+            tasks.filter((task) => task.state === "ready").length +
+            open.approvals.listUnapplied().length,
           pendingApprovals: approvals.length,
           approvals,
           // The store lists tasks in creation order, so the newest are the last ones.

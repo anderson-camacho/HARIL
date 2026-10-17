@@ -114,7 +114,10 @@ describe("shell app with a seeded store", () => {
     await started(mounted);
     const screen = frame(mounted);
     expect(screen).toContain("HARIL shell");
-    expect(screen).toContain("isolation N0 · 0 pending approvals · runtime running · project all");
+    // The seeded lease belongs to this process, so the banner names its pid (LD-T6); the banner wraps when it is long.
+    expect(screen.replace(/\s+/g, " ")).toContain(
+      `isolation N0 · 0 pending approvals · runtime running (pid ${process.pid}) · project all`,
+    );
     expect(screen).toContain("q quit");
     mounted.terminal.send("q");
     await mounted.app.done;

@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runShell, type ShellRunDeps } from "../src/run.js";
+import type { RuntimeCommand, SpawnRuntime } from "../src/runtime-start.js";
+import { openSeedStore, queueTask } from "./seed.js";
 import { VirtualTerminal } from "./virtual-terminal.js";
 
 // Entry point (TUI-D8): without a terminal on stdin and stdout the shell refuses to start with exit 2.
@@ -48,5 +53,69 @@ describe("runShell", () => {
     const { deps, err } = harness();
     expect(await runShell(["--nope"], deps)).toBe(2);
     expect(err.join("\n")).toMatch(/usage: shell/);
+    expect(err.join("\n")).toContain("--no-runtime");
+  });
+});
+
+describe("runShell and the runtime (LD-T6)", () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "haril-shell-main-"));
+    mkdirSync(join(root, "data"));
+    // One project with a queued task and no runtime lease: work waits for a runtime.
+    const store = openSeedStore(join(root, "data"));
+    try {
+      const project = store.projects.register({ slug: "solo", name: "Solo", rootPath: "/w" });
+      queueTask(store, project.projectId, "Waiting work");
+    } finally {
+      store.close();
+    }
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function argsFor(extra: readonly string[]): string[] {
+    const runtimeRoot = join(root, "runtime");
+    return [
+      "--data-dir",
+      join(root, "data"),
+      "--runtime-root",
+      runtimeRoot,
+      "--config",
+      join(runtimeRoot, "config", "haril.json"),
+      "--haril",
+      join(root, "haril.mjs"),
+      ...extra,
+    ];
+  }
+
+  function recordingSpawn(): { spawn: SpawnRuntime; commands: RuntimeCommand[] } {
+    const commands: RuntimeCommand[] = [];
+    return {
+      commands,
+      spawn: (command) => {
+        commands.push(command);
+        return { pid: 4242, running: true, onExit: () => undefined };
+      },
+    };
+  }
+
+  it("starts the runtime through its spawn port when work waits", async () => {
+    const recorder = recordingSpawn();
+    const { deps } = harness({ spawnRuntime: recorder.spawn });
+    expect(await runShell(argsFor([]), deps)).toBe(0);
+    expect(recorder.commands.map((command) => command.args)).toEqual([
+      ["start", "--started-by", "shell", "--data-dir", join(root, "data")],
+    ]);
+  });
+
+  it("never starts one with --no-runtime", async () => {
+    const recorder = recordingSpawn();
+    const { deps } = harness({ spawnRuntime: recorder.spawn });
+    expect(await runShell(argsFor(["--no-runtime"]), deps)).toBe(0);
+    expect(recorder.commands).toEqual([]);
   });
 });

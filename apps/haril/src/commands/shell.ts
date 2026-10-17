@@ -8,10 +8,12 @@ import { runtimeRootFor } from "../runtime.js";
 import { dataDirFor } from "./common.js";
 
 // `haril shell` (TUI-T2): opens the interactive terminal UI. This process only resolves the paths, checks the terminal
-// and runs the shell bundle (apps/shell) with them. It never opens the store and never starts the runtime, and apps
-// never import each other, so the bundle is a separate Node process.
+// and runs the shell bundle (apps/shell) with them. It never opens the store, and apps never import each other, so the
+// bundle is a separate Node process. The bundle starts `haril start` when work waits and no runtime runs (LD-T6,
+// ADR-0022); --no-runtime tells it never to.
 
-const USAGE = "usage: haril shell [--data-dir <path>]";
+const USAGE = "usage: haril shell [--data-dir <path>] [--no-runtime]";
+const NO_RUNTIME = "--no-runtime";
 const NOT_A_TERMINAL =
   "the shell needs an interactive terminal (stdin and stdout must be a TTY); run haril shell in a terminal window";
 const NOT_BUILT = "the shell is not built; run npm run build";
@@ -42,7 +44,7 @@ export async function shell(
   host: HostInfo,
   ports: ShellPorts = defaultShellPorts(),
 ): Promise<number> {
-  const parsed = parseArgs(args, { values: ["--data-dir"], flags: [] });
+  const parsed = parseArgs(args, { values: ["--data-dir"], flags: [NO_RUNTIME] });
   const problem = argsProblem(parsed, io);
   if (problem !== null) return problem;
   if (parsed.positionals.length > 0) {
@@ -75,6 +77,7 @@ export async function shell(
       config,
       "--haril",
       ports.harilEntry,
+      ...(parsed.flags.has(NO_RUNTIME) ? [NO_RUNTIME] : []),
     ],
     io,
   );

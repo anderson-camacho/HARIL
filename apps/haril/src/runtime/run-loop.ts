@@ -81,6 +81,9 @@ export interface RunLoopOptions {
   >;
   // The ordered-stop control (ARCH 4.2). Defaults to a control nobody requests.
   readonly shutdown?: Shutdown;
+  // haril shell started this runtime (LD-T6, ADR-0022): the start is recorded as runtime.started_by_shell, with the pid
+  // and the epoch, once the lease is held.
+  readonly startedByShell?: boolean;
   // Test seams: the lease TTL and the poll interval default to the production values.
   readonly leaseTtlMs?: number;
   readonly pollMs?: number;
@@ -116,6 +119,9 @@ export async function runUntilIdle(options: RunLoopOptions): Promise<RunLoopResu
   const stopNotice = shutdown.onRequest((reason) => emit({ type: "runtime.stopping", reason }));
   let channelOpen = false;
   try {
+    if (options.startedByShell === true) {
+      recordStartedByShell(store, grant.value.instanceId, options.pid, epoch);
+    }
     channelOpen = await openChannel(options.control);
     // M1-T7: attempts orphaned by a previous runtime go back to the queue before anything is claimed.
     for (const recovered of store.runtime.reconcile(epoch, MAX_INFRA_RESTARTS)) {
@@ -517,6 +523,19 @@ function sleepUnlessWoken(
     const cancel = clock.schedule(ms, finish);
     unsubscribeStop = shutdown.onRequest(finish);
     unsubscribeNudge = onNudge(finish);
+  });
+}
+
+// An audit event of the lease just taken: the shell may only start a runtime this way, and the event says it did.
+function recordStartedByShell(store: Store, instanceId: string, pid: number, epoch: number): void {
+  store.events.append({
+    aggregateType: "runtime",
+    aggregateId: instanceId,
+    type: "runtime.started_by_shell",
+    actorKind: "system",
+    actorId: "runtime",
+    audit: true,
+    payload: { pid, epoch },
   });
 }
 

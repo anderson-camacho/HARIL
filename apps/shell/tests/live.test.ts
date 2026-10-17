@@ -158,6 +158,53 @@ describe("live feed (LD-T2)", () => {
     expect(h.feed.subscribed).toBe(false);
   });
 
+  it("tries again after each retry delay and resolves true once a runtime answers (LD-T6)", async () => {
+    const control = fakeControl();
+    let calls = 0;
+    const h = harnessWith(async () => {
+      calls += 1;
+      return calls < 3 ? undefined : control.client;
+    });
+    expect(await h.feed.subscribe([10, 10, 10])).toBe(true);
+    expect(h.connections).toHaveLength(3);
+    expect(h.feed.subscribed).toBe(true);
+    h.feed.close();
+  });
+
+  it("gives up after the last retry delay and tries nothing more (LD-T6)", async () => {
+    const h = harnessWith(async () => undefined);
+    expect(await h.feed.subscribe([10, 20])).toBe(false);
+    expect(h.connections).toHaveLength(3);
+    await wait(60);
+    expect(h.connections).toHaveLength(3);
+    expect(h.feed.subscribed).toBe(false);
+  });
+
+  it("close cancels a retry still waiting and resolves false (LD-T6)", async () => {
+    const h = harnessWith(async () => undefined);
+    const outcome = h.feed.subscribe([5_000]);
+    await wait(0);
+    h.feed.close();
+    expect(await outcome).toBe(false);
+    expect(h.connections).toHaveLength(1);
+  });
+
+  it("stopRetrying ends a waiting retry with false, and the next subscribe starts afresh (LD-T6)", async () => {
+    const control = fakeControl();
+    let answer = false;
+    const h = harnessWith(async () => (answer ? control.client : undefined));
+    const outcome = h.feed.subscribe([5_000]);
+    await wait(0);
+    h.feed.stopRetrying();
+    expect(await outcome).toBe(false);
+    expect(h.connections).toHaveLength(1);
+
+    answer = true;
+    expect(await h.feed.subscribe([5_000])).toBe(true);
+    expect(h.connections).toHaveLength(2);
+    h.feed.close();
+  });
+
   it("drops to unsubscribed and reports the change when the connection ends", async () => {
     const control = fakeControl();
     const h = harnessWith(async () => control.client);

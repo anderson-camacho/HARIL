@@ -119,6 +119,19 @@ describe("haril shell", () => {
     ]);
   });
 
+  it("passes --no-runtime to the bundle only when it is given (LD-T6)", async () => {
+    const entry = fixtureBundle(join(root, "bundle"));
+    const env = { HARIL_SHELL_ENTRY: entry, HARIL_RUNTIME_DIR: join(root, "runtime") };
+    const argvFile = join(root, "bundle", "argv.json");
+    expect(await shell(["--no-runtime"], harness().io, host(env), TTY)).toBe(7);
+    const without = JSON.parse(readFileSync(argvFile, "utf8")) as string[];
+    expect(without.at(-1)).toBe("--no-runtime");
+    expect(without.filter((arg) => arg === "--no-runtime")).toHaveLength(1);
+
+    expect(await shell([], harness().io, host(env), TTY)).toBe(7);
+    expect(JSON.parse(readFileSync(argvFile, "utf8"))).not.toContain("--no-runtime");
+  });
+
   it("passes HARIL_CONFIG as the config path when it is set", async () => {
     const entry = fixtureBundle(join(root, "bundle"));
     const config = join(root, "elsewhere", "haril.json");

@@ -3,7 +3,7 @@ import { createHarilActions, type ShellActions } from "./actions.js";
 import { AddTaskForm, addTaskArgs } from "./add-task.js";
 import { saveThemeChoice } from "./config-file.js";
 import type { PendingApproval, ShellData, ShellSnapshot, TaskDetailView } from "./data.js";
-import { fit, runtimeState, wrap } from "./format.js";
+import { fit, wrap } from "./format.js";
 import { GoalForm, goalArgs } from "./goal.js";
 import { HELP_LINES } from "./help.js";
 import { clampOffset, followCursor, packTabs } from "./layout.js";
@@ -17,12 +17,13 @@ import {
   type PanelView,
   type ShellSettings,
 } from "./panels/index.js";
+import type { RuntimeStarter, SpawnedRuntime } from "./runtime-start.js";
 import { readOptionalFile, resolveTheme, type Theme } from "./theme.js";
 
 // The shell app (TUI-T3): header, banner, tab strip, the active panel's body and a footer with its keys. The app only
 // reads through ShellData; its state is the selected panel, one cursor and scroll offset per panel, the project filter,
 // an open task or plan detail, an open form and the help overlay. Each key changes that state and the next frame
-// shows it. Every write is a haril child process (TUI-D13).
+// shows it. Every write is a haril child process (TUI-D13), and so is the runtime it may start (LD-T6).
 
 interface ShellBanner {
   readonly isolation: string;
@@ -42,6 +43,9 @@ export interface ShellAppOptions {
   readonly defaultModel?: string;
   // Opens the control channel for the live feed (LD-T2). Without it the shell never subscribes.
   readonly connectControl?: ConnectControl;
+  // Starts a runtime when work waits and none runs (LD-T6, ADR-0022). Without it (haril shell --no-runtime) the shell
+  // never starts one and says so after an action.
+  readonly runtimeStarter?: RuntimeStarter;
 }
 
 export interface ShellApp {
@@ -59,6 +63,16 @@ interface Segment {
   readonly bold?: boolean;
 }
 type FrameLine = readonly Segment[];
+
+// One start of the runtime by this shell (LD-T6): the child, its log relative to the runtime root and when it was
+// started; `confirmed` once the handshake reached a runtime, `ended` once a failed start was reported.
+interface ShellStart {
+  readonly runtime: SpawnedRuntime;
+  readonly log: string;
+  readonly at: number;
+  confirmed: boolean;
+  ended: boolean;
+}
 
 // A cursor or scroll movement: a step of lines, or a jump to the first or last line.
 type Motion =
@@ -85,8 +99,12 @@ const PLANS_PANEL = PANELS.findIndex((entry) => entry.id === "plans");
 const LIVE_PANEL = PANELS.findIndex((entry) => entry.id === "live");
 const NO_PROJECT_MESSAGE =
   "no project yet; create one with: haril project init <path> --name <name>";
-// The shell never starts the runtime (LD-T6 will); a queued plan task or a granted plan waits for one.
+// With --no-runtime the shell never starts the runtime: a queued task or a granted plan waits for one (LD-T6).
 const NO_RUNTIME_NOTE = "no runtime is running: start it with haril start";
+// The handshake after a start (LD-T6): one subscribe attempt at once and one after each wait, about 3 s in all. The
+// runtime opens its channel once it holds the lease; past the last wait the shell stops trying and says so.
+const HANDSHAKE_DELAYS_MS = [250, 500, 1000, 1250] as const;
+const HANDSHAKE_GAVE_UP = "runtime starting… press r";
 const NO_ACTIONS: ShellActions = createHarilActions({ harilEntry: undefined });
 // Keys that open a panel from anywhere: t Themes (TUI-D14), p Plans and l Live (LD-T5).
 const DIRECT_PANELS = [
@@ -138,11 +156,35 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
           onChange: () => tui.requestRender(),
         });
   const liveMark = (): string => (feed?.subscribed === true ? " · live" : "");
-  // Subscribes only while the runtime is active: on open and after r, never by polling (LD-T2).
+  // Subscribes only while the runtime is active: on open, after r and after an action, never by polling (LD-T2).
   const subscribeIfRuntimeRunning = (): void => {
-    if (feed !== undefined && runtimeState(snapshot.runtime, snapshot.loadedAt) === "running") {
-      feed.subscribe();
-    }
+    if (feed !== undefined && snapshot.runtimeAlive) void feed.subscribe();
+  };
+  // The runtime this shell started last (LD-T6), kept after it exits: the banner names it by its pid.
+  let started: ShellStart | undefined;
+  // Whether the start before the current one ended without a runtime: the next failure says "again".
+  let lastStartFailed = false;
+  const startingNote = (pid: number): string => `starting the runtime (pid ${pid})…`;
+  // Replaces the end of the status line when it still says `from`; a newer line is left as it is.
+  const replaceNote = (from: string, to: string): void => {
+    if (status?.endsWith(from) === true) status = `${status.slice(0, -from.length)}${to}`;
+  };
+  // The outcome of a start always reaches the status line: it replaces the note of that start, or the whole line when
+  // something newer took its place, so the line never keeps saying the runtime is starting.
+  const settleNote = (pid: number, note: string): void => {
+    const current = status;
+    const suffix = [startingNote(pid), HANDSHAKE_GAVE_UP].find((end) => current?.endsWith(end));
+    status =
+      current === undefined || suffix === undefined
+        ? note
+        : `${current.slice(0, -suffix.length)}${note}`;
+  };
+  // The runtime that answered a start: the shell's own child, or the one that won the lease before it.
+  const answeredNote = (pid: number): string => {
+    const lease = snapshot.runtime;
+    return snapshot.runtimeAlive && lease.status !== "none" && lease.pid !== pid
+      ? `runtime running (pid ${lease.pid})`
+      : `runtime started (pid ${pid})`;
   };
 
   const activeId = () => PANELS[panel]?.id ?? "projects";
@@ -152,16 +194,27 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
     scope === undefined
       ? "all"
       : (snapshot.projects.find((project) => project.projectId === scope)?.slug ?? "all");
-  const runtimeRunning = (): boolean =>
-    runtimeState(snapshot.runtime, snapshot.loadedAt) === "running";
   const approvalsText = (): string =>
     snapshot.pendingApprovals === 0
       ? "0 pending approvals"
       : `${snapshot.pendingApprovals} pending approvals (p to review)`;
+  // The runtime and its pid (LD-T6): running while a live process holds the lease, starting while the one this shell
+  // started has not taken it yet, idle otherwise.
+  const runtimeText = (): string => {
+    const lease = snapshot.runtime;
+    if (snapshot.runtimeAlive && lease.status !== "none") {
+      return started?.runtime.pid === lease.pid
+        ? `running (started by shell, pid ${lease.pid})`
+        : `running (pid ${lease.pid})`;
+    }
+    return started?.runtime.running === true
+      ? `starting (started by shell, pid ${started.runtime.pid})`
+      : "idle";
+  };
   const bannerText = (): string =>
     // The pending-approval count is read from the store with the rest of the snapshot (LD-T3). "live" shows while
     // the shell holds a subscription to the runtime (LD-T2).
-    `isolation ${banner.isolation} · ${approvalsText()} · runtime ${runtimeState(snapshot.runtime, snapshot.loadedAt)}${liveMark()} · project ${projectSlug()}`;
+    `isolation ${banner.isolation} · ${approvalsText()} · runtime ${runtimeText()}${liveMark()} · project ${projectSlug()}`;
   const openApproval = (): PendingApproval | undefined =>
     plan === undefined
       ? undefined
@@ -195,7 +248,8 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
 
   function chromeTop(columns: number): number {
     return (
-      2 +
+      1 +
+      wrap(bannerText(), columns).length +
       packTabs(
         PANELS.map((entry) => entry.label),
         columns,
@@ -256,7 +310,8 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
 
   function frame(columns: number, rows: number): FrameLine[] {
     const lines: FrameLine[] = [[segment(fit("HARIL shell", columns), "accent", true)]];
-    lines.push([segment(fit(bannerText(), columns), "muted")]);
+    // The banner wraps rather than cut: the runtime's pid and the project stay in view on a narrow terminal (LD-T6).
+    for (const part of wrap(bannerText(), columns)) lines.push([segment(part, "muted")]);
     for (const tabLine of packTabs(
       PANELS.map((entry) => entry.label),
       columns,
@@ -380,7 +435,7 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
       status = built.message;
       return;
     }
-    runAction(built.args, goal ? "asking for a plan..." : "adding task...", goal, (ok) => {
+    runAction(built.args, goal ? "asking for a plan..." : "adding task...", true, (ok) => {
       if (ok && form === current) form = undefined;
       if (ok && goal) showLive();
     });
@@ -411,11 +466,12 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
   }
 
   // Runs one CLI action in the background (TUI-D13). The outcome is one line; then the store is read again and the
-  // live feed subscribes if a runtime is up by then (LD-T5). An action that needs the runtime says so when none runs.
+  // live feed subscribes if a runtime is up by then (LD-T5). After an action that queued work the shell starts a
+  // runtime when none runs (LD-T6), and the line says how that went.
   function runAction(
     args: readonly string[],
     busy: string,
-    needsRuntime: boolean,
+    queuesWork: boolean,
     done: (ok: boolean) => void,
   ): void {
     pending = true;
@@ -424,14 +480,94 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
       pending = false;
       if (quitting) return;
       reload();
-      subscribeIfRuntimeRunning();
-      status =
-        outcome.ok && needsRuntime && !runtimeRunning()
-          ? `${outcome.message} · ${NO_RUNTIME_NOTE}`
-          : outcome.message;
+      const note = outcome.ok && queuesWork ? ensureRuntime() : undefined;
+      if (note === undefined) subscribeIfRuntimeRunning();
+      status = note === undefined ? outcome.message : `${outcome.message} · ${note}`;
       done(outcome.ok);
       tui.requestRender();
     });
+  }
+
+  // Starts a runtime unless one runs (LD-T6, ADR-0022), with the lease just read from the store: never a second one
+  // while the one this shell started still runs. Returns the note for the status line; none when a runtime runs.
+  function ensureRuntime(): string | undefined {
+    if (snapshot.runtimeAlive) return undefined;
+    const starter = options.runtimeStarter;
+    if (starter === undefined) return NO_RUNTIME_NOTE;
+    if (started?.runtime.running === true) return startingNote(started.runtime.pid);
+    const at = Date.now();
+    const outcome = starter.start();
+    if (!outcome.ok) return `could not start the runtime: ${outcome.message}`;
+    const start: ShellStart = {
+      runtime: outcome.runtime,
+      log: outcome.log,
+      at,
+      confirmed: false,
+      ended: false,
+    };
+    started = start;
+    start.runtime.onExit((code) => runtimeExited(start, code));
+    handshake(start);
+    return startingNote(start.runtime.pid);
+  }
+
+  // The bounded handshake after a start (LD-T6): a few subscribe attempts, then the outcome on the status line. Nothing
+  // keeps trying afterwards; r reads the store again. An exit of the child ends it sooner (runtimeExited).
+  function handshake(start: ShellStart): void {
+    const pid = start.runtime.pid;
+    const subscribed =
+      feed === undefined ? Promise.resolve(false) : feed.subscribe(HANDSHAKE_DELAYS_MS);
+    void subscribed.then((ok) => {
+      if (quitting || start.ended) return;
+      reload();
+      if (ok) {
+        start.confirmed = true;
+        lastStartFailed = false;
+      }
+      replaceNote(startingNote(pid), ok ? answeredNote(pid) : HANDSHAKE_GAVE_UP);
+      tui.requestRender();
+    });
+  }
+
+  // The child of a start exited. After it held the lease, or once the handshake reached a runtime, this is the normal
+  // end (idle, a stop) and only the banner changes. Before that, the start failed, unless another runtime won the
+  // lease: the handshake stops and the line says so, with the exit code and the log to read.
+  function runtimeExited(start: ShellStart, code: number | null): void {
+    if (quitting) return;
+    reload();
+    const lease = snapshot.runtime;
+    const heldLease =
+      lease.status !== "none" && lease.pid === start.runtime.pid && lease.startedAt >= start.at;
+    if (start.confirmed || heldLease) {
+      lastStartFailed = false;
+    } else if (!start.ended) {
+      start.ended = true;
+      if (snapshot.runtimeAlive) {
+        lastStartFailed = false;
+        settleNote(start.runtime.pid, answeredNote(start.runtime.pid));
+        subscribeIfRuntimeRunning();
+      } else {
+        feed?.stopRetrying();
+        const again = lastStartFailed ? " again" : "";
+        const exited = code === null ? "" : ` (code ${code})`;
+        settleNote(start.runtime.pid, `the runtime exited${again}${exited}; see ${start.log}`);
+        lastStartFailed = true;
+      }
+    }
+    tui.requestRender();
+  }
+
+  // On opening and on r: subscribes to a running runtime, or starts one when work waits and none runs (LD-T6). Under
+  // --no-runtime the line says that the waiting work needs haril start.
+  function followRuntime(): void {
+    if (snapshot.runtimeAlive) {
+      subscribeIfRuntimeRunning();
+      replaceNote(HANDSHAKE_GAVE_UP, "runtime running");
+      return;
+    }
+    if (snapshot.waitingWork === 0) return;
+    if (options.runtimeStarter === undefined) status = NO_RUNTIME_NOTE;
+    else if (started?.runtime.running !== true) status = ensureRuntime();
   }
 
   // Applies a theme now and writes ui.theme (TUI-D14). A theme that cannot be loaded is reported and not saved.
@@ -521,7 +657,7 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
     if (helpOpen) return;
     if (matchesKey(input, "r")) {
       reload();
-      subscribeIfRuntimeRunning();
+      followRuntime();
       return;
     }
     if (detail !== undefined) return;
@@ -604,7 +740,8 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
   return {
     start: () => {
       tui.start();
-      subscribeIfRuntimeRunning();
+      followRuntime();
+      tui.requestRender();
     },
     done,
     frameText: () =>

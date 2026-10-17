@@ -65,6 +65,20 @@ export function createTask(
   goal: string,
   dependsOn: readonly string[] = [],
 ): string {
+  queueTask(store, projectId, goal, dependsOn);
+  const applied = store.commands.applyNext(epoch);
+  const taskId = applied?.taskIds[0];
+  if (taskId === undefined) throw new Error(`seed task "${goal}" was not applied`);
+  return taskId;
+}
+
+// Queues task.create and leaves it queued, as haril task add does when no runtime runs (LD-T6).
+export function queueTask(
+  store: Store,
+  projectId: string,
+  goal: string,
+  dependsOn: readonly string[] = [],
+): void {
   const enqueued = store.commands.enqueue({
     type: "task.create",
     projectId,
@@ -82,10 +96,16 @@ export function createTask(
     },
   });
   if (enqueued.duplicate) throw new Error("seed command duplicated");
-  const applied = store.commands.applyNext(epoch);
-  const taskId = applied?.taskIds[0];
-  if (taskId === undefined) throw new Error(`seed task "${goal}" was not applied`);
-  return taskId;
+}
+
+// Ends the seeded runtime lease, as a runtime that exits idle does: the store then has no runtime (LD-T6).
+export function releaseSeedLease(dataDir: string, epoch: number): void {
+  const store = openSeedStore(dataDir);
+  try {
+    store.runtime.release(epoch, true);
+  } finally {
+    store.close();
+  }
 }
 
 export function seedStore(dataDir: string): SeedResult {

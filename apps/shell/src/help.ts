@@ -12,9 +12,9 @@ export const HELP_LINES: readonly string[] = [
   "  a            add a task: title, agent and model (Tab moves, Enter adds, Esc cancels)",
   "  t            open the Themes panel; Enter there applies the theme and saves ui.theme",
   "  Esc          close a detail, a form or this help",
-  "  r            reload from the store",
+  "  r            reload from the store; starts the runtime if work waits for one",
   "  ?            show or hide this help",
   "  q, Ctrl+C    quit",
   "",
-  "Banner: isolation, pending approvals, runtime (live while subscribed), project.",
+  "Banner: isolation, approvals, runtime and pid (live while subscribed), project.",
 ];

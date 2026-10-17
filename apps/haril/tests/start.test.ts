@@ -216,7 +216,7 @@ describe("haril start stays up for live work (LD-T1)", () => {
     const began = Date.now();
     expect(await startLive(["--idle-exit-sec", "1"])).toBe(0);
     expect(Date.now() - began).toBeGreaterThanOrEqual(900);
-    expect(h.out).toContain("done: 0 completed, 0 failed, 0 blocked");
+    expect(h.out).toContain(`done: 0 completed, 0 failed, 0 blocked (pid ${process.pid})`);
   });
 
   it("runs a task queued during the idle window, then exits after the window has passed", async () => {
@@ -239,5 +239,90 @@ describe("haril start stays up for live work (LD-T1)", () => {
     expect(await start()).toBe(0);
     expect(Date.now() - began).toBeLessThan(5_000);
     expect(await start(["--idle-exit-sec", "5"])).toBe(2);
+  });
+});
+
+describe("haril start --started-by shell (LD-T6)", () => {
+  interface EventView {
+    type: string;
+    aggregateType: string;
+    payload: Record<string, unknown>;
+  }
+
+  function startedByShell(): EventView[] {
+    const report = harness();
+    run(["events", "--json"], report.io, sb.host);
+    return parseJson<EventView[]>(report.out)
+      .filter((event) => event.type === "runtime.started_by_shell")
+      .map(({ type, aggregateType, payload }) => ({ type, aggregateType, payload }));
+  }
+
+  it("records runtime.started_by_shell once per start, with its pid and lease epoch", async () => {
+    addTask("Shell work");
+    expect(await startLive(["--started-by", "shell", "--idle-exit-sec", "0"])).toBe(0);
+    expect(stateOf("Shell work")).toBe("completed");
+    expect(startedByShell()).toEqual([
+      {
+        type: "runtime.started_by_shell",
+        aggregateType: "runtime",
+        payload: { pid: process.pid, epoch: 1 },
+      },
+    ]);
+
+    // A second start takes the next epoch and records its own event.
+    expect(await startLive(["--started-by", "shell", "--idle-exit-sec", "0"])).toBe(0);
+    expect(startedByShell().map((event) => event.payload.epoch)).toEqual([1, 2]);
+  });
+
+  it("records no such event without the flag", async () => {
+    addTask("Plain work");
+    expect(await startLive(["--idle-exit-sec", "0"])).toBe(0);
+    expect(startedByShell()).toEqual([]);
+  });
+
+  it("accepts only shell as the starter", async () => {
+    expect(await startLive(["--started-by", "cron", "--idle-exit-sec", "0"])).toBe(2);
+    expect(h.err.join("\n")).toContain("--started-by");
+    expect(startedByShell()).toEqual([]);
+  });
+
+  // Runtimes started by shells share the log of the day, so the start and the exit lines name their pid.
+  it("says it is up, with its pid, only once it holds the lease, and names its pid when done", async () => {
+    expect(await startLive(["--started-by", "shell", "--idle-exit-sec", "0"])).toBe(0);
+    expect(h.out[0]).toBe(
+      `runtime up (pid ${process.pid}): waiting for work, exits after 0 s idle (haril stop ends it)`,
+    );
+    expect(h.out.at(-1)).toBe(`done: 0 completed, 0 failed, 0 blocked (pid ${process.pid})`);
+  });
+
+  it("a start that loses the lease never says it is up and names itself in the refusal", async () => {
+    // A live holder (this process) keeps the lease, as the winner of a race between two starts does.
+    const store = openStore({
+      dataDir: sb.dataDir,
+      clock: systemClock,
+      ids: { next: () => `winner-${Math.random()}` },
+      rules: {
+        canTransition,
+        checkPlan: checkPlanSubmission,
+        checkAcceptance,
+        checkTaskKind,
+        canonicalJson,
+      },
+    });
+    const grant = store.runtime.acquire({
+      pid: process.pid,
+      nodeVersion: "v24.19.0",
+      sqliteVersion: "3.53.3",
+      ttlMs: 60_000,
+    });
+    expect(grant.ok).toBe(true);
+    store.close();
+
+    expect(await startLive(["--started-by", "shell", "--idle-exit-sec", "0"])).toBe(2);
+    expect(h.out.join("\n")).not.toContain("runtime up");
+    expect(h.err.join("\n")).toBe(
+      `haril (pid ${process.pid}): another runtime is active (pid ${process.pid})`,
+    );
+    expect(startedByShell()).toEqual([]);
   });
 });
