@@ -65,4 +65,20 @@ describe("opening the store next to a busy writer", () => {
     store.close();
     expect(await holder.exited).toBe(0);
   }, 60_000);
+
+  it("a write waits for a lock held longer than the busy timeout instead of failing at once", async () => {
+    const store = openAt();
+    try {
+      // Held three times the 200 ms busy timeout, within the retry budget: a single BEGIN IMMEDIATE would fail.
+      const holder = startChild("lock-holder.mjs", [dbPath(), "600"]);
+      children.push(holder);
+      await holder.ready;
+
+      const { projectId } = store.projects.register({ slug: "busy", name: "Busy", rootPath: dir });
+      expect(store.projects.getBySlug("busy")?.projectId).toBe(projectId);
+      expect(await holder.exited).toBe(0);
+    } finally {
+      store.close();
+    }
+  }, 60_000);
 });

@@ -37,6 +37,7 @@ import type {
 type TaskState = TaskRecord["state"];
 
 import { createBudgetFacets } from "./budgets.js";
+import { withBusyRetry } from "./busy.js";
 import { readPragmas, readUserVersion } from "./connection.js";
 import { StoreError } from "./errors.js";
 import { createMaintenance } from "./maintenance.js";
@@ -262,20 +263,23 @@ export class SqliteStore implements Store {
     const manifestSha256 = input.manifestSha256 ?? null;
     const trustedAt = manifestSha256 === null ? null : createdAt;
     try {
-      this.db
-        .prepare(
-          "INSERT INTO projects (project_id, slug, name, root_path, manifest_sha256, manifest_json, trusted_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .run(
-          projectId,
-          input.slug,
-          input.name,
-          input.rootPath,
-          manifestSha256,
-          input.manifestJson ?? null,
-          trustedAt,
-          createdAt,
-        );
+      // In BEGIN IMMEDIATE like every write, so a busy database is retried instead of failing at once.
+      this.inTransaction(() =>
+        this.db
+          .prepare(
+            "INSERT INTO projects (project_id, slug, name, root_path, manifest_sha256, manifest_json, trusted_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+          )
+          .run(
+            projectId,
+            input.slug,
+            input.name,
+            input.rootPath,
+            manifestSha256,
+            input.manifestJson ?? null,
+            trustedAt,
+            createdAt,
+          ),
+      );
     } catch (error) {
       if (isUniqueViolation(error)) {
         throw new StoreError(
@@ -1262,7 +1266,9 @@ export class SqliteStore implements Store {
   private inTransaction<T>(work: () => T): T {
     // A nested call (the reconciler settles budgets inside its own transaction) joins the open one.
     if (this.db.isTransaction) return work();
-    this.db.exec("BEGIN IMMEDIATE");
+    // Taking the write lock retries with a bounded backoff (ARCH 8.4): nothing has run yet, so a retry is safe, and a
+    // CLI write next to a busy runtime waits instead of failing with "database is locked" after 200 ms.
+    withBusyRetry(() => this.db.exec("BEGIN IMMEDIATE"));
     try {
       const value = work();
       this.db.exec("COMMIT");
