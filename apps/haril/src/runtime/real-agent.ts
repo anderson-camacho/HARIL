@@ -107,11 +107,13 @@ export function createRealAgents(options: RealAgentsOptions): RealAgents {
         spec.maxTokens === undefined ||
         spec.maxTokens < 1
       ) {
+        // The refusal names only what this spec lacks (LD-T7a): a plan task can inherit a model and still have no
+        // token ceiling.
         return {
           ok: false,
           error: {
             code: "agent.invalid_spec",
-            message: "a real agent needs a model, a project and a token ceiling",
+            message: `a real agent needs ${listed(missingSpecParts(spec))}`,
           },
         };
       }
@@ -230,6 +232,23 @@ export function createRealAgents(options: RealAgentsOptions): RealAgents {
       }
     },
   };
+}
+
+// What a real agent's spec lacks, in the order the refusal names them.
+function missingSpecParts(spec: AgentSpec): string[] {
+  return [
+    ...(spec.model === undefined ? ["a model"] : []),
+    ...(spec.projectId === undefined ? ["a project"] : []),
+    ...(spec.maxTokens === undefined || spec.maxTokens < 1
+      ? ["a token ceiling (budget.maxTokens of at least 1)"]
+      : []),
+  ];
+}
+
+// "a", "a and b", "a, b and c".
+function listed(parts: readonly string[]): string {
+  if (parts.length <= 1) return parts.join("");
+  return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
 }
 
 // What a real run needs before a task is claimed (M2-T6): the isolated runtime, the bridge and a valid provider file.

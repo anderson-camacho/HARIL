@@ -140,6 +140,60 @@ describe("approvals.proposePlan", () => {
   });
 });
 
+// LD-T7a: the approval keeps the model of the task that proposed the plan; the plan's tasks are created with it.
+describe("approvals.proposePlan with the model of the proposing task", () => {
+  function proposeWithModel(model: string | null | undefined) {
+    return store.approvals.proposePlan({
+      projectId,
+      plan: readPlan(EXAMPLE_VALID),
+      requestedBy: "run-1",
+      ...(model === undefined ? {} : { model }),
+    });
+  }
+
+  it("records the model on the approval and in its approval.requested event; get and list return it", () => {
+    const proposed = proposeWithModel("e2e-model");
+    if (!proposed.ok) throw new Error("the example plan should be valid");
+    const { approvalId } = proposed.value.approval;
+    expect(proposed.value.approval.model).toBe("e2e-model");
+    expect(store.approvals.get(approvalId)?.model).toBe("e2e-model");
+    expect(store.approvals.list().map((approval) => approval.model)).toEqual(["e2e-model"]);
+    const [requested] = store.events.list({ aggregateId: approvalId });
+    expect(requested?.payload).toMatchObject({ kind: "plan", model: "e2e-model" });
+  });
+
+  it("records no model when the proposer names none, and the event has no model key", () => {
+    const fromCli = proposeValid();
+    expect(store.approvals.get(fromCli)?.model).toBeNull();
+    expect(store.events.list({ aggregateId: fromCli })[0]?.payload).not.toHaveProperty("model");
+
+    store.approvals.decide({ approvalId: fromCli, outcome: "denied", decidedBy: "ana" });
+    const explicit = proposeWithModel(null);
+    if (!explicit.ok) throw new Error("the example plan should be valid");
+    expect(explicit.value.approval.model).toBeNull();
+  });
+
+  it("refuses a blank model and stores nothing", () => {
+    const proposed = proposeWithModel("   ");
+    expect(proposed.ok).toBe(false);
+    if (proposed.ok) return;
+    expect(proposed.error.code).toBe("model.invalid");
+    expect(proposed.error.message).toContain("model");
+    expect(store.approvals.list()).toEqual([]);
+  });
+
+  it("the same plan proposed again while it waits keeps the model of the first proposal", () => {
+    const first = proposeWithModel("e2e-model");
+    const again = proposeWithModel("cliproxy/test-model");
+    if (!first.ok || !again.ok) throw new Error("the example plan should be valid");
+    expect(again.value.created).toBe(false);
+    expect(again.value.approval).toMatchObject({
+      approvalId: first.value.approval.approvalId,
+      model: "e2e-model",
+    });
+  });
+});
+
 describe("approvals.decide", () => {
   it("grants a requested approval, records who decided and why, and emits approval.granted", () => {
     const id = proposeValid();

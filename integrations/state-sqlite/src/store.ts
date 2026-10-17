@@ -654,6 +654,12 @@ export class SqliteStore implements Store {
     const projectId = command.projectId ?? "";
     const check = this.rules.checkPlan(command.args.plan);
     if (!check.ok) return { ok: false, reason: check.reason };
+    // LD-T7a: the model of the task that proposed an approved plan; every task of the plan gets it. Absent or null means
+    // none (a plan from plan import). The plan itself never names a model (ADR-0016 D10).
+    const defaultModel = optionalModel(command.args.defaultModel);
+    if (defaultModel === undefined) {
+      return { ok: false, reason: "defaultModel must be a non-empty model id" };
+    }
 
     const byLocalId = new Map(check.plan.tasks.map((task) => [task.localId, task]));
     for (const task of check.plan.tasks) {
@@ -693,7 +699,7 @@ export class SqliteStore implements Store {
           priority: task.priority,
           kind: task.kind,
           agentRef: task.agent,
-          model: null,
+          model: defaultModel,
           requires: task.requires,
           context: task.context,
           surfaceWrite: task.surface.write,
@@ -717,7 +723,11 @@ export class SqliteStore implements Store {
       type: "plan.submitted",
       actorKind: "system",
       actorId: "runtime",
-      payload: { taskCount: taskIds.length, order: check.order },
+      payload: {
+        taskCount: taskIds.length,
+        order: check.order,
+        ...(defaultModel === null ? {} : { defaultModel }),
+      },
       projectId,
     });
     return { ok: true, taskIds, planId };
@@ -1439,6 +1449,13 @@ function parseCommand(row: CommandRow): CommandRecord {
   return { ...row, args: JSON.parse(row.args) as Record<string, unknown> };
 }
 
+// An optional model id of a command (M2-T6, LD-T7a): absent or null is no model, a non-empty string is the model, and
+// anything else is undefined, which the caller rejects.
+function optionalModel(value: unknown): string | null | undefined {
+  if (value === undefined || value === null) return null;
+  return typeof value === "string" && value.trim() !== "" ? value : undefined;
+}
+
 // Validates the task.create arguments written by `haril task add`; a string is the rejection reason.
 function parseTaskCreateArgs(
   args: Readonly<Record<string, unknown>>,
@@ -1468,10 +1485,8 @@ function parseTaskCreateArgs(
   const kind = rules.checkTaskKind(args.kind, agent);
   if (!kind.ok) return kind.reason;
   // Optional (M2-T6): absent or null means no model; a token ceiling of 0 means none was set.
-  const model = args.model ?? null;
-  if (model !== null && (typeof model !== "string" || model.trim() === "")) {
-    return "model must be a non-empty model id";
-  }
+  const model = optionalModel(args.model);
+  if (model === undefined) return "model must be a non-empty model id";
   const maxTokens = args.maxTokens ?? 0;
   if (!Number.isSafeInteger(maxTokens) || (maxTokens as number) < 0) {
     return "maxTokens must be a whole number of at least 0";
@@ -1492,7 +1507,7 @@ function parseTaskCreateArgs(
     dependsOn: dependsOn as string[],
     kind: kind.kind,
     agent,
-    model: model as string | null,
+    model,
     maxAttempts: maxAttempts as number,
     timeoutMs: timeoutMs as number,
     maxTokens: maxTokens as number,

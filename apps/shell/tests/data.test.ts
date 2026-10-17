@@ -273,6 +273,7 @@ describe("plans waiting for approval (LD-T5)", () => {
         approvalId,
         projectId: seeded.demoId,
         requestedBy: "cli",
+        model: null,
         error: undefined,
       });
       expect(approval?.tasks.map((task) => task.localId)).toEqual([
@@ -338,6 +339,21 @@ describe("live tasks (LD-T5)", () => {
       expect(goals).toHaveLength(20);
       expect(goals[0]).toBe("Bulk task 6");
       expect(goals.at(-1)).toBe("Bulk task 25");
+    } finally {
+      data.close();
+    }
+  });
+});
+
+describe("the model of a plan waiting for approval (LD-T7a)", () => {
+  it("keeps the model of the task that proposed the plan", () => {
+    const seeded = seedStore(dataDir);
+    proposeExamplePlan(dataDir, seeded.demoId, "e2e-model");
+    const data = openShellData({ paths: paths(), env: {} });
+    try {
+      expect(data.load(undefined).approvals).toEqual([
+        expect.objectContaining({ requestedBy: "run-planner", model: "e2e-model" }),
+      ]);
     } finally {
       data.close();
     }

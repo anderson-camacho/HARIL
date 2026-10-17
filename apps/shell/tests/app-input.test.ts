@@ -698,6 +698,7 @@ describe("/ commands (LD-T6b-2)", () => {
           projectId: seeded.demoId,
           requestedAt: snapshot.loadedAt,
           requestedBy: "cli",
+          model: null,
           tasks: [],
           error: undefined,
         })),

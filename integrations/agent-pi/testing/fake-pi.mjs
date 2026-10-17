@@ -14,6 +14,9 @@
 // request that must not be answered; the reply says whether a stray answer arrived).
 // LD-T4 scenarios: propose_plan (one valid plan through the bridge's plan.propose, as haril_propose_plan would send
 // it), propose_plan_retry (an invalid plan first; after the refusal, the valid plan). The reply reports each answer.
+// LD-T7b scenario: propose_analyst_plan, one wrapper for both runs of the live demo. A planner run (one offered
+// haril_propose_plan) proposes a plan of analyst tasks with the token ceiling the planner prompt asks for; any other
+// run answers through the Broker, as ok_via_broker does.
 // Test-only: the real Pi is never replaced outside HARIL_PI_CLI_OVERRIDE.
 
 import { connect } from "node:net";
@@ -24,6 +27,8 @@ const allowedTools = (process.env.HARIL_TOOLS ?? "").split(",").filter((name) =>
 const [pipePath = "", token = ""] = splitBridge(process.env.HARIL_BRIDGE ?? "");
 const expectedModel = argValue("--model");
 const LARGE_LINE_BYTES = 8 * 1024 * 1024 + 1;
+const PROPOSE_PLAN_TOOL = "haril_propose_plan";
+const ANALYST_MAX_TOKENS = 20000;
 
 const pendingBridge = new Map();
 let bridgeSeq = 0;
@@ -110,9 +115,10 @@ function bridgeRead(path) {
   return bridgeRequest({ op: "read", path });
 }
 
-// A valid two-step plan for the goal (the first line of the prompt). Its tasks are hermetic, so a granted plan runs
-// without a model; the description marks the plan body, which no event may carry.
-function fakePlan(goal) {
+// A valid two-step plan for the goal (the first line of the prompt). By default its tasks are hermetic, so a granted
+// plan runs without a model; the description marks the plan body, which no event may carry. The analyst variant
+// (LD-T7b) is what the planner prompt asks for: read-only analyst tasks with a token ceiling of 20000.
+function fakePlan(goal, { agent = "fake:succeed", maxTokens = 0 } = {}) {
   const step = (localId, dependsOn, n) => ({
     localId,
     dependsOn,
@@ -120,11 +126,11 @@ function fakePlan(goal) {
     description: "A step the fake Pi planner proposes.",
     priority: 5,
     kind: "work",
-    agent: "fake:succeed",
+    agent,
     requires: [],
     context: [],
     surface: { write: [], read: [] },
-    budget: { maxCostMicros: 0, maxTokens: 0, maxWallMs: 60000 },
+    budget: { maxCostMicros: 0, maxTokens, maxWallMs: 60000 },
     timeoutMs: 60000,
     maxAttempts: 1,
     acceptance: [],
@@ -231,7 +237,8 @@ async function runPrompt() {
     return;
   }
   if (scenario === "hang" || scenario === "hang_abortable") return;
-  if (scenario === "ok_via_broker") {
+  const planning = allowedTools.includes(PROPOSE_PLAN_TOOL);
+  if (scenario === "ok_via_broker" || (scenario === "propose_analyst_plan" && !planning)) {
     await brokerChat(promptText);
     return;
   }
@@ -277,6 +284,13 @@ async function runPrompt() {
   }
   if (scenario === "propose_plan") {
     text = (await proposePlan(fakePlan(promptText.split("\n")[0] ?? ""))).text;
+  }
+  if (scenario === "propose_analyst_plan") {
+    const plan = fakePlan(promptText.split("\n")[0] ?? "", {
+      agent: "analyst",
+      maxTokens: ANALYST_MAX_TOKENS,
+    });
+    text = (await proposePlan(plan)).text;
   }
   // The model sends a wrong plan, reads the refusal and sends the fixed one, as the planner prompt asks.
   if (scenario === "propose_plan_retry") {

@@ -77,6 +77,8 @@ export interface PendingApproval {
   readonly projectId: string;
   readonly requestedAt: number;
   readonly requestedBy: string;
+  // The model every task of the plan will run with: that of the task that proposed it, or null (LD-T7a).
+  readonly model: string | null;
   readonly tasks: readonly PlanTaskRow[];
   // Set, with no tasks, when the subject is not a plan.
   readonly error: string | undefined;
@@ -291,6 +293,7 @@ function pendingApproval(record: ApprovalRecord): PendingApproval {
     projectId: record.projectId,
     requestedAt: record.requestedAt,
     requestedBy: record.requestedBy,
+    model: record.model,
     tasks: checked.ok ? checked.plan.tasks : [],
     error: checked.ok ? undefined : checked.errors.join("; "),
   };

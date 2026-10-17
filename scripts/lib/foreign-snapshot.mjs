@@ -24,8 +24,9 @@ export function foreignRoots({
     // Live tools write their own state while they run, not as an install: Claude Code its backups/ (about once a
     // minute), its session transcripts under projects/ and the per-session state of every running session (file
     // history, session records and environments, shell snapshots, state, cache, prompt history); Codex its internal
-    // databases (sqlite/), its log database, its global state and its model catalog cache. Ignoring them keeps the
-    // guard about installs; config and binaries still count.
+    // databases (sqlite/ and every SQLite database at its top level, with the -wal, -shm and -journal files SQLite
+    // creates and deletes while it runs), its global state and its model catalog cache. Ignoring them keeps the guard
+    // about installs; config and binaries still count.
     {
       name: "~/.claude",
       path: join(homeDir, ".claude"),
@@ -46,7 +47,7 @@ export function foreignRoots({
       path: join(homeDir, ".codex"),
       ignore: [
         "sqlite",
-        /^logs_\d+\.sqlite(-wal|-shm)?$/,
+        /^[^/]+\.sqlite(-wal|-shm|-journal)?$/,
         /^\.codex-global-state\.json(\.bak)?$/,
         "models_cache.json",
       ],

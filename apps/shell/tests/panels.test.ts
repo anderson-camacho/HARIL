@@ -253,11 +253,24 @@ describe("plans and live (LD-T5)", () => {
     if (approval === undefined) throw new Error("approval not loaded");
     const lines = buildPlanDetailView(approval, contextFor(snapshot, undefined));
     expect(lines[0]).toBe(`plan ${approvalId}`);
-    expect(lines[1]).toMatch(/^project demo, 4 tasks, requested \d+s ago by cli$/);
+    // A plan from the terminal names no model (LD-T7a): the header says so.
+    expect(lines[1]).toMatch(/^project demo, 4 tasks, model none, requested \d+s ago by cli$/);
     expect(lines).toContain("1. survey-readme: Survey the README structure");
     expect(lines).toContain("   agent developer-block, depends on: none");
     expect(lines).toContain("2. draft-section: Draft the new README section");
     expect(lines).toContain("   agent developer-block, depends on: survey-readme");
+  });
+
+  it("plan detail: the header names the model every task of the plan will run with (LD-T7a)", () => {
+    const seeded = seedStore(dataDir);
+    proposeExamplePlan(dataDir, seeded.demoId, "e2e-model");
+    const snapshot = loadSnapshot(undefined);
+    const approval = snapshot.approvals[0];
+    if (approval === undefined) throw new Error("approval not loaded");
+    const lines = buildPlanDetailView(approval, contextFor(snapshot, undefined));
+    expect(lines[1]).toMatch(
+      /^project demo, 4 tasks, model e2e-model, requested \d+s ago by run-planner$/,
+    );
   });
 
   it("live: state, kind, agent, attempt, tokens and the first line of the result or error", () => {
@@ -368,10 +381,12 @@ describe("plans and live (LD-T5)", () => {
       projectId: seeded.demoId,
       requestedAt: snapshot.loadedAt,
       requestedBy: "planner",
+      model: "cliproxy/test-model",
       tasks: [base, { ...base, localId: "quiet", description: " ", acceptance: [] }],
       error: undefined,
     };
     const lines = buildPlanDetailView(approval, contextFor(snapshot, undefined));
+    expect(lines[1]).toContain(", model cliproxy/test-model, ");
     const wipe = lines.indexOf("1. wipe: Tidy up");
     expect(lines.slice(wipe, wipe + 9)).toEqual([
       "1. wipe: Tidy up",
@@ -395,6 +410,7 @@ describe("plans and live (LD-T5)", () => {
       projectId: seeded.demoId,
       requestedAt: snapshot.loadedAt,
       requestedBy: "cli",
+      model: null,
       tasks: [],
       error: "/tasks/0/goal: Expected string",
     };
@@ -403,7 +419,7 @@ describe("plans and live (LD-T5)", () => {
     expect(text).toContain("invalid plan");
     expect(text).not.toContain("0 tasks");
     const lines = buildPlanDetailView(invalid, context);
-    expect(lines[1]).toMatch(/^project demo, invalid plan, requested/);
+    expect(lines[1]).toMatch(/^project demo, invalid plan, model none, requested/);
     expect(lines).toContain("the plan could not be read: /tasks/0/goal: Expected string");
   });
 });

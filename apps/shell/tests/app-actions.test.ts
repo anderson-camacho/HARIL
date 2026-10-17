@@ -390,6 +390,7 @@ describe("goal and plan review with a seeded store (LD-T5)", () => {
             projectId: seeded.demoId,
             requestedAt: snapshot.loadedAt,
             requestedBy: "cli",
+            model: null,
             tasks: [],
             error: "/tasks/0/goal: Expected string",
           },

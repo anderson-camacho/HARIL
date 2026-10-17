@@ -8,13 +8,13 @@ import {
   checkTaskKind,
   type RunEvent,
 } from "@haril/core";
-import type { Clock, PlanProposer, Store } from "@haril/core/ports";
+import type { AgentSpec, Clock, PlanProposer, Store } from "@haril/core/ports";
 import { FakeAgentRuntime, fakePlanFor } from "@haril/core/testing";
 import { openStore } from "@haril/state-sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { run } from "../src/cli.js";
 import { createPlanProposals, type PlanProposals } from "../src/runtime/plan-proposals.js";
-import { runUntilIdle } from "../src/runtime/run-loop.js";
+import { type RunLoopOptions, runUntilIdle } from "../src/runtime/run-loop.js";
 import { createShutdown } from "../src/runtime/shutdown.js";
 import { harness, makeSandbox, parseJson, projectRoot, type Sandbox } from "./helpers.js";
 
@@ -73,7 +73,11 @@ function addPlanTask(
   store: Store,
   projectId: string,
   maxAttempts = 1,
-  setup: { readonly goal?: string; readonly failsAcceptance?: boolean } = {},
+  setup: {
+    readonly goal?: string;
+    readonly failsAcceptance?: boolean;
+    readonly model?: string;
+  } = {},
 ): void {
   store.commands.enqueue({
     type: "task.create",
@@ -88,6 +92,7 @@ function addPlanTask(
       ...(setup.failsAcceptance === true
         ? { acceptance: [{ kind: "output_contains", text: "nunca-aparece" }] }
         : {}),
+      ...(setup.model === undefined ? {} : { model: setup.model }),
     },
     idempotencyKey: `plan-${++keySeq}`,
     requestHash: `plan-${keySeq}`,
@@ -98,6 +103,7 @@ interface LoopSetup {
   readonly proposals?: PlanProposals;
   readonly proposePlan?: PlanProposer;
   readonly notified?: ControlEvent[];
+  readonly realAgents?: RunLoopOptions["realAgents"];
 }
 
 function loop(store: Store, events: RunEvent[], setup: LoopSetup) {
@@ -116,6 +122,7 @@ function loop(store: Store, events: RunEvent[], setup: LoopSetup) {
     pollMs: 50,
     shutdown: createShutdown(),
     ...(setup.proposals === undefined ? {} : { planProposals: setup.proposals }),
+    ...(setup.realAgents === undefined ? {} : { realAgents: setup.realAgents }),
     control: {
       start: async () => undefined,
       close: async () => undefined,
@@ -398,6 +405,113 @@ describe("the planner in the runtime (LD-T4)", () => {
   });
 });
 
+// LD-T7a: the tasks of an approved plan inherit the model of the plan task that proposed it, so a real agent in the
+// plan has a model to run with. The real agents here are ready, with no provider to check a bare model against, and
+// run on a FakeAgentRuntime that records the spec of every attempt it starts.
+describe("the model of an approved plan's tasks (LD-T7a)", () => {
+  const analystPlan = {
+    schemaVersion: 1,
+    tasks: [
+      {
+        localId: "read",
+        dependsOn: [],
+        goal: "Read the README and summarize it",
+        description: "",
+        priority: 5,
+        kind: "work",
+        agent: "analyst",
+        requires: [],
+        context: [],
+        surface: { write: [], read: ["README.md"] },
+        // The token ceiling the planner prompt asks for: a real agent refuses a ceiling below 1.
+        budget: { maxCostMicros: 0, maxTokens: 20_000, maxWallMs: 5_000 },
+        timeoutMs: 5_000,
+        maxAttempts: 1,
+        acceptance: [],
+      },
+    ],
+  };
+
+  function recordingRealAgents(specs: AgentSpec[]): NonNullable<LoopSetup["realAgents"]> {
+    const runtime = new FakeAgentRuntime({ clock });
+    return {
+      readiness: () => ({
+        ok: true,
+        paths: { nodePath: "", piCliPath: "", bridgePath: "" },
+        providers: [],
+      }),
+      runtime: {
+        start: (spec) => {
+          specs.push(spec);
+          return runtime.start(spec);
+        },
+      },
+    };
+  }
+
+  // A plan task (with the model, when one is given) proposes the analyst plan; it is granted, and the runtime runs again.
+  async function planGrantAndRun(
+    model: string | undefined,
+    specs: AgentSpec[],
+    events: RunEvent[],
+  ) {
+    const store = open();
+    addPlanTask(store, projectOf(store), 1, model === undefined ? {} : { model });
+    const proposals = createPlanProposals(store);
+    const realAgents = recordingRealAgents(specs);
+    await loop(store, [], {
+      proposals,
+      proposePlan: (context) => proposals.propose(context, analystPlan),
+      realAgents,
+    });
+    const [approval] = store.approvals.list({ status: "requested" });
+    if (approval === undefined) throw new Error("the plan task proposed nothing");
+    store.approvals.decide({
+      approvalId: approval.approvalId,
+      outcome: "granted",
+      decidedBy: "ana",
+    });
+    await loop(store, events, { proposals, realAgents });
+    const analyst = store.tasks.list().find((task) => task.agentRef === "analyst");
+    if (analyst === undefined) throw new Error("the plan created no analyst task");
+    return { store, approval, analyst };
+  }
+
+  it("records the plan task's model on its approval and gives it to the plan's tasks, so the analyst runs", async () => {
+    const specs: AgentSpec[] = [];
+    const events: RunEvent[] = [];
+    const { store, approval, analyst } = await planGrantAndRun("e2e-model", specs, events);
+
+    expect(approval.model).toBe("e2e-model");
+    expect(store.tasks.get(analyst.taskId)).toMatchObject({
+      state: "completed",
+      model: "e2e-model",
+    });
+    // The spec the real runtime would be handed: a model and the token ceiling it requires (at least 1).
+    expect(specs).toEqual([
+      expect.objectContaining({ agentRef: "analyst", model: "e2e-model", maxTokens: 20_000 }),
+    ]);
+    expect(events.some((event) => event.type === "task.skipped")).toBe(false);
+  }, 20_000);
+
+  it("a plan task without a model leaves the plan's analyst without one: it is skipped and stays ready", async () => {
+    const specs: AgentSpec[] = [];
+    const events: RunEvent[] = [];
+    const { store, approval, analyst } = await planGrantAndRun(undefined, specs, events);
+
+    expect(approval.model).toBeNull();
+    expect(store.tasks.get(analyst.taskId)).toMatchObject({ state: "ready", model: null });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "task.skipped",
+        taskId: analyst.taskId,
+        what: "the task names no model",
+      }),
+    );
+    expect(specs).toEqual([]);
+  }, 20_000);
+});
+
 describe("createPlanProposals (LD-T4)", () => {
   const plan = (goal: string) => ({
     schemaVersion: 1,
@@ -508,6 +622,27 @@ describe("createPlanProposals (LD-T4)", () => {
       { approvalId: first.approvalId, taskId: "task-1", created: false },
     ]);
     expect(close()).toMatchObject({ proposed: true });
+  });
+
+  it("records the model of the attempt's task on the approval, and none for a task without one (LD-T7a)", () => {
+    const store = open();
+    const projectId = projectOf(store);
+    const proposals = createPlanProposals(store);
+    const withModel = { projectId, taskId: "task-1", runId: "run-1" };
+    const closeFirst = proposals.open(
+      { ...withModel, model: "cliproxy/test-model" },
+      () => undefined,
+    );
+    const first = proposals.propose(withModel, plan("Survey"));
+    closeFirst();
+    const withoutModel = { projectId, taskId: "task-2", runId: "run-2" };
+    const closeSecond = proposals.open({ ...withoutModel, model: null }, () => undefined);
+    const second = proposals.propose(withoutModel, plan("Report"));
+    closeSecond();
+
+    if (!first.ok || !second.ok) throw new Error("both plans should be recorded");
+    expect(store.approvals.get(first.approvalId)?.model).toBe("cliproxy/test-model");
+    expect(store.approvals.get(second.approvalId)?.model).toBeNull();
   });
 });
 

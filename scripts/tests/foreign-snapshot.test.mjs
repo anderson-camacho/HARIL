@@ -213,6 +213,9 @@ test("live tool state (transcripts, log databases, global state) is ignored, whi
     writeAt(join(claude, "history.jsonl"), "1");
     writeAt(join(codex, "logs_2.sqlite-wal"), "12");
     writeAt(join(codex, "logs_2.sqlite-shm"), "1");
+    writeAt(join(codex, "thread_history_1.sqlite-wal"), "1");
+    writeAt(join(codex, "state_5.sqlite-shm"), "1");
+    writeAt(join(codex, "state_5.sqlite-journal"), "1");
     writeAt(join(codex, ".codex-global-state.json.bak"), "1");
     writeAt(join(codex, "sqlite", "codex-dev.db-wal"), "1");
     writeAt(join(codex, "models_cache.json"), '{"refreshed":true}');

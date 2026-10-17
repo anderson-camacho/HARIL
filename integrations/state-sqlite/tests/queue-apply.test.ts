@@ -140,6 +140,50 @@ describe("commands.applyNext", () => {
     );
   });
 
+  it("applies plan.submit with a default model: every task of the plan gets it (LD-T7a)", () => {
+    store.commands.enqueue({
+      type: "plan.submit",
+      projectId,
+      args: { plan: JSON.parse(readFileSync(EXAMPLE_VALID, "utf8")), defaultModel: "e2e-model" },
+      idempotencyKey: `k-${++keySeq}`,
+      requestHash: `h-${keySeq}`,
+    });
+    expect(store.commands.applyNext(epoch)?.outcome).toBe("applied");
+    const models = store.tasks.list().map((task) => store.tasks.get(task.taskId)?.model);
+    expect(models).toEqual(["e2e-model", "e2e-model", "e2e-model", "e2e-model"]);
+    const submitted = store.events.list().find((event) => event.type === "plan.submitted");
+    expect(submitted?.payload).toMatchObject({ taskCount: 4, defaultModel: "e2e-model" });
+  });
+
+  it("applies plan.submit without a default model: the tasks name no model", () => {
+    enqueuePlan(JSON.parse(readFileSync(EXAMPLE_VALID, "utf8")));
+    store.commands.applyNext(epoch);
+    const models = store.tasks.list().map((task) => store.tasks.get(task.taskId)?.model);
+    expect(models).toEqual([null, null, null, null]);
+    const submitted = store.events.list().find((event) => event.type === "plan.submitted");
+    expect(submitted?.payload).not.toHaveProperty("defaultModel");
+  });
+
+  it.each([
+    ["a blank string", "  "],
+    ["a number", 7],
+  ])(
+    "rejects plan.submit whose default model is %s, and creates nothing",
+    (_name, defaultModel) => {
+      store.commands.enqueue({
+        type: "plan.submit",
+        projectId,
+        args: { plan: JSON.parse(readFileSync(EXAMPLE_VALID, "utf8")), defaultModel },
+        idempotencyKey: `k-${++keySeq}`,
+        requestHash: `h-${keySeq}`,
+      });
+      const applied = store.commands.applyNext(epoch);
+      expect(applied?.outcome).toBe("rejected");
+      expect(applied?.reason).toBe("defaultModel must be a non-empty model id");
+      expect(store.tasks.list()).toHaveLength(0);
+    },
+  );
+
   it("[INV-05] re-validates a plan with a cycle, rejects it and creates nothing", () => {
     enqueuePlan(JSON.parse(readFileSync(EXAMPLE_CYCLE, "utf8")));
     const applied = store.commands.applyNext(epoch);

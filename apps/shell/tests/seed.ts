@@ -211,14 +211,16 @@ export function seedStore(dataDir: string): SeedResult {
 }
 
 // Proposes examples/plan.valid.json (four tasks, a chain) for approval in the project, the way haril plan propose
-// does, and returns the approval id. Nothing applies it: the approval stays requested.
-export function proposeExamplePlan(dataDir: string, projectId: string): string {
+// does, and returns the approval id. Nothing applies it: the approval stays requested. With a model, it is proposed
+// the way a planner run does (LD-T7a): by the run, with the model of its task.
+export function proposeExamplePlan(dataDir: string, projectId: string, model?: string): string {
   const store = openSeedStore(dataDir);
   try {
     const proposed = store.approvals.proposePlan({
       projectId,
       plan: JSON.parse(readFileSync(EXAMPLE_PLAN, "utf8")) as unknown,
-      requestedBy: "cli",
+      requestedBy: model === undefined ? "cli" : "run-planner",
+      ...(model === undefined ? {} : { model }),
     });
     if (!proposed.ok) throw new Error(`seed plan was refused: ${proposed.error.message}`);
     return proposed.value.approval.approvalId;
