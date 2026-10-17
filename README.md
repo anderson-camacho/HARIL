@@ -15,7 +15,13 @@ Un núcleo propio controla la ejecución; Pi, Engram, Herdr y los proveedores de
 
 Requisitos: Node 24 (recomendado `^24.21.0`; con 24.19 funciona y `doctor` avisa) y `corepack` (incluido en Node 24). Los pasos son para PowerShell, desde la raíz del repositorio.
 
-1. Instalar dependencias y compilar la CLI:
+1. Instalar todo con un solo comando. Instala las dependencias, compila, instala el runtime de Pi y la CLI en tu usuario, y termina con `doctor`:
+
+   ```powershell
+   .\install.cmd
+   ```
+
+   En macOS o Linux es `./install.sh`, y en PowerShell también sirve `.\install.ps1`. Las opciones están en [Instalar HARIL en tu usuario](#instalar-haril-en-tu-usuario). Si solo quieres dependencias y compilación, la alternativa manual es:
 
    ```powershell
    corepack pnpm install
@@ -91,15 +97,46 @@ Con un modelo real, el agente `planner` lee el proyecto en Pi y propone el plan 
 
 ### Instalar HARIL en tu usuario
 
-El instalador copia la CLI compilada a `%LOCALAPPDATA%\HARIL\app\<versión>\` y crea los lanzadores en `%LOCALAPPDATA%\HARIL\bin\`. No edita el PATH ni el registro: se llama al lanzador por su ruta completa.
+Un solo comando desde la raíz del repositorio:
+
+- Windows (PowerShell o cmd): `.\install.cmd`, o `.\install.ps1`. `install.cmd` lanza `install.ps1` sin que la política de ejecución lo bloquee.
+- macOS y Linux: `./install.sh`.
+
+El instalador ejecuta seis pasos. Si uno falla, se detiene y dice qué paso falló y con qué código de salida:
+
+1. Comprueba Node (`^24.21.0 || >=26.8.0`) y `corepack`. Con Node 24.19 avisa y sigue, igual que `doctor`. Si Node falta o es demasiado antiguo, explica cómo instalarlo y sale con 2. Nunca instala Node en el sistema.
+2. `corepack pnpm install --frozen-lockfile`. No ejecuta `corepack enable`.
+3. `corepack pnpm run build`.
+4. Instala el runtime de Pi: un Node fijado y Pi. Va antes que la CLI para que los lanzadores usen ese Node desde la primera instalación.
+5. Copia la CLI a `<raíz>\app\<versión>\` y crea los lanzadores en `<raíz>\bin\`.
+6. Ejecuta `doctor` con el lanzador instalado. Después muestra la ruta del lanzador, cómo añadir `bin` al PATH y los siguientes pasos.
+
+La raíz es `%LOCALAPPDATA%\HARIL` en Windows y `XDG_DATA_HOME/haril` en macOS y Linux (por defecto, `~/.local/share/haril`). `HARIL_RUNTIME_DIR` o `--root` la cambian.
+
+Opciones:
+
+| Opción | Efecto |
+|---|---|
+| `--no-runtime` | Omite el paso 4 |
+| `--root <dir>` | Instala en otra raíz; para usarla, define `HARIL_RUNTIME_DIR` con esa ruta al llamar a `haril` |
+| `--dry-run` | Muestra los comandos sin ejecutar nada |
+| `--help` | Muestra la ayuda |
+
+Volver a ejecutarlo actualiza la instalación.
+
+El instalador no edita el PATH, el registro ni los perfiles de shell. Si quieres llamar a `haril` sin la ruta completa, añades `bin` tú: en macOS y Linux, con la línea que imprime para tu perfil; en Windows, en la ventana de variables de entorno de tu usuario (`rundll32 sysdm.cpl,EditEnvironmentVariables`). En Windows también imprime una línea que vale solo para la sesión de PowerShell actual. Tampoco toca `~/.pi`, `~/.claude`, `~/.codex`, `~/.engram`, `~/.npmrc` ni `%APPDATA%\npm`. La integración con Engram llegará más adelante, en M4; por ahora el instalador no la configura.
+
+Alternativa manual, con los mismos pasos uno a uno:
 
 ```powershell
+corepack pnpm install
 npm run build
+npm run runtime:install
 node apps/bootstrap/dist/haril-bootstrap.mjs install
 & "$env:LOCALAPPDATA\HARIL\bin\haril.ps1" --version
 ```
 
-`uninstall` borra solo lo que `install` creó y conserva `data\`, `runtime\` y `vendor\`. Si quieres usar `haril` sin ruta completa, añade `%LOCALAPPDATA%\HARIL\bin` a tu PATH de usuario a mano; HARIL no lo hará por ti.
+`uninstall` borra solo lo que `install` creó y conserva `data\`, `runtime\` y `vendor\`.
 
 ### M2: agente real `analyst` (opt-in)
 
