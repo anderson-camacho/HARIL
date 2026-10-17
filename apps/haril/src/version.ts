@@ -1,2 +1,2 @@
 // Must equal the version in apps/haril/package.json (asserted by tests/version.test.ts).
-export const VERSION = "0.5.0";
+export const VERSION = "0.6.0";
