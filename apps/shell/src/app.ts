@@ -2,13 +2,15 @@ import { type Component, matchesKey, type Terminal, TuiMainScreen } from "@earen
 import { createHarilActions, type ShellActions } from "./actions.js";
 import { AddTaskForm, addTaskArgs } from "./add-task.js";
 import { saveThemeChoice } from "./config-file.js";
-import type { ShellData, ShellSnapshot, TaskDetailView } from "./data.js";
+import type { PendingApproval, ShellData, ShellSnapshot, TaskDetailView } from "./data.js";
 import { fit, runtimeState, wrap } from "./format.js";
+import { GoalForm, goalArgs } from "./goal.js";
 import { HELP_LINES } from "./help.js";
 import { clampOffset, followCursor, packTabs } from "./layout.js";
 import { type ConnectControl, createLiveFeed } from "./live.js";
 import {
   buildPanelView,
+  buildPlanDetailView,
   buildTaskDetailView,
   PANELS,
   type PanelContext,
@@ -19,7 +21,8 @@ import { readOptionalFile, resolveTheme, type Theme } from "./theme.js";
 
 // The shell app (TUI-T3): header, banner, tab strip, the active panel's body and a footer with its keys. The app only
 // reads through ShellData; its state is the selected panel, one cursor and scroll offset per panel, the project filter,
-// an open task detail and the help overlay. Each key changes that state and the next frame shows it.
+// an open task or plan detail, an open form and the help overlay. Each key changes that state and the next frame
+// shows it. Every write is a haril child process (TUI-D13).
 
 interface ShellBanner {
   readonly isolation: string;
@@ -35,7 +38,7 @@ export interface ShellAppOptions {
   readonly settings: ShellSettings;
   // Runs the CLI for the actions (TUI-D13). Without it, an action reports that it is not available.
   readonly actions?: ShellActions;
-  // HARIL_DEFAULT_MODEL as the shell received it: prefills the model of the add-task form.
+  // HARIL_DEFAULT_MODEL as the shell received it: prefills the model of the add-task and goal forms.
   readonly defaultModel?: string;
   // Opens the control channel for the live feed (LD-T2). Without it the shell never subscribes.
   readonly connectControl?: ConnectControl;
@@ -75,12 +78,24 @@ function motionOf(input: string, pages: number): Motion | undefined {
 const NUMBER_KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9"] as const;
 const FOOTER_TAIL = ["r reload", "? help", "q quit"] as const;
 const FORM_FOOTER = "Enter add task · Tab next field · Esc cancel · Ctrl+C quit";
+const GOAL_FOOTER = "Enter ask for a plan · Tab next field · Esc cancel · Ctrl+C quit";
+const PLAN_FOOTER = "y approve · n deny · ↑↓ scroll · Esc back · r reload · q quit";
 const THEMES_PANEL = PANELS.findIndex((entry) => entry.id === "themes");
+const PLANS_PANEL = PANELS.findIndex((entry) => entry.id === "plans");
+const LIVE_PANEL = PANELS.findIndex((entry) => entry.id === "live");
 const NO_PROJECT_MESSAGE =
   "no project yet; create one with: haril project init <path> --name <name>";
-const SEVERAL_PROJECTS_MESSAGE =
-  "several projects: choose one on Projects (Enter), then press a to add a task";
+// The shell never starts the runtime (LD-T6 will); a queued plan task or a granted plan waits for one.
+const NO_RUNTIME_NOTE = "no runtime is running: start it with haril start";
 const NO_ACTIONS: ShellActions = createHarilActions({ harilEntry: undefined });
+// Keys that open a panel from anywhere: t Themes (TUI-D14), p Plans and l Live (LD-T5).
+const DIRECT_PANELS = [
+  { key: "t", panel: THEMES_PANEL },
+  { key: "p", panel: PLANS_PANEL },
+  { key: "l", panel: LIVE_PANEL },
+] as const;
+
+type Project = ShellSnapshot["projects"][number];
 
 export function createShellApp(options: ShellAppOptions): ShellApp {
   const { terminal, banner, data, warning } = options;
@@ -100,11 +115,13 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
   const cursors: number[] = PANELS.map(() => 0);
   const offsets: number[] = PANELS.map(() => 0);
   let detail: TaskDetailView | undefined;
+  // The approval id of the plan whose tasks are open (LD-T5).
+  let plan: string | undefined;
   let textOffset = 0;
   let helpOpen = false;
   let quitting = false;
-  // The add-task form while it is open, and one line of outcome under the tabs (TUI-D13).
-  let form: AddTaskForm | undefined;
+  // The add-task or goal form while it is open, and one line of outcome under the tabs (TUI-D13).
+  let form: AddTaskForm | GoalForm | undefined;
   let pending = false;
   let status: string | undefined;
   // The live feed (LD-T2): a wake of the runtime reloads the store. Absent without a data dir or a connector.
@@ -135,18 +152,39 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
     scope === undefined
       ? "all"
       : (snapshot.projects.find((project) => project.projectId === scope)?.slug ?? "all");
+  const runtimeRunning = (): boolean =>
+    runtimeState(snapshot.runtime, snapshot.loadedAt) === "running";
+  const approvalsText = (): string =>
+    snapshot.pendingApprovals === 0
+      ? "0 pending approvals"
+      : `${snapshot.pendingApprovals} pending approvals (p to review)`;
   const bannerText = (): string =>
     // The pending-approval count is read from the store with the rest of the snapshot (LD-T3). "live" shows while
     // the shell holds a subscription to the runtime (LD-T2).
-    `isolation ${banner.isolation} · ${snapshot.pendingApprovals} pending approvals · runtime ${runtimeState(snapshot.runtime, snapshot.loadedAt)}${liveMark()} · project ${projectSlug()}`;
+    `isolation ${banner.isolation} · ${approvalsText()} · runtime ${runtimeState(snapshot.runtime, snapshot.loadedAt)}${liveMark()} · project ${projectSlug()}`;
+  const openApproval = (): PendingApproval | undefined =>
+    plan === undefined
+      ? undefined
+      : snapshot.approvals.find((approval) => approval.approvalId === plan);
+  // The text views over the panels: help, a task detail or a plan detail. Undefined shows the active panel.
+  const textLines = (): readonly string[] | undefined => {
+    if (helpOpen) return HELP_LINES;
+    if (detail !== undefined) return buildTaskDetailView(detail);
+    const approval = openApproval();
+    return approval === undefined ? undefined : buildPlanDetailView(approval, context());
+  };
   const footerText = (): string => {
-    if (form !== undefined) return FORM_FOOTER;
+    if (form !== undefined) return form instanceof GoalForm ? GOAL_FOOTER : FORM_FOOTER;
     if (helpOpen) return "↑↓ scroll · Esc close help · q quit";
     if (detail !== undefined) return "↑↓ scroll · Esc back · r reload · q quit";
+    if (openApproval() !== undefined) return PLAN_FOOTER;
     return [
       ...activeView().keys,
       "↑↓ move",
       "Tab next panel",
+      "g goal",
+      "p plans",
+      "l live",
       "a add task",
       "t themes",
       ...FOOTER_TAIL,
@@ -172,7 +210,7 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
     return Math.max(1, rows - chromeTop(columns) - wrap(footerText(), columns).length);
   }
 
-  // The body: the add-task form, help or task detail as text, otherwise the active panel with its cursor.
+  // The body: a form, help or a task or plan detail as text, otherwise the active panel with its cursor.
   function bodyLines(columns: number, height: number): FrameLine[] {
     if (form !== undefined) {
       return form
@@ -180,10 +218,11 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
         .slice(0, height)
         .map((line) => [segment(fit(line, columns), line.startsWith("> ") ? "accent" : "text")]);
     }
-    if (helpOpen || detail !== undefined) {
-      const lines = (
-        helpOpen || detail === undefined ? [...HELP_LINES] : buildTaskDetailView(detail)
-      ).flatMap((text) => wrap(text, columns).map((part) => segment(part, "text")));
+    const text = textLines();
+    if (text !== undefined) {
+      const lines = text.flatMap((line) =>
+        wrap(line, columns).map((part) => segment(part, "text")),
+      );
       textOffset = clampOffset(textOffset, height, lines.length);
       return lines.slice(textOffset, textOffset + height).map((part) => [part]);
     }
@@ -246,7 +285,7 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
   }
 
   function move(delta: number): void {
-    if (helpOpen || detail !== undefined) {
+    if (textLines() !== undefined) {
       textOffset = Math.max(0, textOffset + delta);
       return;
     }
@@ -259,7 +298,7 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
   }
 
   function jump(toEnd: boolean): void {
-    if (helpOpen || detail !== undefined) {
+    if (textLines() !== undefined) {
       textOffset = toEnd ? Number.MAX_SAFE_INTEGER : 0;
       return;
     }
@@ -271,56 +310,110 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
   function selectPanel(index: number): void {
     panel = index;
     detail = undefined;
+    plan = undefined;
     textOffset = 0;
   }
 
   function reload(): void {
     snapshot = data.load(scope);
     if (detail !== undefined) detail = data.taskDetail(detail.detail.taskId);
+    // A plan decided meanwhile, here or by haril approve elsewhere, leaves its detail for the list.
+    if (openApproval() === undefined) plan = undefined;
   }
 
-  // a: the add-task form for the project the filter names, or for the only project. Several projects and no filter
-  // is a message: the shell never guesses where a task goes (TUI-D13).
-  function openAddTask(): void {
+  // The project a form adds to: the one the filter names, or the only project. Several projects and no filter is a
+  // message: the shell never guesses where a task goes (TUI-D13).
+  function formProject(key: string, purpose: string): Project | undefined {
     helpOpen = false;
     detail = undefined;
+    plan = undefined;
     textOffset = 0;
-    if (pending) return;
+    if (pending) return undefined;
     if (snapshot.projects.length === 0) {
       status = NO_PROJECT_MESSAGE;
-      return;
+      return undefined;
     }
     const chosen =
       snapshot.projects.find((project) => project.projectId === scope) ??
       (snapshot.projects.length === 1 ? snapshot.projects[0] : undefined);
-    if (chosen === undefined) {
-      status = SEVERAL_PROJECTS_MESSAGE;
-      return;
-    }
-    form = new AddTaskForm({ projectSlug: chosen.slug, defaultModel: options.defaultModel });
-    status = undefined;
+    status =
+      chosen === undefined
+        ? `several projects: choose one on Projects (Enter), then press ${key} to ${purpose}`
+        : undefined;
+    return chosen;
   }
 
-  // Runs haril task add in the background. The outcome is one line; then the store is read again (TUI-D13).
+  // a: the add-task form (TUI-D13).
+  function openAddTask(): void {
+    const chosen = formProject("a", "add a task");
+    if (chosen !== undefined) {
+      form = new AddTaskForm({ projectSlug: chosen.slug, defaultModel: options.defaultModel });
+    }
+  }
+
+  // g: the goal form, a plan task for a planner agent (LD-T5).
+  function openGoal(): void {
+    const chosen = formProject("g", "plan a goal");
+    if (chosen !== undefined) {
+      form = new GoalForm({ projectSlug: chosen.slug, defaultModel: options.defaultModel });
+    }
+  }
+
+  // Runs haril task add for the open form. A goal switches to Live, where its plan task shows up.
   function submitForm(): void {
     const current = form;
     if (current === undefined || pending) return;
-    const built = addTaskArgs(current.values(), {
-      slug: current.projectSlug,
-      dataDir: settings.dataDir,
-    });
+    const target = { slug: current.projectSlug, dataDir: settings.dataDir };
+    const goal = current instanceof GoalForm;
+    const built = goal ? goalArgs(current.values(), target) : addTaskArgs(current.values(), target);
     if (!built.ok) {
       status = built.message;
       return;
     }
+    runAction(built.args, goal ? "asking for a plan..." : "adding task...", goal, (ok) => {
+      if (ok && form === current) form = undefined;
+      if (ok && goal) selectPanel(LIVE_PANEL);
+    });
+  }
+
+  // y and n (LD-T5): approve or deny the open plan, or the one under the cursor on Plans. The CLI records the OS
+  // user as the decider; the runtime queues a granted plan, so an approval switches to Live.
+  function decide(verb: "approve" | "deny"): void {
+    if (pending) return;
+    const approvalId =
+      plan ?? (activeId() === "plans" ? activeView().items[cursors[panel] ?? 0]?.value : undefined);
+    if (approvalId === undefined) return;
+    const args = [verb, approvalId];
+    if (settings.dataDir !== undefined) args.push("--data-dir", settings.dataDir);
+    const approve = verb === "approve";
+    runAction(args, approve ? "approving plan..." : "denying plan...", approve, (ok) => {
+      if (!ok) return;
+      plan = undefined;
+      textOffset = 0;
+      if (approve) selectPanel(LIVE_PANEL);
+    });
+  }
+
+  // Runs one CLI action in the background (TUI-D13). The outcome is one line; then the store is read again and the
+  // live feed subscribes if a runtime is up by then (LD-T5). An action that needs the runtime says so when none runs.
+  function runAction(
+    args: readonly string[],
+    busy: string,
+    needsRuntime: boolean,
+    done: (ok: boolean) => void,
+  ): void {
     pending = true;
-    status = "adding task...";
-    void actions.run(built.args).then((outcome) => {
+    status = busy;
+    void actions.run(args).then((outcome) => {
       pending = false;
       if (quitting) return;
-      if (outcome.ok && form === current) form = undefined;
-      status = outcome.message;
       reload();
+      subscribeIfRuntimeRunning();
+      status =
+        outcome.ok && needsRuntime && !runtimeRunning()
+          ? `${outcome.message} · ${NO_RUNTIME_NOTE}`
+          : outcome.message;
+      done(outcome.ok);
       tui.requestRender();
     });
   }
@@ -351,21 +444,27 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
     status = `theme ${name} saved`;
   }
 
-  // Enter: on Projects it sets the filter (the first row is all projects); on Tasks and Agents it opens the detail;
-  // on Themes it applies the theme.
+  // Enter: on Projects it sets the filter (the first row is all projects); on Tasks, Agents and Live it opens the
+  // detail; on Plans it opens the plan; on Themes it applies the theme.
   function enter(): void {
     const item = activeView().items[cursors[panel] ?? 0];
     if (item === undefined || item.value === undefined) return;
-    if (activeId() === "themes") {
+    const id = activeId();
+    if (id === "themes") {
       applyTheme(item.value);
       return;
     }
-    if (activeId() === "projects") {
+    if (id === "projects") {
       scope = item.value === "" ? undefined : item.value;
       snapshot = data.load(scope);
       return;
     }
-    if (activeId() === "tasks" || activeId() === "agents") {
+    if (id === "plans") {
+      plan = item.value;
+      textOffset = 0;
+      return;
+    }
+    if (id === "tasks" || id === "agents" || id === "live") {
       detail = data.taskDetail(item.value);
       textOffset = 0;
     }
@@ -379,7 +478,8 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
     }
     if (matchesKey(input, "escape")) {
       if (helpOpen) helpOpen = false;
-      else detail = undefined;
+      else if (detail !== undefined) detail = undefined;
+      else plan = undefined;
       textOffset = 0;
       return;
     }
@@ -392,9 +492,14 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
       openAddTask();
       return;
     }
-    if (matchesKey(input, "t")) {
+    if (matchesKey(input, "g")) {
+      openGoal();
+      return;
+    }
+    const direct = DIRECT_PANELS.find((entry) => matchesKey(input, entry.key));
+    if (direct !== undefined) {
       helpOpen = false;
-      selectPanel(THEMES_PANEL);
+      selectPanel(direct.panel);
       return;
     }
     if (helpOpen) return;
@@ -404,6 +509,11 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
       return;
     }
     if (detail !== undefined) return;
+    if (matchesKey(input, "y") || matchesKey(input, "n")) {
+      decide(matchesKey(input, "y") ? "approve" : "deny");
+      return;
+    }
+    if (plan !== undefined) return;
     const digit = NUMBER_KEYS.findIndex((key) => matchesKey(input, key));
     if (digit >= 0) {
       selectPanel(digit);
@@ -426,7 +536,7 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
     if (current === undefined || pending) return;
     if (matchesKey(input, "escape")) {
       form = undefined;
-      status = "add task cancelled";
+      status = current instanceof GoalForm ? "goal cancelled" : "add task cancelled";
       return;
     }
     if (matchesKey(input, "enter")) {

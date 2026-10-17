@@ -1,8 +1,9 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ControlClient } from "@haril/control";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createHarilActions } from "../src/actions.js";
 import { createShellApp, type ShellApp } from "../src/app.js";
 import { openShellData, type ShellData } from "../src/data.js";
 import type { ConnectControl } from "../src/live.js";
@@ -71,7 +72,10 @@ function fakeControl(): FakeControl {
   };
 }
 
-function mount(connectControl: ConnectControl): {
+function mount(
+  connectControl: ConnectControl,
+  harilEntry?: string,
+): {
   terminal: VirtualTerminal;
   app: ShellApp;
   data: ShellData;
@@ -98,6 +102,7 @@ function mount(connectControl: ConnectControl): {
       themeName: "haril-dark",
       themeLabel: "haril-dark",
     },
+    actions: createHarilActions({ harilEntry }),
     connectControl,
   });
   return { terminal, app, data };
@@ -143,6 +148,51 @@ describe("shell app with the live feed (LD-T2)", () => {
     terminal.send("q");
     await app.done;
     expect(control.closes()).toBe(1);
+  });
+
+  it("subscribes after an action once a runtime is up, without waiting for r (LD-T5)", async () => {
+    const control = fakeControl();
+    // A store with one project and no runtime lease: the shell opens idle and does not subscribe.
+    rmSync(dataDir, { recursive: true, force: true });
+    mkdirSync(dataDir, { recursive: true });
+    const store = openSeedStore(dataDir);
+    store.projects.register({ slug: "solo", name: "Solo", rootPath: "/work/solo" });
+    store.close();
+    // The fixture haril prints what task add prints and writes nothing.
+    const entry = join(root, "haril.mjs");
+    writeFileSync(entry, 'process.stdout.write("command c-1: queued\\n");\n', "utf8");
+    const { terminal, app } = mount(control.connect, entry);
+    await started(app);
+    expect(control.requests).toEqual([]);
+
+    // A runtime starts elsewhere (haril start in another terminal) while the shell is open.
+    const runtime = openSeedStore(dataDir);
+    try {
+      const grant = runtime.runtime.acquire({
+        pid: process.pid,
+        nodeVersion: process.version,
+        sqliteVersion: runtime.info().sqliteVersion,
+        ttlMs: 600_000,
+      });
+      expect(grant.ok).toBe(true);
+    } finally {
+      runtime.close();
+    }
+
+    terminal.send("a");
+    for (const key of "Queued now") terminal.send(key);
+    terminal.send("\r");
+    const deadline = Date.now() + 10_000;
+    while (!frame(app).includes("c-1: queued") && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(frame(app)).toContain("c-1: queued");
+    expect(control.requests).toEqual([{ subscribe: true }]);
+    expect(frame(app)).toContain("· live");
+
+    terminal.send("q");
+    await app.done;
   });
 
   it("does not subscribe when no runtime is active", async () => {

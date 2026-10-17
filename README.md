@@ -154,7 +154,7 @@ HARIL lee sus proveedores de `HARIL_CONFIG` o, si no está definida, de `config\
 
 ### M4: interfaz de terminal (`haril shell`)
 
-`haril shell` abre una interfaz interactiva sobre los datos de HARIL. En una terminal basta con escribir `haril`, sin subcomando: abre la misma interfaz. Fuera de una terminal (un script o una tubería), `haril` solo imprime la ayuda. Necesita una terminal real (Windows Terminal o PowerShell); sin ella `haril shell` sale con 2. La interfaz solo lee: nunca arranca el runtime y no consulta la base en bucle. Los datos se cargan al abrir, con `r` y después de cada acción.
+`haril shell` abre una interfaz interactiva sobre los datos de HARIL. En una terminal basta con escribir `haril`, sin subcomando: abre la misma interfaz. Fuera de una terminal (un script o una tubería), `haril` solo imprime la ayuda. Necesita una terminal real (Windows Terminal o PowerShell); sin ella `haril shell` sale con 2. La interfaz no escribe en la base: cada acción ejecuta un comando `haril` corto. Nunca arranca el runtime y no consulta la base en bucle: los datos se cargan al abrir, con `r`, después de cada acción y cuando el runtime en marcha avisa de un cambio.
 
 ```powershell
 cd D:\github\haril
@@ -164,15 +164,21 @@ npm run build
 
 | Tecla | Acción |
 |---|---|
-| `1`-`9`, `Tab`, `Shift+Tab` | Cambiar de panel (11: proyectos, tareas, agentes, tokens, eventos, modelos, configuración, temas, memoria, servicios y terminales) |
+| `1`-`9`, `Tab`, `Shift+Tab` | Cambiar de panel (13: proyectos, tareas, agentes, tokens, eventos, modelos, configuración, temas, memoria, servicios, terminales, planes y en vivo) |
 | `↑` `↓` `PageUp` `PageDown` `Home` `End` | Moverse por la lista |
-| `Enter` | En Proyectos filtra por proyecto; en Tareas abre el detalle; en Temas aplica el tema |
+| `Enter` | En Proyectos filtra por proyecto; en Tareas y En vivo abre el detalle; en Planes abre el plan; en Temas aplica el tema |
 | `Esc` | Cerrar el detalle, la ayuda o el formulario |
+| `g` | Pedir un plan para un objetivo (objetivo, agente planificador y modelo); se encola con `haril task add --kind plan` |
+| `p` | Ir a Planes: los planes que esperan aprobación, con sus tareas |
+| `y`, `n` | Aprobar o rechazar el plan seleccionado o abierto (`haril approve` o `haril deny`) |
+| `l` | Ir a En vivo: las tareas más recientes con su estado, intento, tokens y resultado |
 | `a` | Añadir una tarea (título, agente y modelo); se encola con `haril task add` y la ejecuta `haril start` |
 | `t` | Ir a Temas |
 | `r` | Recargar |
 | `?` | Ayuda |
 | `q`, `Ctrl+C` | Salir |
+
+Flujo de demostración: `g` pide un plan, `p` lo muestra para aprobarlo con `y` o rechazarlo con `n`, y `l` sigue sus tareas hasta que terminan. Las tareas solo avanzan con un runtime en marcha (`haril start` en otra terminal); si no hay ninguno, la línea de estado lo dice.
 
 El tema elegido se guarda en `config\haril.json` como `ui.theme` y se mantiene al reabrir. Los temas propios van en `config\themes\<nombre>.json` dentro de la raíz del runtime, con el formato JSON de temas de Pi. Memoria, servicios y terminales todavía muestran «no disponible en esta versión».
 

@@ -6,11 +6,12 @@ import { createHarilActions } from "../src/actions.js";
 import { createShellApp, type ShellApp } from "../src/app.js";
 import { openShellData, type ShellData } from "../src/data.js";
 import { resolveTheme } from "../src/theme.js";
-import { openSeedStore, seedStore } from "./seed.js";
+import { openSeedStore, proposeExamplePlan, type SeedResult, seedStore } from "./seed.js";
 import { VirtualTerminal } from "./virtual-terminal.js";
 
-// The add-task action from the TUI (TUI-D13): the form, the exact CLI argv, the outcome line, the reload and the
-// keys that belong to the form. A fixture haril records its argv and prints what the CLI would print.
+// The actions from the TUI: the add-task form (TUI-D13), the goal form and the plan review (LD-T5). Each test checks
+// the exact CLI argv, the outcome line, the reload and the keys. A fixture haril records its argv and prints what the
+// CLI would print; it never writes the store.
 
 const THEME = resolveTheme({ name: "haril-dark", runtimeRoot: "/nonexistent-haril-root" }).theme;
 const ESC = "\x1b";
@@ -207,6 +208,110 @@ describe("add task with a seeded store (TUI-D13)", () => {
   });
 });
 
+const LIVE_HEADER = "Newest tasks, oldest first";
+
+describe("goal and plan review with a seeded store (LD-T5)", () => {
+  let seeded: SeedResult;
+
+  beforeEach(() => {
+    seeded = seedStore(dataDir);
+  });
+
+  it("g queues a plan task for the planner with the exact argv and switches to Live", async () => {
+    const entry = fakeHaril("command c-7: queued (applied by `haril start`)", 0);
+    const mounted = mount({ harilEntry: entry, defaultModel: "qwen-test" });
+    mounted.app.start();
+    mounted.terminal.send(DOWN);
+    mounted.terminal.send(ENTER);
+    mounted.terminal.send("g");
+    expect(frame(mounted)).toContain("Plan a goal for project demo");
+    typeText(mounted, "Document the CLI");
+    mounted.terminal.send(ENTER);
+    await waitForFrame(mounted, "c-7: queued");
+    expect(argvOf(entry)).toEqual([
+      "task",
+      "add",
+      "Document the CLI",
+      "--project",
+      "demo",
+      "--kind",
+      "plan",
+      "--agent",
+      "planner",
+      "--model",
+      "qwen-test",
+      "--data-dir",
+      dataDir,
+    ]);
+    const screen = frame(mounted);
+    expect(screen).not.toContain("Plan a goal for project");
+    expect(screen).toContain(LIVE_HEADER);
+    // The seeded runtime lease is active, so there is nothing to start.
+    expect(screen).not.toContain("no runtime is running");
+    mounted.terminal.send("q");
+    await mounted.app.done;
+  });
+
+  it("g with several projects and no filter names the key in its message and opens nothing", async () => {
+    const mounted = mount({ harilEntry: fakeHaril("never printed", 0) });
+    mounted.app.start();
+    mounted.terminal.send("g");
+    expect(frame(mounted)).toContain("then press g to plan a goal");
+    expect(frame(mounted)).not.toContain("Plan a goal for project");
+    mounted.terminal.send("q");
+    await mounted.app.done;
+  });
+
+  it("the banner points at the pending plan; p lists it, Enter shows its tasks and y approves it", async () => {
+    const approvalId = proposeExamplePlan(dataDir, seeded.demoId);
+    const entry = fakeHaril("approval a-1 granted by tester", 0);
+    const mounted = mount({ harilEntry: entry });
+    mounted.app.start();
+    expect(frame(mounted)).toContain("1 pending approvals (p to review)");
+    mounted.terminal.send("p");
+    expect(frame(mounted)).toContain(approvalId.slice(0, 8));
+    expect(frame(mounted)).toContain("4 tasks");
+    mounted.terminal.send(ENTER);
+    expect(frame(mounted)).toContain("1. survey-readme: Survey the README structure");
+    expect(frame(mounted)).toContain("depends on: survey-readme");
+    mounted.terminal.send("y");
+    await waitForFrame(mounted, "granted by tester");
+    expect(argvOf(entry)).toEqual(["approve", approvalId, "--data-dir", dataDir]);
+    expect(frame(mounted)).toContain(LIVE_HEADER);
+    mounted.terminal.send("q");
+    await mounted.app.done;
+  });
+
+  it("n denies the plan under the cursor on Plans and stays on Plans", async () => {
+    const approvalId = proposeExamplePlan(dataDir, seeded.demoId);
+    const entry = fakeHaril("approval a-1 denied by tester", 0);
+    const mounted = mount({ harilEntry: entry });
+    mounted.app.start();
+    mounted.terminal.send("p");
+    mounted.terminal.send("n");
+    await waitForFrame(mounted, "denied by tester");
+    expect(argvOf(entry)).toEqual(["deny", approvalId, "--data-dir", dataDir]);
+    expect(frame(mounted)).toContain("Enter open plan");
+    expect(frame(mounted)).not.toContain(LIVE_HEADER);
+    mounted.terminal.send("q");
+    await mounted.app.done;
+  });
+
+  it("y and n run nothing outside Plans", async () => {
+    proposeExamplePlan(dataDir, seeded.demoId);
+    const entry = fakeHaril("never printed", 0);
+    const mounted = mount({ harilEntry: entry });
+    mounted.app.start();
+    mounted.terminal.send("2");
+    mounted.terminal.send("y");
+    mounted.terminal.send("n");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(existsSync(join(entry, "..", "argv.json"))).toBe(false);
+    mounted.terminal.send("q");
+    await mounted.app.done;
+  });
+});
+
 describe("add task with one project and no filter", () => {
   it("uses the only project and the simulated agent when no default model is known", async () => {
     const solo = join(root, "solo");
@@ -230,6 +335,39 @@ describe("add task with one project and no filter", () => {
       "--data-dir",
       solo,
     ]);
+    mounted.terminal.send("q");
+    await mounted.app.done;
+  });
+});
+
+describe("goal with one project and no runtime (LD-T5)", () => {
+  it("uses the simulated planner without a default model and says no runtime is running", async () => {
+    const solo = join(root, "solo");
+    openSeedStoreFor(solo).close();
+    const entry = fakeHaril("command c-3: queued (applied by `haril start`)", 0);
+    const mounted = mount({ dataDir: solo, harilEntry: entry });
+    mounted.app.start();
+    mounted.terminal.send("g");
+    typeText(mounted, "Plan offline");
+    mounted.terminal.send(ENTER);
+    await waitForFrame(mounted, "no runtime is running");
+    expect(argvOf(entry)).toEqual([
+      "task",
+      "add",
+      "Plan offline",
+      "--project",
+      "solo",
+      "--kind",
+      "plan",
+      "--agent",
+      "fake:plan",
+      "--data-dir",
+      solo,
+    ]);
+    // The status line wraps at 80 columns; the note reads the same once the line breaks are joined.
+    expect(frame(mounted).replace(/\s+/g, " ")).toContain(
+      "no runtime is running: start it with haril start",
+    );
     mounted.terminal.send("q");
     await mounted.app.done;
   });

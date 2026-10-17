@@ -3,8 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openShellData, type ShellSnapshot } from "../src/data.js";
-import { buildPanelView, buildTaskDetailView, type PanelContext } from "../src/panels/index.js";
-import { SEED_TITLES, seedStore } from "./seed.js";
+import {
+  buildPanelView,
+  buildPlanDetailView,
+  buildTaskDetailView,
+  type PanelContext,
+} from "../src/panels/index.js";
+import { proposeExamplePlan, SEED_TITLES, seedStore } from "./seed.js";
 
 // Pure panel builders (TUI-D6): data in, lines out. No terminal is involved.
 
@@ -213,5 +218,80 @@ describe("panel builders without a store or with unusual inputs", () => {
       expect(view.header).toEqual(["Not available in this version."]);
       expect(view.items).toEqual([]);
     }
+  });
+});
+
+describe("plans and live (LD-T5)", () => {
+  it("plans: one row per requested approval with its short id, project, task count and age", () => {
+    const seeded = seedStore(dataDir);
+    const approvalId = proposeExamplePlan(dataDir, seeded.demoId);
+    // The approvals are global, like the banner count: a project filter does not hide them.
+    const snapshot = loadSnapshot(seeded.otherId);
+    const view = buildPanelView("plans", contextFor(snapshot, seeded.otherId));
+    expect(view.items).toHaveLength(1);
+    expect(view.items[0]?.value).toBe(approvalId);
+    const text = view.items[0]?.text ?? "";
+    expect(text).toContain(approvalId.slice(0, 8));
+    expect(text).toContain("demo");
+    expect(text).toContain("4 tasks");
+    expect(text).toMatch(/\d+s$/);
+    expect(view.keys).toEqual(["Enter open plan", "y approve", "n deny"]);
+  });
+
+  it("plans: says so when nothing waits for a decision", () => {
+    seedStore(dataDir);
+    const view = buildPanelView("plans", contextFor(loadSnapshot(undefined), undefined));
+    expect(view.items).toEqual([]);
+    expect(view.empty).toBe("No plans waiting for approval.");
+  });
+
+  it("plan detail: each task with its local id, goal, agent and dependencies", () => {
+    const seeded = seedStore(dataDir);
+    const approvalId = proposeExamplePlan(dataDir, seeded.demoId);
+    const snapshot = loadSnapshot(undefined);
+    const approval = snapshot.approvals[0];
+    if (approval === undefined) throw new Error("approval not loaded");
+    const lines = buildPlanDetailView(approval, contextFor(snapshot, undefined));
+    expect(lines[0]).toBe(`plan ${approvalId}`);
+    expect(lines[1]).toMatch(/^project demo, 4 tasks, requested \d+s ago by cli$/);
+    expect(lines).toContain("1. survey-readme: Survey the README structure");
+    expect(lines).toContain("   agent developer-block, depends on: none");
+    expect(lines).toContain("2. draft-section: Draft the new README section");
+    expect(lines).toContain("   agent developer-block, depends on: survey-readme");
+  });
+
+  it("live: state, kind, agent, attempt, tokens and the first line of the result or error", () => {
+    const seeded = seedStore(dataDir);
+    const snapshot = loadSnapshot(seeded.demoId);
+    const [completed, running] = snapshot.live;
+    if (completed === undefined || running === undefined) throw new Error("live rows missing");
+    // A plan task and a failed task, as the runtime leaves them; the seed has neither.
+    const planTask = {
+      detail: { ...running.detail, agentRef: "fake:plan", goal: "Plan the docs" },
+      tokens: null,
+    };
+    const failed = {
+      detail: {
+        ...completed.detail,
+        state: "failed" as const,
+        goal: "Broken task",
+        result: null,
+        error: { code: "agent_failed", message: "exit 3\nstack trace" },
+      },
+      tokens: { input: 5, output: 1, unreconciled: 0 },
+    };
+    const view = buildPanelView(
+      "live",
+      contextFor({ ...snapshot, live: [completed, running, planTask, failed] }, seeded.demoId),
+    );
+    const lines = texts(view);
+    expect(lines[0]).toMatch(
+      /^completed\s+work\s+fake-agent\s+\d+\/1\s+40\/12\s+Summarize the logs · Logs summarized$/,
+    );
+    expect(lines[1]).toMatch(/^running\s+work\s+fake-agent\s+\d+\/1\s+-\s+Write the parser$/);
+    expect(lines[2]).toMatch(/^running\s+plan\s+fake:plan\s/);
+    expect(lines[3]).toMatch(/^failed\s+work\s.*5\/1\s+Broken task · agent_failed: exit 3$/);
+    expect(view.items[0]?.value).toBe(seeded.completedTaskId);
+    expect(view.keys).toEqual(["Enter open task"]);
   });
 });

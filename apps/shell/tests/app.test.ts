@@ -119,7 +119,7 @@ describe("shell app with a seeded store", () => {
     await mounted.app.done;
   });
 
-  it("number keys 1 to 9 select the panel and Tab and Shift+Tab cycle through all eleven", async () => {
+  it("number keys 1 to 9 select the panel and Tab and Shift+Tab cycle through all thirteen", async () => {
     const mounted = mount(open());
     await started(mounted);
     mounted.terminal.send("2");
@@ -132,8 +132,30 @@ describe("shell app with a seeded store", () => {
     expect(frame(mounted)).toContain("runtime active");
     mounted.terminal.send("1");
     expect(frame(mounted)).toContain("all projects");
+    // Plans and Live come after Terminals, so going back from the first panel wraps to Live.
+    mounted.terminal.send(SHIFT_TAB);
+    expect(frame(mounted)).toContain("Newest tasks, oldest first");
+    mounted.terminal.send(SHIFT_TAB);
+    expect(frame(mounted)).toContain("No plans waiting for approval.");
     mounted.terminal.send(SHIFT_TAB);
     expect(frame(mounted)).toContain("Not available in this version.");
+    mounted.terminal.send("q");
+    await mounted.app.done;
+  });
+
+  it("p opens Plans and l opens Live from any panel; Enter on Live opens the task (LD-T5)", async () => {
+    const mounted = mount(open());
+    await started(mounted);
+    mounted.terminal.send("p");
+    expect(frame(mounted)).toContain("No plans waiting for approval.");
+    mounted.terminal.send("l");
+    const live = frame(mounted);
+    expect(live).toContain("Newest tasks, oldest first");
+    expect(live).toMatch(/completed\s+work\s+fake-agent\s+\d+\/1\s+40\/12\s+Summarize the logs/);
+    mounted.terminal.send(ENTER);
+    expect(frame(mounted)).toContain("result: Logs summarized");
+    mounted.terminal.send("p");
+    expect(frame(mounted)).toContain("No plans waiting for approval.");
     mounted.terminal.send("q");
     await mounted.app.done;
   });
@@ -202,6 +224,14 @@ describe("shell app with a seeded store", () => {
     mounted.terminal.send("?");
     const help = frame(mounted);
     for (const key of ["Tab", "Enter", "Esc", "r", "?", "q"]) expect(help).toContain(key);
+    for (const line of [
+      "  g            plan a goal",
+      "  p            open the Plans panel",
+      "  y, n         approve or deny",
+      "  l            open the Live panel",
+    ]) {
+      expect(help).toContain(line);
+    }
     mounted.terminal.send(ESCAPE);
     expect(frame(mounted)).toContain("runtime running");
     mounted.terminal.send("q");

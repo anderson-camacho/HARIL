@@ -1,6 +1,7 @@
 import type { ShellSnapshot } from "../data.js";
 
-// The panels of the shell (RF-152) in tab order. Numbers 1 to 9 select the first nine; Tab cycles through all eleven.
+// The panels of the shell (RF-152) in tab order. Numbers 1 to 9 select the first nine; Tab cycles through all
+// thirteen. Plans and Live (LD-T5) come last so the digits keep their panels; p and l open them directly.
 export const PANELS = [
   { id: "projects", label: "Projects" },
   { id: "tasks", label: "Tasks" },
@@ -13,6 +14,8 @@ export const PANELS = [
   { id: "memory", label: "Memory" },
   { id: "services", label: "Services" },
   { id: "terminals", label: "Terminals" },
+  { id: "plans", label: "Plans" },
+  { id: "live", label: "Live" },
 ] as const;
 
 export type PanelId = (typeof PANELS)[number]["id"];
@@ -41,7 +44,8 @@ export interface PanelContext {
 
 interface PanelItem {
   readonly text: string;
-  // What Enter acts on: a task id (Tasks) or a project id, with "" meaning all projects (Projects).
+  // What Enter acts on: a task id (Tasks, Agents, Live), an approval id (Plans) or a project id, with "" meaning all
+  // projects (Projects).
   readonly value?: string;
 }
 

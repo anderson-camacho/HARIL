@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   canonicalJson,
   canTransition,
@@ -20,6 +22,8 @@ const clock: Clock = {
     return () => clearTimeout(timer);
   },
 };
+
+const EXAMPLE_PLAN = fileURLToPath(new URL("../../../examples/plan.valid.json", import.meta.url));
 
 export const SEED_TITLES = {
   completed: "Summarize the logs",
@@ -181,6 +185,23 @@ export function seedStore(dataDir: string): SeedResult {
       runningTaskId,
       pendingTaskId,
     };
+  } finally {
+    store.close();
+  }
+}
+
+// Proposes examples/plan.valid.json (four tasks, a chain) for approval in the project, the way haril plan propose
+// does, and returns the approval id. Nothing applies it: the approval stays requested.
+export function proposeExamplePlan(dataDir: string, projectId: string): string {
+  const store = openSeedStore(dataDir);
+  try {
+    const proposed = store.approvals.proposePlan({
+      projectId,
+      plan: JSON.parse(readFileSync(EXAMPLE_PLAN, "utf8")) as unknown,
+      requestedBy: "cli",
+    });
+    if (!proposed.ok) throw new Error(`seed plan was refused: ${proposed.error.message}`);
+    return proposed.value.approval.approvalId;
   } finally {
     store.close();
   }
