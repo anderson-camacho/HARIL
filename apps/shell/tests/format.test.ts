@@ -1,3 +1,4 @@
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { fit, wrap } from "../src/format.js";
 
@@ -33,6 +34,18 @@ describe("fit and wrap keep the frame plain (LD-T5)", () => {
     const cut = fit(HOSTILE, 12);
     expect(cut).toBe("a?[2Jb?]0;t…");
     for (const line of wrap(HOSTILE, 9)) expect(line.length).toBeLessThanOrEqual(9);
+  });
+
+  it("never cut a line wider than asked, even when a wide character straddles the cut", () => {
+    for (const text of ["ああああ", "aあbいcう", "テーマ名がとても長い場合のテスト", "x界y"]) {
+      for (let columns = 0; columns <= 12; columns++) {
+        const cut = fit(text, columns);
+        expect(visibleWidth(cut)).toBeLessThanOrEqual(columns);
+        if (visibleWidth(text) > columns && columns > 0) expect(cut).toContain("…");
+      }
+    }
+    // The cut takes exactly the columns: a wide character that does not fit leaves a space.
+    expect(visibleWidth(fit("ああああ", 4))).toBe(4);
   });
 
   it("wrap keeps line breaks, LF or CRLF, as breaks", () => {

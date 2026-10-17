@@ -8,7 +8,7 @@ import { createShellApp, type ShellApp } from "../src/app.js";
 import { openShellData, type ShellData } from "../src/data.js";
 import { HELP_LINES } from "../src/help.js";
 import { resolveTheme } from "../src/theme.js";
-import { openSeedStore, proposeExamplePlan, seedStore } from "./seed.js";
+import { createTask, openSeedStore, proposeExamplePlan, seedStore } from "./seed.js";
 import { VirtualTerminal } from "./virtual-terminal.js";
 
 // The console frame (LD-T6b-1): a top bar, the main area with the tabs and the active view (the HARIL banner while
@@ -48,9 +48,17 @@ interface Mounted {
   readonly gitReads: string[];
 }
 
+interface MountExtra {
+  readonly model?: string;
+  readonly themeLabel?: string;
+  // Replaces the fake git read that answers `git` at once.
+  readonly readGit?: (rootPath: string) => Promise<GitStatus | undefined>;
+}
+
 function mount(
   size: { readonly columns: number; readonly rows: number },
   git: GitStatus | undefined = { branch: "main", changes: 3 },
+  extra: MountExtra = {},
 ): Mounted {
   const data = openShellData({
     paths: { dataDir, runtimeRoot, configPath: join(runtimeRoot, "config", "haril.json") },
@@ -69,22 +77,28 @@ function mount(
       runtimeRoot,
       configPath: join(runtimeRoot, "config", "haril.json"),
       themeName: "haril-crimson",
-      themeLabel: "haril-crimson",
+      themeLabel: extra.themeLabel ?? "haril-crimson",
     },
-    defaultModel: "qwen-test",
+    defaultModel: extra.model ?? "qwen-test",
     readGit: async (rootPath) => {
       gitReads.push(rootPath);
-      return git;
+      return extra.readGit === undefined ? git : extra.readGit(rootPath);
     },
   });
   return { terminal, app, gitReads };
 }
 
 // One project and nothing else: no task, no approval, no runtime lease.
-function idleStore(): void {
+function idleStore(
+  project: { slug: string; name: string; rootPath: string } = {
+    slug: "solo",
+    name: "Solo",
+    rootPath: "/work/solo",
+  },
+): string {
   const store = openSeedStore(dataDir);
   try {
-    store.projects.register({ slug: "solo", name: "Solo", rootPath: "/work/solo" });
+    return store.projects.register(project).projectId;
   } finally {
     store.close();
   }
@@ -305,6 +319,148 @@ describe("the home view and git (LD-T6b-1)", () => {
     mounted.terminal.send(ENTER);
     await sleep(5);
     expect(mounted.gitReads).toEqual(["/work/solo", "/work/solo", "/work/solo"]);
+    await quit(mounted);
+  });
+
+  it("runs one git read at a time and one more after it when asked meanwhile", async () => {
+    idleStore();
+    const answers: ((status: GitStatus | undefined) => void)[] = [];
+    const mounted = mount(WIDE, undefined, {
+      readGit: () => new Promise((resolve) => answers.push(resolve)),
+    });
+    await started(mounted);
+    expect(mounted.gitReads).toHaveLength(1);
+    for (const _ of [1, 2, 3]) mounted.terminal.send("r");
+    expect(mounted.gitReads).toHaveLength(1);
+    answers[0]?.({ branch: "first", changes: 0 });
+    await sleep(5);
+    // The three r while the read ran ask for one more read, not three.
+    expect(mounted.gitReads).toHaveLength(2);
+    answers[1]?.({ branch: "second", changes: 0 });
+    await sleep(5);
+    expect(mounted.gitReads).toHaveLength(2);
+    expect(mounted.app.frameText().join("\n")).toMatch(/branch +second/);
+    await quit(mounted);
+  });
+
+  it("on a short terminal a key that moves leaves the home too, so work later keeps the panel", async () => {
+    const projectId = idleStore();
+    const size = { columns: 80, rows: 14 };
+    const mounted = mount(size);
+    await started(mounted);
+    mounted.terminal.send(DOWN);
+    expect(mounted.app.frameText().join("\n")).toContain("> solo");
+    // A ready task appears, as when a task is added from another terminal.
+    const writer = openSeedStore(dataDir);
+    try {
+      const grant = writer.runtime.acquire({
+        pid: process.pid,
+        nodeVersion: process.version,
+        sqliteVersion: writer.info().sqliteVersion,
+        ttlMs: 600_000,
+      });
+      if (!grant.ok) throw new Error("no lease");
+      createTask(writer, projectId, grant.value.epoch, "Arrives later");
+    } finally {
+      writer.close();
+    }
+    mounted.terminal.send("r");
+    const screen = mounted.app.frameText().join("\n");
+    expect(screen).not.toContain("Newest tasks, oldest first");
+    expect(screen).toContain("> solo");
+    await quit(mounted);
+  });
+});
+
+describe("the frame with hostile or unusual text (LD-T6b-1)", () => {
+  it("wide characters in the project, the branch, the model and the theme never widen a line", async () => {
+    idleStore({
+      slug: "プロジェクト",
+      name: "日本語のプロジェクト名",
+      rootPath: "/work/日本語/リポジトリ",
+    });
+    const git = { branch: "機能/とても長いブランチ名です", changes: 2 };
+    const extra = { themeLabel: "テーマ名がとても長い場合のテスト", model: "モデル名-とても長い" };
+    for (const size of [
+      { columns: 53, rows: 20 },
+      { columns: 61, rows: 18 },
+      { columns: 80, rows: 24 },
+      { columns: 99, rows: 30 },
+      { columns: 100, rows: 30 },
+      { columns: 120, rows: 40 },
+      { columns: 40, rows: 10 },
+    ]) {
+      const mounted = mount(size, git, extra);
+      expectShape(await started(mounted), size);
+      for (const key of ["1", "8", "?"]) {
+        mounted.terminal.send(key);
+        expectShape(mounted.app.frameText(), size);
+      }
+      // pi-tui rendered every frame: a line wider than the terminal throws there.
+      await sleep(5);
+      await quit(mounted);
+    }
+  });
+
+  it("below 80x24 the frame is still exactly the rows, none wider than the columns", async () => {
+    idleStore();
+    const size = { columns: 40, rows: 10 };
+    const mounted = mount(size);
+    expectShape(await started(mounted), size);
+    for (const key of ["1", DOWN, "?", "l", "8"]) {
+      mounted.terminal.send(key);
+      expectShape(mounted.app.frameText(), size);
+    }
+    await quit(mounted);
+  });
+
+  it("escape sequences in a project's root and name are shown defused", async () => {
+    idleStore({ slug: "solo", name: "Name\x1b]0;evil\x07", rootPath: "/work/\x1b[2Jroot" });
+    const mounted = mount(WIDE);
+    const frames = [(await started(mounted)).join("\n")];
+    mounted.terminal.send("1");
+    frames.push(mounted.app.frameText().join("\n"));
+    const all = frames.join("\n");
+    expect(all).toContain("/work/?[2Jroot");
+    expect(all).toContain("Name?]0;evil?");
+    for (const screen of frames) expect(screen).not.toContain("\x1b");
+    const output = mounted.terminal.output.join("");
+    expect(output).not.toContain("\x1b]0;evil");
+    expect(output).not.toContain("\x1b[2Jroot");
+    await quit(mounted);
+  });
+
+  it("an escape in the model name is laid out as the text it is shown as", async () => {
+    idleStore();
+    const mounted = mount(WIDE, undefined, { model: "m\x1b]0;X\x07" });
+    const lines = await started(mounted);
+    expect(lines[0]).toContain("◆ HARIL ◇ solo ◇ m?]0;X?");
+    // The right side of the top bar is whole: the layout measured the defused text.
+    expect(lines[0]).toMatch(/ctx n\/a ◇ tok 0\/0 ◇ runtime idle$/);
+    expect(lines.at(-1)).toMatch(/^m\?\]0;X\? · runtime idle · tok 0\/0 +\? help · q quit$/);
+    await quit(mounted);
+  });
+});
+
+describe("the status line names the branch below 100 columns (LD-T6b-1)", () => {
+  it("shows the branch and its changes at 80x24, and not at 120x40 where the Status box has them", async () => {
+    idleStore();
+    const narrow = mount(NARROW);
+    expect((await started(narrow)).at(-1)).toMatch(
+      /^qwen-test · runtime idle · tok 0\/0 · git main · 3 changed +\? help · q quit$/,
+    );
+    await quit(narrow);
+    const wide = mount(WIDE);
+    expect((await started(wide)).at(-1)).not.toContain("git main");
+    await quit(wide);
+  });
+
+  it("drops the branch first when the line is too long for it", async () => {
+    idleStore();
+    const mounted = mount(NARROW, { branch: `feature/${"x".repeat(40)}`, changes: 1 });
+    expect((await started(mounted)).at(-1)).toMatch(
+      /^qwen-test · runtime idle · tok 0\/0 +\? help · q quit$/,
+    );
     await quit(mounted);
   });
 });

@@ -5,7 +5,7 @@ import { createHarilActions, type ShellActions } from "./actions.js";
 import { AddTaskForm, addTaskArgs } from "./add-task.js";
 import { saveThemeChoice } from "./config-file.js";
 import type { PendingApproval, ShellData, ShellSnapshot, TaskDetailView } from "./data.js";
-import { fit, wrap } from "./format.js";
+import { fit, plain, wrap } from "./format.js";
 import { box, fitLine, joinColumns, type Line, type Segment, segment } from "./frame-layout.js";
 import {
   type FrameFacts,
@@ -64,6 +64,8 @@ export interface ShellAppOptions {
   // Reads the branch and changes of a project root for the Status box (LD-T6b-1): with the store, never on a timer.
   // Without it the box says n/a.
   readonly readGit?: (rootPath: string) => Promise<GitStatus | undefined>;
+  // The clock of the git read's rate on wakes (GIT_WAKE_INTERVAL_MS). Defaults to Date.now; tests pass a fake one.
+  readonly now?: () => number;
 }
 
 export interface ShellApp {
@@ -109,6 +111,9 @@ const COMMON_KEYS = ["g goal", "a add", "p plans", "l live", "t themes", "r relo
 const HOME_KEYS = ["1-9 panels", ...COMMON_KEYS.filter((key) => key !== "Tab panels")];
 // Tasks the runtime runs at once (the run loop's concurrency, apps/haril/src/runtime/run-loop.ts): the Taxis box.
 const RUNTIME_SLOTS = 1;
+// While the runtime works it wakes the shell as often as every 250 ms; a reload from a wake reads git at most this
+// often. Opening, r, a filter change and an action always read it.
+const GIT_WAKE_INTERVAL_MS = 5_000;
 const FORM_FOOTER = "Enter add task · Tab next field · Esc cancel · Ctrl+C quit";
 const GOAL_FOOTER = "Enter ask for a plan · Tab next field · Esc cancel · Ctrl+C quit";
 const PLAN_FOOTER = "y approve · n deny · ↑↓ scroll · Esc back · r reload · q quit";
@@ -158,10 +163,13 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
   // The home view (LD-T6b-1): the HARIL banner shows in place of the panel until a panel is chosen, while nothing
   // runs or waits for approval and the terminal is tall and wide enough. With work, the shell lands on Live instead.
   let home = true;
-  // The last git read and the root it was for (LD-T6b-1); one read at a time, and one more if asked meanwhile.
+  // The last git read and the root it was for (LD-T6b-1); one read at a time, and one more if asked meanwhile. The
+  // time the last read started, by the injected clock, spaces the reads that wakes ask for.
   let gitSeen: { readonly root: string; readonly status: GitStatus | undefined } | undefined;
   let gitReading = false;
   let gitAgain = false;
+  let gitStartedAt = Number.NEGATIVE_INFINITY;
+  const now = options.now ?? (() => Date.now());
   let quitting = false;
   // The add-task or goal form while it is open, and one line of outcome under the tabs (TUI-D13).
   let form: AddTaskForm | GoalForm | undefined;
@@ -175,7 +183,7 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
           dataDir: settings.dataDir,
           connect: options.connectControl,
           reload: () => {
-            reload();
+            reload(true);
             tui.requestRender();
           },
           onChange: () => tui.requestRender(),
@@ -258,7 +266,8 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
         : snapshot.projects.find((project) => project.projectId === scope);
     return chosen?.rootPath;
   };
-  // What the frame shows besides the panel (LD-T6b-1), read from the snapshot and the shell's own state.
+  // What the frame shows besides the panel (LD-T6b-1), read from the snapshot and the shell's own state. Every text is
+  // defused here, once, so the bars and boxes lay out and measure the text they will show; fit cuts it later.
   const facts = (): FrameFacts => {
     const tasks = scopedTasks();
     const running = snapshot.live.find((entry) => entry.detail.state === "running");
@@ -273,17 +282,20 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
       );
     const root = gitRoot();
     const pid = runtimePid();
+    const seen = gitSeen !== undefined && gitSeen.root === root ? gitSeen : undefined;
     return {
-      project: projectSlug(),
+      project: plain(projectSlug()),
       projectCount: snapshot.projects.length,
-      rootPath: root,
+      rootPath: root === undefined ? undefined : plain(root),
       git:
-        gitSeen !== undefined && gitSeen.root === root
-          ? (gitSeen.status ?? "unknown")
-          : options.readGit === undefined
+        seen === undefined
+          ? options.readGit === undefined
             ? "unknown"
-            : "reading",
-      model: options.defaultModel,
+            : "reading"
+          : seen.status === undefined
+            ? "unknown"
+            : { branch: plain(seen.status.branch), changes: seen.status.changes },
+      model: options.defaultModel === undefined ? undefined : plain(options.defaultModel),
       context:
         running === undefined
           ? undefined
@@ -298,19 +310,19 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
         byShell: pid !== undefined && started?.runtime.pid === pid,
         live: feed?.subscribed === true,
       },
-      runtimeText: runtimeText(),
-      isolation: banner.isolation,
+      runtimeText: plain(runtimeText()),
+      isolation: plain(banner.isolation),
       approvals: snapshot.pendingApprovals,
       taxis: {
         busy: snapshot.tasks.filter((task) => task.state === "running").length,
         slots: RUNTIME_SLOTS,
       },
-      projects: snapshot.projects.map((project) => project.slug),
-      tasks: taskSummary(tasks),
-      agents: [...new Set(tasks.map((task) => task.agentRef))],
+      projects: snapshot.projects.map((project) => plain(project.slug)),
+      tasks: plain(taskSummary(tasks)),
+      agents: [...new Set(tasks.map((task) => plain(task.agentRef)))],
       version: shellPackage.version,
-      dataDir: settings.dataDir,
-      theme: settings.themeLabel,
+      dataDir: settings.dataDir === undefined ? undefined : plain(settings.dataDir),
+      theme: plain(settings.themeLabel),
     };
   };
   const openApproval = (): PendingApproval | undefined =>
@@ -443,7 +455,7 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
       ...(wide
         ? joinColumns(main, width, rightColumn(shownFacts, middle), RIGHT_COLUMN_WIDTH, middle)
         : main.slice(0, middle)),
-      statusLine(shownFacts, columns),
+      statusLine(shownFacts, columns, !wide),
     ];
     // Exactly `rows` lines, none wider than the terminal: pi-tui fails on a line wider than its width.
     while (lines.length < rows) lines.splice(lines.length - 1, 0, []);
@@ -481,7 +493,8 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
     textOffset = 0;
   }
 
-  function reload(): void {
+  // Reads the store again. `fromWake` marks the reload the runtime's wake asked for: its git read is rate-limited.
+  function reload(fromWake = false): void {
     // Live follows its newest row while the cursor is on it, as tail -f does: new tasks arrive at the end.
     const followLive = (cursors[LIVE_PANEL] ?? 0) >= snapshot.live.length - 1;
     snapshot = data.load(scope);
@@ -490,7 +503,7 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
     // A plan decided meanwhile, here or by haril approve elsewhere, leaves its detail for the list.
     if (openApproval() === undefined) plan = undefined;
     land();
-    refreshGit();
+    refreshGit(fromWake);
   }
 
   // While no panel was chosen yet, work in progress takes the shell from the home view to Live (LD-T6b-1).
@@ -498,17 +511,20 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
     if (home && busy()) showLive();
   }
 
-  // Reads the branch and changes of the git root again (LD-T6b-1): on opening, with every load of the store and when
-  // the filter changes; never on a timer. A read asked for while one runs follows it once it is done.
-  function refreshGit(): void {
+  // Reads the branch and changes of the git root again (LD-T6b-1): on opening, on r, after an action and when the
+  // filter changes; for a reload a wake asked for, only when the last read started GIT_WAKE_INTERVAL_MS ago or more.
+  // Never on a timer. A read asked for while one runs follows it once it is done.
+  function refreshGit(fromWake = false): void {
     const read = options.readGit;
     const root = gitRoot();
     if (read === undefined || root === undefined) return;
+    if (fromWake && now() - gitStartedAt < GIT_WAKE_INTERVAL_MS) return;
     if (gitReading) {
       gitAgain = true;
       return;
     }
     gitReading = true;
+    gitStartedAt = now();
     void read(root)
       .catch(() => undefined)
       .then((status) => {
@@ -781,10 +797,12 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
       return;
     }
     const motion = motionOf(input, pageSize(columns, rows));
-    // On the home view a key that moves or opens shows the active panel first, and does nothing else (LD-T6b-1).
-    if ((motion !== undefined || matchesKey(input, "enter")) && homeShownAt(columns, rows)) {
+    // A key that moves or opens leaves the home (LD-T6b-1): later work no longer takes the shell to Live. While the
+    // banner shows, the key only reveals the active panel; otherwise it also acts on it.
+    if (motion !== undefined || matchesKey(input, "enter")) {
+      const bannerShown = homeShownAt(columns, rows);
       home = false;
-      return;
+      if (bannerShown) return;
     }
     if (motion !== undefined) {
       applyMotion(motion);

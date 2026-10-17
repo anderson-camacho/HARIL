@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { ControlClient } from "@haril/control";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createHarilActions } from "../src/actions.js";
-import { createShellApp, type ShellApp } from "../src/app.js";
+import { createShellApp, type ShellApp, type ShellAppOptions } from "../src/app.js";
 import { openShellData, type ShellData } from "../src/data.js";
 import type { ConnectControl } from "../src/live.js";
 import { resolveTheme } from "../src/theme.js";
@@ -75,6 +75,7 @@ function fakeControl(): FakeControl {
 function mount(
   connectControl: ConnectControl,
   harilEntry?: string,
+  extra: Pick<ShellAppOptions, "now" | "readGit"> = {},
 ): {
   terminal: VirtualTerminal;
   app: ShellApp;
@@ -104,8 +105,13 @@ function mount(
     },
     actions: createHarilActions({ harilEntry }),
     connectControl,
+    ...extra,
   });
   return { terminal, app, data };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function started(app: ShellApp): Promise<void> {
@@ -204,6 +210,61 @@ describe("shell app with the live feed (LD-T2)", () => {
 
     expect(control.requests).toEqual([]);
     expect(frame(app)).not.toContain("· live");
+
+    terminal.send("q");
+    await app.done;
+  });
+});
+
+describe("git reads while the runtime wakes the shell (LD-T6b-1)", () => {
+  it("a wake reads git at most once every 5 s of the shell's clock; opening and r always read", async () => {
+    // One project and a live runtime lease held by this process, so the shell subscribes.
+    const store = openSeedStore(dataDir);
+    try {
+      store.projects.register({ slug: "solo", name: "Solo", rootPath: "/work/solo" });
+      const grant = store.runtime.acquire({
+        pid: process.pid,
+        nodeVersion: process.version,
+        sqliteVersion: store.info().sqliteVersion,
+        ttlMs: 600_000,
+      });
+      expect(grant.ok).toBe(true);
+    } finally {
+      store.close();
+    }
+    const control = fakeControl();
+    let clock = 1_000_000;
+    const reads: string[] = [];
+    const { terminal, app } = mount(control.connect, undefined, {
+      now: () => clock,
+      readGit: async (rootPath) => {
+        reads.push(rootPath);
+        return { branch: "main", changes: 0 };
+      },
+    });
+    await started(app);
+    expect(control.requests).toEqual([{ subscribe: true }]);
+    expect(reads).toHaveLength(1);
+
+    // The feed reloads on a wake at most every 250 ms of real time, so the wakes are spaced by more than that.
+    clock += 1_000;
+    control.wake(1);
+    await sleep(5);
+    expect(reads).toHaveLength(1);
+    await sleep(300);
+    clock += 3_999;
+    control.wake(2);
+    await sleep(5);
+    expect(reads).toHaveLength(1);
+    await sleep(300);
+    clock += 1;
+    control.wake(3);
+    await sleep(5);
+    expect(reads).toHaveLength(2);
+    // r reads at once, whenever the last read was.
+    terminal.send("r");
+    await sleep(5);
+    expect(reads).toHaveLength(3);
 
     terminal.send("q");
     await app.done;

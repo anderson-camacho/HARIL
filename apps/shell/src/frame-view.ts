@@ -1,5 +1,5 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { compactCount } from "./format.js";
+import { compactCount, fit } from "./format.js";
 import {
   box,
   fitsBar,
@@ -122,15 +122,20 @@ export function topBar(facts: FrameFacts, width: number, folded: boolean): Line 
   );
 }
 
-// The status line: model, runtime and tokens on the left, help and quit on the right. Model and tokens give way first.
-export function statusLine(facts: FrameFacts, width: number): Line {
+// The status line: model, runtime and tokens on the left, help and quit on the right. Without the right column
+// (`folded`) it also names the branch and its changes. The branch gives way first, then the model, then the tokens.
+export function statusLine(facts: FrameFacts, width: number, folded: boolean): Line {
   const model = [segment(facts.model ?? "no model", "muted")];
   const runtime = [segment(`runtime ${facts.runtimeText}`, "text")];
   const tokens = [segment(`tok ${tokenPair(facts)}`, "muted")];
   const right = [segment("? help · q quit", "muted")];
-  const variants = [[model, runtime, tokens], [runtime, tokens], [runtime]].map((parts) =>
-    joined(parts, DOT),
-  );
+  const git = folded ? gitPart(facts) : undefined;
+  const variants = [
+    ...(git === undefined ? [] : [[model, runtime, tokens, git]]),
+    [model, runtime, tokens],
+    [runtime, tokens],
+    [runtime],
+  ].map((parts) => joined(parts, DOT));
   return spread(
     firstFitting(variants, (left) => fitsBar(left, right, width)),
     right,
@@ -192,7 +197,7 @@ export function homeLines(facts: FrameFacts, width: number, height: number): Lin
         .slice(index, index + 2)
         .flatMap(([label, value]) => [
           segment(label.padEnd(GRID_LABEL_WIDTH), "accent"),
-          segment(cut(value, valueWidth).padEnd(valueWidth + 1), "text"),
+          segment(cells(fit(value, valueWidth), valueWidth + 1), "text"),
         ]),
     );
   }
@@ -209,10 +214,17 @@ export function homeLines(facts: FrameFacts, width: number, height: number): Lin
   ];
 }
 
-// A path cut from the left to `width` cells, at a separator when one is near: "…\runtime\data".
+// A path cut from the left to `width` cells, at a separator when one is near: "…\runtime\data". It counts cells, not
+// characters, so a wide character in the path keeps it within the width.
 function shortPath(path: string, width: number): string {
   if (visibleWidth(path) <= width) return path;
-  const tail = path.slice(path.length - (width - 1));
+  const chars = [...path];
+  let tail = "";
+  for (let index = chars.length - 1; index >= 0; index--) {
+    const longer = `${chars[index]}${tail}`;
+    if (visibleWidth(longer) > width - 1) break;
+    tail = longer;
+  }
   const separator = tail.search(/[\\/]/);
   return `…${separator > 0 ? tail.slice(separator) : tail}`;
 }
@@ -263,6 +275,17 @@ function approvalRows(facts: FrameFacts): Line[] {
   return facts.approvals === 0
     ? [[segment("none pending", "ok")], [segment("p opens Plans", "muted")]]
     : [[segment(`${facts.approvals} pending`, "warning")], [segment("p to review", "muted")]];
+}
+
+// "git main · 3 changed" for the status line; undefined while git has not answered for the root.
+function gitPart(facts: FrameFacts): Segment[] | undefined {
+  const { git } = facts;
+  if (facts.rootPath === undefined || typeof git === "string") return undefined;
+  return [
+    segment(`git ${git.branch}`, "text"),
+    DOT,
+    git.changes === 0 ? segment("clean", "ok") : segment(`${git.changes} changed`, "warning"),
+  ];
 }
 
 function taxiRow(facts: FrameFacts): Line {
@@ -329,7 +352,9 @@ function centered(line: Line, width: number): Line {
   return [segment(" ".repeat(indent), "text"), ...line];
 }
 
-// Cuts plain text to `width` characters with an ellipsis, so the grid's columns stay even; fit stays the boundary.
-function cut(text: string, width: number): string {
-  return text.length <= width ? text : `${text.slice(0, Math.max(0, width - 1))}…`;
+// Exactly `width` cells: the text cut by fit, then padded with spaces, so the grid's columns stay even with wide
+// characters too.
+function cells(text: string, width: number): string {
+  const shown = fit(text, width);
+  return `${shown}${" ".repeat(Math.max(0, width - visibleWidth(shown)))}`;
 }
