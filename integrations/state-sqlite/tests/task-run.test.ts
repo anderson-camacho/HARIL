@@ -60,7 +60,7 @@ function caught(action: () => unknown): StoreError {
 }
 
 describe("tasks.promote", () => {
-  it("moves a pending task to ready once its dependency has completed", () => {
+  it("[INV-04] moves a pending task to ready once its dependency has completed", () => {
     enqueueTask("A");
     enqueueTask("B", [taskId("A")]);
     const claimed = store.tasks.claimNext(epoch);
@@ -76,7 +76,7 @@ describe("tasks.promote", () => {
     expect(store.tasks.get(taskId("B"))?.state).toBe("ready");
   });
 
-  it("blocks a pending task whose dependency failed, with block reason dep_failed", () => {
+  it("[INV-04] blocks a pending task whose dependency failed, with block reason dep_failed", () => {
     enqueueTask("A");
     enqueueTask("B", [taskId("A")]);
     const claimed = store.tasks.claimNext(epoch);
@@ -170,7 +170,7 @@ describe("tasks.claimNext", () => {
     expect(store.events.list().map((event) => event.type)).toContain("task.claimed");
   });
 
-  it("is atomic across connections: two stores never claim the same task", () => {
+  it("[INV-01] is atomic across connections: two stores never claim the same task", () => {
     const dir = mkdtempSync(join(tmpdir(), "haril-claim-"));
     try {
       const first = openStore({
@@ -273,7 +273,7 @@ describe("runs.complete", () => {
     expect(store.events.list().map((event) => event.type)).toContain("task.failed");
   });
 
-  it("refuses to complete a run that is no longer the current claim with store.stale", () => {
+  it("[INV-07] refuses to complete a run that is no longer the current claim with store.stale", () => {
     enqueueTask("A");
     const claimed = store.tasks.claimNext(epoch);
     const outcome = { runId: claimed?.runId ?? "", outcome: "succeeded" as const, result: {} };

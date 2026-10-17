@@ -77,7 +77,7 @@ describe.each(backends)("Store contract (%s)", (_name, open) => {
     expect(error.code).toBe("store.conflict");
   });
 
-  it("enqueues a command once per idempotency key", () => {
+  it("[INV-08] enqueues a command once per idempotency key", () => {
     const first = store.commands.enqueue({
       type: "task.add",
       args: { goal: "x" },
@@ -96,7 +96,7 @@ describe.each(backends)("Store contract (%s)", (_name, open) => {
     expect(store.commands.listQueued()).toHaveLength(1);
   });
 
-  it("rejects a reused idempotency key with a different request hash", () => {
+  it("[INV-08] rejects a reused idempotency key with a different request hash", () => {
     store.commands.enqueue({
       type: "task.add",
       args: {},
@@ -130,7 +130,7 @@ describe.each(backends)("Store contract (%s)", (_name, open) => {
     expect(store.commands.listQueued().map((c) => c.args)).toEqual([{ n: 1 }, { n: 2 }]);
   });
 
-  it("appends events with increasing seq and lists them in order", () => {
+  it("[INV-10] appends events with increasing seq and lists them in order", () => {
     const a = store.events.append({
       aggregateType: "task",
       aggregateId: "t-1",

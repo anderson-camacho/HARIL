@@ -1,5 +1,5 @@
 // Crash child for the crash-point harness (test only, never built or shipped).
-// Usage: node --import ./register.mjs child.mjs <dataDir> <point>
+// Usage: node --import <integrations/state-sqlite/tests/crash>/register.mjs child.mjs <dataDir> <point>
 // <point> is cp1, cp3, cp4 or cp8. The child stops at its crash point by killing itself hard (SIGKILL, which is
 // TerminateProcess on Windows): no cleanup, no lease release, no rollback. The marker file written just before the
 // kill proves the point was reached, so a child that fails to load can never look like a crash.

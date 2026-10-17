@@ -149,7 +149,7 @@ describe("budgets.reserve", () => {
     expect(store.budgets.get(s.projectBudget)).toMatchObject({ reserved: 0 });
   });
 
-  it("refuses a reused idempotency key with a store conflict", () => {
+  it("[INV-08] refuses a reused idempotency key with a store conflict", () => {
     const s = scope(1000, 100);
     reserve(s, 10, "req-4");
     expect(caught(() => reserve(s, 10, "req-4")).code).toBe("store.conflict");

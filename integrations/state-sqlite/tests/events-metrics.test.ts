@@ -239,7 +239,7 @@ describe("metrics.snapshot (M1-T6)", () => {
     expect(snapshot.runsByStatus).toMatchObject({ completed: 2, failed: 2, orphaned: 1 });
   });
 
-  it("is recomputable from the event log alone", () => {
+  it("[INV-10] is recomputable from the event log alone", () => {
     runScenario();
     const snapshot = store.metrics.snapshot();
     const events = store.events.list();

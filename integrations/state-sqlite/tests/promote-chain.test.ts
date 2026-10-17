@@ -66,7 +66,7 @@ function failFirstClaim(): void {
 }
 
 describe("tasks.promote transitive dep_failed (M1 fix b)", () => {
-  it("blocks a three-level chain behind a failed root in one promote call", () => {
+  it("[INV-04] blocks a three-level chain behind a failed root in one promote call", () => {
     const a = enqueueTask("A");
     const b = enqueueTask("B", [a]);
     const c = enqueueTask("C", [b]);
@@ -79,7 +79,7 @@ describe("tasks.promote transitive dep_failed (M1 fix b)", () => {
     expect(store.tasks.get(c)).toMatchObject({ state: "blocked", blockReason: "dep_failed" });
   });
 
-  it("keeps a task pending while its dependency is neither failed nor completed", () => {
+  it("[INV-04] keeps a task pending while its dependency is neither failed nor completed", () => {
     enqueueTask("A");
     const b = enqueueTask("B");
     const joined = enqueueTask("J", [b]);
