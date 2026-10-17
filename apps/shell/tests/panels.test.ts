@@ -316,6 +316,77 @@ describe("plans and live (LD-T5)", () => {
     });
   });
 
+  it("plan detail: every field the runtime applies, so the approver sees what each agent gets (LD-T6c)", () => {
+    const seeded = seedStore(dataDir);
+    proposeExamplePlan(dataDir, seeded.demoId);
+    const snapshot = loadSnapshot(undefined);
+    const approval = snapshot.approvals[0];
+    if (approval === undefined) throw new Error("approval not loaded");
+    const lines = buildPlanDetailView(approval, contextFor(snapshot, undefined));
+    const survey = lines.indexOf("1. survey-readme: Survey the README structure");
+    expect(lines.slice(survey, survey + 8)).toEqual([
+      "1. survey-readme: Survey the README structure",
+      "   agent developer-block, depends on: none",
+      "   description: List the headings of README.md and note where a new section fits.",
+      "   writes: none; reads: README.md",
+      "   kind work, priority 0, attempts 2, timeout 120000 ms",
+      "   budget: 20000 tokens, 120000 ms wall time, 0 cost micros",
+      "   requires: none; context: none",
+      "   acceptance: none",
+    ]);
+    expect(lines).toContain("   writes: README.md; reads: README.md");
+    expect(lines).toContain("   kind verify, priority 3, attempts 1, timeout 60000 ms");
+    expect(lines).toContain("   acceptance: markdown/lint");
+  });
+
+  it("plan detail: a description line by line, every list and every kind of check", () => {
+    const seeded = seedStore(dataDir);
+    const snapshot = loadSnapshot(undefined);
+    const base = {
+      localId: "wipe",
+      dependsOn: ["first", "second"],
+      goal: "Tidy up",
+      description: "SECRET-DESCRIPTION: also delete the backups\r\nthen report",
+      priority: 9,
+      kind: "work" as const,
+      agent: "analyst",
+      requires: ["fs.write"],
+      context: ["ctx-1", "ctx-2"],
+      surface: { write: ["backups/**", "README.md"], read: [] },
+      budget: { maxCostMicros: 5, maxTokens: 99, maxWallMs: 1000 },
+      timeoutMs: 500,
+      maxAttempts: 3,
+      acceptance: [
+        { kind: "file_exists" as const, path: "out.md" },
+        { kind: "file_contains" as const, path: "out.md", text: "done" },
+        { kind: "output_contains" as const, text: "ok\nnow" },
+        { blockId: "markdown", checkId: "lint", params: { strict: true } },
+      ],
+    };
+    const approval = {
+      approvalId: "a0000000-0000-4000-8000-000000000000",
+      projectId: seeded.demoId,
+      requestedAt: snapshot.loadedAt,
+      requestedBy: "planner",
+      tasks: [base, { ...base, localId: "quiet", description: " ", acceptance: [] }],
+      error: undefined,
+    };
+    const lines = buildPlanDetailView(approval, contextFor(snapshot, undefined));
+    const wipe = lines.indexOf("1. wipe: Tidy up");
+    expect(lines.slice(wipe, wipe + 9)).toEqual([
+      "1. wipe: Tidy up",
+      "   agent analyst, depends on: first, second",
+      "   description: SECRET-DESCRIPTION: also delete the backups",
+      "     then report",
+      "   writes: backups/**, README.md; reads: none",
+      "   kind work, priority 9, attempts 3, timeout 500 ms",
+      "   budget: 99 tokens, 1000 ms wall time, 5 cost micros",
+      "   requires: fs.write; context: ctx-1, ctx-2",
+      '   acceptance: file_exists out.md, file_contains out.md "done", output_contains "ok\\nnow", markdown/lint {"strict":true}',
+    ]);
+    expect(lines).toContain("   description: none");
+  });
+
   it("plans: a subject that is not a plan lists as an invalid plan", () => {
     const seeded = seedStore(dataDir);
     const snapshot = loadSnapshot(undefined);

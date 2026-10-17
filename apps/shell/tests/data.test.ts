@@ -281,11 +281,22 @@ describe("plans waiting for approval (LD-T5)", () => {
         "insert-section",
         "verify-readme",
       ]);
+      // Every field of the task, as the runtime will apply it: the plan detail shows them all (LD-T6c).
       expect(approval?.tasks[1]).toEqual({
         localId: "draft-section",
-        goal: "Draft the new README section",
-        agent: "developer-block",
         dependsOn: ["survey-readme"],
+        goal: "Draft the new README section",
+        description: "Write a short section that explains how to run the CLI smoke test.",
+        priority: 1,
+        kind: "work",
+        agent: "developer-block",
+        requires: [],
+        context: [],
+        surface: { write: [], read: ["README.md"] },
+        budget: { maxCostMicros: 0, maxTokens: 20000, maxWallMs: 120000 },
+        timeoutMs: 120000,
+        maxAttempts: 2,
+        acceptance: [],
       });
     } finally {
       data.close();

@@ -18,7 +18,7 @@ import {
 } from "./commands.js";
 import { saveThemeChoice } from "./config-file.js";
 import type { PendingApproval, ShellData, ShellSnapshot, TaskDetailView } from "./data.js";
-import { fit, plain, wrap } from "./format.js";
+import { fit, visibleText, wrap } from "./format.js";
 import { box, fitLine, joinColumns, type Line, type Segment, segment } from "./frame-layout.js";
 import {
   type FrameFacts,
@@ -299,7 +299,8 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
     return chosen?.rootPath;
   };
   // What the frame shows besides the panel (LD-T6b-1), read from the snapshot and the shell's own state. Every text is
-  // defused here, once, so the bars and boxes lay out and measure the text they will show; fit cuts it later.
+  // shown here as the screen draws it (visibleText), once, so the bars and boxes lay out and measure the text they will
+  // show; fit cuts it later.
   const facts = (): FrameFacts => {
     const tasks = scopedTasks();
     const running = snapshot.live.find((entry) => entry.detail.state === "running");
@@ -316,9 +317,9 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
     const pid = runtimePid();
     const seen = gitSeen !== undefined && gitSeen.root === root ? gitSeen : undefined;
     return {
-      project: plain(projectSlug()),
+      project: visibleText(projectSlug()),
       projectCount: snapshot.projects.length,
-      rootPath: root === undefined ? undefined : plain(root),
+      rootPath: root === undefined ? undefined : visibleText(root),
       git:
         seen === undefined
           ? options.readGit === undefined
@@ -326,8 +327,8 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
             : "reading"
           : seen.status === undefined
             ? "unknown"
-            : { branch: plain(seen.status.branch), changes: seen.status.changes },
-      model: options.defaultModel === undefined ? undefined : plain(options.defaultModel),
+            : { branch: visibleText(seen.status.branch), changes: seen.status.changes },
+      model: options.defaultModel === undefined ? undefined : visibleText(options.defaultModel),
       context:
         running === undefined
           ? undefined
@@ -342,19 +343,19 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
         byShell: pid !== undefined && started?.runtime.pid === pid,
         live: feed?.subscribed === true,
       },
-      runtimeText: plain(runtimeText()),
-      isolation: plain(banner.isolation),
+      runtimeText: visibleText(runtimeText()),
+      isolation: visibleText(banner.isolation),
       approvals: snapshot.pendingApprovals,
       taxis: {
         busy: snapshot.tasks.filter((task) => task.state === "running").length,
         slots: RUNTIME_SLOTS,
       },
-      projects: snapshot.projects.map((project) => plain(project.slug)),
-      tasks: plain(taskSummary(tasks)),
-      agents: [...new Set(tasks.map((task) => plain(task.agentRef)))],
+      projects: snapshot.projects.map((project) => visibleText(project.slug)),
+      tasks: visibleText(taskSummary(tasks)),
+      agents: [...new Set(tasks.map((task) => visibleText(task.agentRef)))],
       version: shellPackage.version,
-      dataDir: settings.dataDir === undefined ? undefined : plain(settings.dataDir),
-      theme: plain(settings.themeLabel),
+      dataDir: settings.dataDir === undefined ? undefined : visibleText(settings.dataDir),
+      theme: visibleText(settings.themeLabel),
     };
   };
   const openApproval = (): PendingApproval | undefined =>

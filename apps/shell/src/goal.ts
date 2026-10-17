@@ -28,11 +28,12 @@ export function goalDefaults(goal: string, defaultModel: string | undefined): Go
 }
 
 // The argv of a plan task. Only planner takes a model; the simulated planner never does. The goal goes as the form
-// and the input box show it (format.ts visibleText): a control or format character a paste brought is sent as "?".
+// and the input box show it, and so does the model (format.ts visibleText): a control or invisible character a paste
+// brought is sent as "?".
 export function goalArgs(values: GoalValues, target: AddTaskTarget): AddTaskArgs {
   const goal = visibleText(values.goal).trim();
   if (goal === "") return { ok: false, message: "goal is required" };
-  const model = values.model.trim();
+  const model = visibleText(values.model).trim();
   if (values.agent === PLANNER && model === "") {
     return { ok: false, message: "planner needs a model: type one in the model field" };
   }
@@ -112,7 +113,7 @@ export class GoalForm {
       `Plan a goal for project ${this.projectSlug}`,
       `${marker("goal")}goal    ${visibleText(this.goalInput.getValue())}${cursor("goal")}`,
       `${marker("agent")}agent   ${agents}`,
-      `${marker("model")}model   ${this.modelInput.getValue()}${cursor("model")}${agent === PLANNER ? "" : "  (planner only)"}`,
+      `${marker("model")}model   ${visibleText(this.modelInput.getValue())}${cursor("model")}${agent === PLANNER ? "" : "  (planner only)"}`,
     ];
   }
 

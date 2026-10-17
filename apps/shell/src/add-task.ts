@@ -1,4 +1,5 @@
 import { Input, type SelectItem, SelectList, type SelectListTheme } from "@earendil-works/pi-tui";
+import { visibleText } from "./format.js";
 
 // The add-task form of the shell (TUI-D13): title, agent and model. pi-tui's Input and SelectList keep the editing
 // and the selection; the app routes Tab, Enter and Esc itself and sends every other key to the focused field.
@@ -27,11 +28,13 @@ export type AddTaskArgs =
   | { readonly ok: true; readonly args: readonly string[] }
   | { readonly ok: false; readonly message: string };
 
-// The argv of `haril task add`. Only analyst takes a model; the simulated agent never does.
+// The argv of `haril task add`. Only analyst takes a model; the simulated agent never does. The title goes as the
+// form shows it, and so does the model (format.ts visibleText, LD-T6c): a control or invisible character a paste
+// brought is sent as "?".
 export function addTaskArgs(values: AddTaskValues, target: AddTaskTarget): AddTaskArgs {
-  const title = values.title.trim();
+  const title = visibleText(values.title).trim();
   if (title === "") return { ok: false, message: "title is required" };
-  const model = values.model.trim();
+  const model = visibleText(values.model).trim();
   if (values.agent === ANALYST && model === "") {
     return { ok: false, message: "analyst needs a model: type one in the model field" };
   }
@@ -110,9 +113,9 @@ export class AddTaskForm {
     const agents = AGENT_REFS.map((ref) => (ref === agent ? `[${ref}]` : ref)).join("  ");
     return [
       `Add task to project ${this.projectSlug}`,
-      `${marker("title")}title   ${this.titleInput.getValue()}${cursor("title")}`,
+      `${marker("title")}title   ${visibleText(this.titleInput.getValue())}${cursor("title")}`,
       `${marker("agent")}agent   ${agents}`,
-      `${marker("model")}model   ${this.modelInput.getValue()}${cursor("model")}${agent === ANALYST ? "" : "  (analyst only)"}`,
+      `${marker("model")}model   ${visibleText(this.modelInput.getValue())}${cursor("model")}${agent === ANALYST ? "" : "  (analyst only)"}`,
     ];
   }
 
