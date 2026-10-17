@@ -55,6 +55,7 @@ const HELP_LINES = [
   "  haril plan import <file> [--project <slug>] [--json]   queue a plan (applied by start)",
   "  haril plan propose <file> [--project <slug>] [--json]   propose a plan: a requested approval, nothing queued",
   "  haril approvals [--project <slug>] [--all] [--json]   the pending approvals (--all: every status)",
+  "  haril approvals show <approvalId> [--json]   one approval with every task of its plan; read it before approve",
   "  haril approve <approvalId> [--reason <text>]   grant a proposed plan; the runtime queues it on its next turn",
   "  haril deny <approvalId> [--reason <text>]   deny a proposed plan; nothing is queued",
   "  haril project init [path] --name <name> [--slug <slug>] [--methodology <name>] [--yes] [--json]",

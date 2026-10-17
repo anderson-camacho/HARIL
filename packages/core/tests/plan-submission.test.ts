@@ -57,6 +57,24 @@ describe("checkPlanSubmission", () => {
     if (!result.ok) expect(result.reason).toMatch(/tasks/);
   });
 
+  // LD-T7c: the reason reaches the planner through haril_propose_plan, so it can propose again within its window.
+  it("refuses an analyst task that writes, with the reason, and accepts the same plan on fake:succeed", () => {
+    const withAgent = (agent: string) => {
+      const plan = validPlan();
+      const tasks = plan.tasks as Record<string, unknown>[];
+      tasks[2] = { ...tasks[2], agent, surface: { write: ["README.md"], read: ["README.md"] } };
+      return plan;
+    };
+    const refused = checkPlanSubmission(withAgent("analyst"));
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) {
+      expect(refused.reason).toContain('task "insert-section"');
+      expect(refused.reason).toContain("read-only agent");
+      expect(refused.reason).toContain("README.md");
+    }
+    expect(checkPlanSubmission(withAgent("fake:succeed")).ok).toBe(true);
+  });
+
   it("rejects a dependency cycle and names the cycle in the reason", () => {
     const plan = validPlan();
     const tasks = plan.tasks as FixtureTask[];

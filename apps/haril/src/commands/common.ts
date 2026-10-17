@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { nudgeRuntime } from "@haril/control";
-import { canonicalJson } from "@haril/core";
+import { canonicalJson, visibleText } from "@haril/core";
 import type { ProjectRecord, Store } from "@haril/core/ports";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
 import { resolveDataDir } from "../data-dir.js";
@@ -16,6 +16,13 @@ export function sha256(text: string): string {
 // Canonical JSON makes key order irrelevant, so a re-ordered plan file is the same request.
 export function requestHash(value: unknown): string {
   return sha256(canonicalJson(value));
+}
+
+// Text an agent or the store holds, as the terminal shows it, with its line breaks kept (LD-T7c): each line passes the
+// Core visibleText rule, as in the shell, so a result or a plan cannot clear the screen, set the clipboard or hide
+// words from the person who reads it. Single-line text goes through visibleText itself; JSON output never does.
+export function visibleBlock(text: string): string {
+  return text.split(/\r?\n/).map(visibleText).join("\n");
 }
 
 export function dataDirFor(host: HostInfo, flag: string | undefined): string {

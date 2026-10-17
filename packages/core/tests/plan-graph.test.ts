@@ -94,6 +94,34 @@ describe("validatePlanGraph", () => {
     expect(issues[0]?.message).toContain('planner agent "planner"');
   });
 
+  // LD-T7c: the real analyst only reads; a task of it that lists files to write could never write them.
+  it("reports read_only_agent_writes for an analyst task with a write surface, once per task", () => {
+    const writes = {
+      ...task("draft"),
+      agent: "analyst",
+      surface: { write: ["CONTRIBUTING.md"], read: [] },
+    };
+    const reads = {
+      ...task("survey"),
+      agent: "analyst",
+      surface: { write: [], read: ["README.md"] },
+    };
+    const issues = validatePlanGraph(plan([reads, writes]));
+    expect(issues).toEqual([
+      expect.objectContaining({ code: "read_only_agent_writes", taskId: "draft" }),
+    ]);
+    expect(issues[0]?.message).toContain('"analyst"');
+    expect(issues[0]?.message).toContain("CONTRIBUTING.md");
+    expect(issues[0]?.message).toContain("result");
+  });
+
+  it("keeps the write surface of simulated and other agents", () => {
+    const surface = { write: ["CONTRIBUTING.md"], read: [] };
+    const fake = { ...task("fake"), agent: "fake:succeed", surface };
+    const block = { ...task("block"), agent: "developer-block", surface };
+    expect(validatePlanGraph(plan([fake, block]))).toEqual([]);
+  });
+
   it("keeps reporting other codes when one rule fails", () => {
     const issues = validatePlanGraph(plan([task("a", ["ghost"], "plan"), task("a")]));
     expect(codesOf(issues).sort()).toEqual(

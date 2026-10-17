@@ -5,6 +5,7 @@ import {
   type Terminal,
   TuiMainScreen,
 } from "@earendil-works/pi-tui";
+import { visibleText } from "@haril/core";
 import type { GitStatus } from "@haril/git";
 import shellPackage from "../package.json" with { type: "json" };
 import { createHarilActions, type ShellActions } from "./actions.js";
@@ -18,7 +19,7 @@ import {
 } from "./commands.js";
 import { saveThemeChoice } from "./config-file.js";
 import type { PendingApproval, ShellData, ShellSnapshot, TaskDetailView } from "./data.js";
-import { fit, visibleText, wrap } from "./format.js";
+import { fit, wrap } from "./format.js";
 import { box, fitLine, joinColumns, type Line, type Segment, segment } from "./frame-layout.js";
 import {
   type FrameFacts,

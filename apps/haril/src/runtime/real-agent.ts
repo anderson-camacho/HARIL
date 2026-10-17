@@ -402,12 +402,14 @@ function recordBridgeOperation(store: Store, spec: AgentSpec, event: BridgeOpera
     });
     return;
   }
+  // A plan proposal keeps its fingerprint, the approval it became, or the capped reason it was refused (LD-T7c).
   if (event.planSha256 !== undefined) {
     recordEvent(store, spec, `tool.${event.op}`, {
       outcome: event.outcome,
       planSha256: event.planSha256,
       planBytes: event.planBytes ?? 0,
       ...(event.approvalId === undefined ? {} : { approvalId: event.approvalId }),
+      ...(event.reason === undefined ? {} : { reason: event.reason }),
     });
     return;
   }

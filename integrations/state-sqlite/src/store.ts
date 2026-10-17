@@ -130,6 +130,7 @@ interface ReadyRow {
   readonly model: string | null;
   readonly maxTokens: number;
   readonly acceptance: string;
+  readonly surfaceRead: string;
   readonly attempt: number;
   readonly attemptsUsed: number;
   readonly maxAttempts: number;
@@ -888,7 +889,7 @@ export class SqliteStore implements Store {
           : ` AND task_id NOT IN (${excludedTasks.map(() => "?").join(", ")})`;
       const row = this.db
         .prepare(
-          `SELECT task_id AS taskId, project_id AS projectId, goal, description, kind, agent_ref AS agentRef, model, budget_max_tokens AS maxTokens, acceptance, attempt, attempts_used AS attemptsUsed, max_attempts AS maxAttempts, timeout_ms AS timeoutMs, claim_epoch AS claimEpoch FROM tasks WHERE state = 'ready'${notExcludedAgents}${notExcludedTasks} ORDER BY priority DESC, created_seq LIMIT 1`,
+          `SELECT task_id AS taskId, project_id AS projectId, goal, description, kind, agent_ref AS agentRef, model, budget_max_tokens AS maxTokens, acceptance, surface_read AS surfaceRead, attempt, attempts_used AS attemptsUsed, max_attempts AS maxAttempts, timeout_ms AS timeoutMs, claim_epoch AS claimEpoch FROM tasks WHERE state = 'ready'${notExcludedAgents}${notExcludedTasks} ORDER BY priority DESC, created_seq LIMIT 1`,
         )
         .get(...excludedAgents, ...excludedTasks) as unknown as ReadyRow | undefined;
       if (row === undefined) return undefined;
@@ -946,6 +947,7 @@ export class SqliteStore implements Store {
         model: row.model,
         maxTokens: row.maxTokens,
         acceptance: JSON.parse(row.acceptance) as ClaimedTask["acceptance"],
+        surfaceRead: JSON.parse(row.surfaceRead) as string[],
         attempt,
         attemptsUsed: row.attemptsUsed,
         maxAttempts: row.maxAttempts,
@@ -1016,11 +1018,14 @@ export class SqliteStore implements Store {
 
       if (completion.outcome === "succeeded") {
         this.transition("running", "completed");
+        // A succeeded attempt is charged like a failed one (ARCH 7.2, 7.6), so a completed task reports the attempts it
+        // ran: the same number the run output gave its claim (LD-T7c). The claim allowed it, so it stays <= max.
+        const attemptsUsed = task.attemptsUsed + 1;
         this.db
           .prepare(
-            "UPDATE tasks SET result = ?, state = 'completed', phase = NULL, completed_at = ?, updated_at = ? WHERE task_id = ?",
+            "UPDATE tasks SET result = ?, state = 'completed', phase = NULL, attempts_used = ?, completed_at = ?, updated_at = ? WHERE task_id = ?",
           )
-          .run(JSON.stringify(completion.result), now, now, run.taskId);
+          .run(JSON.stringify(completion.result), attemptsUsed, now, now, run.taskId);
         this.db
           .prepare(
             "UPDATE runs SET status = 'completed', ended_at = ?, end_cause = 'exit' WHERE run_id = ?",
@@ -1031,7 +1036,7 @@ export class SqliteStore implements Store {
           type: "task.completed",
           payload: { attempt: run.attempt },
         });
-        return { ...base, taskState: "completed", retryReason: null };
+        return { ...base, attemptsUsed, taskState: "completed", retryReason: null };
       }
 
       const attemptsUsed = task.attemptsUsed + 1;

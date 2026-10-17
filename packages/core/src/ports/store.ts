@@ -326,6 +326,9 @@ export interface ClaimedTask {
   readonly maxTokens: number;
   // Host acceptance checks of the task (M3-D7), evaluated after the agent settles.
   readonly acceptance: Acceptance;
+  // The files the task is told to read: a plan task's surface.read, empty for a task.create (LD-T7c). Its prompt names
+  // them; they are not an access limit.
+  readonly surfaceRead: readonly string[];
   readonly attempt: number;
   readonly attemptsUsed: number;
   readonly maxAttempts: number;

@@ -85,6 +85,56 @@ describe("buildAgentSpec", () => {
     }
   });
 
+  // LD-T7c: the first real demo planned a task that drafted a file for an agent that cannot write. The planner is told
+  // what the analyst can do, where the content of a file goes, and what a description must add.
+  it("tells the planner what the analyst can and cannot do, and where the content of a file goes", () => {
+    const { prompt } = buildAgentSpec(
+      { ...task, kind: "plan", agentRef: "planner" },
+      { runId: "r", attempt: 1 },
+    );
+    expect(prompt).toMatch(/"analyst" reads project files and answers in its result text/);
+    expect(prompt).toMatch(/cannot write files or run commands/);
+    expect(prompt).toMatch(/never a copy of the goal/);
+    // LD-T7c fix: the read surface reaches the agent as the files to read, and it is not an access limit.
+    expect(prompt).toMatch(
+      /"surface\.read" lists the files the task tells it to read; it is not an access limit/,
+    );
+    // The second real demo's planner said "write CONTRIBUTING.md" to an agent that cannot write.
+    expect(prompt).toContain(
+      'the goal of the last task says "Return the full content of <file> as the result", never "write"',
+    );
+  });
+
+  // LD-T7c fix: the planner's surface.read reaches the agent; without one the prompt is the goal and the description.
+  it("names the files of the read surface in the prompt, after the description", () => {
+    const reads = buildAgentSpec(
+      { ...task, surfaceRead: ["README.md", "docs/guide.md"] },
+      { runId: "r", attempt: 1 },
+    );
+    expect(reads.prompt).toBe(
+      "Survey the README\n\nList the headings.\n\nFiles to read: README.md, docs/guide.md",
+    );
+    const none = buildAgentSpec({ ...task, surfaceRead: [] }, { runId: "r", attempt: 1 });
+    expect(none.prompt).toBe("Survey the README\n\nList the headings.");
+  });
+
+  // LD-T7c fix: the analyst of the second real demo wrapped the requested file in chat and a code fence.
+  it("tells the analyst to answer in its result, and to return a requested file's content alone", () => {
+    const { prompt } = buildAgentSpec(
+      { ...task, agentRef: "analyst", surfaceRead: ["README.md"] },
+      { runId: "r", attempt: 1 },
+    );
+    expect(
+      prompt.startsWith("Survey the README\n\nList the headings.\n\nFiles to read: README.md"),
+    ).toBe(true);
+    expect(prompt).toContain(
+      "You answer in your result text; you cannot write files or run commands.",
+    );
+    expect(prompt).toContain(
+      "When the goal asks for the content of a file, the result is that content alone: no preamble, no closing remarks and no code fence around it.",
+    );
+  });
+
   it("serves the planner archetype in the real lane, like the analyst", () => {
     expect(REAL_AGENT_REFS).toEqual(["analyst", "planner"]);
   });

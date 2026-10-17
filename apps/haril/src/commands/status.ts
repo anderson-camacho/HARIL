@@ -1,4 +1,4 @@
-import { TASK_STATES } from "@haril/core";
+import { TASK_STATES, visibleText } from "@haril/core";
 import type {
   CommandRecord,
   ProjectRecord,
@@ -127,11 +127,14 @@ function printText(io: CliIo, report: StatusReport): void {
   }
   io.out(`  projects  ${report.projects.length}`);
   for (const project of report.projects) {
-    io.out(`    ${project.slug}  ${project.name}  ${project.rootPath}`);
+    io.out(visibleText(`    ${project.slug}  ${project.name}  ${project.rootPath}`));
   }
   const byState = TASK_STATES.map((state) => `${state} ${report.tasks.byState[state] ?? 0}`);
   io.out(`  tasks     ${report.tasks.total} (${byState.join(", ")})`);
-  for (const task of report.taskList) io.out(`    ${task.taskId}  ${task.state}  ${task.goal}`);
+  // LD-T7c: a plan task's goal is agent-written, so it is shown as the terminal draws it.
+  for (const task of report.taskList) {
+    io.out(visibleText(`    ${task.taskId}  ${task.state}  ${task.goal}`));
+  }
   io.out(`  queued    ${report.queuedCommands.length}`);
   for (const command of report.queuedCommands) io.out(`    ${command.commandId}  ${command.type}`);
   io.out(`  runtime   ${runtimeText(report.runtime)}`);

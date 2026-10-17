@@ -51,7 +51,9 @@ export type BridgeOperationOutcome =
 // Event-friendly record of one bridge operation: the path is hashed and the content is never included.
 // A path_denied operation carries the PathGuard reason (a fixed code such as outside_root), never the path.
 // A plan.propose has no path (pathSha256 hashes ""): it carries the plan's SHA-256 and UTF-8 size, and the approval an
-// accepted plan became, never the plan or the refusal reason, which may quote it.
+// accepted plan became, never the plan. A refused one also carries the reason the host gave the agent (LD-T7c), cut to
+// MAX_REFUSAL_REASON_CHARS, so the refusal is audited outside the Pi session log. The reason is HARIL's own validation
+// message: it may name a task's local id, its agent or the paths it lists, never a goal or a description.
 export interface BridgeOperationEvent {
   readonly runId: string;
   readonly op: string;
@@ -204,6 +206,16 @@ function proposalText(approvalId: string, created: boolean): string {
   return created
     ? `proposed plan ${approvalId}; it waits for a person (haril approve ${approvalId})`
     : `plan ${approvalId} was already proposed; it waits for a person (haril approve ${approvalId})`;
+}
+
+// The longest refusal reason a plan.propose record keeps, in code points (LD-T7c).
+const MAX_REFUSAL_REASON_CHARS = 500;
+
+// A refusal reason as the record keeps it: whole, or cut to MAX_REFUSAL_REASON_CHARS code points ending with "…".
+function cappedReason(reason: string): string {
+  const chars = [...reason];
+  if (chars.length <= MAX_REFUSAL_REASON_CHARS) return reason;
+  return `${chars.slice(0, MAX_REFUSAL_REASON_CHARS - 1).join("")}…`;
 }
 
 // Pi 1.2.0 reads a leading "/" as one of its own commands, so a task that starts with it goes behind a fixed prefix.
@@ -617,7 +629,10 @@ class PiRun implements PiAgentHandle {
       }
     }
     if (!result.ok) {
-      this.recordOperation(PLAN_PROPOSE_OP, sha256(""), "plan_refused", fingerprint);
+      this.recordOperation(PLAN_PROPOSE_OP, sha256(""), "plan_refused", {
+        ...fingerprint,
+        reason: cappedReason(result.reason),
+      });
       this.replyBridge(id, { ok: false, error: result.reason });
       return;
     }

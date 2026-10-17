@@ -1,6 +1,6 @@
 import { Input, type SelectItem, SelectList, type SelectListTheme } from "@earendil-works/pi-tui";
+import { visibleText } from "@haril/core";
 import type { AddTaskArgs, AddTaskTarget } from "./add-task.js";
-import { visibleText } from "./format.js";
 
 // The goal form of the shell (LD-T5): the objective, the planner agent and its model. It mirrors the add-task form:
 // pi-tui's Input and SelectList keep the editing and the selection, and the app routes Tab, Enter and Esc itself.
@@ -28,7 +28,7 @@ export function goalDefaults(goal: string, defaultModel: string | undefined): Go
 }
 
 // The argv of a plan task. Only planner takes a model; the simulated planner never does. The goal goes as the form
-// and the input box show it, and so does the model (format.ts visibleText): a control or invisible character a paste
+// and the input box show it, and so does the model (the Core visibleText): a control or invisible character a paste
 // brought is sent as "?".
 export function goalArgs(values: GoalValues, target: AddTaskTarget): AddTaskArgs {
   const goal = visibleText(values.goal).trim();

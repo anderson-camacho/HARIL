@@ -149,6 +149,24 @@ describe("haril project list", () => {
     expect(list.out.join("\n")).toContain("demo");
   });
 
+  // LD-T7c fix: the name and the root are shown as the terminal draws them, as status does; JSON keeps them as stored.
+  it("shows a hostile project name as ? in text and keeps it in JSON", () => {
+    const name = "Demo\x1b]52;c;ZmFrZS1jbGlw\x07 \u{202E}name\u{E0041}";
+    const root = projectRoot(sb, "demo");
+    expect(
+      run(["project", "init", root, "--name", name, "--slug", "demo", "--yes"], h.io, sb.host),
+    ).toBe(0);
+    const list = harness();
+    expect(run(["project", "list"], list.io, sb.host)).toBe(0);
+    const text = list.out.join("\n");
+    expect(text).toContain(`demo  Demo?]52;c;ZmFrZS1jbGlw? ?name?  ${root}`);
+    for (const hidden of ["\x1b", "\x07", "\u{202E}", "\u{E0041}"])
+      expect(text).not.toContain(hidden);
+    const json = harness();
+    run(["project", "list", "--json"], json.io, sb.host);
+    expect(parseJson<{ projects: { name: string }[] }>(json.out).projects[0]?.name).toBe(name);
+  });
+
   it("says not initialized and creates nothing when there is no store", () => {
     const list = harness();
     expect(run(["project", "list"], list.io, sb.host)).toBe(0);

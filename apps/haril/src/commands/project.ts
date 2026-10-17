@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { canonicalJson } from "@haril/core";
+import { canonicalJson, visibleText } from "@haril/core";
 import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
 import { storeAccess } from "../host.js";
@@ -318,8 +318,10 @@ function projectList(args: readonly string[], io: CliIo, host: HostInfo): number
     } else if (projects.length === 0) {
       io.out("no projects registered");
     } else {
-      for (const item of projects)
-        io.out(`${item.slug}  ${item.name}  ${item.rootPath}  ${item.projectId}`);
+      // LD-T7c: the name and the root are shown as the terminal draws them, as status does.
+      for (const item of projects) {
+        io.out(visibleText(`${item.slug}  ${item.name}  ${item.rootPath}  ${item.projectId}`));
+      }
     }
     return EXIT_OK;
   } finally {

@@ -1,3 +1,4 @@
+import { visibleText } from "@haril/core";
 import type { EventRecord } from "@haril/core/ports";
 import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
@@ -49,7 +50,8 @@ export function events(args: readonly string[], io: CliIo, host: HostInfo): numb
     if (parsed.flags.has("--json")) {
       io.out(JSON.stringify(rows.map(toView)));
     } else {
-      for (const row of rows) io.out(formatLine(row));
+      // LD-T7c: payloads carry goals and reasons an agent may have written, shown as the terminal draws them.
+      for (const row of rows) io.out(visibleText(formatLine(row)));
     }
     return EXIT_OK;
   } finally {

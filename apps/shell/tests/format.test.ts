@@ -1,6 +1,7 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { visibleText } from "@haril/core";
 import { describe, expect, it } from "vitest";
-import { fit, pad, visibleText, wrap } from "../src/format.js";
+import { fit, pad, wrap } from "../src/format.js";
 
 // fit and wrap are the render boundary (LD-T5): every line of the frame passes through one of them before the theme
 // colors it. Text from the store, an agent or the CLI leaves them as plain text: no control character survives.
