@@ -39,6 +39,9 @@ export interface StoreRules {
   checkPlan(value: unknown): PlanCheck;
   // Acceptance checks of a task.create command (M3-D7); a reason names what is wrong.
   checkAcceptance(value: unknown): AcceptanceRuleResult;
+  // The canonical JSON of a value (sorted keys at every depth). Approvals hash the canonical text of their subject, and
+  // the idempotency keys of plan.submit are computed from it, so the adapter and the CLI agree on one text.
+  canonicalJson(value: unknown): string;
 }
 
 export type AcceptanceRuleResult =
@@ -48,6 +51,70 @@ export type AcceptanceRuleResult =
 export type PlanCheck =
   | { readonly ok: true; readonly plan: Plan; readonly order: readonly string[] }
   | { readonly ok: false; readonly reason: string };
+
+// Approvals (LD-T3, ARCH 4.3, 9.5, schemas 16). A decision is an admin write (approvals.decide), never a command. Only
+// `plan` exists as a kind; the runtime applies a granted plan as the same plan.submit that `haril plan import` queues.
+export type ApprovalKind = "plan";
+export type ApprovalStatus = "requested" | "granted" | "denied";
+export type ApprovalOutcome = "granted" | "denied";
+
+export interface ApprovalRecord {
+  readonly approvalId: string;
+  readonly projectId: string;
+  readonly kind: ApprovalKind;
+  // The proposed subject: the schema-checked plan for kind plan.
+  readonly subject: JsonObject;
+  // SHA-256 of the canonical JSON of the subject.
+  readonly subjectSha256: string;
+  readonly status: ApprovalStatus;
+  readonly requestedAt: number;
+  // "cli" for a human at the terminal, otherwise the id of the proposing run or task.
+  readonly requestedBy: string;
+  readonly decidedAt: number | null;
+  readonly decidedBy: string | null;
+  readonly reason: string | null;
+  // Null until the runtime has applied the decision (ARCH 4.2: an unapplied decision keeps the runtime up).
+  readonly appliedAt: number | null;
+}
+
+export interface ApprovalFilter {
+  readonly projectId?: string;
+  readonly status?: ApprovalStatus;
+}
+
+export interface ProposePlanInput {
+  readonly projectId: string;
+  // Untrusted until it passes the Core rules of plan.submit.
+  readonly plan: unknown;
+  readonly requestedBy: string;
+}
+
+export interface ProposePlanResult {
+  readonly approval: ApprovalRecord;
+  // False when the same plan already has a requested approval in this project: that one is returned.
+  readonly created: boolean;
+}
+
+export interface DecideApprovalInput {
+  readonly approvalId: string;
+  readonly outcome: ApprovalOutcome;
+  // A declared name (the OS user name in the CLI), not an authenticated identity (ARCH 9.12).
+  readonly decidedBy: string;
+  readonly reason?: string;
+}
+
+export interface ApprovalsPort {
+  // Validates the plan with the plan.submit rules; an invalid plan is a plan.invalid error that carries the same reason.
+  proposePlan(input: ProposePlanInput): Result<ProposePlanResult, HarilError>;
+  // An admin write, only on a requested approval: a second decision is store.conflict, an unknown id store.not_found.
+  decide(input: DecideApprovalInput): ApprovalRecord;
+  list(filter?: ApprovalFilter): readonly ApprovalRecord[];
+  get(approvalId: string): ApprovalRecord | undefined;
+  // Decided approvals the runtime has not applied yet, oldest decision first.
+  listUnapplied(): readonly ApprovalRecord[];
+  // Marks a decision applied, fenced by the runtime epoch. False when it was already applied (no second event).
+  markApplied(approvalId: string, epoch: number): boolean;
+}
 
 export interface ProjectRecord {
   readonly projectId: string;
@@ -463,7 +530,8 @@ export interface Store {
     acquire(input: AcquireLeaseInput): Result<LeaseGrant, RuntimeBusyError>;
     heartbeat(epoch: number, ttlMs: number): void;
     release(epoch: number, cleanExit: boolean): void;
-    // Releases the lease with a clean exit only when no command is queued, in the same transaction (ARCH 4.2).
+    // Releases the lease with a clean exit only when no command is queued and no decided approval is unapplied, in the same
+    // transaction (ARCH 4.2).
     // False leaves the lease held: the caller drains the queue and decides again.
     releaseIfIdle(epoch: number): boolean;
     // Orphans every running task claimed by another epoch: back to ready (retry_reason orphaned, no attempt
@@ -488,5 +556,6 @@ export interface Store {
   };
   readonly budgets: BudgetsPort;
   readonly virtualKeys: VirtualKeysPort;
+  readonly approvals: ApprovalsPort;
   close(): void;
 }

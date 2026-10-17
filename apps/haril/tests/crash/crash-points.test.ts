@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
+  canonicalJson,
   canTransition,
   checkAcceptance,
   checkPlanSubmission,
@@ -43,7 +44,7 @@ const REGISTER = pathToFileURL(
   ),
 ).href;
 const KEY_HASH = "crash-key";
-const rules = { canTransition, checkPlan: checkPlanSubmission, checkAcceptance };
+const rules = { canTransition, checkPlan: checkPlanSubmission, checkAcceptance, canonicalJson };
 const clock: Clock = {
   now: () => Date.now(),
   schedule: (ms, fn) => {

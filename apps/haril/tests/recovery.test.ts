@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { canTransition, checkAcceptance, checkPlanSubmission } from "@haril/core";
+import { canonicalJson, canTransition, checkAcceptance, checkPlanSubmission } from "@haril/core";
 import { openStore } from "@haril/state-sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { run } from "../src/cli.js";
@@ -29,7 +29,7 @@ function crashWhileRunning(goal: string): string {
     dataDir: sb.dataDir,
     clock: { now: () => Date.now(), schedule: () => () => undefined },
     ids: { next: () => randomUUID() },
-    rules: { canTransition, checkPlan: checkPlanSubmission, checkAcceptance },
+    rules: { canTransition, checkPlan: checkPlanSubmission, checkAcceptance, canonicalJson },
     isPidAlive: () => true,
   });
   const grant = store.runtime.acquire({

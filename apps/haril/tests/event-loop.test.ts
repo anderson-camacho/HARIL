@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { monitorEventLoopDelay } from "node:perf_hooks";
-import { canTransition, checkAcceptance, checkPlanSubmission } from "@haril/core";
+import { canonicalJson, canTransition, checkAcceptance, checkPlanSubmission } from "@haril/core";
 import type { Clock } from "@haril/core/ports";
 import { FakeAgentRuntime } from "@haril/core/testing";
 import { openStore } from "@haril/state-sqlite";
@@ -51,7 +51,7 @@ async function measureRun(): Promise<Measurement> {
     dataDir: dir,
     clock,
     ids: { next: () => randomUUID() },
-    rules: { canTransition, checkPlan: checkPlanSubmission, checkAcceptance },
+    rules: { canTransition, checkPlan: checkPlanSubmission, checkAcceptance, canonicalJson },
   });
   const projectId = store.projects.register({
     slug: "loop",
