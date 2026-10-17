@@ -46,7 +46,9 @@ import { createBudgetFacets } from "./budgets.js";
 import { withBusyRetry } from "./busy.js";
 import { readPragmas, readUserVersion } from "./connection.js";
 import { StoreError } from "./errors.js";
+import { readLeaseSummary } from "./lease.js";
 import { createMaintenance } from "./maintenance.js";
+import { createMemoryFacet } from "./memory.js";
 
 // Implementation of the Store port over one node:sqlite connection. Writes run in BEGIN IMMEDIATE.
 // Core rules (transition table, plan checks) arrive through `rules`; this file never imports Core values.
@@ -84,9 +86,6 @@ function errorOf(errorJson: string): NonNullable<TaskDetail["error"]> {
   const row = JSON.parse(errorJson) as { error: NonNullable<TaskDetail["error"]>; attempt: number };
   return { ...row.error, attempt: row.attempt };
 }
-
-const LEASE_COLUMNS =
-  "instance_id AS instanceId, pid, started_at AS startedAt, heartbeat_at AS heartbeatAt, expires_at AS expiresAt, status, node_version AS nodeVersion, sqlite_version AS sqliteVersion";
 
 const COMMAND_COLUMNS =
   "command_id AS commandId, project_id AS projectId, type, args, idempotency_key AS idempotencyKey, request_hash AS requestHash, enqueued_at AS enqueuedAt";
@@ -163,8 +162,6 @@ const MAX_VERIFY_RETRIES = 2;
 // An acceptance entry the host evaluates, as opposed to a verifier reference.
 type AcceptanceCheckEntry = Extract<ClaimedTask["acceptance"][number], { readonly kind: string }>;
 
-type LeaseRow = Extract<RuntimeLeaseSummary, { status: "active" | "released" | "lost" }>;
-
 // Outcome of applying one command: applied with the ids it created, or rejected with a reason.
 type ApplyVerdict =
   | { readonly ok: true; readonly taskIds: readonly string[]; readonly planId?: string }
@@ -216,6 +213,7 @@ export class SqliteStore implements Store {
   readonly budgets: Store["budgets"];
   readonly virtualKeys: Store["virtualKeys"];
   readonly approvals: Store["approvals"];
+  readonly memory: Store["memory"];
   readonly maintenance: Store["maintenance"];
 
   constructor(options: StoreOptions) {
@@ -273,6 +271,15 @@ export class SqliteStore implements Store {
     this.budgets = facets.budgets;
     this.virtualKeys = facets.virtualKeys;
     this.approvals = createApprovalsFacet({
+      db: this.db,
+      clock: this.clock,
+      ids: this.ids,
+      rules: this.rules,
+      transaction: (work) => this.inTransaction(work),
+      appendEvent: (input) => this.appendEvent(input),
+      assertActiveEpoch: (epoch) => this.assertActiveEpoch(epoch),
+    });
+    this.memory = createMemoryFacet({
       db: this.db,
       clock: this.clock,
       ids: this.ids,
@@ -388,13 +395,7 @@ export class SqliteStore implements Store {
 
   // An active lease wins; otherwise the newest lease tells whether the last runtime was released or lost.
   private leaseSummary(): RuntimeLeaseSummary {
-    const row = this.db
-      .prepare(
-        `SELECT ${LEASE_COLUMNS} FROM runtime_leases ORDER BY (status = 'active') DESC, runtime_epoch DESC LIMIT 1`,
-      )
-      .get() as unknown as LeaseRow | undefined;
-    if (row === undefined) return { status: "none" };
-    return row;
+    return readLeaseSummary(this.db);
   }
 
   // Singleton lease: an active lease refuses the caller only while it has not expired AND its pid is alive.

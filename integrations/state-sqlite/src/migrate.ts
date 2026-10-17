@@ -8,6 +8,7 @@ import { MIGRATION_0002 } from "./migrations/0002_budgets.js";
 import { MIGRATION_0003 } from "./migrations/0003_task_model.js";
 import { MIGRATION_0004 } from "./migrations/0004_approvals.js";
 import { MIGRATION_0005 } from "./migrations/0005_approval_model.js";
+import { MIGRATION_0006 } from "./migrations/0006_memory.js";
 import type { Migration } from "./migrations/types.js";
 
 // Known migrations, in order. Adding one is an additive change; never edit an applied one (INV-12).
@@ -17,6 +18,7 @@ const KNOWN_MIGRATIONS: readonly Migration[] = [
   MIGRATION_0003,
   MIGRATION_0004,
   MIGRATION_0005,
+  MIGRATION_0006,
 ];
 export const KNOWN_SCHEMA_VERSION = Math.max(...KNOWN_MIGRATIONS.map((m) => m.version));
 const STORE_RELEASE = "0.1.0";
