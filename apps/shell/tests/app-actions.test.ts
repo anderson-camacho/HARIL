@@ -131,6 +131,14 @@ function typeText(mounted: Mounted, text: string): void {
   for (const key of text) mounted.terminal.send(key);
 }
 
+// Filters on the demo project, the first after "all projects". The seeded store has work, so the shell opens on
+// Live (LD-T6b-1): 1 goes to Projects first.
+function chooseDemo(mounted: Mounted): void {
+  mounted.terminal.send("1");
+  mounted.terminal.send(DOWN);
+  mounted.terminal.send(ENTER);
+}
+
 describe("add task with a seeded store (TUI-D13)", () => {
   beforeEach(() => {
     seedStore(dataDir);
@@ -140,10 +148,9 @@ describe("add task with a seeded store (TUI-D13)", () => {
     const entry = fakeHaril("command c-9: queued (applied by `haril start`)", 0);
     const mounted = mount({ harilEntry: entry, defaultModel: "qwen-test" });
     mounted.app.start();
-    mounted.terminal.send(DOWN);
-    mounted.terminal.send(ENTER);
+    chooseDemo(mounted);
     mounted.terminal.send("a");
-    expect(frame(mounted)).toContain("project demo");
+    expect(frame(mounted)).toContain("◆ HARIL ◇ demo");
     typeText(mounted, "Write docs");
     mounted.terminal.send(ENTER);
     await waitForFrame(mounted, "queued (applied by");
@@ -169,8 +176,7 @@ describe("add task with a seeded store (TUI-D13)", () => {
     const entry = fakeHaril("never printed", 0);
     const mounted = mount({ harilEntry: entry });
     mounted.app.start();
-    mounted.terminal.send(DOWN);
-    mounted.terminal.send(ENTER);
+    chooseDemo(mounted);
     mounted.terminal.send("a");
     typeText(mounted, "Abandon me");
     mounted.terminal.send(ESC);
@@ -184,8 +190,7 @@ describe("add task with a seeded store (TUI-D13)", () => {
   it("while the form is open, q and digits are typed into the title and do not quit or switch panels", async () => {
     const mounted = mount({ harilEntry: fakeHaril("unused", 0) });
     mounted.app.start();
-    mounted.terminal.send(DOWN);
-    mounted.terminal.send(ENTER);
+    chooseDemo(mounted);
     mounted.terminal.send("a");
     typeText(mounted, "q2");
     expect(frame(mounted)).toContain("q2");
@@ -211,8 +216,7 @@ describe("add task with a seeded store (TUI-D13)", () => {
     const entry = fakeHaril("haril: agent analyst needs a model: pass --model", 2, true);
     const mounted = mount({ harilEntry: entry, defaultModel: "qwen-test" });
     mounted.app.start();
-    mounted.terminal.send(DOWN);
-    mounted.terminal.send(ENTER);
+    chooseDemo(mounted);
     mounted.terminal.send("a");
     typeText(mounted, "Refused");
     mounted.terminal.send(ENTER);
@@ -237,8 +241,7 @@ describe("goal and plan review with a seeded store (LD-T5)", () => {
     const entry = fakeHaril("command c-7: queued (applied by `haril start`)", 0);
     const mounted = mount({ harilEntry: entry, defaultModel: "qwen-test" });
     mounted.app.start();
-    mounted.terminal.send(DOWN);
-    mounted.terminal.send(ENTER);
+    chooseDemo(mounted);
     mounted.terminal.send("g");
     expect(frame(mounted)).toContain("Plan a goal for project demo");
     typeText(mounted, "Document the CLI");
@@ -278,12 +281,13 @@ describe("goal and plan review with a seeded store (LD-T5)", () => {
     await mounted.app.done;
   });
 
-  it("the banner points at the pending plan; p lists it, Enter shows its tasks and y approves it", async () => {
+  it("the top bar points at the pending plan; p lists it, Enter shows its tasks and y approves it", async () => {
     const approvalId = proposeExamplePlan(dataDir, seeded.demoId);
     const entry = fakeHaril("approval a-1 granted by tester", 0);
     const mounted = mount({ harilEntry: entry });
     mounted.app.start();
-    expect(frame(mounted)).toContain("1 pending approvals (p to review)");
+    // At 80 columns there is no right column: the top bar carries the pending approvals (LD-T6b-1).
+    expect(frame(mounted).split("\n")[0]).toContain("1 approval (p)");
     mounted.terminal.send("p");
     expect(frame(mounted)).toContain(approvalId.slice(0, 8));
     expect(frame(mounted)).toContain("4 tasks");
@@ -326,8 +330,7 @@ describe("goal and plan review with a seeded store (LD-T5)", () => {
     const entry = fakeHaril("command c-8: queued (applied by `haril start`)", 0);
     const mounted = mount({ harilEntry: entry, defaultModel: "qwen-test" });
     mounted.app.start();
-    mounted.terminal.send(DOWN);
-    mounted.terminal.send(ENTER);
+    chooseDemo(mounted);
     mounted.terminal.send("g");
     typeText(mounted, "Plan more");
     mounted.terminal.send(ENTER);

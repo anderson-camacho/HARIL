@@ -1,5 +1,6 @@
 import type { Terminal } from "@earendil-works/pi-tui";
 import { connect } from "@haril/control";
+import { type GitStatus, readGitStatus } from "@haril/git";
 import { createHarilActions } from "./actions.js";
 import { createShellApp } from "./app.js";
 import { openShellData } from "./data.js";
@@ -34,6 +35,8 @@ export interface ShellRunDeps {
   readonly createTerminal: () => Terminal;
   // Starts the runtime as a detached child (LD-T6). Defaults to the real spawn; tests record the command instead.
   readonly spawnRuntime?: SpawnRuntime;
+  // Reads a project's branch and changes for the Status box (LD-T6b-1). Defaults to git itself.
+  readonly readGit?: (rootPath: string) => Promise<GitStatus | undefined>;
 }
 
 interface ShellPathArgs {
@@ -115,6 +118,7 @@ export async function runShell(argv: readonly string[], deps: ShellRunDeps): Pro
       actions: createHarilActions({ harilEntry: args.haril }),
       defaultModel: nonEmpty(deps.env?.[DEFAULT_MODEL_ENV]),
       connectControl: connect,
+      readGit: deps.readGit ?? ((rootPath) => readGitStatus(rootPath)),
       ...(runtimeStarter === undefined ? {} : { runtimeStarter }),
     });
     app.start();

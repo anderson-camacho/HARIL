@@ -1,9 +1,22 @@
 import { type Component, matchesKey, type Terminal, TuiMainScreen } from "@earendil-works/pi-tui";
+import type { GitStatus } from "@haril/git";
+import shellPackage from "../package.json" with { type: "json" };
 import { createHarilActions, type ShellActions } from "./actions.js";
 import { AddTaskForm, addTaskArgs } from "./add-task.js";
 import { saveThemeChoice } from "./config-file.js";
 import type { PendingApproval, ShellData, ShellSnapshot, TaskDetailView } from "./data.js";
 import { fit, wrap } from "./format.js";
+import { box, fitLine, joinColumns, type Line, type Segment, segment } from "./frame-layout.js";
+import {
+  type FrameFacts,
+  homeLines,
+  RIGHT_COLUMN_FROM,
+  RIGHT_COLUMN_WIDTH,
+  type RuntimeState,
+  rightColumn,
+  statusLine,
+  topBar,
+} from "./frame-view.js";
 import { GoalForm, goalArgs } from "./goal.js";
 import { HELP_LINES } from "./help.js";
 import { clampOffset, followCursor, packTabs } from "./layout.js";
@@ -20,10 +33,12 @@ import {
 import type { RuntimeStarter, SpawnedRuntime } from "./runtime-start.js";
 import { readOptionalFile, resolveTheme, type Theme } from "./theme.js";
 
-// The shell app (TUI-T3): header, banner, tab strip, the active panel's body and a footer with its keys. The app only
-// reads through ShellData; its state is the selected panel, one cursor and scroll offset per panel, the project filter,
-// an open task or plan detail, an open form and the help overlay. Each key changes that state and the next frame
-// shows it. Every write is a haril child process (TUI-D13), and so is the runtime it may start (LD-T6).
+// The shell app (TUI-T3). The frame (LD-T6b-1): a top bar; the main area with the tab strip, the active panel's body
+// (the HARIL banner while nothing runs) and a bordered box with its keys; a right column of status boxes from 100
+// columns on; a status line. The app only reads through ShellData; its state is the selected panel, one cursor and
+// scroll offset per panel, the project filter, an open task or plan detail, an open form, the help overlay and the
+// home view. Each key changes that state and the next frame shows it. Every write is a haril child process
+// (TUI-D13), and so is the runtime it may start (LD-T6).
 
 interface ShellBanner {
   readonly isolation: string;
@@ -46,6 +61,9 @@ export interface ShellAppOptions {
   // Starts a runtime when work waits and none runs (LD-T6, ADR-0022). Without it (haril shell --no-runtime) the shell
   // never starts one and says so after an action.
   readonly runtimeStarter?: RuntimeStarter;
+  // Reads the branch and changes of a project root for the Status box (LD-T6b-1): with the store, never on a timer.
+  // Without it the box says n/a.
+  readonly readGit?: (rootPath: string) => Promise<GitStatus | undefined>;
 }
 
 export interface ShellApp {
@@ -56,13 +74,7 @@ export interface ShellApp {
   frameText(): string[];
 }
 
-type Tone = "text" | "muted" | "accent" | "warning";
-interface Segment {
-  readonly text: string;
-  readonly tone: Tone;
-  readonly bold?: boolean;
-}
-type FrameLine = readonly Segment[];
+type FrameLine = Line;
 
 // One start of the runtime by this shell (LD-T6): the child, its log relative to the runtime root and when it was
 // started; `confirmed` once the handshake reached a runtime, `ended` once a failed start was reported.
@@ -90,7 +102,13 @@ function motionOf(input: string, pages: number): Motion | undefined {
 }
 
 const NUMBER_KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9"] as const;
-const FOOTER_TAIL = ["r reload", "? help", "q quit"] as const;
+// The keys box at the bottom of the main area (LD-T6b-1): one line of keys inside a border. ? help and q quit are on
+// the status line below it.
+const KEYS_BOX_ROWS = 3;
+const COMMON_KEYS = ["g goal", "a add", "p plans", "l live", "t themes", "r reload", "Tab panels"];
+const HOME_KEYS = ["1-9 panels", ...COMMON_KEYS.filter((key) => key !== "Tab panels")];
+// Tasks the runtime runs at once (the run loop's concurrency, apps/haril/src/runtime/run-loop.ts): the Taxis box.
+const RUNTIME_SLOTS = 1;
 const FORM_FOOTER = "Enter add task · Tab next field · Esc cancel · Ctrl+C quit";
 const GOAL_FOOTER = "Enter ask for a plan · Tab next field · Esc cancel · Ctrl+C quit";
 const PLAN_FOOTER = "y approve · n deny · ↑↓ scroll · Esc back · r reload · q quit";
@@ -137,6 +155,13 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
   let plan: string | undefined;
   let textOffset = 0;
   let helpOpen = false;
+  // The home view (LD-T6b-1): the HARIL banner shows in place of the panel until a panel is chosen, while nothing
+  // runs or waits for approval and the terminal is tall and wide enough. With work, the shell lands on Live instead.
+  let home = true;
+  // The last git read and the root it was for (LD-T6b-1); one read at a time, and one more if asked meanwhile.
+  let gitSeen: { readonly root: string; readonly status: GitStatus | undefined } | undefined;
+  let gitReading = false;
+  let gitAgain = false;
   let quitting = false;
   // The add-task or goal form while it is open, and one line of outcome under the tabs (TUI-D13).
   let form: AddTaskForm | GoalForm | undefined;
@@ -190,31 +215,104 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
   const activeId = () => PANELS[panel]?.id ?? "projects";
   const context = (): PanelContext => ({ snapshot, settings, scope });
   const activeView = (): PanelView => buildPanelView(activeId(), context());
+  // The project the frame names: the filter's, the only one when there is just one, else "all".
   const projectSlug = (): string =>
     scope === undefined
-      ? "all"
+      ? snapshot.projects.length === 1
+        ? (snapshot.projects[0]?.slug ?? "all")
+        : "all"
       : (snapshot.projects.find((project) => project.projectId === scope)?.slug ?? "all");
-  const approvalsText = (): string =>
-    snapshot.pendingApprovals === 0
-      ? "0 pending approvals"
-      : `${snapshot.pendingApprovals} pending approvals (p to review)`;
   // The runtime and its pid (LD-T6): running while a live process holds the lease, starting while the one this shell
   // started has not taken it yet, idle otherwise.
-  const runtimeText = (): string => {
-    const lease = snapshot.runtime;
-    if (snapshot.runtimeAlive && lease.status !== "none") {
-      return started?.runtime.pid === lease.pid
-        ? `running (started by shell, pid ${lease.pid})`
-        : `running (pid ${lease.pid})`;
-    }
-    return started?.runtime.running === true
-      ? `starting (started by shell, pid ${started.runtime.pid})`
-      : "idle";
+  const runtimeState = (): RuntimeState => {
+    if (snapshot.runtimeAlive && snapshot.runtime.status !== "none") return "running";
+    return started?.runtime.running === true ? "starting" : "idle";
   };
-  const bannerText = (): string =>
-    // The pending-approval count is read from the store with the rest of the snapshot (LD-T3). "live" shows while
-    // the shell holds a subscription to the runtime (LD-T2).
-    `isolation ${banner.isolation} · ${approvalsText()} · runtime ${runtimeText()}${liveMark()} · project ${projectSlug()}`;
+  const runtimePid = (): number | undefined => {
+    const lease = snapshot.runtime;
+    if (snapshot.runtimeAlive && lease.status !== "none") return lease.pid;
+    return started?.runtime.running === true ? started.runtime.pid : undefined;
+  };
+  // The status line's runtime: "running (started by shell, pid N)", "running (pid N)", "starting (…)" or "idle".
+  // "live" shows while the shell holds a subscription to the runtime (LD-T2).
+  const runtimeText = (): string => {
+    const state = runtimeState();
+    const pid = runtimePid();
+    if (pid === undefined) return `${state}${liveMark()}`;
+    const byShell = started?.runtime.pid === pid ? "started by shell, " : "";
+    return `${state} (${byShell}pid ${pid})${liveMark()}`;
+  };
+  // The tasks of the filter, or of every project.
+  const scopedTasks = () =>
+    snapshot.tasks.filter((task) => scope === undefined || task.projectId === scope);
+  // Work in progress or about to run: the home view gives way to Live.
+  const busy = (): boolean =>
+    scopedTasks().some((task) => task.state === "running" || task.state === "ready");
+  // The root git is read for: the filtered project's, or the only project's.
+  const gitRoot = (): string | undefined => {
+    const chosen =
+      scope === undefined
+        ? snapshot.projects.length === 1
+          ? snapshot.projects[0]
+          : undefined
+        : snapshot.projects.find((project) => project.projectId === scope);
+    return chosen?.rootPath;
+  };
+  // What the frame shows besides the panel (LD-T6b-1), read from the snapshot and the shell's own state.
+  const facts = (): FrameFacts => {
+    const tasks = scopedTasks();
+    const running = snapshot.live.find((entry) => entry.detail.state === "running");
+    const usage = snapshot.metrics
+      .filter((entry) => scope === undefined || entry.projectId === scope)
+      .reduce(
+        (sum, entry) => ({
+          input: sum.input + (entry.usage?.inputTokens ?? 0),
+          output: sum.output + (entry.usage?.outputTokens ?? 0),
+        }),
+        { input: 0, output: 0 },
+      );
+    const root = gitRoot();
+    const pid = runtimePid();
+    return {
+      project: projectSlug(),
+      projectCount: snapshot.projects.length,
+      rootPath: root,
+      git:
+        gitSeen !== undefined && gitSeen.root === root
+          ? (gitSeen.status ?? "unknown")
+          : options.readGit === undefined
+            ? "unknown"
+            : "reading",
+      model: options.defaultModel,
+      context:
+        running === undefined
+          ? undefined
+          : {
+              used: (running.tokens?.input ?? 0) + (running.tokens?.output ?? 0),
+              max: running.detail.maxTokens,
+            },
+      tokens: usage,
+      runtime: {
+        state: runtimeState(),
+        pid,
+        byShell: pid !== undefined && started?.runtime.pid === pid,
+        live: feed?.subscribed === true,
+      },
+      runtimeText: runtimeText(),
+      isolation: banner.isolation,
+      approvals: snapshot.pendingApprovals,
+      taxis: {
+        busy: snapshot.tasks.filter((task) => task.state === "running").length,
+        slots: RUNTIME_SLOTS,
+      },
+      projects: snapshot.projects.map((project) => project.slug),
+      tasks: taskSummary(tasks),
+      agents: [...new Set(tasks.map((task) => task.agentRef))],
+      version: shellPackage.version,
+      dataDir: settings.dataDir,
+      theme: settings.themeLabel,
+    };
+  };
   const openApproval = (): PendingApproval | undefined =>
     plan === undefined
       ? undefined
@@ -226,45 +324,61 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
     const approval = openApproval();
     return approval === undefined ? undefined : buildPlanDetailView(approval, context());
   };
-  const footerText = (): string => {
+  // The keys box: the keys of what is open, else of the home view or the active panel. One line; it is cut to the box.
+  const keysText = (homeShown: boolean): string => {
     if (form !== undefined) return form instanceof GoalForm ? GOAL_FOOTER : FORM_FOOTER;
     if (helpOpen) return "↑↓ scroll · Esc close help · q quit";
     if (detail !== undefined) return "↑↓ scroll · Esc back · r reload · q quit";
     if (openApproval() !== undefined) return PLAN_FOOTER;
-    return [
-      ...activeView().keys,
-      "↑↓ move",
-      "Tab next panel",
-      "g goal",
-      "p plans",
-      "l live",
-      "a add task",
-      "t themes",
-      ...FOOTER_TAIL,
-    ].join(" · ");
+    if (homeShown) return HOME_KEYS.join(" · ");
+    return [...activeView().keys, ...COMMON_KEYS].join(" · ");
   };
   const pageSize = (columns: number, rows: number): number =>
-    Math.max(1, bodyHeight(columns, rows) - 1);
+    Math.max(1, bodyRows(columns, rows) - 1);
 
-  function chromeTop(columns: number): number {
-    return (
-      1 +
-      wrap(bannerText(), columns).length +
-      packTabs(
-        PANELS.map((entry) => entry.label),
-        columns,
-      ).length +
-      (warning === undefined ? 0 : wrap(warning, columns).length) +
-      (status === undefined ? 0 : wrap(status, columns).length)
+  // The main area's width: all of it, or what the right column leaves from RIGHT_COLUMN_FROM columns on.
+  function mainWidth(columns: number): number {
+    return columns >= RIGHT_COLUMN_FROM ? columns - RIGHT_COLUMN_WIDTH - 1 : columns;
+  }
+
+  // The main area above the body: the tab strip, the warning and the outcome of the last action.
+  function headLines(width: number): FrameLine[] {
+    const lines: FrameLine[] = packTabs(
+      PANELS.map((entry) => entry.label),
+      width,
+    ).map((tabLine) =>
+      tabLine.flatMap((cell, position) => [
+        ...(position > 0 ? [segment("  ", "muted")] : []),
+        segment(cell.text, cell.index === panel ? "accent" : "muted", cell.index === panel),
+      ]),
     );
+    if (warning !== undefined) {
+      for (const part of wrap(warning, width)) lines.push([segment(part, "warning")]);
+    }
+    if (status !== undefined) {
+      for (const part of wrap(status, width)) lines.push([segment(part, "accent")]);
+    }
+    return lines;
   }
 
-  // The footer takes as many lines as its keys need, so the body gives up the same lines.
-  function bodyHeight(columns: number, rows: number): number {
-    return Math.max(1, rows - chromeTop(columns) - wrap(footerText(), columns).length);
+  // The body's rows: the frame less the top bar, the status line, the head of the main area and the keys box.
+  function bodyRows(columns: number, rows: number): number {
+    return Math.max(0, rows - 2 - headLines(mainWidth(columns)).length - KEYS_BOX_ROWS);
   }
 
-  // The body: a form, help or a task or plan detail as text, otherwise the active panel with its cursor.
+  // The home view's lines when it shows: on the home, with nothing running, ready or waiting for approval, nothing
+  // open over it, and room for the banner.
+  function homeView(width: number, height: number): FrameLine[] | undefined {
+    if (!home || busy() || snapshot.pendingApprovals > 0) return undefined;
+    if (form !== undefined || textLines() !== undefined) return undefined;
+    return homeLines(facts(), width, height);
+  }
+
+  function homeShownAt(columns: number, rows: number): boolean {
+    return homeView(mainWidth(columns), bodyRows(columns, rows)) !== undefined;
+  }
+
+  // The body: a form, help or a task or plan detail as text, the home view, otherwise the active panel with its cursor.
   function bodyLines(columns: number, height: number): FrameLine[] {
     if (form !== undefined) {
       return form
@@ -280,6 +394,8 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
       textOffset = clampOffset(textOffset, height, lines.length);
       return lines.slice(textOffset, textOffset + height).map((part) => [part]);
     }
+    const homed = homeView(columns, height);
+    if (homed !== undefined) return homed;
     const view = activeView();
     const header = view.header.flatMap((text) =>
       wrap(text, columns).map((part) => [segment(part, "muted")]),
@@ -309,34 +425,29 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
   }
 
   function frame(columns: number, rows: number): FrameLine[] {
-    const lines: FrameLine[] = [[segment(fit("HARIL shell", columns), "accent", true)]];
-    // The banner wraps rather than cut: the runtime's pid and the project stay in view on a narrow terminal (LD-T6).
-    for (const part of wrap(bannerText(), columns)) lines.push([segment(part, "muted")]);
-    for (const tabLine of packTabs(
-      PANELS.map((entry) => entry.label),
-      columns,
-    )) {
-      const cells: Segment[] = [];
-      tabLine.forEach((cell, position) => {
-        if (position > 0) cells.push(segment("  ", "muted"));
-        cells.push(
-          segment(cell.text, cell.index === panel ? "accent" : "muted", cell.index === panel),
-        );
-      });
-      lines.push(cells);
-    }
-    if (warning !== undefined) {
-      for (const part of wrap(warning, columns)) lines.push([segment(part, "warning")]);
-    }
-    if (status !== undefined) {
-      for (const part of wrap(status, columns)) lines.push([segment(part, "accent")]);
-    }
-    const height = bodyHeight(columns, rows);
-    const body = bodyLines(columns, height);
-    while (body.length < height) body.push([segment("", "text")]);
-    lines.push(...body);
-    for (const part of wrap(footerText(), columns)) lines.push([segment(part, "muted")]);
-    return lines;
+    const wide = columns >= RIGHT_COLUMN_FROM;
+    const width = mainWidth(columns);
+    const middle = Math.max(0, rows - 2);
+    const height = bodyRows(columns, rows);
+    const shownFacts = facts();
+    const homeShown = homeView(width, height) !== undefined;
+    const body = bodyLines(width, height);
+    while (body.length < height) body.push([]);
+    const main: FrameLine[] = [
+      ...headLines(width),
+      ...body,
+      ...box(undefined, [[segment(keysText(homeShown), "muted")]], width),
+    ];
+    const lines: FrameLine[] = [
+      topBar(shownFacts, columns, !wide),
+      ...(wide
+        ? joinColumns(main, width, rightColumn(shownFacts, middle), RIGHT_COLUMN_WIDTH, middle)
+        : main.slice(0, middle)),
+      statusLine(shownFacts, columns),
+    ];
+    // Exactly `rows` lines, none wider than the terminal: pi-tui fails on a line wider than its width.
+    while (lines.length < rows) lines.splice(lines.length - 1, 0, []);
+    return lines.slice(0, rows).map((line) => fitLine(line, columns));
   }
 
   function move(delta: number): void {
@@ -364,6 +475,7 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
 
   function selectPanel(index: number): void {
     panel = index;
+    home = false;
     detail = undefined;
     plan = undefined;
     textOffset = 0;
@@ -377,6 +489,38 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
     if (detail !== undefined) detail = data.taskDetail(detail.detail.taskId);
     // A plan decided meanwhile, here or by haril approve elsewhere, leaves its detail for the list.
     if (openApproval() === undefined) plan = undefined;
+    land();
+    refreshGit();
+  }
+
+  // While no panel was chosen yet, work in progress takes the shell from the home view to Live (LD-T6b-1).
+  function land(): void {
+    if (home && busy()) showLive();
+  }
+
+  // Reads the branch and changes of the git root again (LD-T6b-1): on opening, with every load of the store and when
+  // the filter changes; never on a timer. A read asked for while one runs follows it once it is done.
+  function refreshGit(): void {
+    const read = options.readGit;
+    const root = gitRoot();
+    if (read === undefined || root === undefined) return;
+    if (gitReading) {
+      gitAgain = true;
+      return;
+    }
+    gitReading = true;
+    void read(root)
+      .catch(() => undefined)
+      .then((status) => {
+        gitReading = false;
+        if (quitting) return;
+        gitSeen = { root, status };
+        if (gitAgain) {
+          gitAgain = false;
+          refreshGit();
+        }
+        tui.requestRender();
+      });
   }
 
   // After a goal or an approval: Live with the cursor on the newest task, so the run is seen as it starts. The frame
@@ -609,6 +753,7 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
     if (id === "projects") {
       scope = item.value === "" ? undefined : item.value;
       snapshot = data.load(scope);
+      refreshGit();
       return;
     }
     if (id === "plans") {
@@ -636,6 +781,11 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
       return;
     }
     const motion = motionOf(input, pageSize(columns, rows));
+    // On the home view a key that moves or opens shows the active panel first, and does nothing else (LD-T6b-1).
+    if ((motion !== undefined || matchesKey(input, "enter")) && homeShownAt(columns, rows)) {
+      home = false;
+      return;
+    }
     if (motion !== undefined) {
       applyMotion(motion);
       return;
@@ -740,6 +890,8 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
   return {
     start: () => {
       tui.start();
+      land();
+      refreshGit();
       followRuntime();
       tui.requestRender();
     },
@@ -749,8 +901,15 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
   };
 }
 
-function segment(text: string, tone: Tone, bold = false): Segment {
-  return bold ? { text, tone, bold } : { text, tone };
+// "3 completed, 1 failed": the scope's tasks counted by state, most common first; "none yet" without any.
+function taskSummary(tasks: readonly { readonly state: string }[]): string {
+  if (tasks.length === 0) return "none yet";
+  const counts = new Map<string, number>();
+  for (const task of tasks) counts.set(task.state, (counts.get(task.state) ?? 0) + 1);
+  return [...counts]
+    .sort((a, b) => b[1] - a[1])
+    .map(([state, count]) => `${count} ${state}`)
+    .join(", ");
 }
 
 function styled(theme: Theme, part: Segment): string {
