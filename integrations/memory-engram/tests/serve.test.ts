@@ -48,6 +48,8 @@ let home = "";
 const serves: EngramServe[] = [];
 const busy: Server[] = [];
 const foreign: FakeEngramServer[] = [];
+// Processes a fake started; any still alive after a test is killed, so a failing test leaks nothing.
+const strays: number[] = [];
 
 beforeEach(() => {
   root = realpathSync.native(mkdtempSync(join(tmpdir(), "haril-engram-serve-")));
@@ -63,6 +65,14 @@ afterEach(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
   for (const server of foreign.splice(0)) await server.close();
+  for (const pid of strays.splice(0)) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      continue;
+    }
+    await until(() => !alive(pid));
+  }
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -425,6 +435,8 @@ describe("restart and stop", () => {
     expect(calls).toHaveLength(2);
   });
 
+  // The grandchild starts through a shell: on Windows it is outside the job object that takes a Node child down with
+  // its parent, so it dies only when taskkill walks the tree while the serve is still alive.
   it("stop kills the whole process tree", async () => {
     const { serve: engram } = serve("grandchild");
     const connected = await engram.connect();
@@ -432,11 +444,12 @@ describe("restart and stop", () => {
     const pidFile = join(engramDataDirOf(harilData), "fake-grandchild.pid");
     await until(() => existsSync(pidFile));
     const grandchild = Number(readFileSync(pidFile, "utf8"));
+    strays.push(grandchild);
     const child = engram.status().lastPid ?? 0;
     expect(alive(grandchild)).toBe(true);
     expect(alive(child)).toBe(true);
     await engram.stop();
-    await until(() => !alive(child) && !alive(grandchild));
+    await until(() => !alive(child) && !alive(grandchild), 3000);
     expect(engram.status().state).toBe("stopped");
     expect(await engram.connect()).toMatchObject({
       ok: false,

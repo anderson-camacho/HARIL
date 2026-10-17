@@ -8,15 +8,17 @@
 //
 // Scenarios: ok (default), never_ready (stays alive without listening), exit0 (exits 0 at once, as a serve that found
 // its own instance does, #1462), wrong_instance (answers /health with an instance_id that is not .instance-id),
-// grandchild (spawns a long-lived child and writes its pid to fake-grandchild.pid, then serves), leak_token (prints
-// its ENGRAM_HTTP_TOKEN to stderr and exits 1). --start-delay-ms=N waits before it binds; if the port is taken it
-// exits 4.
+// grandchild (starts fake-grandchild.mjs through the shell, which writes its pid to fake-grandchild.pid in the data
+// dir, then serves; on Windows that process escapes the job object that kills a Node child with its parent, so only a
+// tree kill that walks from the live serve reaches it), leak_token (prints its ENGRAM_HTTP_TOKEN to stderr and exits
+// 1). --start-delay-ms=N waits before it binds; if the port is taken it exits 4.
 // POST /__fake/exit?code=N makes it exit with N after answering; GET /__fake/env answers its process environment.
 
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { FakeEngramServer } from "./fake-engram-server.ts";
 
 const option = (name) =>
@@ -49,6 +51,22 @@ const instanceFile = join(dataDir, ".instance-id");
 if (!existsSync(instanceFile)) writeFileSync(instanceFile, `${randomBytes(16).toString("hex")}\n`);
 const instanceId = readFileSync(instanceFile, "utf8").trim();
 
+// The child env carries no ComSpec, so the Windows shell is named by its path. The shell runs in this directory, not
+// in the data dir, so neither it nor the grandchild keeps the test's temp dir open.
+function startGrandchild() {
+  const script = fileURLToPath(new URL("./fake-grandchild.mjs", import.meta.url));
+  const shell =
+    process.platform === "win32"
+      ? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "cmd.exe")
+      : "/bin/sh";
+  spawn(`"${process.execPath}" "${script}"`, {
+    cwd: fileURLToPath(new URL(".", import.meta.url)),
+    shell,
+    stdio: "ignore",
+    windowsHide: true,
+  });
+}
+
 if (scenario === "exit0") process.exit(0);
 if (scenario === "leak_token") {
   process.stderr.write(`fake-engram: token ${process.env.ENGRAM_HTTP_TOKEN ?? ""}\n`);
@@ -57,13 +75,7 @@ if (scenario === "leak_token") {
 if (scenario === "never_ready") {
   setInterval(() => {}, 1000);
 } else {
-  if (scenario === "grandchild") {
-    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    writeFileSync(join(dataDir, "fake-grandchild.pid"), String(child.pid));
-  }
+  if (scenario === "grandchild") startGrandchild();
   const server = new FakeEngramServer({
     port,
     token: process.env.ENGRAM_HTTP_TOKEN ?? "",

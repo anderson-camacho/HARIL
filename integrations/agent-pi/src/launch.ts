@@ -95,23 +95,45 @@ interface SpawnOptionsLike {
 
 export const defaultSpawn: SpawnFn = (command, args, options) => spawn(command, [...args], options);
 
-// Windows: taskkill /T takes the whole tree. POSIX: the child leads its own process group (detached).
-export function killProcessTree(child: ChildProcess, osEnv: NodeJS.ProcessEnv): void {
+type KillerSpawnFn = (command: string, args: readonly string[]) => ChildProcess;
+
+const defaultKillerSpawn: KillerSpawnFn = (command, args) =>
+  spawn(command, [...args], { shell: false, windowsHide: true, stdio: "ignore" });
+
+// Windows: taskkill /T takes the whole tree by walking it from the child, so the child is killed only after taskkill
+// exits, or when taskkill cannot start. A child killed first leaves taskkill no tree to walk, and a process that a
+// shell under the child started has left the job object that would take it down with the child. POSIX: the child
+// leads its own process group (detached).
+export function killProcessTree(
+  child: ChildProcess,
+  osEnv: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+  spawnKiller: KillerSpawnFn = defaultKillerSpawn,
+): void {
   const pid = child.pid;
   if (pid === undefined) {
     child.kill("SIGKILL");
     return;
   }
-  if (process.platform === "win32") {
+  if (platform === "win32") {
+    const killChild = (): void => {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    };
     const systemRoot = osEnv.SystemRoot ?? osEnv.windir ?? "C:\\Windows";
-    const taskkill = join(systemRoot, "System32", "taskkill.exe");
-    const killer = spawn(taskkill, ["/F", "/T", "/PID", String(pid)], {
-      shell: false,
-      windowsHide: true,
-      stdio: "ignore",
-    });
-    killer.on("error", () => {});
-    child.kill("SIGKILL");
+    let killer: ChildProcess;
+    try {
+      killer = spawnKiller(join(systemRoot, "System32", "taskkill.exe"), [
+        "/F",
+        "/T",
+        "/PID",
+        String(pid),
+      ]);
+    } catch {
+      killChild();
+      return;
+    }
+    killer.on("error", killChild);
+    killer.once("exit", killChild);
     return;
   }
   try {
