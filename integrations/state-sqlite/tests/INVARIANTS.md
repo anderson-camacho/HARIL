@@ -5,7 +5,7 @@ prefix, so `vitest -t "INV-01"` runs one invariant. Paths are relative to the re
 
 | ID | Invariant | Tests | Status |
 |---|---|---|---|
-| INV-01 | One claim winner across processes, CLI admin writes included | `integrations/state-sqlite/tests/concurrency.test.ts` "[INV-01] eight claimers and one admin writer"; `task-run.test.ts` "[INV-01] is atomic across connections" | Covered (multi-process) |
+| INV-01 | One claim winner across processes, CLI admin writes included | `integrations/state-sqlite/tests/concurrency.test.ts` "[INV-01] eight claimers and one admin writer"; `task-run.test.ts` "[INV-01] is atomic across connections" | Covered (multi-process); a claimer behind a burst of commits waits for it (busy note below) |
 | INV-02 | Independent tasks run concurrently under the budget | none | Deferred: the MVP runtime is sequential by design (`apps/haril/src/runtime/run-loop.ts`, M1-D6); concurrent executors are M4 |
 | INV-03 | The budget is never overdrawn under concurrency | `concurrency.test.ts` "[INV-03] six processes reserving against one budget" | Covered (multi-process) |
 | INV-04 | A task is not claimed before its dependencies complete | `task-run.test.ts` "[INV-04] ..."; `promote-chain.test.ts` "[INV-04] ..." | Covered |
@@ -28,3 +28,13 @@ prefix, so `vitest -t "INV-01"` runs one invariant. Paths are relative to the re
 
 Not an invariant but covered in the same suite: a busy open waits for a short lock, and an open that must migrate retries
 with a bounded backoff (`open-busy.test.ts`; ARCH 8.4, ST-01).
+
+A write waits for the lock too (`open-busy.test.ts`, `src/busy.ts`). SQLite's write lock has no queue, so a writer behind
+others that commit back to back waits for their whole burst, not for one commit. INV-01 failed that way on a loaded
+Windows runner while the budget was a flat 2 s. The retry now keeps waiting while `PRAGMA data_version` shows commits by
+other connections, up to 10 s in all. After 2 s without any commit (a stuck holder) it still fails with
+`database is locked`. Tradeoff: the wait is synchronous, so a contended write can block the event loop for up to 10 s
+instead of 2 s, outside the 100 ms of INV-18. 10 s is a third of the runtime's 30 s lease, and the heartbeat runs every
+10 s, so the lease does not lapse. A stuck lock still blocks for at most 2 s. Measured locally with every commit of the
+nine INV-01 processes slowed to a mean of 30 ms and 60 ms, the longest claim waited 4.4 s and 7.9 s, and no claimer
+failed. With the flat 2 s budget, most claimers failed at both stall levels.
