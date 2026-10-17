@@ -1,18 +1,23 @@
 import { existsSync, readFileSync } from "node:fs";
 import { posix, win32 } from "node:path";
 import {
+  envSecretRef,
   isValidModelDescriptor,
   type ModelDescriptor,
+  type SecretMaterial,
   validateHarilConfig,
 } from "@haril/contracts";
+import type { SecretStore } from "@haril/core/ports";
 import { createOpenAiCompatibleClient, ProviderError } from "@haril/gateway";
+import { EnvSecretStore } from "@haril/os";
 import type { HostInfo } from "./context.js";
 import { runtimeRootFor } from "./runtime.js";
 
 // Providers of HARIL (M3-T7, ACE-06). They come from haril.json (HARIL_CONFIG, else <runtime root>/config/haril.json);
 // without a file, one default applies: cliproxy (keyed, HARIL_GATEWAY_URL may move it). Ollama is not a default:
 // local inference is too heavy for the reference machine (RL-D4); a user may still add it in haril.json.
-// Keys are read from the environment named by keyEnv here only; no output ever prints a key value.
+// A key is read here only, by reference (env:<keyEnv>) through the SecretStore, and travels sealed to the gateway
+// adapter, which reveals it for the Authorization header (ADR-0020 SEC-1, SEC-2; BL-070). No output prints a key value.
 
 const CONFIG_ENV = "HARIL_CONFIG";
 const GATEWAY_URL_ENV = "HARIL_GATEWAY_URL";
@@ -28,8 +33,9 @@ export interface ProviderEntry {
   readonly id: string;
   readonly baseUrl: string;
   readonly keyEnv?: string;
-  // The value of keyEnv, read once. Never printed and never stored outside the process.
-  readonly apiKey: string | undefined;
+  // The key stored under env:<keyEnv>, read once and sealed: printed or serialized it reads [redacted]. Undefined
+  // without keyEnv or when nothing is stored under it. Never stored outside the process.
+  readonly credential: SecretMaterial | undefined;
 }
 
 export type ProviderLoad =
@@ -75,14 +81,31 @@ function configPathFor(host: HostInfo): { path: string; explicit: boolean } {
   return { path: ops.join(runtimeRootFor(host), "config", "haril.json"), explicit: false };
 }
 
+// The composition root's SecretStore (ARCH 9.7): the real keys of the Runtime's environment, by reference.
+export function secretStoreFor(host: HostInfo): SecretStore {
+  return new EnvSecretStore(host.env ?? {});
+}
+
+function credentialOf(
+  keyEnv: string | undefined,
+  secrets: SecretStore,
+): SecretMaterial | undefined {
+  if (keyEnv === undefined) return undefined;
+  const got = secrets.get(envSecretRef(keyEnv));
+  return got.ok ? got.value : undefined;
+}
+
 // The providers in effect for this run. A problem with the file is an error for the whole command, not a skip.
-export function loadProviderConfig(host: HostInfo): ProviderLoad {
+export function loadProviderConfig(
+  host: HostInfo,
+  secrets: SecretStore = secretStoreFor(host),
+): ProviderLoad {
   const env = host.env ?? {};
   const { path, explicit } = configPathFor(host);
   if (!existsSync(path)) {
     if (explicit)
       return { ok: false, path, errors: ["the file named by HARIL_CONFIG does not exist"] };
-    return defaultProviders(env, path);
+    return defaultProviders(env, path, secrets);
   }
   let parsed: unknown;
   try {
@@ -94,7 +117,7 @@ export function loadProviderConfig(host: HostInfo): ProviderLoad {
   const ownErrors = ownKeyErrors(parsed);
   if (ownErrors.length > 0) return { ok: false, path, errors: ownErrors };
   // A file without providers (for example one that only holds ui.theme) gives the same defaults as no file.
-  if (!("providers" in parsed)) return defaultProviders(env, path);
+  if (!("providers" in parsed)) return defaultProviders(env, path, secrets);
   const checked = validateHarilConfig({ providers: parsed.providers });
   if (!checked.ok) return { ok: false, path, errors: checked.errors };
   return {
@@ -105,7 +128,7 @@ export function loadProviderConfig(host: HostInfo): ProviderLoad {
       id: entry.id,
       baseUrl: entry.baseUrl,
       ...(entry.keyEnv === undefined ? {} : { keyEnv: entry.keyEnv }),
-      apiKey: entry.keyEnv === undefined ? undefined : nonEmpty(env[entry.keyEnv]),
+      credential: credentialOf(entry.keyEnv, secrets),
     })),
   };
 }
@@ -149,6 +172,7 @@ function uiErrors(ui: unknown): string[] {
 function defaultProviders(
   env: Readonly<Record<string, string | undefined>>,
   path: string,
+  secrets: SecretStore,
 ): ProviderLoad {
   const url = nonEmpty(env[GATEWAY_URL_ENV]) ?? DEFAULT_CLIPROXY_URL;
   if (!isHttpUrl(url)) {
@@ -163,7 +187,7 @@ function defaultProviders(
         id: "cliproxy",
         baseUrl: url,
         keyEnv: GATEWAY_KEY_ENV,
-        apiKey: nonEmpty(env[GATEWAY_KEY_ENV]),
+        credential: credentialOf(GATEWAY_KEY_ENV, secrets),
       },
     ],
   };
@@ -175,19 +199,19 @@ export async function listProviderModels(
   timeoutMs: number,
 ): Promise<ProviderListing> {
   const key =
-    entry.keyEnv === undefined ? "none needed" : entry.apiKey === undefined ? "not set" : "set";
+    entry.keyEnv === undefined ? "none needed" : entry.credential === undefined ? "not set" : "set";
   const base = {
     id: entry.id,
     url: entry.baseUrl,
     key,
     ...(entry.keyEnv === undefined ? {} : { keyEnv: entry.keyEnv }),
   } as const;
-  if (entry.keyEnv !== undefined && entry.apiKey === undefined) {
+  if (entry.keyEnv !== undefined && entry.credential === undefined) {
     return { ...base, status: "skipped", detail: KEY_NOT_SET, models: [] };
   }
   const client = createOpenAiCompatibleClient({
     baseUrl: entry.baseUrl,
-    apiKey: entry.apiKey,
+    credential: entry.credential,
     timeoutMs,
   });
   try {
@@ -206,7 +230,7 @@ export async function listProviderModels(
 function failureDetail(error: unknown, entry: ProviderEntry): string {
   if (!(error instanceof ProviderError)) return "probe failed";
   if (error.code === "auth") {
-    return entry.apiKey === undefined ? "auth required, no key configured" : KEY_REJECTED;
+    return entry.credential === undefined ? "auth required, no key configured" : KEY_REJECTED;
   }
   if (error.code === "unreachable") return "unreachable";
   return error.message;
@@ -280,7 +304,7 @@ export function modelProblemOf(
     return { what: "the task names no model", fix: "add one with --model <provider>/<model>" };
   }
   const owner = providers.find((entry) => model.startsWith(`${entry.id}${NAMESPACE_SEPARATOR}`));
-  if (owner === undefined || owner.keyEnv === undefined || owner.apiKey !== undefined) {
+  if (owner === undefined || owner.keyEnv === undefined || owner.credential !== undefined) {
     return undefined;
   }
   return {

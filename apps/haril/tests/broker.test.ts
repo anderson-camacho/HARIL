@@ -3,6 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { request } from "node:http";
 import { connect } from "node:net";
 import { join } from "node:path";
+import { sealSecret } from "@haril/contracts";
 import {
   canonicalJson,
   canTransition,
@@ -133,7 +134,9 @@ beforeEach(async () => {
   broker = await startHarilBroker({
     store,
     clock,
-    providers: [{ id: "upstream", baseUrl: upstream.baseUrl, apiKey: UPSTREAM_KEY }],
+    providers: [
+      { id: "upstream", baseUrl: upstream.baseUrl, credential: sealSecret(UPSTREAM_KEY) },
+    ],
     timeoutMs: 5000,
   });
   closed = new Set();

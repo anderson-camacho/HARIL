@@ -1,3 +1,4 @@
+import { sealSecret } from "@haril/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import { type ChatEvent, createOpenAiCompatibleClient, ProviderError } from "../src/index.js";
 import { type FakeOpenAiServer, startFakeOpenAiServer } from "../src/testing/index.js";
@@ -19,7 +20,7 @@ async function start(completion: Parameters<typeof startFakeOpenAiServer>[0]["co
 function clientFor(baseUrl: string, extra: { fetch?: typeof fetch; timeoutMs?: number } = {}) {
   return createOpenAiCompatibleClient({
     baseUrl,
-    apiKey: KEY,
+    credential: sealSecret(KEY),
     timeoutMs: extra.timeoutMs ?? 2000,
     ...(extra.fetch === undefined ? {} : { fetch: extra.fetch }),
   });
@@ -95,6 +96,29 @@ describe("listModels", () => {
     await clientFor(started.baseUrl).listModels();
     expect(started.requests[0]?.headers.authorization).toBe(`Bearer ${KEY}`);
   });
+
+  it("reveals the sealed credential only for the header: no request, error or option shows it otherwise", async () => {
+    const started = await start();
+    const options = { baseUrl: started.baseUrl, credential: sealSecret(KEY), timeoutMs: 2000 };
+    await createOpenAiCompatibleClient(options).listModels();
+    const request = started.requests[0];
+    expect(request?.headers.authorization).toBe(`Bearer ${KEY}`);
+    expect(JSON.stringify({ ...request, headers: {} })).not.toContain(KEY);
+    expect(JSON.stringify(options)).not.toContain(KEY);
+    const wrong = createOpenAiCompatibleClient({
+      ...options,
+      credential: sealSecret("fake-wrong"),
+    });
+    const error = await failure(wrong.listModels());
+    expect((error as ProviderError).code).toBe("auth");
+    expect(String(error)).not.toContain("fake-wrong");
+  });
+
+  it("sends no Authorization header without a credential", async () => {
+    server = await startFakeOpenAiServer({ apiKey: null, models: ["alpha"] });
+    await createOpenAiCompatibleClient({ baseUrl: server.baseUrl, timeoutMs: 2000 }).listModels();
+    expect(server.requests[0]?.headers.authorization).toBeUndefined();
+  });
 });
 
 describe("chat streaming", () => {
@@ -158,7 +182,7 @@ describe("chat streaming", () => {
       const events = await collect(
         createOpenAiCompatibleClient({
           baseUrl: "http://127.0.0.1:9/v1",
-          apiKey: KEY,
+          credential: sealSecret(KEY),
           timeoutMs: 1000,
           fetch: fetchFromPieces(pieces),
         }).chat({ model: "alpha", messages: MESSAGES, maxTokens: 8 }),
@@ -173,7 +197,7 @@ describe("chat streaming", () => {
     const events = await collect(
       createOpenAiCompatibleClient({
         baseUrl: "http://127.0.0.1:9/v1",
-        apiKey: KEY,
+        credential: sealSecret(KEY),
         timeoutMs: 1000,
         fetch: fetchFromPieces(pieces),
       }).chat({ model: "alpha", messages: MESSAGES, maxTokens: 8 }),
@@ -214,7 +238,7 @@ describe("chat streaming", () => {
     const error = await failure(
       createOpenAiCompatibleClient({
         baseUrl: "http://127.0.0.1:9/v1",
-        apiKey: KEY,
+        credential: sealSecret(KEY),
         timeoutMs: 1000,
         fetch: fetchFromPieces([new TextEncoder().encode(body)]),
       }).chat({ model: "alpha", messages: MESSAGES, maxTokens: 8 }),

@@ -9,8 +9,8 @@ import {
 import type { ProviderEntry } from "./providers.js";
 
 // Composition of the Broker (M2-D7, M3-T7): one OpenAI-compatible upstream per configured provider. The Broker
-// never imports providers/, and each key reaches its adapter only here (ADR-0005 BR-14). Pi and the grant already
-// carry the bare model id, so the resolver forwards it unchanged: stripping again would break ids such as
+// never imports providers/, and each key reaches its adapter only here, sealed (ADR-0005 BR-14). Pi and the grant
+// already carry the bare model id, so the resolver forwards it unchanged: stripping again would break ids such as
 // "openai/gpt-4o" on a provider named "openai".
 
 export interface HarilBrokerOptions {
@@ -28,7 +28,7 @@ export function startHarilBroker(options: HarilBrokerOptions): Promise<Broker> {
         providerId: entry.id,
         client: createOpenAiCompatibleClient({
           baseUrl: entry.baseUrl,
-          apiKey: entry.apiKey,
+          credential: entry.credential,
           timeoutMs: options.timeoutMs,
         }),
       },

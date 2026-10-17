@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
-import { type PlanTask, validateHarilConfig, validatePlanSchema } from "@haril/contracts";
+import {
+  envSecretRef,
+  type PlanTask,
+  validateHarilConfig,
+  validatePlanSchema,
+} from "@haril/contracts";
 import {
   canonicalJson,
   canTransition,
@@ -19,17 +24,19 @@ import type {
   MetricsSnapshot,
   ProjectRecord,
   RuntimeLeaseSummary,
+  SecretStore,
   Store,
   TaskDetail,
   UsageSummary,
 } from "@haril/core/ports";
+import { EnvSecretStore } from "@haril/os";
 import { inspectStore, openStore } from "@haril/state-sqlite";
 import { readOptionalFile } from "./theme.js";
 
 // Data access of the shell (TUI-D4). The store is opened the way the CLI's openExisting does it: inspect first, and
 // an uninitialized data dir gives no store and no file. Only the read facets are used. Nothing here starts the
-// runtime, writes a row, polls, or reads a run's files under data/runs/. Provider keys are read from the environment
-// only to tell whether they are set; their values never leave this module.
+// runtime, writes a row, polls, or reads a run's files under data/runs/. Whether a provider key is set is read by
+// reference through the SecretStore (env:<keyEnv>), and the key is never revealed (ADR-0020 SEC-1).
 
 const EVENT_LIMIT = 200;
 // The Live panel shows at most this many of the scope's newest tasks (LD-T5).
@@ -50,7 +57,7 @@ interface ProviderRow {
   readonly id: string;
   readonly baseUrl: string;
   readonly keyEnv: string | undefined;
-  // Whether the variable named by keyEnv holds a value. Undefined when the provider needs no key.
+  // Whether a key is stored under env:<keyEnv>. Undefined when the provider needs no key.
   readonly keySet: boolean | undefined;
 }
 
@@ -147,6 +154,9 @@ export interface ShellData {
 export interface OpenShellDataOptions {
   readonly paths: ShellPaths;
   readonly env: Readonly<Record<string, string | undefined>>;
+  // Where provider keys are looked up; defaults to an EnvSecretStore over env. Injected so tests can avoid the
+  // environment.
+  readonly secrets?: SecretStore;
   readonly now?: () => number;
   // Reads a file as text, or undefined when it does not exist. Injected so tests can avoid the disk.
   readonly readFile?: (path: string) => string | undefined;
@@ -162,6 +172,7 @@ export function openShellData(options: OpenShellDataOptions): ShellData {
   const listFiles = options.listFiles ?? listDirectory;
   const isPidAlive = options.isPidAlive ?? defaultPidAlive;
   const { paths, env } = options;
+  const secrets = options.secrets ?? new EnvSecretStore(env);
   const clock: Clock = {
     now,
     schedule: (delayMs, run) => {
@@ -208,7 +219,7 @@ export function openShellData(options: OpenShellDataOptions): ShellData {
 
   return {
     load(scope) {
-      const providers = readProviders(paths.configPath, env, readFile);
+      const providers = readProviders(paths.configPath, env, secrets, readFile);
       const loadedAt = now();
       const base = {
         initialized,
@@ -312,10 +323,11 @@ function pendingApproval(record: ApprovalRecord): PendingApproval {
 function readProviders(
   configPath: string | undefined,
   env: Readonly<Record<string, string | undefined>>,
+  secrets: SecretStore,
   readFile: (path: string) => string | undefined,
 ): ProviderSnapshot {
   const text = configPath === undefined ? undefined : readFile(configPath);
-  if (text === undefined) return readProvidersDefaults(env);
+  if (text === undefined) return readProvidersDefaults(env, secrets);
   let parsed: unknown;
   try {
     parsed = JSON.parse(text) as unknown;
@@ -333,26 +345,27 @@ function readProviders(
       rows: [],
     };
   }
-  if (!("providers" in parsed)) return readProvidersDefaults(env);
+  if (!("providers" in parsed)) return readProvidersDefaults(env, secrets);
   const checked = validateHarilConfig({ providers: parsed.providers });
   if (!checked.ok) return { source: "file", error: checked.errors.join("; "), rows: [] };
   return {
     source: "file",
     error: undefined,
     rows: checked.config.providers.map((entry) =>
-      providerRow(entry.id, entry.baseUrl, entry.keyEnv, env),
+      providerRow(entry.id, entry.baseUrl, entry.keyEnv, secrets),
     ),
   };
 }
 
 function readProvidersDefaults(
   env: Readonly<Record<string, string | undefined>>,
+  secrets: SecretStore,
 ): ProviderSnapshot {
   const url = nonEmpty(env[GATEWAY_URL_ENV]) ?? DEFAULT_GATEWAY_URL;
   return {
     source: "defaults",
     error: undefined,
-    rows: [providerRow(DEFAULT_GATEWAY_ID, url, GATEWAY_KEY_ENV, env)],
+    rows: [providerRow(DEFAULT_GATEWAY_ID, url, GATEWAY_KEY_ENV, secrets)],
   };
 }
 
@@ -360,17 +373,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// Set or not set only: the sealed key is never revealed.
 function providerRow(
   id: string,
   baseUrl: string,
   keyEnv: string | undefined,
-  env: Readonly<Record<string, string | undefined>>,
+  secrets: SecretStore,
 ): ProviderRow {
   return {
     id,
     baseUrl,
     keyEnv,
-    keySet: keyEnv === undefined ? undefined : nonEmpty(env[keyEnv]) !== undefined,
+    keySet: keyEnv === undefined ? undefined : secrets.get(envSecretRef(keyEnv)).ok,
   };
 }
 
