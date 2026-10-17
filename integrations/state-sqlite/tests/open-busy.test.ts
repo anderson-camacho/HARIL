@@ -81,4 +81,44 @@ describe("opening the store next to a busy writer", () => {
       store.close();
     }
   }, 60_000);
+
+  it("a write waits behind another process that commits back to back for longer than the retry budget", async () => {
+    const store = openAt();
+    try {
+      // Seen in CI on Windows as INV-01 failing with "database is locked": SQLite's write lock has no queue, so a
+      // waiter rarely lands in the gap between a commit and the next BEGIN IMMEDIATE of a busy writer. With commits
+      // slowed to 25 ms (a loaded runner's fsync), the burst lasts 3 s, longer than the 2 s budget without a commit.
+      const churn = startChild("churner.mjs", [dbPath(), "3000", "25"]);
+      children.push(churn);
+      await churn.ready;
+
+      const { projectId } = store.projects.register({
+        slug: "burst",
+        name: "Burst",
+        rootPath: dir,
+      });
+      expect(store.projects.getBySlug("burst")?.projectId).toBe(projectId);
+      expect(await churn.exited).toBe(0);
+    } finally {
+      store.close();
+    }
+  }, 60_000);
+
+  it("a write still fails with its error when the lock is held without a commit for longer than the budget", async () => {
+    const store = openAt();
+    try {
+      // No other writer commits, so nothing extends the 2 s budget: a stuck holder does not block the caller longer.
+      const holder = startChild("lock-holder.mjs", [dbPath(), "6000"]);
+      children.push(holder);
+      await holder.ready;
+
+      const started = Date.now();
+      expect(() =>
+        store.projects.register({ slug: "stuck", name: "Stuck", rootPath: dir }),
+      ).toThrow(/database is locked/);
+      expect(Date.now() - started).toBeLessThan(6000);
+    } finally {
+      store.close();
+    }
+  }, 60_000);
 });

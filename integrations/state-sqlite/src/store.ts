@@ -1395,8 +1395,12 @@ export class SqliteStore implements Store {
     // A nested call (the reconciler settles budgets inside its own transaction) joins the open one.
     if (this.db.isTransaction) return work();
     // Taking the write lock retries with a bounded backoff (ARCH 8.4): nothing has run yet, so a retry is safe, and a
-    // CLI write next to a busy runtime waits instead of failing with "database is locked" after 200 ms.
-    withBusyRetry(() => this.db.exec("BEGIN IMMEDIATE"));
+    // CLI write next to a busy runtime waits instead of failing with "database is locked" after 200 ms. The data
+    // version tells a contended lock (others commit) from a stuck one, which fails sooner.
+    withBusyRetry(
+      () => this.db.exec("BEGIN IMMEDIATE"),
+      () => this.dataVersion(),
+    );
     try {
       const value = work();
       this.db.exec("COMMIT");
@@ -1404,6 +1408,17 @@ export class SqliteStore implements Store {
     } catch (error) {
       if (this.db.isTransaction) this.db.exec("ROLLBACK");
       throw error;
+    }
+  }
+
+  // PRAGMA data_version changes when another connection commits. It is a read, so it needs no write lock; a read that
+  // fails counts as no progress.
+  private dataVersion(): number | undefined {
+    try {
+      const row = this.db.prepare("PRAGMA data_version").get() as { data_version: number };
+      return row.data_version;
+    } catch {
+      return undefined;
     }
   }
 }
