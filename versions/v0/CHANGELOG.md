@@ -4,6 +4,103 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.7.0
+
+- **Fecha:** 2026-10-17
+- **Estado:** **demo en vivo de M4.** Desde `haril`, en una sola ventana: se escribe un objetivo, el agente `planner` propone un plan con un modelo real, la persona lo revisa entero y lo aprueba o lo rechaza, y la vista en vivo sigue sus tareas hasta el resultado. El runtime es residente, despierta por un pipe de control sin sondeo y lo arranca la propia interfaz cuando hay trabajo. La demo se ejecutó cuatro veces con `cliproxy/gemini-3-flash` a través de CLIProxyAPI, y su versión hermética corre en la CI.
+
+### Añadido
+
+- **Runtime residente (PR #13):**
+  - `haril start` se queda en marcha y sale tras 120 s sin trabajo (`--idle-exit-sec <n>`);
+  - `haril run` procesa la cola y sale;
+  - `haril stop` lo detiene en orden: el run en curso queda `cancelled`, la tarea vuelve a `ready` sin cobrar intento, las claves virtuales se revocan y las reservas se liquidan;
+  - `Ctrl+C` y `SIGTERM` paran igual; una segunda señal sale con 130.
+- **Pipe de control y suscripciones (PR #14):** paquete `@haril/control` (pipe con nombre en Windows, socket en POSIX, con token y líneas JSON). El runtime publica eventos ya redactados, se mantiene vivo mientras haya suscriptores y despierta con un `nudge`, que la CLI envía tras encolar. La interfaz se suscribe y vuelve a leer el almacén con un debounce de 250 ms, sin sondeo.
+- **Aprobación de planes (PR #16):**
+  - tabla `approvals` (migración 0004, aditiva);
+  - `haril plan propose`, `haril approvals [--all]`, `haril approve <id>` y `haril deny <id>`;
+  - el runtime aplica cada decisión en su siguiente turno, antes de la cola, con la misma clave de idempotencia que `plan import`, y registra `approval.applied`;
+  - en N0 la decisión es una declaración, no una autenticación.
+- **Planificador (PR #18):**
+  - tareas `--kind plan`: el agente `planner` (Pi real) propone el plan con la herramienta del puente `haril_propose_plan`, Core lo valida y queda como aprobación pendiente;
+  - `fake:plan` para el carril hermético, sin tokens;
+  - una tarea de plan que acaba sin propuesta falla (`plan.not_proposed`), y una que acaba `failed` deniega el plan que dejó pendiente;
+  - un plan no puede contener una tarea que nombre al agente `planner`;
+  - el evento `approval.requested` despierta a los suscriptores.
+- **`haril` sin subcomando (PR #17):** en una terminal abre la interfaz; fuera de una terminal imprime la ayuda y sale con 2.
+- **Objetivo, revisión del plan y vista en vivo en la interfaz (PR #20):** el formulario `g` del objetivo; el panel Planes, con el detalle del plan y `y`/`n`; el panel En vivo, con las tareas más recientes (estado, agente, intento, tokens y primera línea del resultado). La interfaz pasa de 11 a 13 paneles.
+- **Una sola ventana (PR #21, ADR-0022):** sin un runtime con lease vivo y con trabajo pendiente, la interfaz arranca `haril start --started-by shell` como hijo desacoplado y sin ventana. Su salida va a `logs\runtime-<fecha>.log`, el runtime registra `runtime.started_by_shell` y `--no-runtime` lo impide. No hay demonio: el hijo sale por inactividad como cualquier `haril start`.
+- **Consola rediseñada (PR #23 y #24):**
+  - barra superior (proyecto, modelo, contexto de la tarea en curso, tokens y runtime), columna derecha con cajas de estado a partir de 100 columnas (git, runtime, aprobaciones, taxis y tokens), banner HARIL en reposo y línea de estado; funciona desde 80x24;
+  - lectura de git para la caja de estado (`integrations/git`), sin shell y con tiempo límite;
+  - temas `haril-crimson` (el nuevo predeterminado) y `haril-blossom`, con los tokens opcionales `border`, `ok` y `danger`;
+  - caja de entrada siempre visible: modo entrada (Enter envía el objetivo) y modo navegación (`Esc` e `i`), con `Ctrl+C` para salir en los dos;
+  - comandos `/` con autocompletado: `/projects`, `/tasks`, `/plans`, `/live` y los demás paneles principales, `/approve [id]`, `/deny [id]`, `/add`, `/reload`, `/help` y `/quit`.
+- **`haril approvals show <id> [--json]` (PR #28):** el plan completo antes de decidir, con cada tarea y su modelo. Un plan pendiente que las reglas actuales rechazarían muestra `refused by the current rules: <motivo>`, y una decisión aplicada, `applied <fecha>`.
+- **`npm run e2e:demo` (PR #27):** demo hermética de punta a punta (`scripts/e2e-demo.mjs`), también como paso de la CI:
+  - carril simulado: objetivo, plan de `fake:plan`, aprobación, tareas completadas y parada limpia;
+  - carril real con el Pi falso y un servidor OpenAI falso en loopback: las tareas `analyst` corren con el modelo heredado del planner;
+  - un plan denegado no crea tareas, y ninguno las crea antes de aprobarse.
+
+### Cambiado
+
+- **Las tareas de un plan heredan el modelo del planner (PR #26, migración 0005):**
+  - la aprobación guarda el modelo de la tarea que propuso el plan (`approvals.model`, nulo para un plan de `plan propose` o de `plan import`); el modelo sale de la tarea reclamada en el almacén, nunca del agente;
+  - al aplicarla, `plan.submit` lleva `args.defaultModel` y cada tarea del plan lo recibe; el plan nunca nombra un modelo, y la clave de idempotencia y el hash se siguen calculando solo con el plan;
+  - `haril approvals` y el detalle del plan muestran `model <id|none>` antes de decidir;
+  - el esquema del almacén pasa de 3 a 5 con dos migraciones aditivas (0004 y 0005); una versión anterior no abre una base ya migrada, que nunca se degrada.
+- **Planes que encajan con lo que pueden hacer los agentes (PR #28 y commit `6ba88a5`):**
+  - el prompt del planner dice que `analyst` solo lee y responde en su resultado, que las tareas no ven los resultados de las demás y que basta una tarea por resultado (de 1 a 5 tareas), que una comprobación de aceptación prueba el resultado de su propia tarea y que la descripción añade detalle sin copiar el objetivo;
+  - la regla de Core `read_only_agent_writes` rechaza una tarea `analyst` con archivos que escribir, en todas las entradas de planes (`plan validate`, `plan propose`, `plan import` y el planner, que recibe el motivo);
+  - el prompt del agente incluye `Files to read: …` con la superficie de lectura de la tarea;
+  - si el objetivo pide un archivo, la última tarea pide «Return the full content of <archivo> as the result» y el `analyst` devuelve solo ese contenido, sin preámbulo ni bloque de código.
+- **Intentos (PR #28):** el intento que acaba bien también se cuenta; una tarea completada al primer intento muestra `1/N` en vez de `0/N`.
+- `agent.invalid_spec` nombra exactamente lo que falta (modelo, proyecto o tope de tokens) (PR #26).
+- El guion `test` da 15 s a cada prueba (`--testTimeout=15000`) para que las pausas de E/S del runner no hagan fallar la CI (PR #16).
+
+### Corregido
+
+- **Lo que se ve es lo que se aprueba:**
+  - las secuencias de escape del texto de agentes y del almacén ya no llegan a la terminal: todo carácter de control C0/C1 y DEL se muestra como `?` (PR #20);
+  - los caracteres invisibles (los de formato, `\p{Cf}`, los demás `Default_Ignorable_Code_Point` como los selectores de variación y los rellenos de Hangul, y los sustitutos sueltos) también se muestran como `?`; solo se conservan el selector de presentación tras un emoji y la unión de ancho cero (ZWJ) en posiciones válidas (PR #25);
+  - el detalle del plan muestra todos los campos que llegan al agente o cambian lo que puede hacer (descripción, escrituras y lecturas, tipo, prioridad, intentos, tiempo, presupuesto, requisitos, contexto y aceptación); antes la descripción no se mostraba aunque entraba en el prompt (PR #25);
+  - la caja de entrada y los formularios envían el texto tal como se ve (PR #24 y #25);
+  - `visibleText` pasa a Core y la salida de texto de la CLI con texto de agentes (`approvals`, `approvals show`, `task show`, `status`, `project list`, `events`, `run` y `start`) lo aplica; `--json` conserva el texto tal cual (PR #28).
+- El evento `tool.plan.propose` de un plan rechazado guarda el motivo que recibió el agente (como mucho 500 caracteres), nunca el plan; antes el motivo solo quedaba en el registro de la sesión de Pi (PR #28).
+- `database is locked` bajo carga: la espera del lock de escritura se reinicia cada vez que otro proceso confirma, hasta 10 s (PR #19, INV-01).
+- INV-18 en el runner Windows de la CI: hasta 3 mediciones, y una cota de 400 ms solo en ese runner (100 ms en local y en Linux) (PR #13 y #16).
+- Un runtime hijo que muere antes de tomar el lease ya no deja la interfaz en "starting": la línea de estado da su código de salida y el log que hay que leer (PR #21).
+- Un carácter ancho (CJK) ya no deja una línea una celda más ancha que la terminal, y git se lee como mucho una vez cada 5 s cuando el runtime avisa (PR #23).
+- El formato de `scripts/tests/foreign-snapshot.test.mjs`, que dejó `main` en rojo (PR #15).
+- E2E:
+  - el control de instalaciones ajenas ignora la caché de modelos de Codex, el estado por sesión de Claude Code y las bases SQLite de primer nivel de `~/.codex` (PR #14, #20 y #27);
+  - `e2e.mjs` ya no copia `process.env` a sus procesos hijos, así que las variables `HARIL_*` del usuario, con su clave, no les llegan (PR #27).
+
+### Desvíos y aplazamientos
+
+- **Las tareas no ven los resultados de las otras.** Pasar resultados entre tareas es orquestación de M4; por eso un plan útil suele ser de una sola tarea.
+- **`analyst` solo lee.** Un archivo pedido vuelve como resultado de la última tarea y la persona lo aplica; no hay todavía un agente que escriba (`developer`).
+- **La salida que no pasa la verificación no se guarda** (`result: none`) y el reintento no recibe el motivo del fallo.
+- **La primera propuesta del planner real suele omitir la `description`** de alguna tarea; Core la rechaza con el motivo y el planner la corrige en el mismo run.
+- **El coste no se registra:** la barra superior muestra `n/a`.
+- **Windows Terminal real sin verificar:** el aspecto (caracteres de ancho ambiguo, cursor, protocolo Kitty y pegado real) solo se probó con una terminal virtual.
+- **Pipe de control:** no tiene el acuse de 3 s del diseño; el canal se cierra después de liberar el lease.
+- **Menores conocidos:** una decisión del runtime se registra con `actorKind: "user"`; tras denegar un plan, el resultado guardado del planner sigue diciendo que espera aprobación (su estado `completed` sí es correcto); INV-01 aún falla de forma intermitente en el runner Windows cargado.
+
+### Verificación
+
+- Las tareas de aprobaciones, planificador, interfaz, arranque del runtime, consola y demo (PR #16, #18, #20, #21 y #23 a #28) tuvieron un verificador independiente de solo lectura y, con sus hallazgos, una corrección acotada. El de la caja de entrada (PR #24) recorrió todos los tamaños de 1 a 200 columnas, 6000 teclas aleatorias con semilla y pegados hostiles sin romper ningún invariante.
+- La CI pública corre en Windows y ubuntu en cada PR, con `e2e:demo` como paso propio desde el #27.
+- Local: `pnpm run check` 0; `pnpm test` con 1169 pruebas de Vitest (1 omitida, solo POSIX) y 56 de `node:test`; `npm run e2e` 38 pasos; `npm run e2e:demo` 21 pasos.
+- **Demo real** con `cliproxy/gemini-3-flash` a través de CLIProxyAPI, con datos temporales y sin imprimir la clave:
+  1. el flujo funcionó de punta a punta (plan de 2 tareas `analyst`, las dos completadas con el modelo heredado) y sacó a la luz lo que corrigió el PR #28;
+  2. dos demos completas, todas las tareas al primer intento, en unos 31 s y con 14 643 tokens de entrada y 1 488 de salida; en una de ellas, la primera propuesta del planner se rechazó por esquema y él mismo la corrigió;
+  3. el plan ya tenía la forma buscada, pero una comprobación de aceptación de una tarea que solo leía no podía cumplirse; de ahí el commit `6ba88a5`;
+  4. las dos demos completaron todas sus tareas al primer intento, en unos 22 s y con unos 15 800 tokens.
+
+---
+
 ## 0.6.0
 
 - **Fecha:** 2026-10-17
