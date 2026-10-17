@@ -208,7 +208,7 @@ test("live tool state (transcripts, log databases, global state) is ignored, whi
     writeAt(join(codex, "logs_2.sqlite-shm"), "1");
     writeAt(join(codex, ".codex-global-state.json.bak"), "1");
     writeAt(join(codex, "sqlite", "codex-dev.db-wal"), "1");
-    writeAt(join(codex, "models_cache.json"), "{\"refreshed\":true}");
+    writeAt(join(codex, "models_cache.json"), '{"refreshed":true}');
     assert.deepEqual(
       diffForeignSnapshots(before, snapshotForeignInstalls({ roots, readUserPath: noPath })),
       { added: [], removed: [], changed: [] },
