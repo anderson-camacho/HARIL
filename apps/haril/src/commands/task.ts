@@ -98,21 +98,27 @@ function taskAdd(args: readonly string[], io: CliIo, host: HostInfo): number {
   const dataDir = dataDirFor(host, lastValue(parsed, "--data-dir"));
   const idempotencyKey = explicitKey ?? `task-add-${storeAccess(host).ids.next()}`;
   return withProject(io, host, dataDir, lastValue(parsed, "--project"), (store, project) =>
-    queueCommand(io, parsed.flags.has("--json"), store, {
-      type: "task.create",
-      projectId: project.projectId,
-      args: {
-        goal: title,
-        dependsOn,
-        agent,
-        maxAttempts,
-        timeoutMs,
-        model: model ?? null,
-        maxTokens,
-        acceptance,
+    queueCommand(
+      io,
+      parsed.flags.has("--json"),
+      store,
+      {
+        type: "task.create",
+        projectId: project.projectId,
+        args: {
+          goal: title,
+          dependsOn,
+          agent,
+          maxAttempts,
+          timeoutMs,
+          model: model ?? null,
+          maxTokens,
+          acceptance,
+        },
+        idempotencyKey,
       },
-      idempotencyKey,
-    }),
+      dataDir,
+    ),
   );
 }
 

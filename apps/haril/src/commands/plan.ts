@@ -59,12 +59,18 @@ function planImport(args: readonly string[], io: CliIo, host: HostInfo): number 
   // Idempotency key = sha256(projectId + canonical JSON of the plan) (M1-T5): re-importing the same plan
   // is reported as already queued and does not add a command.
   return withProject(io, host, dataDir, lastValue(parsed, "--project"), (store, project) =>
-    queueCommand(io, json, store, {
-      type: "plan.submit",
-      projectId: project.projectId,
-      args: { plan: checked.plan },
-      idempotencyKey: sha256(`${project.projectId}${canonicalJson(checked.plan)}`),
-    }),
+    queueCommand(
+      io,
+      json,
+      store,
+      {
+        type: "plan.submit",
+        projectId: project.projectId,
+        args: { plan: checked.plan },
+        idempotencyKey: sha256(`${project.projectId}${canonicalJson(checked.plan)}`),
+      },
+      dataDir,
+    ),
   );
 }
 

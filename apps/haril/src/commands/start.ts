@@ -1,3 +1,4 @@
+import { createControlServer } from "@haril/control";
 import { type RunEvent, runExitCode } from "@haril/core";
 import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_ERROR, EXIT_USAGE, type HostInfo } from "../context.js";
@@ -60,6 +61,9 @@ async function serve(
   }
   // The real lane (M2-T6): the analyst agent in Pi through one Broker, closed when the run ends.
   const realAgents = createRealAgents({ host, store, clock: clockFor(host), dataDir });
+  // The control channel (LD-T2): the runtime opens it after taking the lease, so subscribed shells and nudging CLIs
+  // reach this runtime only while it holds the lease.
+  const control = createControlServer({ dataDir });
   // Ctrl+C and SIGTERM ask for the ordered stop; a second signal exits at once (ARCH 4.2).
   const shutdown = createShutdown();
   const detach = attachStopSignals(
@@ -87,6 +91,7 @@ async function serve(
       pid: process.pid,
       nodeVersion: host.nodeVersion,
       realAgents,
+      control,
       idleExitMs: idleExitSec * 1000,
       shutdown,
       onEvent: (event) => {

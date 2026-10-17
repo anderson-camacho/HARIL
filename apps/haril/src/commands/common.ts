@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { nudgeRuntime } from "@haril/control";
 import { canonicalJson } from "@haril/core";
 import type { ProjectRecord, Store } from "@haril/core/ports";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
@@ -88,12 +89,21 @@ export interface QueueRequest {
   readonly idempotencyKey: string;
 }
 
-// Enqueues one command. The scheduler applies it on `haril start` (M1-D5).
+// Asks the runtime of this data dir, if one listens, to apply what was just queued at once instead of at its next poll
+// (LD-T2). Best-effort: with no runtime listening nothing happens, and the command waits for the next `haril start`.
+// The nudge is not awaited: the process stays up until the connection closes, and nudgeRuntime bounds that wait. The
+// design's 3 s acknowledgement (ARCH 4.3) is not implemented; the store row is the source of truth either way.
+export function nudgeQueued(dataDir: string): void {
+  void nudgeRuntime(dataDir);
+}
+
+// Enqueues one command. The scheduler applies it on `haril start` (M1-D5), or at once when a runtime is nudged.
 export function queueCommand(
   io: CliIo,
   json: boolean,
   store: Store,
   request: QueueRequest,
+  dataDir: string,
 ): number {
   const hash = requestHash({
     type: request.type,
@@ -107,6 +117,7 @@ export function queueCommand(
     idempotencyKey: request.idempotencyKey,
     requestHash: hash,
   });
+  nudgeQueued(dataDir);
   if (json) {
     io.out(
       JSON.stringify({

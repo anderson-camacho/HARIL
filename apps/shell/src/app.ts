@@ -6,6 +6,7 @@ import type { ShellData, ShellSnapshot, TaskDetailView } from "./data.js";
 import { fit, runtimeState, wrap } from "./format.js";
 import { HELP_LINES } from "./help.js";
 import { clampOffset, followCursor, packTabs } from "./layout.js";
+import { type ConnectControl, createLiveFeed } from "./live.js";
 import {
   buildPanelView,
   buildTaskDetailView,
@@ -37,6 +38,8 @@ export interface ShellAppOptions {
   readonly actions?: ShellActions;
   // HARIL_DEFAULT_MODEL as the shell received it: prefills the model of the add-task form.
   readonly defaultModel?: string;
+  // Opens the control channel for the live feed (LD-T2). Without it the shell never subscribes.
+  readonly connectControl?: ConnectControl;
 }
 
 export interface ShellApp {
@@ -105,6 +108,26 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
   let form: AddTaskForm | undefined;
   let pending = false;
   let status: string | undefined;
+  // The live feed (LD-T2): a wake of the runtime reloads the store. Absent without a data dir or a connector.
+  const feed =
+    options.connectControl === undefined || settings.dataDir === undefined
+      ? undefined
+      : createLiveFeed({
+          dataDir: settings.dataDir,
+          connect: options.connectControl,
+          reload: () => {
+            reload();
+            tui.requestRender();
+          },
+          onChange: () => tui.requestRender(),
+        });
+  const liveMark = (): string => (feed?.subscribed === true ? " · live" : "");
+  // Subscribes only while the runtime is active: on open and after r, never by polling (LD-T2).
+  const subscribeIfRuntimeRunning = (): void => {
+    if (feed !== undefined && runtimeState(snapshot.runtime, snapshot.loadedAt) === "running") {
+      feed.subscribe();
+    }
+  };
 
   const activeId = () => PANELS[panel]?.id ?? "projects";
   const context = (): PanelContext => ({ snapshot, settings, scope });
@@ -114,8 +137,9 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
       ? "all"
       : (snapshot.projects.find((project) => project.projectId === scope)?.slug ?? "all");
   const bannerText = (): string =>
-    // Approvals do not exist in this version, so the count is always 0 (the caller passes it).
-    `isolation ${banner.isolation} · ${banner.pendingApprovals} pending approvals · runtime ${runtimeState(snapshot.runtime, snapshot.loadedAt)} · project ${projectSlug()}`;
+    // Approvals do not exist in this version, so the count is always 0 (the caller passes it). "live" shows while
+    // the shell holds a subscription to the runtime (LD-T2).
+    `isolation ${banner.isolation} · ${banner.pendingApprovals} pending approvals · runtime ${runtimeState(snapshot.runtime, snapshot.loadedAt)}${liveMark()} · project ${projectSlug()}`;
   const footerText = (): string => {
     if (form !== undefined) return FORM_FOOTER;
     if (helpOpen) return "↑↓ scroll · Esc close help · q quit";
@@ -377,6 +401,7 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
     if (helpOpen) return;
     if (matchesKey(input, "r")) {
       reload();
+      subscribeIfRuntimeRunning();
       return;
     }
     if (detail !== undefined) return;
@@ -427,6 +452,7 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
 
   function quit(): void {
     quitting = true;
+    feed?.close();
     tui.stop();
     data.close();
     void terminal.drainInput().then(() => resolveDone());
@@ -451,7 +477,10 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
   });
 
   return {
-    start: () => tui.start(),
+    start: () => {
+      tui.start();
+      subscribeIfRuntimeRunning();
+    },
     done,
     frameText: () =>
       frame(terminal.columns, terminal.rows).map((line) => line.map((part) => part.text).join("")),
