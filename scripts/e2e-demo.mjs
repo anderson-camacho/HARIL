@@ -348,6 +348,7 @@ const steps = [
     async () => {
       const report = await awaitPlanDone(REAL_GOAL);
       const planTasks = planTasksOf(report, REAL_GOAL);
+      expect(planTasks.length === 2, `the plan created ${planTasks.length} tasks, not 2`);
       for (const task of planTasks) {
         const view = taskView(task.taskId);
         const what = `plan task "${task.goal}"`;
@@ -355,8 +356,12 @@ const steps = [
         expect(view.agent === "analyst", `${what}: agent ${view.agent}`);
         expect(view.model === DEMO_MODEL, `${what}: model ${JSON.stringify(view.model)}`);
         expect(view.maxTokens === ANALYST_MAX_TOKENS, `${what}: max tokens ${view.maxTokens}`);
+        // MC-T1: the second step depends on the first and receives its answer; the fake Pi adds what it received.
+        const expected = task.goal.endsWith("(step 1 of 2)")
+          ? FAKE_UPSTREAM_REPLY
+          : `${FAKE_UPSTREAM_REPLY} | dependency result: ${FAKE_UPSTREAM_REPLY}`;
         const reply = view.result?.text ?? view.result?.summary;
-        expect(reply === FAKE_UPSTREAM_REPLY, `${what}: result ${JSON.stringify(reply)}`);
+        expect(reply === expected, `${what}: result ${JSON.stringify(reply)}`);
         expect(
           view.result?.model === `${PROVIDER_ID}/${DEMO_MODEL}`,
           `${what}: served by ${JSON.stringify(view.result?.model)}`,
@@ -365,7 +370,7 @@ const steps = [
       }
       const planner = taskView(plannerTaskOf(report, REAL_GOAL).taskId);
       expect(planner.model === DEMO_MODEL, `planner task model ${JSON.stringify(planner.model)}`);
-      return `${planTasks.length} analyst tasks completed with model ${DEMO_MODEL} (${PROVIDER_ID}/${DEMO_MODEL} served)`;
+      return `${planTasks.length} analyst tasks completed with model ${DEMO_MODEL} (${PROVIDER_ID}/${DEMO_MODEL} served); the second received the first one's result`;
     },
   ],
   [

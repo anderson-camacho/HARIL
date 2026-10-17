@@ -16,7 +16,8 @@
 // it), propose_plan_retry (an invalid plan first; after the refusal, the valid plan). The reply reports each answer.
 // LD-T7b scenario: propose_analyst_plan, one wrapper for both runs of the live demo. A planner run (one offered
 // haril_propose_plan) proposes a plan of analyst tasks with the token ceiling the planner prompt asks for; any other
-// run answers through the Broker, as ok_via_broker does.
+// run answers through the Broker, as ok_via_broker does, and adds the first line of the first dependency result its
+// prompt carries (MC-T1).
 // Test-only: the real Pi is never replaced outside HARIL_PI_CLI_OVERRIDE.
 
 import { connect } from "node:net";
@@ -164,9 +165,22 @@ function uiRequest(id) {
   });
 }
 
+// What an analyst of the demo plan saw of the tasks it depends on (MC-T1): " | dependency result: <first line>" for
+// the first block of the prompt's dependency section (the label, a blank line, "[<task id>] <goal>", then its result),
+// or "" when the prompt has none. It lets the e2e prove that a task received its dependency's answer.
+const DEPENDENCY_LABEL = "Results of the tasks this task depends on (";
+
+function dependencyEcho(prompt) {
+  const lines = prompt.split("\n");
+  const start = lines.findIndex((line) => line.startsWith(DEPENDENCY_LABEL));
+  if (start === -1 || !(lines[start + 2] ?? "").startsWith("[")) return "";
+  return ` | dependency result: ${lines[start + 3] ?? ""}`;
+}
+
 // One streamed OpenAI-style call through the Broker. Refusals (402 insufficient_quota, 401, 502) end the
-// assistant message with stopReason "error", the way Pi reports a failed model call.
-async function brokerChat(prompt) {
+// assistant message with stopReason "error", the way Pi reports a failed model call. A suffix, when given, is streamed
+// after the upstream's reply, as if the model had added it.
+async function brokerChat(prompt, suffix = "") {
   const response = await fetch(`${process.env.HARIL_BROKER_URL}/chat/completions`, {
     method: "POST",
     headers: {
@@ -210,6 +224,10 @@ async function brokerChat(prompt) {
       }
     }
   }
+  if (suffix !== "" && streamError === undefined) {
+    text += suffix;
+    emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: suffix } });
+  }
   emitAssistant(text, streamError);
   emit({ type: "turn_end" });
   emit({ type: "agent_settled", aborted: false });
@@ -238,8 +256,12 @@ async function runPrompt() {
   }
   if (scenario === "hang" || scenario === "hang_abortable") return;
   const planning = allowedTools.includes(PROPOSE_PLAN_TOOL);
-  if (scenario === "ok_via_broker" || (scenario === "propose_analyst_plan" && !planning)) {
+  if (scenario === "ok_via_broker") {
     await brokerChat(promptText);
+    return;
+  }
+  if (scenario === "propose_analyst_plan" && !planning) {
+    await brokerChat(promptText, dependencyEcho(promptText));
     return;
   }
   // Pi retries a failed model call: the first assistant message ends with an error, the retry succeeds.

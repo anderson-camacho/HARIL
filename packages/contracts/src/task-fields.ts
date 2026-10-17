@@ -10,7 +10,9 @@ import { TaskKindSchema } from "./enums.js";
 const CapabilitySchema = Type.String({ minLength: 1 });
 // TODO(AGENTS.md 5.3): AgentBlockRef shape not defined in this slice.
 const AgentBlockRefSchema = Type.String({ minLength: 1 });
-// TODO(schemas.md section 4, ContextRef / SC-10): shape not defined in this slice.
+// TODO(schemas.md section 12.2, ContextRef / SC-10): the docs propose { kind, ref, sha256? }, but nothing resolves a
+// declared reference yet, so it stays an opaque string. The results of a task's dependencies reach its prompt from the
+// store through its dependsOn, not through context (MC-T1).
 const ContextRefSchema = Type.String({ minLength: 1 });
 // TODO(schemas.md section 4, ArtifactRef): shape not defined in this slice.
 export const ArtifactRefSchema = Type.String({ minLength: 1 });
