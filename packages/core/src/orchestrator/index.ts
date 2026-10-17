@@ -80,6 +80,14 @@ export type RunEvent =
       readonly approvalId: string;
       readonly outcome: "granted" | "denied";
       readonly alreadySubmitted: boolean;
+    }
+  | {
+      // A plan task proposed a plan (LD-T4): it waits as a requested approval. created is false when the same plan was
+      // already waiting for a decision in the project, and that approval is the one named.
+      readonly type: "approval.requested";
+      readonly approvalId: string;
+      readonly taskId: string;
+      readonly created: boolean;
     };
 
 export interface RunSummary {

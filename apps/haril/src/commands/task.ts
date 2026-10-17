@@ -1,5 +1,5 @@
 import type { AcceptanceCheck } from "@haril/contracts";
-import { isRealAgent, type Verification } from "@haril/core";
+import { checkTaskKind, isRealAgent, type Verification } from "@haril/core";
 import { allValues, argsProblem, lastValue, type ParsedArgs, parseArgs } from "../args.js";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
 import { storeAccess } from "../host.js";
@@ -7,6 +7,8 @@ import { dataDirFor, openExisting, queueCommand, withProject } from "./common.js
 
 // `haril task add` (M1-T4): validates the input and queues task.create. `haril start` applies the queue.
 // `haril task show` (M2-T6) prints one task with its result or error and its settled tokens.
+// `--kind plan` (LD-T4) asks a planner agent (planner, or fake:plan in the hermetic lane) for a plan: the task writes
+// nothing, and the plan it proposes waits for `haril approve`.
 
 const DEFAULT_AGENT = "fake:succeed";
 const DEFAULT_MAX_ATTEMPTS = 1;
@@ -14,7 +16,7 @@ const DEFAULT_TIMEOUT_MS = 120000;
 const DEFAULT_MAX_TOKENS = 20000; // M2-D5
 const MODEL_ENV = "HARIL_DEFAULT_MODEL";
 const TASK_ADD_USAGE =
-  'usage: haril task add "<title>" [--project <slug>] [--depends-on <taskId>]... [--agent <agentRef>] [--model <id>] [--max-tokens <n>] [--max-attempts <n>] [--timeout-ms <n>] [--accept-file <path>]... [--accept-contains <path>=<text>]... [--accept-output <text>]... [--idempotency-key <key>] [--json] [--data-dir <path>]';
+  'usage: haril task add "<title>" [--project <slug>] [--depends-on <taskId>]... [--kind work|plan] [--agent <agentRef>] [--model <id>] [--max-tokens <n>] [--max-attempts <n>] [--timeout-ms <n>] [--accept-file <path>]... [--accept-contains <path>=<text>]... [--accept-output <text>]... [--idempotency-key <key>] [--json] [--data-dir <path>]';
 const TASK_SHOW_USAGE = "usage: haril task show <taskId> [--json] [--data-dir <path>]";
 const NOT_INITIALIZED =
   "store not initialized (run haril project init <path> --name <name> --yes first)";
@@ -34,6 +36,7 @@ function taskAdd(args: readonly string[], io: CliIo, host: HostInfo): number {
     values: [
       "--project",
       "--depends-on",
+      "--kind",
       "--agent",
       "--model",
       "--max-tokens",
@@ -68,6 +71,17 @@ function taskAdd(args: readonly string[], io: CliIo, host: HostInfo): number {
   const agent = (lastValue(parsed, "--agent") ?? DEFAULT_AGENT).trim();
   if (agent === "") {
     io.err("haril: --agent needs an agent reference");
+    return EXIT_USAGE;
+  }
+  const kindFlag = lastValue(parsed, "--kind")?.trim();
+  if (kindFlag === "") {
+    io.err("haril: --kind needs work or plan");
+    return EXIT_USAGE;
+  }
+  // The store applies the same rule to the queued command (LD-T4).
+  const kind = checkTaskKind(kindFlag, agent);
+  if (!kind.ok) {
+    io.err(`haril: ${kind.reason}`);
     return EXIT_USAGE;
   }
   // A real agent needs a model (M2-T6): --model, or HARIL_DEFAULT_MODEL; the simulated agents keep none.
@@ -108,6 +122,7 @@ function taskAdd(args: readonly string[], io: CliIo, host: HostInfo): number {
         args: {
           goal: title,
           dependsOn,
+          kind: kind.kind,
           agent,
           maxAttempts,
           timeoutMs,

@@ -235,3 +235,71 @@ describe("approvals applied by the runtime", () => {
     expect(store.approvals.get(id)?.appliedAt).toBeNull();
   });
 });
+
+// LD-T4: the runtime denies the plans a failed plan task left requested. It finds them by the proposing run, so a plan
+// another task only deduplicated against, or a plan proposed at the terminal, is never treated as the task's own.
+describe("approvals.list by the proposing task", () => {
+  let keySeq = 0;
+
+  function claimTask(goal: string): { taskId: string; runId: string } {
+    store.commands.enqueue({
+      type: "task.create",
+      projectId,
+      args: { goal, dependsOn: [], agent: "fake:succeed", maxAttempts: 1, timeoutMs: 1000 },
+      idempotencyKey: `task-${++keySeq}`,
+      requestHash: `task-${keySeq}`,
+    });
+    store.commands.applyNext(epoch);
+    const claimed = store.tasks.claimNext(epoch);
+    if (claimed === undefined) throw new Error(`"${goal}" was not claimed`);
+    return { taskId: claimed.taskId, runId: claimed.runId };
+  }
+
+  function proposeAs(requestedBy: string, goal: string): string {
+    const proposed = store.approvals.proposePlan({
+      projectId,
+      plan: {
+        schemaVersion: 1,
+        tasks: [
+          {
+            localId: "only",
+            dependsOn: [],
+            goal,
+            description: "",
+            priority: 5,
+            kind: "work",
+            agent: "fake:succeed",
+            requires: [],
+            context: [],
+            surface: { write: [], read: [] },
+            budget: { maxCostMicros: 0, maxTokens: 0, maxWallMs: 1000 },
+            timeoutMs: 1000,
+            maxAttempts: 1,
+            acceptance: [],
+          },
+        ],
+      },
+      requestedBy,
+    });
+    if (!proposed.ok) throw new Error(proposed.error.message);
+    return proposed.value.approval.approvalId;
+  }
+
+  it("returns only the approvals whose requestedBy is a run of the task, with the other filters", () => {
+    const planner = claimTask("Planner");
+    const other = claimTask("Other planner");
+    const own = proposeAs(planner.runId, "Own plan");
+    const decided = proposeAs(planner.runId, "Decided plan");
+    store.approvals.decide({ approvalId: decided, outcome: "granted", decidedBy: "ana" });
+    proposeAs(other.runId, "Foreign plan");
+    proposeAs("cli", "Terminal plan");
+
+    const ids = (filter: Parameters<Store["approvals"]["list"]>[0]) =>
+      store.approvals.list(filter).map((approval) => approval.approvalId);
+    expect(ids({ requestedByTask: planner.taskId })).toEqual([own, decided]);
+    expect(ids({ requestedByTask: planner.taskId, status: "requested" })).toEqual([own]);
+    expect(ids({ requestedByTask: planner.taskId, projectId: "elsewhere" })).toEqual([]);
+    expect(ids({ requestedByTask: "no-such-task" })).toEqual([]);
+    expect(store.approvals.list()).toHaveLength(4);
+  });
+});

@@ -163,3 +163,63 @@ describe("haril task add", () => {
     expect(h.err.join("\n")).toContain("ghost");
   });
 });
+
+// LD-T4: `--kind plan` asks a planner agent for a plan. A plan task writes nothing; its plan waits for an approval.
+describe("haril task add --kind", () => {
+  it("queues a plan task for fake:plan with kind plan, and a work task by default", () => {
+    initProject("demo", "demo");
+    expect(
+      run(
+        ["task", "add", "Plan the docs", "--kind", "plan", "--agent", "fake:plan"],
+        h.io,
+        sb.host,
+      ),
+    ).toBe(0);
+    expect(run(["task", "add", "Write README"], harness().io, sb.host)).toBe(0);
+    const [plan, work] = queuedCommands();
+    expect(plan?.args).toMatchObject({ goal: "Plan the docs", kind: "plan", agent: "fake:plan" });
+    expect(work?.args).toMatchObject({ goal: "Write README", kind: "work" });
+  });
+
+  it.each([
+    [
+      ["--kind", "plan"],
+      'a plan task needs a planner agent (planner or fake:plan); got "fake:succeed"',
+    ],
+    [["--kind", "plan", "--agent", "fake:fail"], "a plan task needs a planner agent"],
+    [["--agent", "fake:plan"], 'agent "fake:plan" runs only plan tasks'],
+    [
+      ["--kind", "work", "--agent", "planner", "--model", "m1"],
+      'agent "planner" runs only plan tasks',
+    ],
+    [["--kind", "verify"], 'task kind must be "work" or "plan"'],
+    [["--kind", " "], "--kind needs work or plan"],
+  ])("rejects %j with exit 2 and the reason", (flags, message) => {
+    initProject("demo", "demo");
+    expect(run(["task", "add", "Plan the docs", ...flags], h.io, sb.host)).toBe(2);
+    expect(h.err.join("\n")).toContain(message);
+    expect(queuedCommands()).toHaveLength(0);
+  });
+
+  it("asks the real planner for a model, as it does for the analyst", () => {
+    initProject("demo", "demo");
+    const args = ["task", "add", "Plan the docs", "--kind", "plan", "--agent", "planner"];
+    expect(run(args, h.io, sb.host)).toBe(2);
+    expect(h.err.join("\n")).toContain("agent planner needs a model");
+    expect(run([...args, "--model", "m1"], harness().io, sb.host)).toBe(0);
+    expect(queuedCommands()[0]?.args).toMatchObject({
+      kind: "plan",
+      agent: "planner",
+      model: "m1",
+    });
+  });
+
+  it("lists --kind in the usage and in the help", () => {
+    initProject("demo", "demo");
+    expect(run(["task", "add"], h.io, sb.host)).toBe(2);
+    expect(h.err.join("\n")).toContain("[--kind work|plan]");
+    const help = harness();
+    expect(run(["help"], help.io, sb.host)).toBe(0);
+    expect(help.out.join("\n")).toContain("--kind work|plan");
+  });
+});

@@ -2,7 +2,13 @@ import { randomUUID } from "node:crypto";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { validateHarilConfig } from "@haril/contracts";
-import { canonicalJson, canTransition, checkAcceptance, checkPlanSubmission } from "@haril/core";
+import {
+  canonicalJson,
+  canTransition,
+  checkAcceptance,
+  checkPlanSubmission,
+  checkTaskKind,
+} from "@haril/core";
 import type {
   Clock,
   EventRecord,
@@ -126,7 +132,13 @@ export function openShellData(options: OpenShellDataOptions): ShellData {
           dataDir: paths.dataDir,
           clock,
           ids: { next: () => randomUUID() },
-          rules: { canTransition, checkPlan: checkPlanSubmission, checkAcceptance, canonicalJson },
+          rules: {
+            canTransition,
+            checkPlan: checkPlanSubmission,
+            checkAcceptance,
+            checkTaskKind,
+            canonicalJson,
+          },
           isPidAlive: defaultPidAlive,
         });
       }

@@ -80,6 +80,20 @@ describe("validatePlanGraph", () => {
     expect(issues).toEqual([expect.objectContaining({ code: "nested_plan_task", taskId: "b" })]);
   });
 
+  // LD-T4: a planner agent runs only plan tasks, and a plan may not hold a plan task, so a plan may not hold a planner.
+  it("reports nested_plan_task for a task that names a planner agent, once per task", () => {
+    const planner = { ...task("p"), agent: "planner" };
+    const fakePlanner = { ...task("f"), agent: "fake:plan" };
+    const both = { ...task("both", [], "plan"), agent: "fake:plan" };
+    const issues = validatePlanGraph(plan([task("a"), planner, fakePlanner, both]));
+    expect(issues).toEqual([
+      expect.objectContaining({ code: "nested_plan_task", taskId: "p" }),
+      expect.objectContaining({ code: "nested_plan_task", taskId: "f" }),
+      expect.objectContaining({ code: "nested_plan_task", taskId: "both" }),
+    ]);
+    expect(issues[0]?.message).toContain('planner agent "planner"');
+  });
+
   it("keeps reporting other codes when one rule fails", () => {
     const issues = validatePlanGraph(plan([task("a", ["ghost"], "plan"), task("a")]));
     expect(codesOf(issues).sort()).toEqual(

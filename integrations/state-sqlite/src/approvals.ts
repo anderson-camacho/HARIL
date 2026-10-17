@@ -140,13 +140,15 @@ export function createApprovalsFacet(options: ApprovalFacetOptions): ApprovalsPo
     list(filter?: ApprovalFilter) {
       const rows = db
         .prepare(
-          `SELECT ${APPROVAL_COLUMNS} FROM approvals WHERE (? IS NULL OR project_id = ?) AND (? IS NULL OR status = ?) ORDER BY requested_at, rowid`,
+          `SELECT ${APPROVAL_COLUMNS} FROM approvals WHERE (? IS NULL OR project_id = ?) AND (? IS NULL OR status = ?) AND (? IS NULL OR requested_by IN (SELECT run_id FROM runs WHERE task_id = ?)) ORDER BY requested_at, rowid`,
         )
         .all(
           filter?.projectId ?? null,
           filter?.projectId ?? null,
           filter?.status ?? null,
           filter?.status ?? null,
+          filter?.requestedByTask ?? null,
+          filter?.requestedByTask ?? null,
         ) as unknown as ApprovalRow[];
       return rows.map(toRecord);
     },

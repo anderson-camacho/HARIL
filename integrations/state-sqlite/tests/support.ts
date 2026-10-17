@@ -1,7 +1,13 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { canonicalJson, canTransition, checkAcceptance, checkPlanSubmission } from "@haril/core";
+import {
+  canonicalJson,
+  canTransition,
+  checkAcceptance,
+  checkPlanSubmission,
+  checkTaskKind,
+} from "@haril/core";
 import type { Clock, Ids, StoreRules } from "@haril/core/ports";
 
 // The Core rules the composition root injects into the store (the store never imports Core values).
@@ -9,6 +15,7 @@ export const testRules: StoreRules = {
   canTransition,
   checkPlan: checkPlanSubmission,
   checkAcceptance,
+  checkTaskKind,
   canonicalJson,
 };
 

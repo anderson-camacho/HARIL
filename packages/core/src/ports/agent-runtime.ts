@@ -1,5 +1,22 @@
 // Minimal AgentRuntime port for M1 (agent-runtime contract, ARCH 5.1). The real adapter (Pi) arrives in M2.
+import type { TaskKind } from "@haril/contracts";
 import type { HarilError, Result } from "./result.js";
+
+// The host side of haril_propose_plan (LD-T4, ARCH 9.4). An agent runtime calls it with the run it serves and the
+// untrusted plan; the host checks the plan with the plan.submit rules and records it as a requested approval. `created`
+// is false when the same plan already waits for a decision in the project: that approval is returned. The runtime never
+// reaches the store itself.
+export interface PlanProposalContext {
+  readonly projectId: string;
+  readonly taskId: string;
+  readonly runId: string;
+}
+
+export type PlanProposalResult =
+  | { readonly ok: true; readonly approvalId: string; readonly created: boolean }
+  | { readonly ok: false; readonly reason: string };
+
+export type PlanProposer = (context: PlanProposalContext, plan: unknown) => PlanProposalResult;
 
 export interface AgentSpec {
   readonly runId: string;
@@ -15,6 +32,8 @@ export interface AgentSpec {
   readonly projectId?: string;
   readonly model?: string;
   readonly maxTokens?: number;
+  // The kind of the task (LD-T4). A plan task is answered by proposing a plan through haril_propose_plan.
+  readonly kind?: TaskKind;
 }
 
 export interface AgentHello {

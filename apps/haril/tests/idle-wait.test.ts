@@ -4,6 +4,7 @@ import {
   canTransition,
   checkAcceptance,
   checkPlanSubmission,
+  checkTaskKind,
   type RunEvent,
 } from "@haril/core";
 import type { Clock, Store } from "@haril/core/ports";
@@ -40,7 +41,13 @@ function open(): Store {
     dataDir: sb.dataDir,
     clock,
     ids: { next: () => randomUUID() },
-    rules: { canTransition, checkPlan: checkPlanSubmission, checkAcceptance, canonicalJson },
+    rules: {
+      canTransition,
+      checkPlan: checkPlanSubmission,
+      checkAcceptance,
+      checkTaskKind,
+      canonicalJson,
+    },
     // Every pid is alive: a lease can only be taken over once it expires.
     isPidAlive: () => true,
   });

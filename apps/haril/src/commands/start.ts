@@ -3,6 +3,7 @@ import { type RunEvent, runExitCode } from "@haril/core";
 import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_ERROR, EXIT_USAGE, type HostInfo } from "../context.js";
 import { agentRuntimeFor, clockFor } from "../host.js";
+import { createPlanProposals } from "../runtime/plan-proposals.js";
 import { createRealAgents } from "../runtime/real-agent.js";
 import { runUntilIdle } from "../runtime/run-loop.js";
 import { attachStopSignals, createShutdown } from "../runtime/shutdown.js";
@@ -59,8 +60,17 @@ async function serve(
     io.err(`haril: ${NOT_INITIALIZED}`);
     return EXIT_USAGE;
   }
-  // The real lane (M2-T6): the analyst agent in Pi through one Broker, closed when the run ends.
-  const realAgents = createRealAgents({ host, store, clock: clockFor(host), dataDir });
+  // The host handler of haril_propose_plan (LD-T4): a plan task's proposal becomes a requested approval. Both lanes get
+  // the same handler, so the run loop opens one attempt window whichever runtime serves the plan task.
+  const planProposals = createPlanProposals(store);
+  // The real lane (M2-T6): the analyst and planner agents in Pi through one Broker, closed when the run ends.
+  const realAgents = createRealAgents({
+    host,
+    store,
+    clock: clockFor(host),
+    dataDir,
+    proposePlan: planProposals.propose,
+  });
   // The control channel (LD-T2): the runtime opens it after taking the lease, so subscribed shells and nudging CLIs
   // reach this runtime only while it holds the lease.
   const control = createControlServer({ dataDir });
@@ -86,11 +96,12 @@ async function serve(
 
     const result = await runUntilIdle({
       store,
-      agentRuntime: agentRuntimeFor(host),
+      agentRuntime: agentRuntimeFor(host, planProposals.propose),
       clock: clockFor(host),
       pid: process.pid,
       nodeVersion: host.nodeVersion,
       realAgents,
+      planProposals,
       control,
       idleExitMs: idleExitSec * 1000,
       shutdown,
@@ -163,5 +174,11 @@ function formatEvent(event: RunEvent): string {
       return event.alreadySubmitted
         ? `approval ${event.approvalId} ${event.outcome}: applied (plan already submitted, nothing new queued)`
         : `approval ${event.approvalId} ${event.outcome}: applied`;
+    // Only what is true (LD-T4): a grant may queue nothing (the plan was already submitted), and a deduplicated proposal
+    // names the approval it found, not a requester it never was.
+    case "approval.requested":
+      return event.created
+        ? `approval ${event.approvalId} requested by task ${event.taskId}: decide with haril approve|deny ${event.approvalId}`
+        : `the same plan already waits as approval ${event.approvalId}: decide with haril approve|deny ${event.approvalId}`;
   }
 }

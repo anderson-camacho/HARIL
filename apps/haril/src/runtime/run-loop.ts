@@ -6,6 +6,7 @@ import {
   evaluateAcceptance,
   isRealAgent,
   MAX_INFRA_RESTARTS,
+  planAttemptOutcome,
   REAL_AGENT_REFS,
   type RunEvent,
   type RunSummary,
@@ -26,8 +27,9 @@ import type {
 import { StoreError } from "@haril/state-sqlite";
 import { modelProblemOf } from "../providers.js";
 import { projectFileReader, verificationPayload } from "./acceptance.js";
-import { applyDecidedApprovals } from "./approvals.js";
+import { applyDecidedApprovals, denyPlansOfFailedTask } from "./approvals.js";
 import { controlEventOf } from "./control-events.js";
+import type { PlanAttemptReport, PlanProposals } from "./plan-proposals.js";
 import type { RealAgentReadiness, RealAgents } from "./real-agent.js";
 import { createShutdown, RUNTIME_STOP, type Shutdown } from "./shutdown.js";
 
@@ -64,6 +66,9 @@ export interface RunLoopOptions {
   readonly onEvent: (event: RunEvent) => void;
   // Real agents (M2-T6). Without them, every agent keeps the simulated behaviour of M1.
   readonly realAgents?: Pick<RealAgents, "readiness" | "runtime">;
+  // The host handler of haril_propose_plan (LD-T4) that the agent runtimes were given. The loop opens it for each plan
+  // attempt and reports its proposals. Without it, no plan attempt can show a proposal, so every one fails.
+  readonly planProposals?: PlanProposals;
   // ARCH 4.2: how long the runtime waits after its last activity before it exits. Defaults to 0 (`haril run`).
   readonly idleExitMs?: number;
   // Clients subscribed to this runtime (LD-T2, ARCH 4.2). Defaults to the subscribers of the control channel.
@@ -115,6 +120,9 @@ export async function runUntilIdle(options: RunLoopOptions): Promise<RunLoopResu
     // M1-T7: attempts orphaned by a previous runtime go back to the queue before anything is claimed.
     for (const recovered of store.runtime.reconcile(epoch, MAX_INFRA_RESTARTS)) {
       emit(recoveryEvent(recovered));
+      if (recovered.outcome === "failed") {
+        denyPlansOfFailedTask(store, recovered.taskId, "infra_restarts_exhausted");
+      }
     }
     // serve() releases the lease itself, cleanly, on idle and on a stop.
     const beat = leaseHeartbeat(store, options.clock, epoch, ttlMs);
@@ -228,7 +236,7 @@ async function runClaimed(
     maxAttempts: claimed.maxAttempts,
   });
 
-  const outcome = await executeAttempt(options, shutdown, { epoch, beat }, emit, claimed);
+  const outcome = await executePlannedAttempt(options, shutdown, { epoch, beat }, emit, claimed);
   if (shutdown.requested && outcome.status !== "succeeded") {
     // ARCH 4.2 step 3: the run ends as cancelled and its task returns to ready; no attempt and no infra restart.
     const returned = store.runs.cancel(claimed.runId, "shutdown");
@@ -261,6 +269,9 @@ async function runClaimed(
     });
   } else {
     emit({ type: "task.failed", taskId: result.taskId, goal: result.goal, code });
+    // LD-T4: a plan task that failed for good leaves no plan to approve. Between retries the plan stays requested, since
+    // the next attempt proposes it again and finds the same approval.
+    denyPlansOfFailedTask(store, result.taskId, code);
   }
 }
 
@@ -365,6 +376,30 @@ function recoveryEvent(recovered: RecoveredTask): RunEvent {
     infraRestarts: recovered.infraRestarts,
     maxInfraRestarts: recovered.maxInfraRestarts,
   };
+}
+
+// A plan attempt (LD-T4) runs inside a proposal window: each proposal it records is told to subscribers at once, and a
+// success that recorded none fails as plan.not_proposed. Every other attempt runs as it is.
+async function executePlannedAttempt(
+  options: RunLoopOptions,
+  shutdown: Shutdown,
+  lease: { readonly epoch: number; readonly beat: () => void },
+  emit: (event: RunEvent) => void,
+  task: ClaimedTask,
+): Promise<AgentOutcome> {
+  if (task.kind !== "plan") return await executeAttempt(options, shutdown, lease, emit, task);
+  const close = options.planProposals?.open(
+    { projectId: task.projectId, taskId: task.taskId, runId: task.runId },
+    (proposal) => emit({ type: "approval.requested", ...proposal }),
+  );
+  let report: PlanAttemptReport = { proposed: false };
+  let outcome: AgentOutcome;
+  try {
+    outcome = await executeAttempt(options, shutdown, lease, emit, task);
+  } finally {
+    report = close?.() ?? report;
+  }
+  return planAttemptOutcome(task.kind, outcome, report.proposed, report.lastRefusal);
 }
 
 // While an attempt runs, the lease is renewed and the queue is checked each poll, so a long attempt keeps its lease and

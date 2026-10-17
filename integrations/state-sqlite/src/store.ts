@@ -8,6 +8,7 @@ import type {
   Clock,
   CommandRecord,
   CompletedRun,
+  CreatableTaskKind,
   EnqueueCommandInput,
   EnqueueResult,
   EventFilter,
@@ -124,6 +125,7 @@ interface ReadyRow {
   readonly projectId: string;
   readonly goal: string;
   readonly description: string;
+  readonly kind: ClaimedTask["kind"];
   readonly agentRef: string;
   readonly model: string | null;
   readonly maxTokens: number;
@@ -603,7 +605,7 @@ export class SqliteStore implements Store {
 
   private applyTaskCreate(command: CommandRecord, now: number): ApplyVerdict {
     const projectId = command.projectId ?? "";
-    const parsed = parseTaskCreateArgs(command.args, this.rules.checkAcceptance);
+    const parsed = parseTaskCreateArgs(command.args, this.rules);
     if (typeof parsed === "string") return { ok: false, reason: parsed };
 
     const dependsOn = [...new Set(parsed.dependsOn)];
@@ -622,7 +624,7 @@ export class SqliteStore implements Store {
         goal: parsed.goal,
         description: "",
         priority: 5,
-        kind: "work",
+        kind: parsed.kind,
         agentRef: parsed.agent,
         model: parsed.model,
         requires: [],
@@ -876,7 +878,7 @@ export class SqliteStore implements Store {
           : ` AND task_id NOT IN (${excludedTasks.map(() => "?").join(", ")})`;
       const row = this.db
         .prepare(
-          `SELECT task_id AS taskId, project_id AS projectId, goal, description, agent_ref AS agentRef, model, budget_max_tokens AS maxTokens, acceptance, attempt, attempts_used AS attemptsUsed, max_attempts AS maxAttempts, timeout_ms AS timeoutMs, claim_epoch AS claimEpoch FROM tasks WHERE state = 'ready'${notExcludedAgents}${notExcludedTasks} ORDER BY priority DESC, created_seq LIMIT 1`,
+          `SELECT task_id AS taskId, project_id AS projectId, goal, description, kind, agent_ref AS agentRef, model, budget_max_tokens AS maxTokens, acceptance, attempt, attempts_used AS attemptsUsed, max_attempts AS maxAttempts, timeout_ms AS timeoutMs, claim_epoch AS claimEpoch FROM tasks WHERE state = 'ready'${notExcludedAgents}${notExcludedTasks} ORDER BY priority DESC, created_seq LIMIT 1`,
         )
         .get(...excludedAgents, ...excludedTasks) as unknown as ReadyRow | undefined;
       if (row === undefined) return undefined;
@@ -929,6 +931,7 @@ export class SqliteStore implements Store {
         runId,
         goal: row.goal,
         description: row.description,
+        kind: row.kind,
         agentRef: row.agentRef,
         model: row.model,
         maxTokens: row.maxTokens,
@@ -1424,11 +1427,12 @@ function parseCommand(row: CommandRow): CommandRecord {
 // Validates the task.create arguments written by `haril task add`; a string is the rejection reason.
 function parseTaskCreateArgs(
   args: Readonly<Record<string, unknown>>,
-  checkAcceptance: StoreRules["checkAcceptance"],
+  rules: Pick<StoreRules, "checkAcceptance" | "checkTaskKind">,
 ):
   | {
       goal: string;
       dependsOn: string[];
+      kind: CreatableTaskKind;
       agent: string;
       model: string | null;
       maxAttempts: number;
@@ -1445,6 +1449,9 @@ function parseTaskCreateArgs(
   }
   const agent = args.agent;
   if (typeof agent !== "string" || agent.trim() === "") return "agent reference must not be empty";
+  // Optional (LD-T4): absent means work; a plan task and a planner agent go together.
+  const kind = rules.checkTaskKind(args.kind, agent);
+  if (!kind.ok) return kind.reason;
   // Optional (M2-T6): absent or null means no model; a token ceiling of 0 means none was set.
   const model = args.model ?? null;
   if (model !== null && (typeof model !== "string" || model.trim() === "")) {
@@ -1463,11 +1470,12 @@ function parseTaskCreateArgs(
     return "timeoutMs must be a whole number of at least 1";
   }
   // Optional (M3-D7): absent means no acceptance checks; the rule names the first problem.
-  const acceptance = checkAcceptance(args.acceptance ?? []);
+  const acceptance = rules.checkAcceptance(args.acceptance ?? []);
   if (!acceptance.ok) return acceptance.reason;
   return {
     goal,
     dependsOn: dependsOn as string[],
+    kind: kind.kind,
     agent,
     model: model as string | null,
     maxAttempts: maxAttempts as number,

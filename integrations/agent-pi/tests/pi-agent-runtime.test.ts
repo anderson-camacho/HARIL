@@ -1,4 +1,5 @@
 import { spawn as nodeSpawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -11,7 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AgentHandle, AgentSpec } from "@haril/core/ports";
+import type { AgentHandle, AgentSpec, PlanProposalContext, PlanProposer } from "@haril/core/ports";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createPiAgentRuntime,
@@ -489,5 +490,145 @@ describe("createPiAgentRuntime lifecycle", () => {
     await handle.dispose();
     expect(await handle.settled).toEqual({ status: "aborted" });
     expect(existsSync(join(h.runsDir, "run-1", "pi"))).toBe(true);
+  });
+});
+
+// haril_propose_plan on the Pi lane (LD-T4): the fake Pi sends plan.propose the way the bridge tool does. The proposer
+// stands in for the host handler: it accepts a plan of schemaVersion 1 and refuses any other with a reason.
+describe("createPiAgentRuntime plan.propose (LD-T4)", () => {
+  const PLAN_TOOLS = ["read", "haril_propose_plan"];
+  const ACCEPTED = "plan ok: proposed plan appr-1; it waits for a person (haril approve appr-1)";
+
+  interface ProposalCall {
+    readonly context: PlanProposalContext;
+    readonly plan: unknown;
+  }
+
+  function planSpec(overrides: Partial<AgentSpec> = {}): AgentSpec {
+    return {
+      ...spec("run-plan"),
+      projectId: "project-1",
+      allowedTools: PLAN_TOOLS,
+      kind: "plan",
+      ...overrides,
+    };
+  }
+
+  function proposer(calls: ProposalCall[]): PlanProposer {
+    return (context, plan) => {
+      calls.push({ context, plan });
+      return (plan as { schemaVersion?: unknown }).schemaVersion === 1
+        ? { ok: true, approvalId: "appr-1", created: true }
+        : { ok: false, reason: "invalid plan: schemaVersion must be 1" };
+    };
+  }
+
+  function summaryOf(outcome: Awaited<AgentHandle["settled"]>): string {
+    if (outcome.status !== "succeeded") throw new Error(`run ${outcome.status}`);
+    return outcome.summary;
+  }
+
+  it("serves plan.propose through the proposer with the run's context, recording the plan's hash and size only", async () => {
+    const h = harness();
+    const calls: ProposalCall[] = [];
+    const handle = await startHandle(
+      h.runtime("propose_plan", { proposePlan: proposer(calls) }),
+      planSpec(),
+    );
+    expect((await handle.hello).tools).toEqual(PLAN_TOOLS);
+    await handle.prompt("Plan the docs");
+
+    expect(summaryOf(await handle.settled)).toBe(ACCEPTED);
+    expect(calls).toEqual([
+      {
+        context: { projectId: "project-1", taskId: "task-1", runId: "run-plan" },
+        plan: expect.objectContaining({ schemaVersion: 1 }),
+      },
+    ]);
+    const body = JSON.stringify(calls[0]?.plan);
+    expect(h.events).toEqual([
+      {
+        runId: "run-plan",
+        op: "plan.propose",
+        pathSha256: expect.any(String),
+        outcome: "ok",
+        planSha256: createHash("sha256").update(body, "utf8").digest("hex"),
+        planBytes: Buffer.byteLength(body, "utf8"),
+        approvalId: "appr-1",
+      },
+    ]);
+    const serialized = JSON.stringify(h.events);
+    expect(serialized).not.toContain("Plan the docs");
+    expect(serialized).not.toContain("fake Pi planner");
+  });
+
+  it("answers a refused plan with the reason, so the agent can fix the plan and propose again", async () => {
+    const h = harness();
+    const calls: ProposalCall[] = [];
+    const handle = await startHandle(
+      h.runtime("propose_plan_retry", { proposePlan: proposer(calls) }),
+      planSpec(),
+    );
+    await handle.prompt("Plan the docs");
+
+    expect(summaryOf(await handle.settled)).toBe(
+      `plan refused: invalid plan: schemaVersion must be 1 | ${ACCEPTED}`,
+    );
+    expect(calls).toHaveLength(2);
+    expect(h.events).toEqual([
+      expect.objectContaining({ op: "plan.propose", outcome: "plan_refused" }),
+      expect.objectContaining({ op: "plan.propose", outcome: "ok", approvalId: "appr-1" }),
+    ]);
+    // The refusal reason goes to the agent only: the record keeps no text taken from the plan.
+    expect(JSON.stringify(h.events)).not.toContain("schemaVersion must be 1");
+  });
+
+  it("answers plan.propose as unsupported without a proposer, and for a run that may not propose", async () => {
+    const h = harness();
+    const bare = await startHandle(h.runtime("propose_plan"), planSpec());
+    await bare.prompt("Plan the docs");
+    expect(summaryOf(await bare.settled)).toBe("plan refused: unsupported");
+
+    const calls: ProposalCall[] = [];
+    // A work run (read and write only) never reaches the proposer, even when one is configured.
+    const work = await startHandle(
+      h.runtime("propose_plan", { proposePlan: proposer(calls) }),
+      spec("run-work"),
+    );
+    await work.prompt("Plan the docs");
+    expect(summaryOf(await work.settled)).toBe("plan refused: unsupported");
+    expect(calls).toEqual([]);
+    expect(h.events).toEqual([
+      expect.objectContaining({ runId: "run-plan", op: "plan.propose", outcome: "unsupported" }),
+      expect.objectContaining({ runId: "run-work", op: "plan.propose", outcome: "unsupported" }),
+    ]);
+  });
+
+  it("refuses the proposal when the run has no project or the proposer throws", async () => {
+    const h = harness();
+    const calls: ProposalCall[] = [];
+    const { projectId: _dropped, ...noProject } = planSpec({ runId: "run-orphan" });
+    const orphan = await startHandle(
+      h.runtime("propose_plan", { proposePlan: proposer(calls) }),
+      noProject,
+    );
+    await orphan.prompt("Plan the docs");
+    expect(summaryOf(await orphan.settled)).toBe("plan refused: the run has no project");
+    expect(calls).toEqual([]);
+
+    const failing = await startHandle(
+      h.runtime("propose_plan", {
+        proposePlan: () => {
+          throw new Error("store is closed");
+        },
+      }),
+      planSpec(),
+    );
+    await failing.prompt("Plan the docs");
+    expect(summaryOf(await failing.settled)).toBe("plan refused: the plan could not be recorded");
+    expect(h.events).toEqual([
+      expect.objectContaining({ runId: "run-orphan", outcome: "plan_refused" }),
+      expect.objectContaining({ runId: "run-plan", outcome: "plan_refused" }),
+    ]);
   });
 });

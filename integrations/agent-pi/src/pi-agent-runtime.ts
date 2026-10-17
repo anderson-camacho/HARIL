@@ -1,6 +1,7 @@
 // AgentRuntime adapter for Pi 1.2.0 in `--mode rpc` (ADR-0004). One Pi process per attempt. The adapter
 // owns the bridge channel (named pipe or unix socket with a 256-bit token), the RPC JSONL stream, the
-// handshake (fail closed), the bridge read operation through PathGuard, and the abort/kill escalation.
+// handshake (fail closed), the bridge read operation through PathGuard, the plan.propose operation of a plan
+// task through the host's proposer (LD-T4), and the abort/kill escalation.
 // It never sends new_session, switch_session, fork or clone, and it never logs the token or the key.
 
 import type { ChildProcess } from "node:child_process";
@@ -15,6 +16,8 @@ import type {
   AgentRuntime,
   AgentSpec,
   HarilError,
+  PlanProposalResult,
+  PlanProposer,
   Result,
 } from "@haril/core/ports";
 import { JsonlReader } from "./jsonl.js";
@@ -36,22 +39,34 @@ export interface PiTimings {
   readonly graceMs?: number;
 }
 
+// plan_refused: the host refused a plan.propose (an invalid plan, a closed attempt); the agent hears the reason.
 export type BridgeOperationOutcome =
   | "ok"
   | "path_denied"
   | "too_large"
   | "read_failed"
+  | "plan_refused"
   | "unsupported";
 
 // Event-friendly record of one bridge operation: the path is hashed and the content is never included.
 // A path_denied operation carries the PathGuard reason (a fixed code such as outside_root), never the path.
+// A plan.propose has no path (pathSha256 hashes ""): it carries the plan's SHA-256 and UTF-8 size, and the approval an
+// accepted plan became, never the plan or the refusal reason, which may quote it.
 export interface BridgeOperationEvent {
   readonly runId: string;
   readonly op: string;
   readonly pathSha256: string;
   readonly outcome: BridgeOperationOutcome;
   readonly reason?: string;
+  readonly planSha256?: string;
+  readonly planBytes?: number;
+  readonly approvalId?: string;
 }
+
+type OperationDetail = Pick<
+  BridgeOperationEvent,
+  "reason" | "planSha256" | "planBytes" | "approvalId"
+>;
 
 export interface PiAgentRuntimeOptions {
   readonly nodePath: string;
@@ -71,6 +86,8 @@ export interface PiAgentRuntimeOptions {
   readonly pathGuard?: PathGuard;
   readonly timings?: PiTimings;
   readonly onBridgeOperation?: (event: BridgeOperationEvent) => void;
+  // The host side of haril_propose_plan (LD-T4). Without it, plan.propose is unsupported and a plan task cannot propose.
+  readonly proposePlan?: PlanProposer;
 }
 
 export interface PiDiagnostics {
@@ -84,6 +101,9 @@ export interface PiAgentHandle extends AgentHandle {
 
 const RUN_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const MAX_READ_BYTES = 1024 * 1024;
+// The bridge tool of a plan task and its operation (LD-T4). Core values stay out of this adapter, so the name is local.
+const PROPOSE_PLAN_TOOL = "haril_propose_plan";
+const PLAN_PROPOSE_OP = "plan.propose";
 // Pi waits for an answer only to these extension dialogs; every other extension_ui_request is fire-and-forget.
 const DIALOG_METHODS: ReadonlySet<unknown> = new Set(["select", "confirm", "input", "editor"]);
 const DEFAULT_HELLO_TIMEOUT_MS = 15_000;
@@ -177,6 +197,13 @@ function validate(spec: AgentSpec, options: PiAgentRuntimeOptions): HarilError |
 
 function isPositiveInteger(value: number): boolean {
   return Number.isSafeInteger(value) && value > 0;
+}
+
+// What the agent reads after an accepted proposal (LD-T4): the approval it became, which a person decides.
+function proposalText(approvalId: string, created: boolean): string {
+  return created
+    ? `proposed plan ${approvalId}; it waits for a person (haril approve ${approvalId})`
+    : `plan ${approvalId} was already proposed; it waits for a person (haril approve ${approvalId})`;
 }
 
 // Pi 1.2.0 reads a leading "/" as one of its own commands, so a task that starts with it goes behind a fixed prefix.
@@ -527,6 +554,10 @@ class PiRun implements PiAgentHandle {
   private async onBridgeOperation(message: Json): Promise<void> {
     const id = message.id;
     if (typeof id !== "string" && typeof id !== "number") return;
+    if (message.op === PLAN_PROPOSE_OP) {
+      this.onProposePlan(id, message.plan);
+      return;
+    }
     if (message.op !== "read") {
       this.recordOperation(String(message.op), sha256(""), "unsupported");
       this.replyBridge(id, { ok: false, error: "unsupported" });
@@ -536,7 +567,7 @@ class PiRun implements PiAgentHandle {
     const pathSha256 = sha256(requested);
     const check = this.guard(requested);
     if (!check.ok) {
-      this.recordOperation("read", pathSha256, "path_denied", check.reason);
+      this.recordOperation("read", pathSha256, "path_denied", { reason: check.reason });
       this.replyBridge(id, { ok: false, error: "path_denied" });
       return;
     }
@@ -548,7 +579,7 @@ class PiRun implements PiAgentHandle {
     }
     // A link or a swapped file found after the guard is a denial too: the path is refused, never read.
     if (read.reason === "link" || read.reason === "identity_changed") {
-      this.recordOperation("read", pathSha256, "path_denied", read.reason);
+      this.recordOperation("read", pathSha256, "path_denied", { reason: read.reason });
       this.replyBridge(id, { ok: false, error: "path_denied" });
       return;
     }
@@ -561,20 +592,50 @@ class PiRun implements PiAgentHandle {
     this.replyBridge(id, { ok: false, error: "read_failed" });
   }
 
+  // haril_propose_plan (LD-T4): the plan goes to the host's proposer untouched, with the run's own context; the host
+  // checks it and the reply carries its reason, so the agent can fix the plan. Only a run allowed the tool reaches the
+  // proposer; without one, the operation is unsupported like any other the adapter does not serve.
+  private onProposePlan(id: string | number, plan: unknown): void {
+    const body = JSON.stringify(plan) ?? "";
+    const fingerprint = { planSha256: sha256(body), planBytes: Buffer.byteLength(body, "utf8") };
+    const proposer = this.options.proposePlan;
+    if (proposer === undefined || !this.spec.allowedTools.includes(PROPOSE_PLAN_TOOL)) {
+      this.recordOperation(PLAN_PROPOSE_OP, sha256(""), "unsupported", fingerprint);
+      this.replyBridge(id, { ok: false, error: "unsupported" });
+      return;
+    }
+    const projectId = this.spec.projectId;
+    let result: PlanProposalResult;
+    if (projectId === undefined) {
+      result = { ok: false, reason: "the run has no project" };
+    } else {
+      try {
+        result = proposer({ projectId, taskId: this.spec.taskId, runId: this.runId }, plan);
+      } catch {
+        // The host failed, not the plan: the agent hears a fixed reason, never the host's error.
+        result = { ok: false, reason: "the plan could not be recorded" };
+      }
+    }
+    if (!result.ok) {
+      this.recordOperation(PLAN_PROPOSE_OP, sha256(""), "plan_refused", fingerprint);
+      this.replyBridge(id, { ok: false, error: result.reason });
+      return;
+    }
+    this.recordOperation(PLAN_PROPOSE_OP, sha256(""), "ok", {
+      ...fingerprint,
+      approvalId: result.approvalId,
+    });
+    this.replyBridge(id, { ok: true, content: proposalText(result.approvalId, result.created) });
+  }
+
   private recordOperation(
     op: string,
     pathSha256: string,
     outcome: BridgeOperationOutcome,
-    reason?: string,
+    detail: OperationDetail = {},
   ): void {
     try {
-      this.options.onBridgeOperation?.({
-        runId: this.runId,
-        op,
-        pathSha256,
-        outcome,
-        ...(reason === undefined ? {} : { reason }),
-      });
+      this.options.onBridgeOperation?.({ runId: this.runId, op, pathSha256, outcome, ...detail });
     } catch {
       // A failing observer must not change the operation's answer.
     }
