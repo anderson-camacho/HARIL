@@ -8,12 +8,14 @@ import { spawn, spawnSync } from "node:child_process";
 import {
   closeSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   openSync,
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
@@ -45,6 +47,7 @@ const E2E_REPLY = "Hello from the e2e model.";
 const E2E_LONG_MARKER = "E2E-LONG-REPLY";
 const E2E_LONG_CHUNKS = 400;
 const E2E_OUTSIDE_SECRET = "e2e outside secret: must never reach the store";
+const E2E_LINK_SECRET = "e2e link secret: must never reach the store";
 const E2E_TOKEN_CAP = 40;
 const E2E_SAY = "e2e agent reply: verified";
 const E2E_VERIFIED_TEXT = "E2E-VERIFIED-TEXT";
@@ -287,13 +290,17 @@ function writeFakePiWrapper(name, scenario, env = {}) {
 }
 
 // True when a file under one of the directories contains the text: the store, its logs and the project's .haril.
+// Links are skipped: readdir with recursive: true follows a junction on Windows, and a link target is not project content.
 function anyFileContains(dirs, text) {
-  for (const dir of dirs) {
-    if (!existsSync(dir)) continue;
-    for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
-      if (entry.isFile() && readFileSync(join(entry.parentPath, entry.name)).includes(text)) {
-        return true;
-      }
+  const pending = dirs.filter((dir) => existsSync(dir));
+  while (pending.length > 0) {
+    const dir = pending.pop();
+    for (const name of readdirSync(dir)) {
+      const path = join(dir, name);
+      const stat = lstatSync(path);
+      if (stat.isSymbolicLink()) continue;
+      if (stat.isDirectory()) pending.push(path);
+      else if (stat.isFile() && readFileSync(path).includes(text)) return true;
     }
   }
   return false;
@@ -623,6 +630,44 @@ const steps = [
         !anyFileContains([session.projectDir, join(session.root, "home")], E2E_OUTSIDE_SECRET),
         "the outside content reached the store or the logs",
       );
+    },
+  ],
+  [
+    "ESC-05: a read through a junction inside the project is denied and recorded",
+    () => {
+      // A junction (a directory link on Windows; a symlink elsewhere) inside the project, pointing outside it.
+      const linkedOutside = join(session.root, "linked-outside");
+      mkdirSync(linkedOutside, { recursive: true });
+      writeFileSync(join(linkedOutside, "secret.txt"), E2E_LINK_SECRET, "utf8");
+      symlinkSync(linkedOutside, join(session.projectDir, "link-out"), "junction");
+      const wrapper = writeFakePiWrapper("pi-read-link.mjs", "ok_with_read", {
+        FAKE_PI_READ_PATH: "link-out/secret.txt",
+      });
+      const output = withPiWrapper(wrapper, () => {
+        expectCode(
+          ["task", "add", "Read through a link", "--agent", "analyst", "--project", "demo"],
+          [0],
+        );
+        return expectCode(["start", "--project", "demo"], [0]).out;
+      });
+      expect(
+        /^completed \S+ Read through a link$/m.test(output),
+        "the task that read through a link did not complete",
+      );
+      const taskId = statusReport().taskList.find(
+        (task) => task.goal === "Read through a link",
+      )?.taskId;
+      expect(taskId !== undefined, "no read-through-link task in status");
+      const shown = expectCode(["task", "show", taskId], [0]).out;
+      expect(/^permission denials: 1$/m.test(shown), "task show does not count 1 denial");
+      const metrics = expectJson(["metrics", "--json", "--project", "demo"]);
+      expect(metrics.permissionDenials === 4, `permissionDenials ${metrics.permissionDenials}`);
+      expect(!`${output}${shown}`.includes(E2E_LINK_SECRET), "the linked content was printed");
+      expect(
+        !anyFileContains([session.projectDir, join(session.root, "home")], E2E_LINK_SECRET),
+        "the linked content reached the store or the logs",
+      );
+      return "denial through a junction recorded";
     },
   ],
   [

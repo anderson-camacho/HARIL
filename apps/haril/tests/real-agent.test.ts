@@ -224,7 +224,7 @@ describe("haril start with an analyst task (M2-T6)", () => {
   );
 
   it(
-    "records each PathGuard denial as tool.denied, counts it in metrics and task show, and keeps the path and content out of the store",
+    "records each PathGuard denial as security.pathguard.denied, counts it in metrics and task show, and keeps the path and content out of the store",
     async () => {
       const outside = join(sb.root, "outside.txt");
       writeFileSync(outside, "secret outside", "utf8");
@@ -240,7 +240,9 @@ describe("haril start with an analyst task (M2-T6)", () => {
       const taskId = taskIdOf("Read outside the project");
       const db = ledgerDb();
       const denied = db
-        .prepare("SELECT payload FROM events WHERE type = 'tool.denied' AND task_id = ?")
+        .prepare(
+          "SELECT payload FROM events WHERE type = 'security.pathguard.denied' AND task_id = ?",
+        )
         .all(taskId) as Array<{ payload: string }>;
       db.close();
       expect(denied).toHaveLength(3);

@@ -370,7 +370,7 @@ function recordEvent(
 // Every other bridge operation keeps its tool.<op> record.
 function recordBridgeOperation(store: Store, spec: AgentSpec, event: BridgeOperationEvent): void {
   if (event.outcome === "path_denied") {
-    recordEvent(store, spec, "tool.denied", {
+    recordEvent(store, spec, "security.pathguard.denied", {
       tool: event.op,
       reason: event.reason ?? "unknown",
       pathHash: event.pathSha256,

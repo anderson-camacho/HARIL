@@ -142,7 +142,7 @@ export function seedStore(dataDir: string): SeedResult {
     store.events.append({
       aggregateType: "task",
       aggregateId: completedTaskId,
-      type: "tool.denied",
+      type: "security.pathguard.denied",
       actorKind: "agent",
       actorId: "fake-agent",
       payload: { tool: "write", path: "/etc/hosts" },

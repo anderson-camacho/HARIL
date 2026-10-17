@@ -141,7 +141,7 @@ function taskShow(args: readonly string[], io: CliIo, host: HostInfo): number {
     const usage = store.budgets.usageSummary({ taskId });
     const permissionDenials = store.events
       .list({ taskId })
-      .filter((event) => event.type === "tool.denied").length;
+      .filter((event) => event.type === "security.pathguard.denied").length;
     const view = {
       taskId: detail.taskId,
       goal: detail.goal,
