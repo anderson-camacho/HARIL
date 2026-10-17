@@ -1,10 +1,20 @@
+import { randomUUID } from "node:crypto";
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  canonicalJson,
+  canTransition,
+  checkAcceptance,
+  checkPlanSubmission,
+  checkTaskKind,
+} from "@haril/core";
 import { type FakeOpenAiServer, startFakeOpenAiServer } from "@haril/gateway/testing";
+import { openStore } from "@haril/state-sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { run } from "../src/cli.js";
+import { createRealAgents } from "../src/runtime/real-agent.js";
 import { harness, makeSandbox, parseJson, projectRoot, type Sandbox } from "./helpers.js";
 
 // M2-T6, end to end through the real Broker and the real Pi adapter. Pi itself is replaced by the test-only
@@ -98,7 +108,7 @@ interface TaskView {
   readonly state: string;
   readonly attempts?: { used: number; max: number };
   readonly result: { text?: string; model?: string } | null;
-  readonly error: { code: string } | null;
+  readonly error: { code: string; message?: string } | null;
   readonly tokens: { input: number; output: number; unreconciled: number } | null;
 }
 
@@ -512,4 +522,124 @@ describe("haril start with a planner task (LD-T4)", () => {
     },
     TEST_TIMEOUT_MS,
   );
+});
+
+// LD-T7a on the Pi lane: a granted plan gives its analyst the planner's model, but the plan's own budget decides the
+// token ceiling. A ceiling below 1 fails the attempt, and the refusal names only what is missing: the token ceiling.
+describe("haril start with a plan-created analyst (LD-T7a)", () => {
+  const clock = { now: () => Date.now(), schedule: () => () => undefined };
+
+  function openDemoStore() {
+    return openStore({
+      dataDir: sb.dataDir,
+      clock,
+      ids: { next: () => randomUUID() },
+      rules: {
+        canTransition,
+        checkPlan: checkPlanSubmission,
+        checkAcceptance,
+        checkTaskKind,
+        canonicalJson,
+      },
+    });
+  }
+
+  // The planner's proposal as the runtime records it: requested by its run, with the model of its task.
+  function proposeAnalystPlan(maxTokens: number): string {
+    const store = openDemoStore();
+    try {
+      const project = store.projects.getBySlug("demo");
+      if (project === undefined) throw new Error("project demo is missing");
+      const proposed = store.approvals.proposePlan({
+        projectId: project.projectId,
+        requestedBy: "run-planner",
+        model: "fake-model",
+        plan: {
+          schemaVersion: 1,
+          tasks: [
+            {
+              localId: "read",
+              dependsOn: [],
+              goal: "Summarize the README",
+              description: "",
+              priority: 5,
+              kind: "work",
+              agent: "analyst",
+              requires: [],
+              context: [],
+              surface: { write: [], read: ["README.md"] },
+              budget: { maxCostMicros: 0, maxTokens, maxWallMs: 60_000 },
+              timeoutMs: 60_000,
+              maxAttempts: 1,
+              acceptance: [],
+            },
+          ],
+        },
+      });
+      if (!proposed.ok) throw new Error(proposed.error.message);
+      return proposed.value.approval.approvalId;
+    } finally {
+      store.close();
+    }
+  }
+
+  it(
+    "fails an analyst whose plan gives it no token ceiling, and the refusal names the ceiling, not the model",
+    async () => {
+      const approvalId = proposeAnalystPlan(0);
+      const approve = harness();
+      expect(await run(["approve", approvalId], approve.io, { ...sb.host, user: "ana" })).toBe(0);
+
+      const result = await startRuntime(realHost("ok_via_broker"));
+
+      expect(result.code).toBe(1);
+      const view = taskView("Summarize the README");
+      expect(view.state).toBe("failed");
+      expect(view.error?.code).toBe("agent.invalid_spec");
+      expect(view.error?.message).toContain("token ceiling");
+      expect(view.error?.message).not.toContain("model");
+      expect(view.error?.message).not.toContain("project");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  // The run loop skips a real task without a model before its claim, so only the agent runtime sees the other cases.
+  it.each([
+    [
+      "a model only",
+      { model: "fake-model", maxTokens: 0 },
+      "a token ceiling (budget.maxTokens of at least 1)",
+    ],
+    ["a token ceiling only", { maxTokens: 20_000 }, "a model"],
+    ["neither", { maxTokens: 0 }, "a model and a token ceiling (budget.maxTokens of at least 1)"],
+  ])("refuses a spec with %s and names exactly what is missing", async (_name, parts, needs) => {
+    const store = openDemoStore();
+    const agents = createRealAgents({
+      host: realHost("ok_via_broker"),
+      store,
+      clock,
+      dataDir: sb.dataDir,
+    });
+    try {
+      const projectId = store.projects.getBySlug("demo")?.projectId;
+      const started = await agents.runtime.start({
+        runId: "run-1",
+        taskId: "task-1",
+        attempt: 1,
+        agentRef: "analyst",
+        allowedTools: ["read"],
+        prompt: "Summarize the README",
+        timeoutMs: 60_000,
+        ...(projectId === undefined ? {} : { projectId }),
+        ...parts,
+      });
+      expect(started).toEqual({
+        ok: false,
+        error: { code: "agent.invalid_spec", message: `a real agent needs ${needs}` },
+      });
+    } finally {
+      await agents.close();
+      store.close();
+    }
+  });
 });

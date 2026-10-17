@@ -423,7 +423,8 @@ describe("the model of an approved plan's tasks (LD-T7a)", () => {
         requires: [],
         context: [],
         surface: { write: [], read: ["README.md"] },
-        budget: { maxCostMicros: 0, maxTokens: 0, maxWallMs: 5_000 },
+        // The token ceiling the planner prompt asks for: a real agent refuses a ceiling below 1.
+        budget: { maxCostMicros: 0, maxTokens: 20_000, maxWallMs: 5_000 },
         timeoutMs: 5_000,
         maxAttempts: 1,
         acceptance: [],
@@ -486,7 +487,10 @@ describe("the model of an approved plan's tasks (LD-T7a)", () => {
       state: "completed",
       model: "e2e-model",
     });
-    expect(specs).toEqual([expect.objectContaining({ agentRef: "analyst", model: "e2e-model" })]);
+    // The spec the real runtime would be handed: a model and the token ceiling it requires (at least 1).
+    expect(specs).toEqual([
+      expect.objectContaining({ agentRef: "analyst", model: "e2e-model", maxTokens: 20_000 }),
+    ]);
     expect(events.some((event) => event.type === "task.skipped")).toBe(false);
   }, 20_000);
 
