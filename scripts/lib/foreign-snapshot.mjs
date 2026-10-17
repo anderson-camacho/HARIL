@@ -22,13 +22,19 @@ export function foreignRoots({
     { name: "~/.pi", path: join(homeDir, ".pi") },
     { name: "~/.engram", path: join(homeDir, ".engram") },
     // Live tools write their own state while they run, not as an install: Claude Code its backups/ (about once a
-    // minute) and its session transcripts under projects/; Codex its internal databases (sqlite/), its log database
-    // and its global state. Ignoring them keeps the guard about installs; config and binaries still count.
+    // minute) and its session transcripts under projects/; Codex its internal databases (sqlite/), its log database,
+    // its global state and its model catalog cache. Ignoring them keeps the guard about installs; config and binaries
+    // still count.
     { name: "~/.claude", path: join(homeDir, ".claude"), ignore: ["backups", "projects"] },
     {
       name: "~/.codex",
       path: join(homeDir, ".codex"),
-      ignore: ["sqlite", /^logs_\d+\.sqlite(-wal|-shm)?$/, /^\.codex-global-state\.json(\.bak)?$/],
+      ignore: [
+        "sqlite",
+        /^logs_\d+\.sqlite(-wal|-shm)?$/,
+        /^\.codex-global-state\.json(\.bak)?$/,
+        "models_cache.json",
+      ],
     },
     { name: "~/.npmrc", path: join(homeDir, ".npmrc") },
   ];

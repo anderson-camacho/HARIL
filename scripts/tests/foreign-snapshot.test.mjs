@@ -197,6 +197,7 @@ test("live tool state (transcripts, log databases, global state) is ignored, whi
     writeAt(join(codex, "logs_2.sqlite-wal"), "1");
     writeAt(join(codex, ".codex-global-state.json"), "1");
     writeAt(join(codex, "sqlite", "codex-dev.db"), "1");
+    writeAt(join(codex, "models_cache.json"), "{}");
     const roots = foreignRoots({ homeDir: dir, env: {}, platform: "linux" })
       .filter((root) => root.name === "~/.claude" || root.name === "~/.codex")
       .map((root) => ({ ...root, path: root.name === "~/.claude" ? claude : codex }));
@@ -207,6 +208,7 @@ test("live tool state (transcripts, log databases, global state) is ignored, whi
     writeAt(join(codex, "logs_2.sqlite-shm"), "1");
     writeAt(join(codex, ".codex-global-state.json.bak"), "1");
     writeAt(join(codex, "sqlite", "codex-dev.db-wal"), "1");
+    writeAt(join(codex, "models_cache.json"), "{\"refreshed\":true}");
     assert.deepEqual(
       diffForeignSnapshots(before, snapshotForeignInstalls({ roots, readUserPath: noPath })),
       { added: [], removed: [], changed: [] },
