@@ -204,6 +204,13 @@ test("live tool state (transcripts, log databases, global state) is ignored, whi
     const before = snapshotForeignInstalls({ roots, readUserPath: noPath });
 
     writeAt(join(claude, "projects", "repo", "session.jsonl"), "12");
+    writeAt(join(claude, "file-history", "session-1", "edit.json"), "1");
+    writeAt(join(claude, "sessions", "one.json"), "1");
+    writeAt(join(claude, "session-env", "one", "env"), "1");
+    writeAt(join(claude, "shell-snapshots", "snapshot.sh"), "1");
+    writeAt(join(claude, "state", "one.json"), "1");
+    writeAt(join(claude, "cache", "one.json"), "1");
+    writeAt(join(claude, "history.jsonl"), "1");
     writeAt(join(codex, "logs_2.sqlite-wal"), "12");
     writeAt(join(codex, "logs_2.sqlite-shm"), "1");
     writeAt(join(codex, ".codex-global-state.json.bak"), "1");
