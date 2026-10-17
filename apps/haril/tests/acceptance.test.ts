@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { run } from "../src/cli.js";
@@ -188,6 +188,28 @@ describe("host verification at run time", () => {
     expect(await cli(["start", "--project", "demo"])).toBe(1);
     const view = showJson("Escape");
     expect(view.verification?.checks[0]?.detail).toBe("outside_root");
+    expect(view.state).toBe("failed");
+  });
+
+  it("fails a check that reads through a junction inside the project (links are refused)", async () => {
+    const outsideDir = join(sb.root, "outside-dir");
+    mkdirSync(outsideDir, { recursive: true });
+    writeFileSync(join(outsideDir, "secret.txt"), "secret outside", "utf8");
+    symlinkSync(outsideDir, join(root, "jout"), "junction");
+    await cli([
+      "task",
+      "add",
+      "Through link",
+      "--agent",
+      "fake:succeed",
+      "--project",
+      "demo",
+      "--accept-file",
+      "jout/secret.txt",
+    ]);
+    expect(await cli(["start", "--project", "demo"])).toBe(1);
+    const view = showJson("Through link");
+    expect(view.verification?.checks[0]?.detail).toBe("link");
     expect(view.state).toBe("failed");
   });
 });
