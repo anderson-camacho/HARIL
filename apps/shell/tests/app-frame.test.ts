@@ -158,14 +158,14 @@ describe("the frame at 120x40 (LD-T6b-1)", () => {
     expect(screen).toContain("haril-crimson");
     // The right column takes the last 30 columns, right under the top bar.
     expect(lines[1]?.slice(90)).toMatch(/^┌─ Status ─+┐$/);
-    for (const title of ["Runtime", "Approvals", "Taxis", "Tokens"]) {
+    for (const title of ["Runtime", "Approvals", "Tokens"]) {
       expect(screen).toMatch(new RegExp(`┌─ ${title} ─+┐`));
     }
+    expect(screen).not.toContain("Taxis");
     expect(screen).toContain("/work/solo");
     expect(screen).toMatch(/branch +main/);
     expect(screen).toContain("3 changed");
     expect(screen).toContain("none pending");
-    expect(screen).toContain("0 busy · 1 free");
     expect(screen).toContain("not connected (M4)");
     // MC-T4: the memory row shows the provider and its health, as haril memory status does.
     expect(screen).toMatch(/memory +null · not checked/);
@@ -187,7 +187,7 @@ describe("the frame at 120x40 (LD-T6b-1)", () => {
     await quit(mounted);
   });
 
-  it("with work: Live is the default view, the context bar shows and one taxi is busy", async () => {
+  it("with work: Live is the default view and the context bar shows", async () => {
     seedStore(dataDir);
     const mounted = mount(WIDE);
     const lines = await started(mounted);
@@ -197,7 +197,6 @@ describe("the frame at 120x40 (LD-T6b-1)", () => {
     expect(screen).not.toContain(TAGLINE);
     // The running task has settled nothing yet against its 1000 tokens.
     expect(lines[0]).toMatch(/ctx ▱{8} 0% ◇ tok 40\/12 ◇ runtime running$/);
-    expect(screen).toContain("1 busy · 0 free");
     expect(screen).toContain(`pid ${process.pid}`);
     expect(screen).toContain("in 40 · out 12");
     // Two projects and no filter: the Status box names no single root.

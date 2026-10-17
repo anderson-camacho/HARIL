@@ -136,8 +136,6 @@ const PANEL_KEYS = ["up", "down", "pageUp", "pageDown", "tab", "shift+tab"] as c
 const PICK_PROJECT = "several projects: pick one on Projects first (Esc, 1, ↓ and Enter, then i)";
 const COMMON_KEYS = ["g goal", "a add", "p plans", "l live", "t themes", "r reload", "Tab panels"];
 const HOME_KEYS = ["1-9 panels", ...COMMON_KEYS.filter((key) => key !== "Tab panels")];
-// Tasks the runtime runs at once (the run loop's concurrency, apps/haril/src/runtime/run-loop.ts): the Taxis box.
-const RUNTIME_SLOTS = 1;
 // While the runtime works it wakes the shell as often as every 250 ms; a reload from a wake reads git at most this
 // often. Opening, r, a filter change and an action always read it.
 const GIT_WAKE_INTERVAL_MS = 5_000;
@@ -347,10 +345,6 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
       runtimeText: visibleText(runtimeText()),
       isolation: visibleText(banner.isolation),
       approvals: snapshot.pendingApprovals,
-      taxis: {
-        busy: snapshot.tasks.filter((task) => task.state === "running").length,
-        slots: RUNTIME_SLOTS,
-      },
       projects: snapshot.projects.map((project) => visibleText(project.slug)),
       tasks: visibleText(taskSummary(tasks)),
       agents: [...new Set(tasks.map((task) => visibleText(task.agentRef)))],

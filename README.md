@@ -205,7 +205,7 @@ HARIL lee sus proveedores de `HARIL_CONFIG` o, si no está definida, de `config\
 |---|---|
 | Barra superior | Proyecto, modelo, contexto de la tarea en curso (`ctx`), tokens y estado del runtime |
 | Centro | Las pestañas y el panel activo. En reposo (nada en marcha ni planes por aprobar), el banner HARIL con los datos principales; con trabajo, En vivo |
-| Columna derecha (100 columnas o más) | Cajas de estado: proyecto, rama y cambios de git, runtime, aprobaciones, taxis y tokens |
+| Columna derecha (100 columnas o más) | Cajas de estado: proyecto, rama y cambios de git, runtime, aprobaciones y tokens |
 | Abajo | La caja de entrada, siempre visible: el modo en su borde superior (`Input` o `Keys`), lo escrito en medio y las teclas de lo que está abierto en el borde inferior. Debajo, la línea de estado: modelo, runtime con su pid, tokens y el modo (`input · Ctrl+C quit` o `keys · ? help · q quit`) |
 
 Funciona desde 80x24: por debajo de 100 columnas se oculta la columna derecha, las aprobaciones pendientes pasan a la barra superior y la rama con sus cambios a la línea de estado. Git se lee al abrir, con `r`, al cambiar el filtro y después de cada acción; cuando el runtime avisa de un cambio, como mucho una vez cada 5 s; nunca con un temporizador. La interfaz solo lee git en las raíces de proyecto que registraste, con la misma confianza que tu editor da a ese repositorio: la configuración de un repositorio puede hacer que git ejecute programas (por ejemplo un filtro `clean`), y los agentes de HARIL no pueden escribir en `.git`.

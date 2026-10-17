@@ -17,7 +17,6 @@ function facts(memory: FrameFacts["memory"]): FrameFacts {
     runtimeText: "running (pid 42) · live",
     isolation: "N0",
     approvals: 0,
-    taxis: { busy: 0, slots: 1 },
     projects: ["demo"],
     tasks: "none yet",
     agents: [],
