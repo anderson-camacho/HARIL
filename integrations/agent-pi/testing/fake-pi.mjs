@@ -17,7 +17,7 @@
 // LD-T7b scenario: propose_analyst_plan, one wrapper for both runs of the live demo. A planner run (one offered
 // haril_propose_plan) proposes a plan of analyst tasks with the token ceiling the planner prompt asks for; any other
 // run answers through the Broker, as ok_via_broker does, and adds the first line of the first dependency result its
-// prompt carries (MC-T1).
+// prompt carries (MC-T1) and the text of the first output_contains check a rejected attempt failed (MC-T2).
 // Test-only: the real Pi is never replaced outside HARIL_PI_CLI_OVERRIDE.
 
 import { connect } from "node:net";
@@ -178,6 +178,24 @@ function dependencyEcho(prompt) {
   return ` | dependency result: ${(lines[start + 3] ?? "").replace(/^\| /, "")}`;
 }
 
+// What an analyst of the demo did with a rejected attempt (MC-T2): " | retry: <text>" with the text of the first failed
+// output_contains check its prompt names ('- output_contains: the result text contains "<text>" (...)', the text quoted
+// as JSON), or "" when the prompt has no rejected attempt. It lets the e2e prove that a retry learned why the previous
+// attempt failed and passed because of it.
+const REJECTED_LABEL = "An earlier attempt (attempt ";
+const FAILED_OUTPUT_CHECK = /^- output_contains: the result text contains ("(?:[^"\\]|\\.)*")/;
+
+function retryEcho(prompt) {
+  const lines = prompt.split("\n");
+  const start = lines.findIndex((line) => line.startsWith(REJECTED_LABEL));
+  if (start === -1) return "";
+  for (const line of lines.slice(start + 1)) {
+    const check = FAILED_OUTPUT_CHECK.exec(line);
+    if (check !== null) return ` | retry: ${JSON.parse(check[1])}`;
+  }
+  return "";
+}
+
 // One streamed OpenAI-style call through the Broker. Refusals (402 insufficient_quota, 401, 502) end the
 // assistant message with stopReason "error", the way Pi reports a failed model call. A suffix, when given, is streamed
 // after the upstream's reply, as if the model had added it.
@@ -262,7 +280,7 @@ async function runPrompt() {
     return;
   }
   if (scenario === "propose_analyst_plan" && !planning) {
-    await brokerChat(promptText, dependencyEcho(promptText));
+    await brokerChat(promptText, dependencyEcho(promptText) + retryEcho(promptText));
     return;
   }
   // Pi retries a failed model call: the first assistant message ends with an error, the retry succeeds.

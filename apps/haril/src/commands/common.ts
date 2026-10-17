@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { nudgeRuntime } from "@haril/control";
 import { canonicalJson, visibleText } from "@haril/core";
-import type { ProjectRecord, Store } from "@haril/core/ports";
+import type { FailureReason, ProjectRecord, Store } from "@haril/core/ports";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
 import { resolveDataDir } from "../data-dir.js";
 import { storeAccess } from "../host.js";
@@ -23,6 +23,13 @@ export function requestHash(value: unknown): string {
 // words from the person who reads it. Single-line text goes through visibleText itself; JSON output never does.
 export function visibleBlock(text: string): string {
   return text.split(/\r?\n/).map(visibleText).join("\n");
+}
+
+// Why a task failed for good, as `run`, `start` and `task show` print it (MC-T2 fix): its verification retries ran out
+// (with how many it used), or its infra restarts did.
+export function failureReasonText(reason: FailureReason, verifyRetries: number): string {
+  if (reason !== "verification_exhausted") return reason;
+  return `${reason} (${verifyRetries} verification ${verifyRetries === 1 ? "retry" : "retries"} used)`;
 }
 
 export function dataDirFor(host: HostInfo, flag: string | undefined): string {

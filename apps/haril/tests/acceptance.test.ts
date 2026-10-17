@@ -1,5 +1,7 @@
 import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { AgentRuntime } from "@haril/core/ports";
+import { FakeAgentRuntime, FakeClock } from "@haril/core/testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { run } from "../src/cli.js";
 import {
@@ -155,6 +157,133 @@ describe("host verification at run time", () => {
     const metrics = harness();
     run(["metrics", "--json", "--project", "demo"], metrics.io, sb.host);
     expect(parseJson<{ retries: number }>(metrics.out).retries).toBe(1);
+  });
+
+  // MC-T2: the output a check rejected is kept, and task show prints it as the terminal draws it; JSON keeps it as stored.
+  it("keeps the rejected output of the last attempt and shows it in task show", async () => {
+    const reply = "Hello\x1b]52;c;ZmFrZQ\x07 there\u{202E}txt\u{E0041}\nsecond line";
+    await cli([
+      "task",
+      "add",
+      "Rejected",
+      "--agent",
+      `fake:say:${reply}`,
+      "--project",
+      "demo",
+      "--accept-output",
+      "goodbye",
+      "--max-attempts",
+      "2",
+    ]);
+    expect(await cli(["run", "--project", "demo"])).toBe(1);
+    const shown = harness();
+    run(["task", "show", taskIdOf("Rejected"), "--json"], shown.io, sb.host);
+    const view = parseJson<{
+      state: string;
+      result: unknown;
+      error: { code: string; output?: { summary?: string } } | null;
+    }>(shown.out);
+    expect(view.state).toBe("failed");
+    expect(view.result).toBeNull();
+    expect(view.error?.code).toBe("verification_failed");
+    expect(view.error?.output).toEqual({ summary: reply });
+
+    expect(await cli(["task", "show", taskIdOf("Rejected")])).toBe(0);
+    const text = h.out.join("\n");
+    expect(text).toContain("  failed output_contains: output does not contain text");
+    expect(text).toContain("rejected output: Hello?]52;c;ZmFrZQ? there?txt?\nsecond line");
+    for (const hidden of ["\x1b", "\x07", "\u{202E}", "\u{E0041}"]) {
+      expect(text).not.toContain(hidden);
+    }
+
+    const events = harness();
+    run(["events", "--project", "demo", "--json"], events.io, sb.host);
+    expect(events.out.join("\n")).toContain('"retryReason":"verify_failed"');
+  });
+
+  // MC-T2 fix (executor.md DR-05): a task whose verification retries ran out says so in the run line and in task show.
+  it("says verification_exhausted in the run output and in task show", async () => {
+    await cli([
+      "task",
+      "add",
+      "Exhausted",
+      "--agent",
+      "fake:say:hello",
+      "--project",
+      "demo",
+      "--accept-output",
+      "goodbye",
+      "--max-attempts",
+      "3",
+    ]);
+    expect(await cli(["run", "--project", "demo"])).toBe(1);
+    const id = taskIdOf("Exhausted");
+    expect(h.out).toContain(
+      `failed ${id} Exhausted: verification_failed, verification_exhausted (2 verification retries used)`,
+    );
+    expect(await cli(["task", "show", id])).toBe(0);
+    expect(h.out).toContain("failed: verification_exhausted (2 verification retries used)");
+    const shown = harness();
+    run(["task", "show", id, "--json"], shown.io, sb.host);
+    expect(parseJson(shown.out)).toMatchObject({
+      state: "failed",
+      failureReason: "verification_exhausted",
+      verifyRetries: 2,
+      error: { code: "verification_failed" },
+      earlierFailure: null,
+    });
+  });
+
+  // MC-T2 fix, from the real demo: once a retry completes the task, the rejection of an earlier attempt is history, not
+  // the task's error.
+  it("shows the rejection of an earlier attempt of a completed task as history, not as its error", async () => {
+    await cli([
+      "task",
+      "add",
+      "Second try",
+      "--agent",
+      "fake:say:goodbye",
+      "--project",
+      "demo",
+      "--accept-output",
+      "goodbye",
+      "--max-attempts",
+      "2",
+    ]);
+    const fake = new FakeAgentRuntime({ clock: new FakeClock() });
+    let starts = 0;
+    const firstSaysHello: AgentRuntime = {
+      start: (spec) =>
+        fake.start(starts++ === 0 ? { ...spec, agentRef: "fake:say:hello first" } : spec),
+    };
+    h = harness();
+    expect(
+      await run(["run", "--project", "demo"], h.io, { ...sb.host, agentRuntime: firstSaysHello }),
+    ).toBe(0);
+    const id = taskIdOf("Second try");
+    const shown = harness();
+    run(["task", "show", id, "--json"], shown.io, sb.host);
+    expect(parseJson(shown.out)).toMatchObject({
+      state: "completed",
+      result: { summary: "goodbye" },
+      error: null,
+      failureReason: null,
+      verification: { verified: true },
+      earlierFailure: {
+        attempt: 1,
+        code: "verification_failed",
+        output: { summary: "hello first" },
+      },
+    });
+
+    expect(await cli(["task", "show", id])).toBe(0);
+    const text = h.out.join("\n");
+    expect(text).toContain(
+      "earlier attempt 1 failed: verification_failed: verification failed: output_contains (output does not contain text)",
+    );
+    expect(text).toMatch(/^verification: verified$/m);
+    expect(text).not.toMatch(/^error: /m);
+    expect(text).not.toContain("rejected output:");
   });
 
   it("counts a task without checks as completed but unverified", async () => {

@@ -5,7 +5,8 @@
 // HARIL_CONFIG and a project); no HARIL_* variable of the parent reaches it. The simulated lane plans with fake:plan.
 // The real lane plans and works with the planner and analyst agents through the fake Pi
 // (integrations/agent-pi/testing/fake-pi.mjs) and a fake OpenAI-compatible upstream on loopback, so nothing leaves the
-// machine and no real model or key is used. Each step prints PASS or FAIL; the first failure prints the runtime log
+// machine and no real model or key is used. A task of the real lane fails its acceptance check once and passes on the
+// retry that is told why (MC-T2). Each step prints PASS or FAIL; the first failure prints the runtime log
 // tail and the status, and exits 1. Temporary directories are removed, and the metadata of other tools' installs must
 // not change across the run (AR-G7).
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -40,6 +41,9 @@ const PROJECT = "demo";
 const SIMULATED_GOAL = "Survey the demo project";
 const REAL_GOAL = "Summarize the demo project for a new reader";
 const DENIED_GOAL = "Rewrite the demo project from scratch";
+const RETRY_GOAL = "Name the guide file of the demo project";
+// The text the retried task's acceptance asks for: only an attempt told about the failed check returns it (MC-T2).
+const RETRY_MARKER = "GUIDE.md";
 const DEMO_MODEL = "e2e-model";
 const PROVIDER_ID = "e2e";
 // The fake upstream's bearer value: a fixture that only the loopback upstream checks, never a real key.
@@ -379,6 +383,64 @@ const steps = [
       const skipped = runtimeLogLines().filter((line) => line.startsWith("skipped "));
       expect(skipped.length === 0, `skipped: ${redact(skipped.join(" | "))}`);
       return "no skipped line in the runtime log";
+    },
+  ],
+  [
+    "real lane: a task that fails its check retries with the reason and passes",
+    async () => {
+      expectCode(
+        [
+          "task",
+          "add",
+          RETRY_GOAL,
+          "--agent",
+          "analyst",
+          "--model",
+          DEMO_MODEL,
+          "--accept-output",
+          RETRY_MARKER,
+          "--max-attempts",
+          "2",
+          "--project",
+          PROJECT,
+        ],
+        [0],
+      );
+      const task = await waitFor(
+        () => {
+          const current = statusReport().taskList.find((row) => row.goal === RETRY_GOAL);
+          failIfSettledWithoutSuccess(current === undefined ? [] : [current]);
+          return current?.state === "completed" ? current : undefined;
+        },
+        DONE_TIMEOUT_MS,
+        "the retried task to complete",
+      );
+      const view = taskView(task.taskId);
+      // MC-T2: attempt 1 answers without the marker and is rejected; the fake Pi reads the failed check in the prompt
+      // of attempt 2 and adds the text it asks for.
+      expect(view.attempts.used === 2, `attempts ${JSON.stringify(view.attempts)}`);
+      const reply = view.result?.text;
+      expect(
+        reply === `${FAKE_UPSTREAM_REPLY} | retry: ${RETRY_MARKER}`,
+        `result ${JSON.stringify(reply)}`,
+      );
+      expect(view.verification?.verified === true, "the retry is not verified");
+      // The task completed, so the rejection of attempt 1 is history, not its error (MC-T2 fix).
+      expect(view.error === null, `error ${JSON.stringify(view.error)}`);
+      const earlier = view.earlierFailure;
+      expect(earlier?.code === "verification_failed", `earlier failure ${earlier?.code}`);
+      expect(earlier?.attempt === 1, `earlier failure attempt ${earlier?.attempt}`);
+      expect(
+        earlier?.output?.text === FAKE_UPSTREAM_REPLY,
+        `rejected output ${JSON.stringify(earlier?.output)}`,
+      );
+      const text = expectCode(["task", "show", task.taskId], [0]).out;
+      expect(
+        text.includes("earlier attempt 1 failed: verification_failed"),
+        "task show does not show the earlier rejection as history",
+      );
+      expect(!/^error: /m.test(text), "task show prints an error for a completed task");
+      return "attempt 1 rejected and kept as history; attempt 2 named the failed check and passed";
     },
   ],
   [

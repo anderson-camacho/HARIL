@@ -5,12 +5,12 @@ import {
   completionFor,
   DEPENDENCY_GOAL_MAX_CHARS,
   DEPENDENCY_RESULT_MAX_CHARS,
-  DEPENDENCY_RESULTS_MAX_BYTES,
-  dependencyResultsBudget,
   M1_ALLOWED_TOOLS,
   PLAN_ALLOWED_TOOLS,
+  PROMPT_DATA_MAX_BYTES,
   PROPOSE_PLAN_TOOL,
   planAttemptOutcome,
+  promptDataBudget,
   REAL_AGENT_REFS,
 } from "../src/executor/index.js";
 
@@ -202,13 +202,14 @@ describe("buildAgentSpec: the results of the dependencies (MC-T1)", () => {
   it("states the caps: 8000 characters a result, 200 a goal, and a section budget from the task's tokens", () => {
     expect(DEPENDENCY_RESULT_MAX_CHARS).toBe(8000);
     expect(DEPENDENCY_GOAL_MAX_CHARS).toBe(200);
-    expect(DEPENDENCY_RESULTS_MAX_BYTES).toBe(24000);
-    // 3 bytes per estimated token, an eighth of the task's tokens per call; 24000 bytes without a token ceiling.
-    expect(dependencyResultsBudget(20_000)).toBe(7500);
-    expect(dependencyResultsBudget(800)).toBe(300);
-    expect(dependencyResultsBudget(1_000_000)).toBe(24000);
-    expect(dependencyResultsBudget(undefined)).toBe(24000);
-    expect(dependencyResultsBudget(0)).toBe(24000);
+    expect(PROMPT_DATA_MAX_BYTES).toBe(24000);
+    // 3 bytes per estimated token, an eighth of the task's tokens per call; 24000 bytes without a token ceiling. Without
+    // a rejected attempt (MC-T2), the dependency results have the whole budget.
+    expect(promptDataBudget(20_000)).toBe(7500);
+    expect(promptDataBudget(800)).toBe(300);
+    expect(promptDataBudget(1_000_000)).toBe(24000);
+    expect(promptDataBudget(undefined)).toBe(24000);
+    expect(promptDataBudget(0)).toBe(24000);
   });
 
   it("adds the results after the files to read and before the instructions, in the order of the claim", () => {

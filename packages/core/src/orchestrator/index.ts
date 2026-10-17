@@ -46,6 +46,9 @@ export type RunEvent =
       readonly taskId: string;
       readonly goal: string;
       readonly code: string;
+      // Set when the task's verification retries ran out (MC-T2 fix; executor.md DR-05), with how many were used.
+      readonly reason?: "verification_exhausted";
+      readonly verifyRetries?: number;
     }
   | {
       readonly type: "task.blocked";
