@@ -83,13 +83,17 @@ const PLANNER_INSTRUCTIONS: readonly string[] = [
 ];
 
 // A plan attempt succeeds only by proposing (LD-T4): a success whose run recorded no proposal is a plan.not_proposed
-// failure, retried like any other failure. Every other kind and every other outcome passes through.
+// failure, retried like any other failure. When the host refused every proposal of the run, the failure is plan.refused
+// with the last refusal, so the reason is kept. Every other kind and every other outcome passes through.
 export function planAttemptOutcome(
   kind: TaskKind | undefined,
   outcome: AgentOutcome,
   proposed: boolean,
+  lastRefusal?: string,
 ): AgentOutcome {
   if (kind !== "plan" || outcome.status !== "succeeded" || proposed) return outcome;
+  if (lastRefusal !== undefined)
+    return { status: "failed", code: "plan.refused", message: lastRefusal };
   return {
     status: "failed",
     code: "plan.not_proposed",

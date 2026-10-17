@@ -27,9 +27,9 @@ import type {
 import { StoreError } from "@haril/state-sqlite";
 import { modelProblemOf } from "../providers.js";
 import { projectFileReader, verificationPayload } from "./acceptance.js";
-import { applyDecidedApprovals } from "./approvals.js";
+import { applyDecidedApprovals, denyPlansOfFailedTask } from "./approvals.js";
 import { controlEventOf } from "./control-events.js";
-import type { PlanProposals } from "./plan-proposals.js";
+import type { PlanAttemptReport, PlanProposals } from "./plan-proposals.js";
 import type { RealAgentReadiness, RealAgents } from "./real-agent.js";
 import { createShutdown, RUNTIME_STOP, type Shutdown } from "./shutdown.js";
 
@@ -120,6 +120,9 @@ export async function runUntilIdle(options: RunLoopOptions): Promise<RunLoopResu
     // M1-T7: attempts orphaned by a previous runtime go back to the queue before anything is claimed.
     for (const recovered of store.runtime.reconcile(epoch, MAX_INFRA_RESTARTS)) {
       emit(recoveryEvent(recovered));
+      if (recovered.outcome === "failed") {
+        denyPlansOfFailedTask(store, recovered.taskId, "infra_restarts_exhausted");
+      }
     }
     // serve() releases the lease itself, cleanly, on idle and on a stop.
     const beat = leaseHeartbeat(store, options.clock, epoch, ttlMs);
@@ -266,6 +269,9 @@ async function runClaimed(
     });
   } else {
     emit({ type: "task.failed", taskId: result.taskId, goal: result.goal, code });
+    // LD-T4: a plan task that failed for good leaves no plan to approve. Between retries the plan stays requested, since
+    // the next attempt proposes it again and finds the same approval.
+    denyPlansOfFailedTask(store, result.taskId, code);
   }
 }
 
@@ -386,14 +392,14 @@ async function executePlannedAttempt(
     { projectId: task.projectId, taskId: task.taskId, runId: task.runId },
     (proposal) => emit({ type: "approval.requested", ...proposal }),
   );
-  let proposed = false;
+  let report: PlanAttemptReport = { proposed: false };
   let outcome: AgentOutcome;
   try {
     outcome = await executeAttempt(options, shutdown, lease, emit, task);
   } finally {
-    proposed = close?.() ?? false;
+    report = close?.() ?? report;
   }
-  return planAttemptOutcome(task.kind, outcome, proposed);
+  return planAttemptOutcome(task.kind, outcome, report.proposed, report.lastRefusal);
 }
 
 // While an attempt runs, the lease is renewed and the queue is checked each poll, so a long attempt keeps its lease and

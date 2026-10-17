@@ -174,9 +174,11 @@ function formatEvent(event: RunEvent): string {
       return event.alreadySubmitted
         ? `approval ${event.approvalId} ${event.outcome}: applied (plan already submitted, nothing new queued)`
         : `approval ${event.approvalId} ${event.outcome}: applied`;
+    // Only what is true (LD-T4): a grant may queue nothing (the plan was already submitted), and a deduplicated proposal
+    // names the approval it found, not a requester it never was.
     case "approval.requested":
       return event.created
-        ? `approval ${event.approvalId} requested by ${event.taskId}: haril approve ${event.approvalId} runs its plan`
-        : `approval ${event.approvalId} requested by ${event.taskId}: the same plan already waits (haril approve ${event.approvalId})`;
+        ? `approval ${event.approvalId} requested by task ${event.taskId}: decide with haril approve|deny ${event.approvalId}`
+        : `the same plan already waits as approval ${event.approvalId}: decide with haril approve|deny ${event.approvalId}`;
   }
 }

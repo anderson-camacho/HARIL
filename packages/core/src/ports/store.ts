@@ -97,6 +97,9 @@ export interface ApprovalRecord {
 export interface ApprovalFilter {
   readonly projectId?: string;
   readonly status?: ApprovalStatus;
+  // Only the approvals a run of this task proposed (requestedBy is one of its run ids, LD-T4). An approval the task's
+  // proposal only deduplicated against was requested by another run and is left out.
+  readonly requestedByTask?: string;
 }
 
 export interface ProposePlanInput {

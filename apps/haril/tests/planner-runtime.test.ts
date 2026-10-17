@@ -9,7 +9,7 @@ import {
   type RunEvent,
 } from "@haril/core";
 import type { Clock, PlanProposer, Store } from "@haril/core/ports";
-import { FakeAgentRuntime } from "@haril/core/testing";
+import { FakeAgentRuntime, fakePlanFor } from "@haril/core/testing";
 import { openStore } from "@haril/state-sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { run } from "../src/cli.js";
@@ -42,6 +42,10 @@ afterEach(() => {
 });
 
 function open(): Store {
+  return openWith(() => true);
+}
+
+function openWith(isPidAlive: (pid: number) => boolean): Store {
   const store = openStore({
     dataDir: sb.dataDir,
     clock,
@@ -53,7 +57,7 @@ function open(): Store {
       checkTaskKind,
       canonicalJson,
     },
-    isPidAlive: () => true,
+    isPidAlive,
   });
   stores.push(store);
   return store;
@@ -63,18 +67,27 @@ function projectOf(store: Store): string {
   return store.projects.register({ slug: "demo", name: "Demo", rootPath: sb.root }).projectId;
 }
 
-// Queues and applies nothing: the loop applies the task.create on its first turn.
-function addPlanTask(store: Store, projectId: string, maxAttempts = 1): void {
+// Queues and applies nothing: the loop applies the task.create on its first turn. An unmet acceptance check fails every
+// attempt after its proposal: the host verifies a plan attempt only once it has proposed.
+function addPlanTask(
+  store: Store,
+  projectId: string,
+  maxAttempts = 1,
+  setup: { readonly goal?: string; readonly failsAcceptance?: boolean } = {},
+): void {
   store.commands.enqueue({
     type: "task.create",
     projectId,
     args: {
-      goal: "Document the CLI",
+      goal: setup.goal ?? "Document the CLI",
       dependsOn: [],
       kind: "plan",
       agent: "fake:plan",
       maxAttempts,
       timeoutMs: 5_000,
+      ...(setup.failsAcceptance === true
+        ? { acceptance: [{ kind: "output_contains", text: "nunca-aparece" }] }
+        : {}),
     },
     idempotencyKey: `plan-${++keySeq}`,
     requestHash: `plan-${keySeq}`,
@@ -264,6 +277,125 @@ describe("the planner in the runtime (LD-T4)", () => {
     expect(store.tasks.get(task.taskId)?.error).toMatchObject({ code: "plan.refused" });
     expect(store.approvals.list()).toEqual([]);
   });
+
+  it("fails a plan attempt whose every proposal was refused with the last refusal, not plan.not_proposed", async () => {
+    const store = open();
+    addPlanTask(store, projectOf(store));
+    const proposals = createPlanProposals(store);
+    const events: RunEvent[] = [];
+
+    // A real planner that sends a wrong plan, hears the refusal, and then ends its turn without fixing it.
+    await loop(store, events, {
+      proposals,
+      proposePlan: (context) => {
+        proposals.propose(context, { schemaVersion: 2, tasks: [] });
+        return { ok: true, approvalId: "never-recorded", created: true };
+      },
+    });
+
+    const task = onlyTask(store);
+    expect(store.tasks.get(task.taskId)?.error).toEqual({
+      code: "plan.refused",
+      message: expect.stringContaining("invalid plan"),
+    });
+    expect(store.approvals.list()).toEqual([]);
+  });
+
+  it("denies the plan a failed plan task left requested, after its last attempt only", async () => {
+    const store = open();
+    addPlanTask(store, projectOf(store), 2, { failsAcceptance: true });
+    const proposals = createPlanProposals(store);
+    const events: RunEvent[] = [];
+
+    const result = await loop(store, events, { proposals, proposePlan: proposals.propose });
+
+    const task = onlyTask(store);
+    expect(task.state).toBe("failed");
+    if (result.kind === "idle") expect(result.summary.failed).toEqual([task.taskId]);
+    // The retry proposed the same plan and found it still requested: no denial between attempts.
+    const requested = events.filter((event) => event.type === "approval.requested");
+    expect(requested.map((event) => event.type === "approval.requested" && event.created)).toEqual([
+      true,
+      false,
+    ]);
+    const [approval] = store.approvals.list();
+    expect(approval).toMatchObject({
+      status: "denied",
+      decidedBy: "runtime",
+      reason: expect.stringContaining(`plan task ${task.taskId} failed`),
+    });
+    expect(approval?.appliedAt).not.toBeNull();
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: "approval.applied", outcome: "denied" }),
+    );
+    expect(store.commands.listQueued()).toEqual([]);
+  });
+
+  it("leaves alone a plan that a failed task only deduplicated against", async () => {
+    const store = open();
+    const projectId = projectOf(store);
+    addPlanTask(store, projectId);
+    addPlanTask(store, projectId, 1, { failsAcceptance: true });
+    const proposals = createPlanProposals(store);
+    const events: RunEvent[] = [];
+
+    await loop(store, events, { proposals, proposePlan: proposals.propose });
+
+    const states = store.tasks.list().map((task) => task.state);
+    expect(states.sort()).toEqual(["completed", "failed"]);
+    // The second task proposed the same plan; the approval belongs to the run of the first one.
+    expect(store.approvals.list()).toEqual([expect.objectContaining({ status: "requested" })]);
+  });
+
+  it("denies the plan of a plan task that recovery fails as infra_restarts_exhausted", async () => {
+    // Only this process is alive: every earlier runtime is a dead pid whose lease the next one takes over.
+    const alive = (pid: number) => pid === process.pid;
+    // Four runtimes die while the plan task runs; the first one recorded its proposal before dying.
+    let taskId = "";
+    for (let generation = 1; generation <= 4; generation++) {
+      const store = openWith(alive);
+      if (generation === 1) addPlanTask(store, projectOf(store));
+      const grant = store.runtime.acquire({
+        pid: 900 + generation,
+        nodeVersion: process.version,
+        sqliteVersion: store.info().sqliteVersion,
+        ttlMs: 60_000,
+      });
+      if (!grant.ok) throw new Error("takeover refused");
+      store.runtime.reconcile(grant.value.epoch, 3);
+      store.commands.applyNext(grant.value.epoch);
+      const claimed = store.tasks.claimNext(grant.value.epoch);
+      if (claimed === undefined) throw new Error("the plan task was not claimed");
+      taskId = claimed.taskId;
+      if (generation === 1) {
+        const proposed = store.approvals.proposePlan({
+          projectId: claimed.projectId,
+          plan: fakePlanFor(claimed.goal),
+          requestedBy: claimed.runId,
+        });
+        expect(proposed.ok).toBe(true);
+      }
+      // The runtime dies without releasing its lease; afterEach must not close this store again.
+      stores.splice(stores.indexOf(store), 1);
+      store.close();
+    }
+
+    const store = openWith(alive);
+    const proposals = createPlanProposals(store);
+    const events: RunEvent[] = [];
+    await loop(store, events, { proposals, proposePlan: proposals.propose });
+
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: "task.failed", taskId, code: "infra_restarts_exhausted" }),
+    );
+    expect(store.approvals.list()).toEqual([
+      expect.objectContaining({
+        status: "denied",
+        decidedBy: "runtime",
+        reason: `plan task ${taskId} failed: infra_restarts_exhausted`,
+      }),
+    ]);
+  });
 });
 
 describe("createPlanProposals (LD-T4)", () => {
@@ -316,7 +448,7 @@ describe("createPlanProposals (LD-T4)", () => {
       { approvalId: first.approvalId, taskId: "task-1", created: true },
       { approvalId: first.approvalId, taskId: "task-1", created: false },
     ]);
-    expect(close()).toBe(true);
+    expect(close()).toEqual({ proposed: true });
     // A closed window refuses late calls.
     expect(proposals.propose(context, plan("Late")).ok).toBe(false);
   });
@@ -340,8 +472,42 @@ describe("createPlanProposals (LD-T4)", () => {
     expect(proposals.propose({ ...context, taskId: "task-2" }, plan("Other")).ok).toBe(false);
     expect(proposals.propose({ ...context, projectId: "elsewhere" }, plan("Other")).ok).toBe(false);
 
-    expect(close()).toBe(false);
+    // Only the attempt's own calls count: the last refusal is the nested plan, not the foreign task or project.
+    expect(close()).toEqual({
+      proposed: false,
+      lastRefusal: expect.stringContaining('has kind "plan"'),
+    });
     expect(store.approvals.list()).toEqual([]);
+  });
+
+  it("accepts one plan per attempt: the same plan again is idempotent, a different plan is refused", () => {
+    const store = open();
+    const projectId = projectOf(store);
+    const proposals = createPlanProposals(store);
+    const context = { projectId, taskId: "task-1", runId: "run-1" };
+    const recorded: unknown[] = [];
+    const close = proposals.open(context, (proposal) => recorded.push(proposal));
+
+    const first = proposals.propose(context, plan("Survey"));
+    if (!first.ok) throw new Error(first.reason);
+    expect(proposals.propose(context, plan("Another survey"))).toEqual({
+      ok: false,
+      reason: `a plan was already proposed in this attempt (${first.approvalId})`,
+    });
+    // Decided meanwhile or not, the same plan still answers with the attempt's approval and creates no other.
+    store.approvals.decide({ approvalId: first.approvalId, outcome: "granted", decidedBy: "ana" });
+    expect(proposals.propose(context, plan("Survey"))).toEqual({
+      ok: true,
+      approvalId: first.approvalId,
+      created: false,
+    });
+
+    expect(store.approvals.list()).toHaveLength(1);
+    expect(recorded).toEqual([
+      { approvalId: first.approvalId, taskId: "task-1", created: true },
+      { approvalId: first.approvalId, taskId: "task-1", created: false },
+    ]);
+    expect(close()).toMatchObject({ proposed: true });
   });
 });
 
@@ -388,5 +554,65 @@ describe("haril task add --kind plan, run, approve, run (LD-T4)", () => {
     const tasks = parseJson<{ taskList: { state: string }[] }>(status.out).taskList;
     expect(tasks).toHaveLength(1 + approval.tasks);
     expect(tasks.every((task) => task.state === "completed")).toBe(true);
+  }, 20_000);
+
+  it("denies the plan of a plan task that fails, so it can no longer be approved", async () => {
+    const init = harness();
+    expect(
+      run(
+        ["project", "init", projectRoot(sb, "demo"), "--name", "Demo", "--slug", "demo", "--yes"],
+        init.io,
+        sb.host,
+      ),
+    ).toBe(0);
+    const add = harness();
+    expect(
+      run(
+        [
+          "task",
+          "add",
+          "Revisar el README",
+          "--kind",
+          "plan",
+          "--agent",
+          "fake:plan",
+          "--max-attempts",
+          "2",
+          "--accept-output",
+          "nunca-aparece",
+        ],
+        add.io,
+        sb.host,
+      ),
+    ).toBe(0);
+
+    const firstRun = harness();
+    expect(await run(["run"], firstRun.io, sb.host)).toBe(1);
+    const listed = harness();
+    expect(run(["approvals", "--all", "--json"], listed.io, sb.host)).toBe(0);
+    const [approval] = parseJson<{ approvalId: string; status: string; decidedBy: string }[]>(
+      listed.out,
+    );
+    expect(approval).toMatchObject({ status: "denied", decidedBy: "runtime" });
+    if (approval === undefined) return;
+    const status = harness();
+    run(["status", "--json"], status.io, sb.host);
+    const [task] = parseJson<{ taskList: { taskId: string; state: string }[] }>(
+      status.out,
+    ).taskList;
+    expect(task?.state).toBe("failed");
+
+    // The lines say what is true: who asked, how to decide, and that the retry found the same approval.
+    const id = approval.approvalId;
+    const out = firstRun.out.join("\n");
+    expect(out).toContain(
+      `approval ${id} requested by task ${task?.taskId}: decide with haril approve|deny ${id}`,
+    );
+    expect(out).toContain(`the same plan already waits as approval ${id}`);
+    expect(out).not.toContain("runs its plan");
+    expect(out).toContain(`approval ${id} denied: applied`);
+
+    const approve = harness();
+    expect(await run(["approve", id], approve.io, { ...sb.host, user: "ana" })).not.toBe(0);
   }, 20_000);
 });

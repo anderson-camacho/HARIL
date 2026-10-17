@@ -59,7 +59,7 @@ Para trabajo en vivo, `start` se queda en primer plano y sale tras 120 s sin tra
 
 Un plan también puede pedir aprobación antes de encolarse: `haril plan propose <archivo>` crea una aprobación pendiente sin encolar nada, `haril approvals` la lista y `haril approve <id>` o `haril deny <id>` la deciden una sola vez. La decisión queda registrada con el usuario del sistema; en N0 es una declaración, no una autenticación. El runtime aplica la decisión en su siguiente turno: un plan aprobado se encola como el `plan import` de arriba.
 
-El plan también se le puede pedir a un agente: `task add --kind plan` crea una tarea que no escribe nada y cuyo agente propone el plan con `haril_propose_plan`; el plan queda como aprobación pendiente. Sin tokens, `fake:plan` propone un plan fijo de 2 a 4 tareas simuladas:
+El plan también se le puede pedir a un agente: `task add --kind plan` crea una tarea que no escribe nada y cuyo agente propone el plan con `haril_propose_plan`; el plan queda como aprobación pendiente. Si la tarea de plan termina fallida (por ejemplo, porque no cumple su aceptación), el runtime deniega el plan que dejó pendiente, así que ya no se puede aprobar. Sin tokens, `fake:plan` propone un plan fijo de 2 a 4 tareas simuladas:
 
 ```powershell
 .\bin\haril.ps1 task add "Documentar la CLI" --kind plan --agent fake:plan --project demo

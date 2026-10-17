@@ -101,6 +101,18 @@ describe("planAttemptOutcome", () => {
     });
   });
 
+  it("fails a succeeded plan attempt whose every proposal was refused with the last refusal as plan.refused", () => {
+    expect(
+      planAttemptOutcome("plan", succeeded, false, "invalid plan: schemaVersion must be 1"),
+    ).toEqual({
+      status: "failed",
+      code: "plan.refused",
+      message: "invalid plan: schemaVersion must be 1",
+    });
+    // A refusal before an accepted proposal does not matter: the attempt proposed.
+    expect(planAttemptOutcome("plan", succeeded, true, "an earlier refusal")).toBe(succeeded);
+  });
+
   it("keeps a plan attempt that proposed, any other kind, and every unsuccessful outcome", () => {
     expect(planAttemptOutcome("plan", succeeded, true)).toBe(succeeded);
     expect(planAttemptOutcome("work", succeeded, false)).toBe(succeeded);
