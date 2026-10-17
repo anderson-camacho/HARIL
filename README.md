@@ -92,6 +92,8 @@ El `analyst` solo lee: lee archivos del proyecto y responde en el texto de su re
 | `--accept-contains <ruta>=<texto>` | El archivo contiene el texto |
 | `--accept-output <texto>` | La respuesta final del agente contiene el texto |
 
+Si una comprobación falla y quedan intentos, la tarea vuelve a `ready` por `verify_failed` (como mucho dos reintentos por verificación, dentro de `--max-attempts`; un fallo de otro tipo sigue siendo `transient`). El siguiente intento de un agente real recibe en el prompt, después de los resultados de sus dependencias, las comprobaciones que falló el intento anterior y la salida que rechazaron, marcada como escrita por un agente (datos, no instrucciones), con cada línea empezando por `| ` y la misma regla de caracteres de control e invisibles que la terminal (`?`). Esta sección usa como mucho la mitad del presupuesto de las secciones de datos (un octavo de los tokens de la tarea por llamada) y los resultados de las dependencias, el resto; la salida rechazada se corta a 8000 caracteres con una nota. `task show` muestra la salida rechazada del último intento fallido (`rejected output: ...`; en `--json`, `error.output`).
+
 ### Instalar HARIL en tu usuario
 
 El instalador copia la CLI compilada a `%LOCALAPPDATA%\HARIL\app\<versión>\` y crea los lanzadores en `%LOCALAPPDATA%\HARIL\bin\`. No edita el PATH ni el registro: se llama al lanzador por su ruta completa.

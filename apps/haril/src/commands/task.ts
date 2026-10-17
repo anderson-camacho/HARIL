@@ -199,6 +199,10 @@ function taskShow(args: readonly string[], io: CliIo, host: HostInfo): number {
       io.out(visibleBlock(`error: ${view.error.code}: ${view.error.message}`));
     }
     printVerification(io, view.verification);
+    // MC-T2: the output the checks of the newest failed attempt rejected; the error message names the checks it failed.
+    if (view.error?.output !== undefined) {
+      io.out(`rejected output: ${visibleBlock(resultText(view.error.output))}`);
+    }
     io.out(`permission denials: ${view.permissionDenials}`);
     io.out(
       view.tokens === null

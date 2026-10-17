@@ -7,10 +7,14 @@ import type {
   AgentSpec,
   DependencyResult,
   HarilError,
+  JsonObject,
+  RejectedAttempt,
   Result,
   RunCompletion,
 } from "../ports/index.js";
 import { dependencyResultsSection } from "./dependency-results.js";
+import { promptDataBudget } from "./prompt-data.js";
+import { rejectedAttemptSection } from "./rejected-attempt.js";
 import { hasFailedCheck, type Verification, verificationFailureMessage } from "./verification.js";
 
 // M1 gives every agent the same single tool; the real tool policy arrives with Pi (M2).
@@ -40,6 +44,9 @@ export interface ExecutableTask {
   readonly surfaceRead?: readonly string[];
   // The results of the tasks it depends on, from its claim (MC-T1). They reach the prompt of a real agent only.
   readonly dependencyResults?: readonly DependencyResult[];
+  // The previous attempt when its acceptance checks rejected it, from its claim (MC-T2). It reaches the prompt of a real
+  // agent only.
+  readonly rejectedAttempt?: RejectedAttempt | null;
 }
 
 // Agent references served by a real runtime (Pi through the Broker, M2-D6). Every other reference keeps the
@@ -56,8 +63,9 @@ export interface RunIdentity {
 }
 
 // The prompt: the goal, the description, the files to read when the task names any, the results of the tasks it
-// depends on (MC-T1), then the instructions of its agent (a planner's, or a read-only analyst's, LD-T7c). A simulated
-// agent's prompt reaches no model, so it gets neither the results nor instructions.
+// depends on (MC-T1), the previous attempt when its acceptance checks rejected it (MC-T2), then the instructions of its
+// agent (a planner's, or a read-only analyst's, LD-T7c). A simulated agent's prompt reaches no model, so it gets neither
+// the data sections nor instructions.
 export function buildAgentSpec(task: ExecutableTask, run: RunIdentity): AgentSpec {
   const planning = task.kind === "plan";
   const reads = task.surfaceRead ?? [];
@@ -66,14 +74,13 @@ export function buildAgentSpec(task: ExecutableTask, run: RunIdentity): AgentSpe
     : READ_ONLY_AGENT_REFS.includes(task.agentRef)
       ? ANALYST_INSTRUCTIONS
       : [];
-  const results = isRealAgent(task.agentRef)
-    ? dependencyResultsSection(task.dependencyResults ?? [], task.maxTokens)
-    : "";
+  const data = isRealAgent(task.agentRef) ? dataSections(task) : { results: "", rejected: "" };
   const prompt = [
     task.goal,
     task.description,
     reads.length === 0 ? "" : `Files to read: ${reads.join(", ")}`,
-    results,
+    data.results,
+    data.rejected,
     ...instructions,
   ]
     .filter((part) => part.trim() !== "")
@@ -91,6 +98,22 @@ export function buildAgentSpec(task: ExecutableTask, run: RunIdentity): AgentSpe
     ...(task.maxTokens === undefined ? {} : { maxTokens: task.maxTokens }),
     ...(task.kind === undefined ? {} : { kind: task.kind }),
   };
+}
+
+// The data sections share one budget of the task's tokens (promptDataBudget). The rejected attempt is built first and
+// may use half of it, since what failed is what the attempt must fix; the dependency results get what it leaves, which
+// is the whole budget when there is no rejected attempt (MC-T1, MC-T2).
+function dataSections(task: ExecutableTask): {
+  readonly results: string;
+  readonly rejected: string;
+} {
+  const budget = promptDataBudget(task.maxTokens);
+  const rejected = rejectedAttemptSection(task.rejectedAttempt, Math.floor(budget / 2));
+  const results = dependencyResultsSection(
+    task.dependencyResults ?? [],
+    Math.max(0, budget - rejected.bytes),
+  );
+  return { results, rejected: rejected.text };
 }
 
 // What a planner is asked after the goal and the description (LD-T4): the plan shape of schemas.md section 6, the
@@ -177,8 +200,8 @@ export function checkHandshake(
 }
 
 // `verification` is the host evaluation of the acceptance checks after a succeeded outcome (M3-D7). A failed
-// check turns the attempt into a verification_failed failure that keeps the evidence; a passing or unverified
-// success keeps it in the result.
+// check turns the attempt into a verification_failed failure that keeps the evidence and the output it rejected, the
+// result the attempt would have had (MC-T2); a passing or unverified success keeps the evidence in the result.
 export function completionFor(
   runId: string,
   outcome: AgentOutcome,
@@ -196,25 +219,11 @@ export function completionFor(
           },
           endCause: "exit",
           verification: { ...verification },
+          output: resultOf(outcome),
         };
       }
       const evidence = verification === undefined ? {} : { verification: { ...verification } };
-      if (outcome.simulated === true) {
-        return { runId, outcome: "succeeded", result: { simulated: true, ...evidence } };
-      }
-      if (outcome.model !== undefined) {
-        return {
-          runId,
-          outcome: "succeeded",
-          result: {
-            text: outcome.summary,
-            model: outcome.model,
-            warnings: [...(outcome.warnings ?? [])],
-            ...evidence,
-          },
-        };
-      }
-      return { runId, outcome: "succeeded", result: { summary: outcome.summary, ...evidence } };
+      return { runId, outcome: "succeeded", result: { ...resultOf(outcome), ...evidence } };
     }
     case "failed":
       return {
@@ -240,5 +249,17 @@ export function completionFor(
   }
 }
 
+// What a succeeded attempt answered, as a result stores it: a simulated run's mark, a real agent's text with its model
+// and warnings, or a summary.
+function resultOf(outcome: Extract<AgentOutcome, { status: "succeeded" }>): JsonObject {
+  if (outcome.simulated === true) return { simulated: true };
+  if (outcome.model !== undefined) {
+    return { text: outcome.summary, model: outcome.model, warnings: [...(outcome.warnings ?? [])] };
+  }
+  return { summary: outcome.summary };
+}
+
 export * from "./dependency-results.js";
+export { PROMPT_DATA_MAX_BYTES, promptDataBudget } from "./prompt-data.js";
+export * from "./rejected-attempt.js";
 export * from "./verification.js";

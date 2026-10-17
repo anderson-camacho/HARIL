@@ -22,6 +22,8 @@ import type {
   PromoteResult,
   RecoveredTask,
   RegisterProjectInput,
+  RejectedAttempt,
+  RejectedCheck,
   Result,
   RunCompletion,
   RuntimeBusyError,
@@ -138,6 +140,13 @@ interface ReadyRow {
   readonly timeoutMs: number;
   readonly claimEpoch: number;
 }
+
+// ORCHESTRATION 7.3 and executor.md EXE-12: a task is granted at most 2 retries after a verification failure, inside its
+// maxAttempts ([S], not configurable). tasks.verify_retries counts the ones granted.
+const MAX_VERIFY_RETRIES = 2;
+
+// An acceptance entry the host evaluates, as opposed to a verifier reference.
+type AcceptanceCheckEntry = Extract<ClaimedTask["acceptance"][number], { readonly kind: string }>;
 
 type LeaseRow = Extract<RuntimeLeaseSummary, { status: "active" | "released" | "lost" }>;
 
@@ -896,6 +905,7 @@ export class SqliteStore implements Store {
       if (row === undefined) return undefined;
 
       this.transition("ready", "running");
+      const acceptance = JSON.parse(row.acceptance) as ClaimedTask["acceptance"];
       const now = this.clock.now();
       const attempt = row.attempt + 1;
       const claimEpoch = row.claimEpoch + 1;
@@ -947,9 +957,10 @@ export class SqliteStore implements Store {
         agentRef: row.agentRef,
         model: row.model,
         maxTokens: row.maxTokens,
-        acceptance: JSON.parse(row.acceptance) as ClaimedTask["acceptance"],
+        acceptance,
         surfaceRead: JSON.parse(row.surfaceRead) as string[],
         dependencyResults: this.dependencyResultsOf(row.taskId),
+        rejectedAttempt: this.rejectedAttemptOf(row.taskId, acceptance),
         attempt,
         attemptsUsed: row.attemptsUsed,
         maxAttempts: row.maxAttempts,
@@ -976,8 +987,52 @@ export class SqliteStore implements Store {
     }));
   }
 
-  // Success: the result is written in the same UPDATE that sets `completed`. Failure: one attempt is charged;
-  // with attempts left the task returns to ready (transient retry), otherwise it fails.
+  // The newest charged attempt of a task when its acceptance checks rejected it (MC-T2): a failed run whose error holds
+  // the host evidence. A run cancelled by a stop or orphaned by a crash charged nothing, so a rejection before it still
+  // counts; a failure for another reason after it makes the rejection old. The evidence lists one outcome per check of
+  // the task's acceptance, in its order (evaluateAcceptance skips the verifier references), so each outcome is paired
+  // with its check and the pairing stops at the first one that does not match.
+  private rejectedAttemptOf(
+    taskId: string,
+    acceptance: ClaimedTask["acceptance"],
+  ): RejectedAttempt | null {
+    const row = this.db
+      .prepare(
+        "SELECT attempt, error FROM runs WHERE task_id = ? AND status = 'failed' ORDER BY attempt DESC LIMIT 1",
+      )
+      .get(taskId) as { attempt: number; error: string | null } | undefined;
+    if (row === undefined || row.error === null) return null;
+    const error = JSON.parse(row.error) as {
+      readonly verification?: { readonly checks?: unknown };
+      readonly output?: unknown;
+    };
+    const outcomes = error.verification?.checks;
+    if (!Array.isArray(outcomes)) return null;
+    const checks: RejectedCheck[] = [];
+    const taskChecks = acceptance.filter((entry): entry is AcceptanceCheckEntry => "kind" in entry);
+    for (const [index, check] of taskChecks.entries()) {
+      const outcome = outcomes[index] as { kind?: unknown; ok?: unknown; detail?: unknown };
+      if (outcome?.kind !== check.kind || typeof outcome.ok !== "boolean") break;
+      checks.push({
+        ...check,
+        ok: outcome.ok,
+        detail: typeof outcome.detail === "string" ? outcome.detail : "",
+      });
+    }
+    const output = error.output;
+    return {
+      attempt: row.attempt,
+      checks,
+      output:
+        typeof output === "object" && output !== null && !Array.isArray(output)
+          ? (output as JsonObject)
+          : null,
+    };
+  }
+
+  // Success: the result is written in the same UPDATE that sets `completed`. Failure: one attempt is charged; with
+  // attempts left the task returns to ready, otherwise it fails. A verification failure (the completion carries host
+  // evidence) returns as verify_failed while its verification retries last, every other failure as transient (MC-T2).
   private completeRun(completion: RunCompletion): CompletedRun {
     return this.inTransaction(() => {
       const run = this.db
@@ -994,7 +1049,7 @@ export class SqliteStore implements Store {
       }
       const task = this.db
         .prepare(
-          "SELECT goal, project_id AS projectId, state, claim_epoch AS claimEpoch, attempts_used AS attemptsUsed, max_attempts AS maxAttempts FROM tasks WHERE task_id = ?",
+          "SELECT goal, project_id AS projectId, state, claim_epoch AS claimEpoch, attempts_used AS attemptsUsed, max_attempts AS maxAttempts, verify_retries AS verifyRetries FROM tasks WHERE task_id = ?",
         )
         .get(run.taskId) as
         | {
@@ -1004,6 +1059,7 @@ export class SqliteStore implements Store {
             claimEpoch: number;
             attemptsUsed: number;
             maxAttempts: number;
+            verifyRetries: number;
           }
         | undefined;
       if (task === undefined || task.state !== "running" || task.claimEpoch !== run.claimEpoch) {
@@ -1065,22 +1121,30 @@ export class SqliteStore implements Store {
         .run(
           now,
           completion.endCause,
-          // The host evidence of a verification_failed attempt rides in the error (M3-D7).
+          // The host evidence of a verification_failed attempt rides in the error (M3-D7), with the output it rejected
+          // (MC-T2).
           JSON.stringify({
             ...completion.error,
             ...(completion.verification === undefined
               ? {}
               : { verification: completion.verification }),
+            ...(completion.output === undefined ? {} : { output: completion.output }),
           }),
           completion.runId,
         );
-      if (attemptsUsed < task.maxAttempts) {
+      const verifyFailed = completion.verification !== undefined;
+      const retryable =
+        attemptsUsed < task.maxAttempts &&
+        (!verifyFailed || task.verifyRetries < MAX_VERIFY_RETRIES);
+      if (retryable) {
+        const retryReason = verifyFailed ? "verify_failed" : "transient";
+        const verifyRetries = task.verifyRetries + (verifyFailed ? 1 : 0);
         this.transition("running", "ready");
         this.db
           .prepare(
-            "UPDATE tasks SET state = 'ready', phase = NULL, retry_reason = 'transient', attempts_used = ?, claimed_runtime_epoch = NULL, updated_at = ? WHERE task_id = ?",
+            "UPDATE tasks SET state = 'ready', phase = NULL, retry_reason = ?, verify_retries = ?, attempts_used = ?, claimed_runtime_epoch = NULL, updated_at = ? WHERE task_id = ?",
           )
-          .run(attemptsUsed, now, run.taskId);
+          .run(retryReason, verifyRetries, attemptsUsed, now, run.taskId);
         this.appendEvent({
           ...eventBase,
           type: "task.retried",
@@ -1089,9 +1153,10 @@ export class SqliteStore implements Store {
             attemptsUsed,
             maxAttempts: task.maxAttempts,
             code: completion.error.code,
+            retryReason,
           },
         });
-        return { ...base, attemptsUsed, taskState: "ready", retryReason: "transient" };
+        return { ...base, attemptsUsed, taskState: "ready", retryReason };
       }
       this.transition("running", "failed");
       this.db
@@ -1099,10 +1164,19 @@ export class SqliteStore implements Store {
           "UPDATE tasks SET state = 'failed', phase = NULL, attempts_used = ?, completed_at = ?, updated_at = ? WHERE task_id = ?",
         )
         .run(attemptsUsed, now, now, run.taskId);
+      // A verification failure with attempts left has used up its verification retries (executor.md DR-05).
+      const exhausted = verifyFailed && attemptsUsed < task.maxAttempts;
       this.appendEvent({
         ...eventBase,
         type: "task.failed",
-        payload: { attempt: run.attempt, attemptsUsed, code: completion.error.code },
+        payload: {
+          attempt: run.attempt,
+          attemptsUsed,
+          code: completion.error.code,
+          ...(exhausted
+            ? { reason: "verification_exhausted", verifyRetries: task.verifyRetries }
+            : {}),
+        },
       });
       return { ...base, attemptsUsed, taskState: "failed", retryReason: null };
     });
