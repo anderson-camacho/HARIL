@@ -1,6 +1,8 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { AgentRuntime } from "@haril/core/ports";
+import { FakeAgentRuntime, FakeClock } from "@haril/core/testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { run } from "../src/cli.js";
 import {
@@ -92,5 +94,23 @@ describe("haril plan import", () => {
     expect(run(["plan", "import", file], h.io, sb.host)).toBe(0);
     expect(h.out.at(-1)).toContain("already queued");
     expect(queued()).toHaveLength(1);
+  });
+
+  // LD-T7c fix: a plan task's surface.read reaches its agent's prompt as the files to read.
+  it("gives each task of an imported plan the files of its read surface in its prompt", async () => {
+    expect(run(["plan", "import", EXAMPLE_VALID], h.io, sb.host)).toBe(0);
+    const fake = new FakeAgentRuntime({ clock: new FakeClock() });
+    const prompts: string[] = [];
+    const recording: AgentRuntime = {
+      start: (spec) => {
+        prompts.push(spec.prompt);
+        return fake.start(spec);
+      },
+    };
+    await run(["run"], harness().io, { ...sb.host, agentRuntime: recording });
+    expect(prompts).toHaveLength(4);
+    expect(prompts[0]).toBe(
+      "Survey the README structure\n\nList the headings of README.md and note where a new section fits.\n\nFiles to read: README.md",
+    );
   });
 });

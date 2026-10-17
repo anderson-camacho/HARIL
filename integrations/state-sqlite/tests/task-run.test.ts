@@ -151,6 +151,28 @@ describe("tasks.claimNext", () => {
     expect(store.tasks.claimNext(epoch)?.goal).toBe("Goal low");
   });
 
+  // LD-T7c fix: the files a plan task is told to read reach its prompt, so the claim carries them.
+  it("hands over the read surface of a plan task, and none for a task.create", () => {
+    store.commands.enqueue({
+      type: "plan.submit",
+      projectId,
+      args: {
+        plan: {
+          schemaVersion: 1,
+          tasks: [
+            { ...planTask("reads", 5), surface: { write: [], read: ["README.md", "docs/a.md"] } },
+          ],
+        },
+      },
+      idempotencyKey: "plan-reads",
+      requestHash: "plan-reads",
+    });
+    store.commands.applyNext(epoch);
+    expect(store.tasks.claimNext(epoch)?.surfaceRead).toEqual(["README.md", "docs/a.md"]);
+    enqueueTask("A");
+    expect(store.tasks.claimNext(epoch)?.surfaceRead).toEqual([]);
+  });
+
   it("moves the task to running, counts the attempt and records the claim", () => {
     enqueueTask("A", [], 2);
     const claimed = store.tasks.claimNext(epoch);
@@ -258,6 +280,32 @@ describe("runs.complete", () => {
       attemptsUsed: 2,
       maxAttempts: 3,
     });
+  });
+
+  // The CHECK attempts_used <= max_attempts holds when the last allowed attempt succeeds: 2 of 2 after one failure.
+  it("records 2 of 2 when the last allowed attempt succeeds, and the task stays completed", () => {
+    enqueueTask("A", [], 2);
+    const first = store.tasks.claimNext(epoch);
+    store.runs.complete({
+      runId: first?.runId ?? "",
+      outcome: "failed",
+      error: { code: "fake.failed", message: "boom" },
+      endCause: "exit",
+    });
+    const last = store.tasks.claimNext(epoch);
+    expect(last).toMatchObject({ attempt: 2, attemptsUsed: 1, maxAttempts: 2 });
+    const result = store.runs.complete({
+      runId: last?.runId ?? "",
+      outcome: "succeeded",
+      result: { summary: "fake agent succeeded" },
+    });
+    expect(result).toMatchObject({ taskState: "completed", attemptsUsed: 2, maxAttempts: 2 });
+    expect(store.tasks.get(taskId("A"))).toMatchObject({
+      state: "completed",
+      attemptsUsed: 2,
+      maxAttempts: 2,
+    });
+    expect(store.tasks.claimNext(epoch)).toBeUndefined();
   });
 
   it("returns a failed attempt to ready as a transient retry while attempts remain", () => {

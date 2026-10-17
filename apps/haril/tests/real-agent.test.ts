@@ -480,11 +480,13 @@ describe("haril start with a planner task (LD-T4)", () => {
         const proposals = rows
           .filter((row) => row.type === "tool.plan.propose")
           .map((row) => JSON.parse(row.payload) as Record<string, unknown>);
+        // LD-T7c fix: the refusal keeps the reason HARIL gave the planner (never the plan itself).
         expect(proposals).toEqual([
           {
             outcome: "plan_refused",
             planSha256: expect.any(String),
             planBytes: expect.any(Number),
+            reason: expect.stringMatching(/^invalid plan: /),
           },
           {
             outcome: "ok",
@@ -498,6 +500,11 @@ describe("haril start with a planner task (LD-T4)", () => {
       } finally {
         db.close();
       }
+      const events = harness();
+      expect(run(["events", "--task", taskIdOf("Plan the docs")], events.io, sb.host)).toBe(0);
+      expect(events.out.join("\n")).toMatch(
+        /tool\.plan\.propose .*outcome=plan_refused .*reason=invalid plan: /,
+      );
 
       const approve = harness();
       expect(

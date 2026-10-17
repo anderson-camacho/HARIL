@@ -1,6 +1,7 @@
 // Executor rules (M1-T5): the AgentSpec built from a claimed task, the handshake check that runs
 // before any prompt is sent, and the mapping of an agent outcome to the run completion. Pure.
 import type { TaskKind } from "@haril/contracts";
+import { READ_ONLY_AGENT_REFS } from "../domain/plan-graph.js";
 import type { AgentOutcome, AgentSpec, HarilError, Result, RunCompletion } from "../ports/index.js";
 import { hasFailedCheck, type Verification, verificationFailureMessage } from "./verification.js";
 
@@ -26,6 +27,9 @@ export interface ExecutableTask {
   readonly maxTokens?: number;
   // LD-T4: absent is a task without a kind of its own (work).
   readonly kind?: TaskKind;
+  // The files the task is told to read (a plan task's surface.read, LD-T7c). They reach the prompt; they are not an
+  // access limit: the PathGuard keeps reads inside the project root.
+  readonly surfaceRead?: readonly string[];
 }
 
 // Agent references served by a real runtime (Pi through the Broker, M2-D6). Every other reference keeps the
@@ -41,9 +45,22 @@ export interface RunIdentity {
   readonly attempt: number;
 }
 
+// The prompt: the goal, the description, the files to read when the task names any, then the instructions of its
+// agent (a planner's, or a read-only analyst's, LD-T7c). A simulated agent gets no instructions.
 export function buildAgentSpec(task: ExecutableTask, run: RunIdentity): AgentSpec {
   const planning = task.kind === "plan";
-  const prompt = [task.goal, task.description, ...(planning ? PLANNER_INSTRUCTIONS : [])]
+  const reads = task.surfaceRead ?? [];
+  const instructions = planning
+    ? PLANNER_INSTRUCTIONS
+    : READ_ONLY_AGENT_REFS.includes(task.agentRef)
+      ? ANALYST_INSTRUCTIONS
+      : [];
+  const prompt = [
+    task.goal,
+    task.description,
+    reads.length === 0 ? "" : `Files to read: ${reads.join(", ")}`,
+    ...instructions,
+  ]
     .filter((part) => part.trim() !== "")
     .join("\n\n");
   return {
@@ -62,14 +79,15 @@ export function buildAgentSpec(task: ExecutableTask, run: RunIdentity): AgentSpe
 }
 
 // What a planner is asked after the goal and the description (LD-T4): the plan shape of schemas.md section 6, the
-// required PlanTask fields and the read-only rule. Since LD-T7c it also says what the agent of the plan can do, where
-// the content of a requested file goes and what a description adds. The Core checks the proposal again
-// (plan-graph.ts); this text only guides the agent.
+// required PlanTask fields and the read-only rule. Since LD-T7c it also says what the agent of the plan can do, what
+// its read surface means, how the last task asks for a requested file and what a description adds. The Core checks the
+// proposal again (plan-graph.ts); this text only guides the agent.
 const PLANNER_INSTRUCTIONS: readonly string[] = [
   `You plan this goal; you do not do the work. Read what you need, then call the tool ${PROPOSE_PLAN_TOOL} once with a plan. A person approves the plan before any of its tasks runs.`,
   [
-    'The agent of every task is "analyst", a read-only agent: "analyst" reads the files of its read surface and answers in its result text; it cannot write files or run commands.',
-    "If the goal asks for a file or a change, the last task writes the full content in its result and its goal says so; the person applies it.",
+    'The agent of every task is "analyst", a read-only agent: "analyst" reads project files and answers in its result text; it cannot write files or run commands.',
+    'A task\'s "surface.read" lists the files the task tells it to read; it is not an access limit.',
+    'If the goal asks for a file or a change, the goal of the last task says "Return the full content of <file> as the result", never "write"; the person applies it.',
   ].join(" "),
   [
     'The plan is a JSON object {"schemaVersion": 1, "tasks": [...]} with 2 to 5 tasks. Every task has exactly these fields:',
@@ -80,12 +98,22 @@ const PLANNER_INSTRUCTIONS: readonly string[] = [
     '- "kind": "work"; a task of the plan may not plan',
     '- "agent": "analyst"',
     '- "requires": [] and "context": []',
-    '- "surface": {"write": [], "read": [the paths it reads]}; the tasks write nothing',
+    '- "surface": {"write": [], "read": [the files the task tells it to read]}; the tasks write nothing',
     '- "budget": {"maxCostMicros": 0, "maxTokens": 20000, "maxWallMs": 120000}',
     '- "timeoutMs": 120000 and "maxAttempts": 1 to 3',
     '- "acceptance": [], or checks such as {"kind": "output_contains", "text": "..."}',
   ].join("\n"),
   `If ${PROPOSE_PLAN_TOOL} refuses the plan, read its reason, fix the plan and call it again.`,
+];
+
+// What a read-only analyst is told after its task (LD-T7c): its result is its only output, and a requested file comes
+// back as the bare content, since the person applies it as it is. The second real demo wrapped the file in chat and a
+// code fence.
+const ANALYST_INSTRUCTIONS: readonly string[] = [
+  [
+    "You answer in your result text; you cannot write files or run commands.",
+    "When the goal asks for the content of a file, the result is that content alone: no preamble, no closing remarks and no code fence around it.",
+  ].join(" "),
 ];
 
 // A plan attempt succeeds only by proposing (LD-T4): a success whose run recorded no proposal is a plan.not_proposed

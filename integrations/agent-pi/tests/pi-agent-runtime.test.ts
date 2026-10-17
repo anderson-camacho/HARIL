@@ -575,12 +575,34 @@ describe("createPiAgentRuntime plan.propose (LD-T4)", () => {
       `plan refused: invalid plan: schemaVersion must be 1 | ${ACCEPTED}`,
     );
     expect(calls).toHaveLength(2);
+    // LD-T7c fix: the record keeps the reason HARIL gave, so the refusal is audited outside the Pi session log.
     expect(h.events).toEqual([
-      expect.objectContaining({ op: "plan.propose", outcome: "plan_refused" }),
+      expect.objectContaining({
+        op: "plan.propose",
+        outcome: "plan_refused",
+        reason: "invalid plan: schemaVersion must be 1",
+      }),
       expect.objectContaining({ op: "plan.propose", outcome: "ok", approvalId: "appr-1" }),
     ]);
-    // The refusal reason goes to the agent only: the record keeps no text taken from the plan.
-    expect(JSON.stringify(h.events)).not.toContain("schemaVersion must be 1");
+    expect(h.events[1]).not.toHaveProperty("reason");
+  });
+
+  it("records a long refusal reason cut to 500 characters, and never the plan", async () => {
+    const h = harness();
+    const long = `invalid plan: ${"x".repeat(2000)}`;
+    const handle = await startHandle(
+      h.runtime("propose_plan", { proposePlan: () => ({ ok: false, reason: long }) }),
+      planSpec(),
+    );
+    await handle.prompt("Plan the docs");
+    await handle.settled;
+
+    const [refused] = h.events as { readonly reason?: string }[];
+    expect(refused).toMatchObject({ op: "plan.propose", outcome: "plan_refused" });
+    expect([...(refused?.reason ?? "")]).toHaveLength(500);
+    expect(refused?.reason?.startsWith("invalid plan: xxx")).toBe(true);
+    expect(refused?.reason?.endsWith("…")).toBe(true);
+    expect(JSON.stringify(h.events)).not.toContain("fake Pi planner");
   });
 
   it("answers plan.propose as unsupported without a proposer, and for a run that may not propose", async () => {

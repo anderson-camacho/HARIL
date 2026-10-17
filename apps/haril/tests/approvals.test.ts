@@ -1,6 +1,17 @@
+import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { validatePlanSchema } from "@haril/contracts";
+import {
+  canonicalJson,
+  canTransition,
+  checkAcceptance,
+  checkTaskKind,
+  topologicalOrder,
+} from "@haril/core";
+import type { PlanCheck } from "@haril/core/ports";
+import { openStore } from "@haril/state-sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { run } from "../src/cli.js";
 import {
@@ -68,6 +79,38 @@ function listed(args: string[] = []): ApprovalRow[] {
   const out = fresh();
   expect(run(["approvals", "--json", ...args], out.io, sb.host)).toBe(0);
   return parseJson<ApprovalRow[]>(out.out);
+}
+
+// A requested approval stored under the rules before LD-T7c (schema and dependency order only): the example plan on
+// the analyst, whose insert-section task writes README.md. The current rules refuse it.
+function proposeLegacyAnalystPlan(): string {
+  const legacyCheck = (value: unknown): PlanCheck => {
+    const schema = validatePlanSchema(value);
+    if (!schema.ok) return { ok: false, reason: schema.errors.join("; ") };
+    return { ok: true, plan: schema.plan, order: topologicalOrder(schema.plan) ?? [] };
+  };
+  const store = openStore({
+    dataDir: sb.dataDir,
+    clock: { now: () => Date.now(), schedule: () => () => undefined },
+    ids: { next: () => randomUUID() },
+    rules: { canTransition, checkPlan: legacyCheck, checkAcceptance, checkTaskKind, canonicalJson },
+    isPidAlive: () => true,
+  });
+  try {
+    const plan = JSON.parse(readFileSync(EXAMPLE_VALID, "utf8")) as { tasks: { agent: string }[] };
+    for (const task of plan.tasks) task.agent = "analyst";
+    const project = store.projects.getBySlug("demo");
+    if (project === undefined) throw new Error("no demo project");
+    const proposed = store.approvals.proposePlan({
+      projectId: project.projectId,
+      plan,
+      requestedBy: "run-legacy",
+    });
+    if (!proposed.ok) throw new Error(proposed.error.message);
+    return proposed.value.approval.approvalId;
+  } finally {
+    store.close();
+  }
 }
 
 function taskCount(): number {
@@ -204,6 +247,34 @@ describe("haril approvals show", () => {
     const bare = fresh();
     expect(run(["approvals", "show"], bare.io, sb.host)).toBe(2);
     expect(bare.err.join("\n")).toContain("usage: haril approvals show <approvalId>");
+  });
+
+  // LD-T7c fix: a plan requested before the read-only rule existed can still be approved, and its plan.submit is then
+  // refused when the runtime applies it. show says so before the decision, and says when a decision was applied.
+  it("says when the current rules refuse a requested plan, and when a decided plan was applied", async () => {
+    const id = proposeLegacyAnalystPlan();
+    const before = shown(id).out;
+    expect(before).toContain(
+      'refused by the current rules: task "insert-section" uses the read-only agent "analyst", which cannot write files, but its surface.write lists README.md; give it "write": [] and have it return the content in its result',
+    );
+    expect(before.join("\n")).not.toContain("applied");
+
+    expect(run(["approve", id], fresh().io, operator())).toBe(0);
+    const runOut = fresh();
+    await run(["run"], runOut.io, sb.host);
+    // The plan approved before the rule is refused at apply time, and the run output says why.
+    expect(runOut.out.join("\n")).toMatch(
+      /plan\.submit rejected: .*task "insert-section" uses the read-only agent "analyst"/,
+    );
+    expect(taskCount()).toBe(0);
+    const after = shown(id).out;
+    expect(after[1]).toBe("project demo, kind plan, status granted, model none, 4 tasks");
+    expect(after.some((line) => /^applied \d{4}-\d\d-\d\dT[\d:.]+Z$/.test(line))).toBe(true);
+    expect(after.join("\n")).not.toContain("refused by the current rules");
+  });
+
+  it("prints no refusal for a requested plan the current rules accept", () => {
+    expect(shown(propose()).out.join("\n")).not.toContain("refused");
   });
 
   // Control sequences (clear screen, OSC 52 clipboard), a right-to-left override and tag characters in a plan's goal

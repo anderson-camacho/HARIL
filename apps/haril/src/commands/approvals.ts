@@ -1,5 +1,5 @@
 import { validatePlanSchema } from "@haril/contracts";
-import { planTaskLines, visibleText } from "@haril/core";
+import { checkPlanSubmission, planTaskLines, visibleText } from "@haril/core";
 import type { ApprovalRecord, ApprovalStatus } from "@haril/core/ports";
 import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
@@ -105,9 +105,14 @@ function approvalsShow(args: readonly string[], io: CliIo, host: HostInfo): numb
 }
 
 // The header of the approval, then every task of its plan with the fields the shell's plan review shows. A subject
-// that is not a plan says so and shows no task.
+// that is not a plan says so and shows no task. A plan still to be submitted (requested, or granted and not applied
+// yet) is checked against the current rules: one stored before a rule existed is refused when the runtime applies it,
+// so the approver reads why first (LD-T7c). An applied decision says when.
 function approvalLines(row: ApprovalRow, subject: unknown): string[] {
   const checked = validatePlanSchema(subject);
+  const pending =
+    row.status === "requested" || (row.status === "granted" && row.appliedAt === null);
+  const current = checked.ok && pending ? checkPlanSubmission(subject) : undefined;
   const tasks = checked.ok ? `${checked.plan.tasks.length} tasks` : "invalid plan";
   const decided =
     row.decidedAt === null
@@ -120,6 +125,10 @@ function approvalLines(row: ApprovalRow, subject: unknown): string[] {
     `project ${row.projectSlug}, kind ${row.kind}, status ${row.status}, model ${row.model ?? "none"}, ${tasks}`,
     `requested by ${row.requestedBy} at ${iso(row.requestedAt)}`,
     ...decided,
+    ...(row.appliedAt === null ? [] : [`applied ${iso(row.appliedAt)}`]),
+    ...(current === undefined || current.ok
+      ? []
+      : [`refused by the current rules: ${current.reason}`]),
     ...(checked.ok ? [] : [`the plan could not be read: ${checked.errors.join("; ")}`]),
     "",
     ...(checked.ok ? checked.plan.tasks.flatMap((task, index) => planTaskLines(task, index)) : []),

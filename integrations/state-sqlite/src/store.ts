@@ -130,6 +130,7 @@ interface ReadyRow {
   readonly model: string | null;
   readonly maxTokens: number;
   readonly acceptance: string;
+  readonly surfaceRead: string;
   readonly attempt: number;
   readonly attemptsUsed: number;
   readonly maxAttempts: number;
@@ -888,7 +889,7 @@ export class SqliteStore implements Store {
           : ` AND task_id NOT IN (${excludedTasks.map(() => "?").join(", ")})`;
       const row = this.db
         .prepare(
-          `SELECT task_id AS taskId, project_id AS projectId, goal, description, kind, agent_ref AS agentRef, model, budget_max_tokens AS maxTokens, acceptance, attempt, attempts_used AS attemptsUsed, max_attempts AS maxAttempts, timeout_ms AS timeoutMs, claim_epoch AS claimEpoch FROM tasks WHERE state = 'ready'${notExcludedAgents}${notExcludedTasks} ORDER BY priority DESC, created_seq LIMIT 1`,
+          `SELECT task_id AS taskId, project_id AS projectId, goal, description, kind, agent_ref AS agentRef, model, budget_max_tokens AS maxTokens, acceptance, surface_read AS surfaceRead, attempt, attempts_used AS attemptsUsed, max_attempts AS maxAttempts, timeout_ms AS timeoutMs, claim_epoch AS claimEpoch FROM tasks WHERE state = 'ready'${notExcludedAgents}${notExcludedTasks} ORDER BY priority DESC, created_seq LIMIT 1`,
         )
         .get(...excludedAgents, ...excludedTasks) as unknown as ReadyRow | undefined;
       if (row === undefined) return undefined;
@@ -946,6 +947,7 @@ export class SqliteStore implements Store {
         model: row.model,
         maxTokens: row.maxTokens,
         acceptance: JSON.parse(row.acceptance) as ClaimedTask["acceptance"],
+        surfaceRead: JSON.parse(row.surfaceRead) as string[],
         attempt,
         attemptsUsed: row.attemptsUsed,
         maxAttempts: row.maxAttempts,
