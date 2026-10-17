@@ -21,7 +21,8 @@ function harness(overrides: Partial<ShellRunDeps> = {}) {
     readGit: async () => undefined,
     createTerminal: () => {
       created.count++;
-      return new VirtualTerminal(["q"]);
+      // Esc leaves input mode, the default (LD-T6b-2); q quits in navigation mode.
+      return new VirtualTerminal(["\x1b", "q"]);
     },
     ...overrides,
   };

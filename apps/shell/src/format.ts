@@ -23,6 +23,17 @@ export function plain(text: string): string {
   return out;
 }
 
+// Each Unicode format character but the zero-width joiner that emoji sequences need, and each lone surrogate.
+const HIDDEN = /(?!\u{200D})\p{Cf}|[\u{D800}-\u{DFFF}]/gu;
+
+// Typed text as the screen shows it (LD-T6b-2): plain, and each Unicode format character (zero-width spaces,
+// bidirectional overrides, tag characters...) or lone surrogate also becomes "?", one per code point. A format
+// character draws nothing or reorders the text around it, so without this a goal could carry words that neither the
+// person who sends it nor the one who approves its plan ever saw.
+export function visibleText(text: string): string {
+  return plain(text).replace(HIDDEN, "?");
+}
+
 // Cuts text to `columns` cells, marking the cut with an ellipsis. A line break is a control character here. The cut
 // is strict: a wide character that would straddle it is left out and a space takes its cell, so the result is never
 // wider than `columns` (pi-tui fails on a line wider than the terminal).

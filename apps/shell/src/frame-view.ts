@@ -58,6 +58,9 @@ const MASCOT: readonly string[] = [
 
 export type RuntimeState = "running" | "starting" | "idle";
 
+// The keyboard mode (LD-T6b-2): input types into the box, navigation gives the single keys their actions.
+export type ShellMode = "input" | "navigation";
+
 export interface FrameFacts {
   // The filter's slug, or "all".
   readonly project: string;
@@ -122,13 +125,22 @@ export function topBar(facts: FrameFacts, width: number, folded: boolean): Line 
   );
 }
 
-// The status line: model, runtime and tokens on the left, help and quit on the right. Without the right column
-// (`folded`) it also names the branch and its changes. The branch gives way first, then the model, then the tokens.
-export function statusLine(facts: FrameFacts, width: number, folded: boolean): Line {
+// The status line: model, runtime and tokens on the left; on the right the keyboard mode with how to quit, and in
+// navigation mode the help key. Without the right column (`folded`) it also names the branch and its changes. The
+// branch gives way first, then the model, then the tokens.
+export function statusLine(
+  facts: FrameFacts,
+  width: number,
+  folded: boolean,
+  mode: ShellMode,
+): Line {
   const model = [segment(facts.model ?? "no model", "muted")];
   const runtime = [segment(`runtime ${facts.runtimeText}`, "text")];
   const tokens = [segment(`tok ${tokenPair(facts)}`, "muted")];
-  const right = [segment("? help · q quit", "muted")];
+  const right =
+    mode === "input"
+      ? [segment("input", "accent"), DOT, segment("Ctrl+C quit", "muted")]
+      : [segment("keys", "accent"), DOT, segment("? help · q quit", "muted")];
   const git = folded ? gitPart(facts) : undefined;
   const variants = [
     ...(git === undefined ? [] : [[model, runtime, tokens, git]]),

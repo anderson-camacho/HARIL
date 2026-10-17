@@ -14,6 +14,7 @@ import {
   type SpawnedRuntime,
 } from "../src/runtime-start.js";
 import { resolveTheme } from "../src/theme.js";
+import { inNavigationMode } from "./navigation.js";
 import {
   openSeedStore,
   proposeExamplePlan,
@@ -178,7 +179,7 @@ function mount(options: {
           }),
         }),
   });
-  return { terminal, app };
+  return { terminal, app: inNavigationMode(app, terminal) };
 }
 
 // The frame with its line breaks as spaces: the banner and the status wrap at 80 columns.

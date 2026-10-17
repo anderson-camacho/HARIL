@@ -44,6 +44,17 @@ describe("box", () => {
     ]);
   });
 
+  it("draws a footer in the bottom border and cuts it like the title (LD-T6b-2)", () => {
+    expect(box("Input", [text("> goal")], 20, "Esc keys").map(lineText)).toEqual([
+      "┌─ Input ──────────┐",
+      "│ > goal           │",
+      "└─ Esc keys ───────┘",
+    ]);
+    const cut = box(undefined, [], 16, "Esc keys · / commands · Ctrl+C quit").map(lineText);
+    for (const line of cut) expect(visibleWidth(line)).toBe(16);
+    expect(cut[1]).toBe("└─ Esc keys … ─┘");
+  });
+
   it("cuts a long title and a long line instead of widening the box", () => {
     const lines = box("A very long box title", [text("x".repeat(40))], 16).map(lineText);
     for (const line of lines) expect(visibleWidth(line)).toBe(16);

@@ -13,6 +13,8 @@ export interface Segment {
   readonly text: string;
   readonly tone: Tone;
   readonly bold?: boolean;
+  // Drawn in reverse video: the cursor of the input box (LD-T6b-2).
+  readonly inverse?: boolean;
 }
 
 export type Line = readonly Segment[];
@@ -52,34 +54,40 @@ export function padLine(line: Line, width: number): Segment[] {
   return rest > 0 ? [...fitted, segment(" ".repeat(rest), "text")] : fitted;
 }
 
-// A box `width` cells wide with a border on every side and its title in the top one: "┌─ Status ──┐". Each body line
-// is cut to the inside. The border takes the border token and the title the accent; the body keeps its own tones.
-export function box(title: string | undefined, body: readonly Line[], width: number): Segment[][] {
+// A box `width` cells wide with a border on every side, its title in the top one ("┌─ Status ──┐") and a footer, such
+// as the keys of the input box (LD-T6b-2), in the bottom one. Each body line is cut to the inside. The border takes the
+// border token, the title the accent and the footer the muted one; the body keeps its own tones.
+export function box(
+  title: string | undefined,
+  body: readonly Line[],
+  width: number,
+  footer?: string,
+): Segment[][] {
   if (width < 4) return [];
   const inner = width - 4;
-  const top =
+  return [
     title === undefined || width < 7
       ? [segment(`┌${"─".repeat(width - 2)}┐`, "border")]
-      : titledTop(title, width);
-  return [
-    top,
+      : labelledBorder("┌", "┐", segment(title, "accent", true), width),
     ...body.map((line) => [
       segment("│ ", "border"),
       ...padLine(line, inner),
       segment(" │", "border"),
     ]),
-    [segment(`└${"─".repeat(width - 2)}┘`, "border")],
+    footer === undefined || footer === "" || width < 7
+      ? [segment(`└${"─".repeat(width - 2)}┘`, "border")]
+      : labelledBorder("└", "┘", segment(footer, "muted"), width),
   ];
 }
 
-function titledTop(title: string, width: number): Segment[] {
-  // "┌─ " and " " around the title, at least one "─" and the corner: six cells besides the title.
-  const shown = fit(title, width - 6);
+function labelledBorder(left: string, right: string, label: Segment, width: number): Segment[] {
+  // "┌─ " and " " around the label, at least one "─" and the corner: six cells besides the label.
+  const shown = fit(label.text, width - 6);
   const rest = width - 5 - visibleWidth(shown);
   return [
-    segment("┌─ ", "border"),
-    segment(shown, "accent", true),
-    segment(` ${"─".repeat(rest)}┐`, "border"),
+    segment(`${left}─ `, "border"),
+    { ...label, text: shown },
+    segment(` ${"─".repeat(rest)}${right}`, "border"),
   ];
 }
 

@@ -1,5 +1,6 @@
 import { Input, type SelectItem, SelectList, type SelectListTheme } from "@earendil-works/pi-tui";
 import type { AddTaskArgs, AddTaskTarget } from "./add-task.js";
+import { visibleText } from "./format.js";
 
 // The goal form of the shell (LD-T5): the objective, the planner agent and its model. It mirrors the add-task form:
 // pi-tui's Input and SelectList keep the editing and the selection, and the app routes Tab, Enter and Esc itself.
@@ -13,15 +14,23 @@ const FIELDS = ["goal", "agent", "model"] as const;
 
 type GoalField = (typeof FIELDS)[number];
 
-interface GoalValues {
+export interface GoalValues {
   readonly goal: string;
   readonly agent: string;
   readonly model: string;
 }
 
-// The argv of a plan task. Only planner takes a model; the simulated planner never does.
+// A goal with the form's defaults: with a default model, planner and that model; without one, the simulated planner.
+// The input box sends its goal with these (LD-T6b-2), so Enter there queues what g and Enter would.
+export function goalDefaults(goal: string, defaultModel: string | undefined): GoalValues {
+  const model = defaultModel?.trim() ?? "";
+  return { goal, agent: model === "" ? SIMULATED : PLANNER, model };
+}
+
+// The argv of a plan task. Only planner takes a model; the simulated planner never does. The goal goes as the form
+// and the input box show it (format.ts visibleText): a control or format character a paste brought is sent as "?".
 export function goalArgs(values: GoalValues, target: AddTaskTarget): AddTaskArgs {
-  const goal = values.goal.trim();
+  const goal = visibleText(values.goal).trim();
   if (goal === "") return { ok: false, message: "goal is required" };
   const model = values.model.trim();
   if (values.agent === PLANNER && model === "") {
@@ -58,13 +67,11 @@ export class GoalForm {
 
   constructor(options: GoalFormOptions) {
     this.projectSlug = options.projectSlug;
-    const defaultModel = options.defaultModel?.trim() ?? "";
+    const defaults = goalDefaults("", options.defaultModel);
     const items: SelectItem[] = PLANNER_REFS.map((ref) => ({ value: ref, label: ref }));
     this.agentList = new SelectList(items, items.length, PLAIN_THEME);
-    this.agentList.setSelectedIndex(
-      Math.max(0, PLANNER_REFS.indexOf(defaultModel === "" ? SIMULATED : PLANNER)),
-    );
-    this.modelInput.setValue(defaultModel);
+    this.agentList.setSelectedIndex(Math.max(0, PLANNER_REFS.indexOf(defaults.agent)));
+    this.modelInput.setValue(defaults.model);
   }
 
   get field(): GoalField {
@@ -103,7 +110,7 @@ export class GoalForm {
     const agents = PLANNER_REFS.map((ref) => (ref === agent ? `[${ref}]` : ref)).join("  ");
     return [
       `Plan a goal for project ${this.projectSlug}`,
-      `${marker("goal")}goal    ${this.goalInput.getValue()}${cursor("goal")}`,
+      `${marker("goal")}goal    ${visibleText(this.goalInput.getValue())}${cursor("goal")}`,
       `${marker("agent")}agent   ${agents}`,
       `${marker("model")}model   ${this.modelInput.getValue()}${cursor("model")}${agent === PLANNER ? "" : "  (planner only)"}`,
     ];
