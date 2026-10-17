@@ -1,4 +1,5 @@
 import type { Terminal } from "@earendil-works/pi-tui";
+import { connect } from "@haril/control";
 import { createHarilActions } from "./actions.js";
 import { createShellApp } from "./app.js";
 import { openShellData } from "./data.js";
@@ -91,6 +92,7 @@ export async function runShell(argv: readonly string[], deps: ShellRunDeps): Pro
       settings,
       actions: createHarilActions({ harilEntry: args.haril }),
       defaultModel: nonEmpty(deps.env?.[DEFAULT_MODEL_ENV]),
+      connectControl: connect,
     });
     app.start();
     await app.done;
