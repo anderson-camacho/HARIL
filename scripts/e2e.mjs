@@ -4,31 +4,33 @@
 // project root). Each step prints PASS or FAIL; the first failing step exits 1. Temporary directories are removed.
 // M3: the installer of HARIL (haril-bootstrap install/uninstall) runs into a temporary root, and the metadata of
 // other tools' installs must not change across the whole run (AR-G7, M3-T2).
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import {
-  closeSync,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
-  openSync,
   readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { isMainThread, parentPort, Worker, workerData } from "node:worker_threads";
+import { fileURLToPath } from "node:url";
 import {
-  diffForeignSnapshots,
-  foreignRoots,
-  isEmptyDiff,
-  snapshotForeignInstalls,
-} from "./lib/foreign-snapshot.mjs";
+  createCli,
+  expect,
+  guardForeignInstalls,
+  isAlive,
+  killHard,
+  runSteps,
+  spawnDetached,
+  waitFor,
+  writeFakePiWrapper,
+} from "./lib/e2e-harness.mjs";
+import { FAKE_UPSTREAM_REPLY, startCatalogServer, startUpstream } from "./lib/fake-upstream.mjs";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
 const ENTRY = join(REPO, "apps", "haril", "dist", "haril.mjs");
@@ -40,10 +42,9 @@ const CHILD_TIMEOUT_MS = 60_000;
 const CRASH_TASK_MS = 15_000;
 const CRASH_POLL_TIMEOUT_MS = 20_000;
 const SIMULATED_NOTE = "(simulated: no real agent until M2)";
-const FAKE_PI = join(REPO, "integrations", "agent-pi", "testing", "fake-pi.mjs");
 const E2E_GATEWAY_KEY = "e2e-gateway-key-0123456789";
 const E2E_MODEL = "e2e-model";
-const E2E_REPLY = "Hello from the e2e model.";
+const E2E_REPLY = FAKE_UPSTREAM_REPLY;
 const E2E_LONG_MARKER = "E2E-LONG-REPLY";
 const E2E_LONG_CHUNKS = 400;
 const E2E_OUTSIDE_SECRET = "e2e outside secret: must never reach the store";
@@ -65,54 +66,11 @@ const session = {
   upstream: undefined,
 };
 
-// Runs the CLI in a child process and returns its exit code and output. Never throws on a non-zero exit.
-function haril(args) {
-  const result = spawnSync(process.execPath, [ENTRY, ...args], {
-    cwd: session.root,
-    env: session.env,
-    encoding: "utf8",
-    timeout: CHILD_TIMEOUT_MS,
-    windowsHide: true,
-  });
-  if (result.error) throw result.error;
-  return { code: result.status, out: result.stdout ?? "", err: result.stderr ?? "" };
-}
-
-function expectCode(args, allowed) {
-  const result = haril(args);
-  if (!allowed.includes(result.code)) {
-    throw new Error(
-      `"haril ${args.join(" ")}" exited ${result.code}, expected ${allowed.join(" or ")}: ${result.err.trim()}`,
-    );
-  }
-  return result;
-}
-
-function expectJson(args, allowedCodes = [0]) {
-  const result = expectCode(args, allowedCodes);
-  try {
-    return JSON.parse(result.out);
-  } catch {
-    throw new Error(`"haril ${args.join(" ")}" did not print JSON`);
-  }
-}
-
-function expect(condition, message) {
-  if (!condition) throw new Error(message);
-}
+// Runs the CLI in a child process against the session (scripts/lib/e2e-harness.mjs). Never throws on a non-zero exit.
+const { expectCode, expectJson } = createCli(session, ENTRY, CHILD_TIMEOUT_MS);
 
 // Runs haril-bootstrap in a child process against the temporary install root. Never throws on a non-zero exit.
-function bootstrap(args) {
-  const result = spawnSync(process.execPath, [BOOTSTRAP, ...args], {
-    cwd: session.root,
-    env: session.env,
-    encoding: "utf8",
-    timeout: CHILD_TIMEOUT_MS,
-    windowsHide: true,
-  });
-  if (result.error) throw result.error;
-  return { code: result.status, out: result.stdout ?? "", err: result.stderr ?? "" };
-}
+const { run: bootstrap } = createCli(session, BOOTSTRAP, CHILD_TIMEOUT_MS);
 
 // Runs the installed launcher the way a user would: the .cmd shim through cmd.exe on win32, the sh shim elsewhere.
 function launcher(args) {
@@ -144,127 +102,6 @@ function statusReport() {
   return expectJson(["status", "--json", "--project", "demo"]);
 }
 
-function isAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function waitFor(predicate, timeoutMs, what) {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    const value = predicate();
-    if (value) return value;
-    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-}
-
-function killHard(pid) {
-  if (process.platform === "win32") {
-    const result = spawnSync("taskkill", ["/F", "/PID", String(pid)], { encoding: "utf8" });
-    expect(result.status === 0, `taskkill /F /PID ${pid} failed: ${result.stderr ?? ""}`);
-  } else {
-    process.kill(pid, "SIGKILL");
-  }
-}
-
-// Hermetic OpenAI-compatible upstream for the M2 steps: one streamed reply with usage, bearer key checked.
-// It runs in a worker thread, because the steps block on spawnSync and would starve an in-process server.
-function startUpstream() {
-  const worker = new Worker(fileURLToPath(import.meta.url), { workerData: { role: "upstream" } });
-  return new Promise((resolve, reject) => {
-    worker.once("message", (port) => resolve({ port, worker }));
-    worker.once("error", reject);
-  });
-}
-
-// A keyless OpenAI-compatible catalog on loopback: GET /v1/models only (criterion 6). It runs in a worker
-// because the CLI calls are synchronous: a server on the main thread could not answer them.
-function startCatalogServer(modelIds) {
-  const worker = new Worker(fileURLToPath(import.meta.url), {
-    workerData: { role: "catalog", models: modelIds },
-  });
-  return new Promise((resolve, reject) => {
-    worker.once("message", (port) => {
-      resolve({
-        url: `http://127.0.0.1:${port}/v1`,
-        close: () => worker.terminate(),
-      });
-    });
-    worker.once("error", reject);
-  });
-}
-
-function serveCatalog(modelIds) {
-  const server = createServer((request, response) => {
-    if (request.method === "GET" && request.url === "/v1/models") {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(
-        JSON.stringify({ object: "list", data: modelIds.map((id) => ({ id, object: "model" })) }),
-      );
-      return;
-    }
-    response.writeHead(404, { "content-type": "application/json" });
-    response.end(JSON.stringify({ error: { type: "not_found", message: "no route" } }));
-  });
-  server.listen(0, "127.0.0.1", () => parentPort.postMessage(server.address().port));
-  parentPort.on("message", () => server.close());
-}
-
-function serveUpstream() {
-  const server = createServer((request, response) => {
-    if (request.headers.authorization !== `Bearer ${E2E_GATEWAY_KEY}`) {
-      response.writeHead(401, { "content-type": "application/json" });
-      response.end(JSON.stringify({ error: { type: "auth", message: "bad key" } }));
-      return;
-    }
-    if (request.method === "GET" && request.url === "/v1/models") {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ object: "list", data: [{ id: E2E_MODEL, object: "model" }] }));
-      return;
-    }
-    if (request.method !== "POST" || request.url !== "/v1/chat/completions") {
-      response.writeHead(404, { "content-type": "application/json" });
-      response.end(JSON.stringify({ error: { type: "not_found", message: "no route" } }));
-      return;
-    }
-    let body = "";
-    request.setEncoding("utf8");
-    request.on("data", (chunk) => {
-      body += chunk;
-    });
-    request.on("end", () => {
-      const base = {
-        id: "chatcmpl-e2e",
-        object: "chat.completion.chunk",
-        created: 0,
-        model: E2E_MODEL,
-      };
-      const send = (choices, extra = {}) =>
-        response.write(`data: ${JSON.stringify({ ...base, choices, ...extra })}\n\n`);
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      if (body.includes(E2E_LONG_MARKER)) {
-        // A reply longer than any e2e token cap: the Broker must cut the stream at its reservation.
-        for (let index = 0; index < E2E_LONG_CHUNKS; index++) {
-          send([{ index: 0, delta: { content: "long " }, finish_reason: null }]);
-        }
-      } else {
-        send([{ index: 0, delta: { content: "Hello " }, finish_reason: null }]);
-        send([{ index: 0, delta: { content: "from the e2e model." }, finish_reason: null }]);
-      }
-      send([{ index: 0, delta: {}, finish_reason: "stop" }]);
-      send([], { usage: { prompt_tokens: 12, completion_tokens: 5 } });
-      response.end("data: [DONE]\n\n");
-    });
-  });
-  server.listen(0, "127.0.0.1", () => parentPort.postMessage(server.address().port));
-  parentPort.on("message", () => server.close());
-}
-
 // Runs fn with HARIL_PI_CLI_OVERRIDE pointing at one fake-pi scenario, then restores the M2 wrapper.
 function withPiWrapper(wrapper, fn) {
   const previous = session.env.HARIL_PI_CLI_OVERRIDE;
@@ -274,19 +111,6 @@ function withPiWrapper(wrapper, fn) {
   } finally {
     session.env = { ...session.env, HARIL_PI_CLI_OVERRIDE: previous };
   }
-}
-
-// A wrapper that selects one fake-pi scenario (and its environment) and runs fake-pi.mjs with the current Node.
-function writeFakePiWrapper(name, scenario, env = {}) {
-  const path = join(session.root, name);
-  const assignments = Object.entries({ FAKE_PI_SCENARIO: scenario, ...env })
-    .map(([key, value]) => `process.env[${JSON.stringify(key)}] = ${JSON.stringify(value)};\n`)
-    .join("");
-  writeFileSync(
-    path,
-    `${assignments}await import(${JSON.stringify(pathToFileURL(FAKE_PI).href)});\n`,
-  );
-  return path;
 }
 
 // True when a file under one of the directories contains the text: the store, its logs and the project's .haril.
@@ -458,16 +282,13 @@ const steps = [
   [
     "crash: start runs detached",
     () => {
-      const logFd = openSync(session.runtimeLog, "w");
-      const child = spawn(process.execPath, [ENTRY, "start", "--project", "demo"], {
+      const child = spawnDetached({
+        entry: ENTRY,
+        args: ["start", "--project", "demo"],
         cwd: session.root,
         env: session.env,
-        detached: true,
-        stdio: ["ignore", logFd, logFd],
-        windowsHide: true,
+        logPath: session.runtimeLog,
       });
-      closeSync(logFd);
-      child.unref();
       session.runtime = child;
       expect(typeof child.pid === "number", "the runtime did not spawn");
       return `pid ${child.pid}`;
@@ -528,12 +349,16 @@ const steps = [
   [
     "M2: fake upstream and Pi stand-in (hermetic, no network)",
     async () => {
-      session.upstream = await startUpstream();
+      session.upstream = await startUpstream({
+        key: E2E_GATEWAY_KEY,
+        model: E2E_MODEL,
+        longMarker: E2E_LONG_MARKER,
+        longChunks: E2E_LONG_CHUNKS,
+      });
       const port = session.upstream.port;
-      const wrapper = join(session.root, "pi-ok-via-broker.mjs");
-      writeFileSync(
-        wrapper,
-        `process.env.FAKE_PI_SCENARIO = "ok_via_broker";\nawait import(${JSON.stringify(pathToFileURL(FAKE_PI).href)});\n`,
+      const wrapper = writeFakePiWrapper(
+        join(session.root, "pi-ok-via-broker.mjs"),
+        "ok_via_broker",
       );
       session.env = {
         ...session.env,
@@ -603,9 +428,13 @@ const steps = [
     () => {
       const outside = join(session.root, "outside.txt");
       writeFileSync(outside, E2E_OUTSIDE_SECRET, "utf8");
-      const wrapper = writeFakePiWrapper("pi-read-outside.mjs", "read_outside", {
-        FAKE_PI_OUTSIDE_PATH: outside,
-      });
+      const wrapper = writeFakePiWrapper(
+        join(session.root, "pi-read-outside.mjs"),
+        "read_outside",
+        {
+          FAKE_PI_OUTSIDE_PATH: outside,
+        },
+      );
       const output = withPiWrapper(wrapper, () => {
         expectCode(
           ["task", "add", "Read outside the project", "--agent", "analyst", "--project", "demo"],
@@ -640,7 +469,7 @@ const steps = [
       mkdirSync(linkedOutside, { recursive: true });
       writeFileSync(join(linkedOutside, "secret.txt"), E2E_LINK_SECRET, "utf8");
       symlinkSync(linkedOutside, join(session.projectDir, "link-out"), "junction");
-      const wrapper = writeFakePiWrapper("pi-read-link.mjs", "ok_with_read", {
+      const wrapper = writeFakePiWrapper(join(session.root, "pi-read-link.mjs"), "ok_with_read", {
         FAKE_PI_READ_PATH: "link-out/secret.txt",
       });
       const output = withPiWrapper(wrapper, () => {
@@ -845,16 +674,13 @@ const steps = [
         ["task", "add", "Long run", "--agent", `fake:slow:${E2E_SLOW_MS}`, "--project", "demo"],
         [0],
       );
-      const logFd = openSync(session.runtimeLog, "w");
-      const child = spawn(process.execPath, [ENTRY, "start", "--project", "demo"], {
+      const child = spawnDetached({
+        entry: ENTRY,
+        args: ["start", "--project", "demo"],
         cwd: session.root,
         env: session.env,
-        detached: true,
-        stdio: ["ignore", logFd, logFd],
-        windowsHide: true,
+        logPath: session.runtimeLog,
       });
-      closeSync(logFd);
-      child.unref();
       session.runtimePid = child.pid;
       await waitFor(
         () => statusReport().runtime.status === "active",
@@ -897,36 +723,27 @@ async function main() {
   session.runtimeLog = join(session.root, "runtime.log");
   session.installRoot = join(session.root, "install");
   mkdirSync(session.projectDir);
-  const roots = foreignRoots();
-  const foreignBefore = snapshotForeignInstalls({ roots });
+  const foreign = guardForeignInstalls();
 
   try {
-    for (const [name, run] of steps) {
-      try {
-        const detail = await run();
-        console.log(`PASS  ${name}${detail ? `: ${detail}` : ""}`);
-      } catch (error) {
-        console.log(`FAIL  ${name}: ${error.message}`);
-        if (existsSync(session.runtimeLog)) {
-          console.log(`      runtime log: ${session.runtimeLog}`);
-        }
-        return 1;
+    const passed = await runSteps(steps, () => {
+      if (existsSync(session.runtimeLog)) {
+        console.log(`      runtime log: ${session.runtimeLog}`);
       }
-    }
-    const diff = diffForeignSnapshots(foreignBefore, snapshotForeignInstalls({ roots }));
-    if (!isEmptyDiff(diff)) {
+    });
+    if (!passed) return 1;
+    const changes = foreign.changes();
+    if (changes.length > 0) {
       console.log("FAIL  foreign installs changed during the E2E run:");
-      for (const [kind, entries] of Object.entries(diff)) {
-        for (const entry of entries) console.log(`      ${kind}: ${entry}`);
-      }
+      for (const change of changes) console.log(`      ${change}`);
       return 1;
     }
     console.log("PASS  all E2E steps (M1 and M2 hermetic)");
     // One PASS line per compared root plus the user PATH.
-    console.log(`PASS  foreign installs untouched (${roots.length + 1} roots compared)`);
+    console.log(`PASS  foreign installs untouched (${foreign.rootCount} roots compared)`);
     return 0;
   } finally {
-    await session.upstream?.worker.terminate();
+    await session.upstream?.close();
     if (session.runtimePid !== undefined && isAlive(session.runtimePid)) {
       killHard(session.runtimePid);
     }
@@ -934,18 +751,12 @@ async function main() {
   }
 }
 
-// The same file serves as the upstream worker of the M2 steps (see startUpstream).
-if (!isMainThread) {
-  if (workerData?.role === "catalog") serveCatalog(workerData.models);
-  else serveUpstream();
-} else {
-  main().then(
-    (code) => {
-      process.exitCode = code;
-    },
-    (error) => {
-      console.log(`FAIL  ${error.message}`);
-      process.exitCode = 1;
-    },
-  );
-}
+main().then(
+  (code) => {
+    process.exitCode = code;
+  },
+  (error) => {
+    console.log(`FAIL  ${error.message}`);
+    process.exitCode = 1;
+  },
+);
