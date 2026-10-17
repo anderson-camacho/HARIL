@@ -173,6 +173,39 @@ describe("tasks.claimNext", () => {
     expect(store.tasks.claimNext(epoch)?.surfaceRead).toEqual([]);
   });
 
+  // MC-T1: the results of the tasks a task depends on reach its prompt, so the claim carries them, oldest dependency
+  // first whatever order the task named them in. A task without dependencies gets none.
+  it("hands over the stored results of the completed dependencies, in the order they were created", () => {
+    enqueueTask("A");
+    enqueueTask("B");
+    enqueueTask("C", [taskId("B"), taskId("A")]);
+    const first = store.tasks.claimNext(epoch);
+    expect(first?.goal).toBe("A");
+    expect(first?.dependencyResults).toEqual([]);
+    store.runs.complete({
+      runId: first?.runId ?? "",
+      outcome: "succeeded",
+      result: { summary: "A found three headings" },
+    });
+    const second = store.tasks.claimNext(epoch);
+    store.runs.complete({
+      runId: second?.runId ?? "",
+      outcome: "succeeded",
+      result: { text: "B drafted the section", model: "e2e/m", warnings: [] },
+    });
+    store.tasks.promote();
+    const dependent = store.tasks.claimNext(epoch);
+    expect(dependent?.goal).toBe("C");
+    expect(dependent?.dependencyResults).toEqual([
+      { taskId: taskId("A"), goal: "A", result: { summary: "A found three headings" } },
+      {
+        taskId: taskId("B"),
+        goal: "B",
+        result: { text: "B drafted the section", model: "e2e/m", warnings: [] },
+      },
+    ]);
+  });
+
   it("moves the task to running, counts the attempt and records the claim", () => {
     enqueueTask("A", [], 2);
     const claimed = store.tasks.claimNext(epoch);

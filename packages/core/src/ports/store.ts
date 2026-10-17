@@ -311,6 +311,15 @@ export interface PromoteResult {
   readonly blocked: readonly PromotedTask[];
 }
 
+// The stored result of a task that a claimed task depends on (AGENTS.md 6.1, source 4; MC-T1). Another agent wrote it,
+// so the prompt that carries it labels it as data. `result` is the task's result as completed (never null: a task is
+// ready only once every dependency completed, and a completed task has a result).
+export interface DependencyResult {
+  readonly taskId: string;
+  readonly goal: string;
+  readonly result: JsonObject;
+}
+
 // A task handed to the runtime by claimNext. `attempt` is the attempt number of this run.
 export interface ClaimedTask {
   readonly taskId: string;
@@ -329,6 +338,8 @@ export interface ClaimedTask {
   // The files the task is told to read: a plan task's surface.read, empty for a task.create (LD-T7c). Its prompt names
   // them; they are not an access limit.
   readonly surfaceRead: readonly string[];
+  // The results of the task's direct dependencies, the oldest dependency first; empty without dependencies (MC-T1).
+  readonly dependencyResults: readonly DependencyResult[];
   readonly attempt: number;
   readonly attemptsUsed: number;
   readonly maxAttempts: number;

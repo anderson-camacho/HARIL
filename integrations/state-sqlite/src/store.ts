@@ -9,6 +9,7 @@ import type {
   CommandRecord,
   CompletedRun,
   CreatableTaskKind,
+  DependencyResult,
   EnqueueCommandInput,
   EnqueueResult,
   EventFilter,
@@ -948,6 +949,7 @@ export class SqliteStore implements Store {
         maxTokens: row.maxTokens,
         acceptance: JSON.parse(row.acceptance) as ClaimedTask["acceptance"],
         surfaceRead: JSON.parse(row.surfaceRead) as string[],
+        dependencyResults: this.dependencyResultsOf(row.taskId),
         attempt,
         attemptsUsed: row.attemptsUsed,
         maxAttempts: row.maxAttempts,
@@ -956,6 +958,22 @@ export class SqliteStore implements Store {
         runtimeEpoch: epoch,
       };
     });
+  }
+
+  // The results of a task's direct dependencies, in the order the dependencies were created, which for a plan is its
+  // dependency order (MC-T1). A ready task's dependencies all completed (promote), and a completed task always has a
+  // result (schema CHECK); the filter only keeps any other dependency out of the prompt.
+  private dependencyResultsOf(taskId: string): DependencyResult[] {
+    const rows = this.db
+      .prepare(
+        "SELECT t.task_id AS taskId, t.goal AS goal, t.result AS result FROM task_dependencies d JOIN tasks t ON t.task_id = d.depends_on_task_id WHERE d.task_id = ? AND t.state = 'completed' AND t.result IS NOT NULL ORDER BY t.created_seq",
+      )
+      .all(taskId) as unknown as Array<{ taskId: string; goal: string; result: string }>;
+    return rows.map((row) => ({
+      taskId: row.taskId,
+      goal: row.goal,
+      result: JSON.parse(row.result) as JsonObject,
+    }));
   }
 
   // Success: the result is written in the same UPDATE that sets `completed`. Failure: one attempt is charged;

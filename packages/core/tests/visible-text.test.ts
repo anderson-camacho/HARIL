@@ -11,6 +11,12 @@ describe("visibleText", () => {
     expect(visibleText(hostile)).toBe("a?[2Jb?]52;c;ZmFrZS1jbGlw?c?d g?h?i?j");
   });
 
+  // MC-T1 fix: the Unicode line and paragraph separators break a line in some renderers and in a model's reading, so
+  // a caller that keeps line breaks splits on them first; whatever is left of them shows as "?".
+  it("turns the line separator and the paragraph separator into ?", () => {
+    expect(visibleText("one\u{2028}two\u{2029}three")).toBe("one?two?three");
+  });
+
   it("turns format characters, tag characters and lone surrogates into ?, one per code point", () => {
     expect(visibleText("ok\u{202E}txt.exe")).toBe("ok?txt.exe");
     expect(visibleText("do\u{200B}it\u{FEFF}\u{E0041}\u{E007F}")).toBe("do?it???");
