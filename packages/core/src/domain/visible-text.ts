@@ -16,8 +16,12 @@ const INVISIBLE =
 const LOOSE_JOINER =
   /(?<!\p{Extended_Pictographic}|\u{FE0F}|[\u{1F3FB}-\u{1F3FF}]|\p{Mn})\u{200D}/gu;
 
-// Text as the screen shows it: each control character (C0 with ESC, CR and LF, DEL, C1) and each invisible code point
-// above becomes "?", and a tab a space. Such a code point draws nothing or reorders the text around it, so without this
+// The Unicode line and paragraph separators (Zl, Zp): no terminal control, but some renderers and a model reading the
+// text break a line at them, so they are shown like a line feed (MC-T1).
+const LINE_SEPARATORS = /[\u{2028}\u{2029}]/gu;
+
+// Text as the screen shows it: each control character (C0 with ESC, CR and LF, DEL, C1), each line or paragraph
+// separator and each invisible code point above becomes "?", and a tab a space. Such a code point draws nothing or reorders the text around it, so without this
 // a plan could carry words its approver never sees (LD-T6c). It keeps what emoji sequences and scripts need: the
 // presentation selector right after an emoji, the joiner where it joins, and the combining marks (accents, nikud,
 // viramas), which draw. One "?" per code point: a tag character is two UTF-16 units and no cell, its "?" one unit and
@@ -32,5 +36,9 @@ export function visibleText(text: string): string {
     else out += char;
   }
   // The joiners are judged last, on the text with every other invisible code point already shown as "?".
-  return out.replace(LOOSE_SELECTOR, "?").replace(INVISIBLE, "?").replace(LOOSE_JOINER, "?");
+  return out
+    .replace(LINE_SEPARATORS, "?")
+    .replace(LOOSE_SELECTOR, "?")
+    .replace(INVISIBLE, "?")
+    .replace(LOOSE_JOINER, "?");
 }

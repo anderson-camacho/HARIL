@@ -67,7 +67,7 @@ export function buildAgentSpec(task: ExecutableTask, run: RunIdentity): AgentSpe
       ? ANALYST_INSTRUCTIONS
       : [];
   const results = isRealAgent(task.agentRef)
-    ? dependencyResultsSection(task.dependencyResults ?? [])
+    ? dependencyResultsSection(task.dependencyResults ?? [], task.maxTokens)
     : "";
   const prompt = [
     task.goal,
@@ -97,17 +97,20 @@ export function buildAgentSpec(task: ExecutableTask, run: RunIdentity): AgentSpe
 // required PlanTask fields and the read-only rule. Since LD-T7c it also says what the agent of the plan can do, what
 // its read surface means, how the last task asks for a requested file, what a description adds and what an acceptance
 // check tests. Since MC-T1 it says that a task receives the results of its dependencies, so a plan may chain tasks,
-// while every task still returns a whole piece of the work. The Core checks the proposal again (plan-graph.ts); this
-// text only guides the agent.
+// while every task still returns a whole piece of the work. The first real demo of MC-T1 merged "list the gaps, then
+// write FAQ.md" into one task checked for the text "FAQ.md", which the bare file content never holds, so it also asks
+// for one task per result and for no file-name check on a file's content. The Core checks the proposal again
+// (plan-graph.ts); this text only guides the agent.
 const PLANNER_INSTRUCTIONS: readonly string[] = [
   `You plan this goal; you do not do the work. Read what you need, then call the tool ${PROPOSE_PLAN_TOOL} once with a plan. A person approves the plan before any of its tasks runs.`,
   [
     'The agent of every task is "analyst", a read-only agent: "analyst" reads project files and answers in its result text; it cannot write files or run commands.',
     'A task\'s "surface.read" lists the files the task tells it to read; it is not an access limit.',
     'If the goal asks for a file or a change, the goal of the last task says "Return the full content of <file> as the result", never "write"; the person applies it.',
-    "A task gets its goal, its description, its files to read and the results of the tasks in its dependsOn, so a later task can build on an earlier task's result (for example, draft a file from an analysis).",
-    "Every task still does a whole piece of the work and puts it in its result text, which is all the tasks after it receive: a task that only reads produces nothing. One task per result is usually enough.",
-    "An acceptance check tests the text of that task's own result; when unsure, use [].",
+    "A task gets its goal, its description, its files to read and the results of the tasks in its dependsOn, so a later task can build on an earlier task's result.",
+    'Plan one task per result the goal asks for; a task that needs another task\'s result as its input depends on that task: "first list X, then write Y from it" is two tasks, the second depending on the first.',
+    "Every task does a whole piece of the work and puts it in its result text, which is all the tasks after it receive: a task that only reads produces nothing.",
+    "An acceptance check tests the text of that task's own result: never check for a file's name in a result that is that file's content, and use [] for a task that returns a file's content; when unsure, use [].",
   ].join(" "),
   [
     'The plan is a JSON object {"schemaVersion": 1, "tasks": [...]} with 1 to 5 tasks. Every task has exactly these fields:',

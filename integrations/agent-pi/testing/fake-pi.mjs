@@ -166,15 +166,16 @@ function uiRequest(id) {
 }
 
 // What an analyst of the demo plan saw of the tasks it depends on (MC-T1): " | dependency result: <first line>" for
-// the first block of the prompt's dependency section (the label, a blank line, "[<task id>] <goal>", then its result),
-// or "" when the prompt has none. It lets the e2e prove that a task received its dependency's answer.
+// the first block of the prompt's dependency section (the label, a blank line, "[<task id>] <goal>", then its result,
+// each line marked "| "), or "" when the prompt has none. It lets the e2e prove that a task received its dependency's
+// answer.
 const DEPENDENCY_LABEL = "Results of the tasks this task depends on (";
 
 function dependencyEcho(prompt) {
   const lines = prompt.split("\n");
   const start = lines.findIndex((line) => line.startsWith(DEPENDENCY_LABEL));
   if (start === -1 || !(lines[start + 2] ?? "").startsWith("[")) return "";
-  return ` | dependency result: ${lines[start + 3] ?? ""}`;
+  return ` | dependency result: ${(lines[start + 3] ?? "").replace(/^\| /, "")}`;
 }
 
 // One streamed OpenAI-style call through the Broker. Refusals (402 insufficient_quota, 401, 502) end the
