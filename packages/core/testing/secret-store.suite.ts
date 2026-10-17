@@ -11,7 +11,8 @@ import { type ContractTestApi, ContractViolation } from "./contract-api.js";
 // Contract suite of the SecretStore port (TEST_STRATEGY 5 row 10; ADR-0020 SEC-1, SEC-2; BL-024, BL-089). It is written
 // once and run against every implementation: FakeSecretStore in packages/core/tests and EnvSecretStore in
 // integrations/os. get, put and delete by reference; a value only ever comes back sealed; every expected failure is a
-// typed result; no value shows in an answer, a refusal or the store itself; nothing is persisted.
+// typed result; no value shows in an answer, a refusal or the store itself, printed, serialized or walked through its
+// own properties; nothing is persisted.
 
 // A fresh store for each case. Two calls must give two stores over the same backing source (for EnvSecretStore, the
 // same environment map), so that a store which persists what it is given is caught (SS-08). The source must hold
@@ -110,8 +111,42 @@ function shownForms(value: unknown): string[] {
   return forms;
 }
 
+// A bound on the objects one walk visits, so a cyclic or huge value cannot stall a case.
+const WALK_LIMIT = 10_000;
+
+// Every string reachable from `value` without running its code: own properties, enumerable or not, under string or
+// symbol keys (data properties only, so no getter runs), Map keys and values, Set values, and the property keys
+// themselves. Private class fields and closures stay out of reach, which is where a store keeps its values.
+function reachableStrings(value: unknown): string[] {
+  const found: string[] = [];
+  const seen = new Set<object>();
+  const pending: unknown[] = [value];
+  while (pending.length > 0 && seen.size < WALK_LIMIT) {
+    const next = pending.pop();
+    if (typeof next === "string") {
+      found.push(next);
+      continue;
+    }
+    if ((typeof next !== "object" && typeof next !== "function") || next === null) continue;
+    if (seen.has(next)) continue;
+    seen.add(next);
+    try {
+      if (next instanceof Map) for (const [key, entry] of next) pending.push(key, entry);
+      if (next instanceof Set) for (const entry of next) pending.push(entry);
+      for (const key of Reflect.ownKeys(next)) {
+        found.push(typeof key === "string" ? key : (key.description ?? ""));
+        const descriptor = Reflect.getOwnPropertyDescriptor(next, key);
+        if (descriptor !== undefined && "value" in descriptor) pending.push(descriptor.value);
+      }
+    } catch {
+      // A value that cannot be walked without running its code (a Proxy) is left to the forms above.
+    }
+  }
+  return found;
+}
+
 function checkHidden(what: string, value: unknown): void {
-  for (const form of shownForms(value)) {
+  for (const form of [...shownForms(value), ...reachableStrings(value)]) {
     for (const secret of VALUES) check(!form.includes(secret), `${what} shows the value`);
   }
 }
@@ -263,10 +298,20 @@ const CASES: readonly ContractCase[] = [
   {
     id: "SS-07",
     title:
-      "put refuses a plain or empty value as contract.invalid, without quoting it, and keeps nothing",
+      "put refuses a plain, empty or unreadable value as contract.invalid, without quoting it, and keeps nothing",
     run(make) {
       const store = make();
-      const refused: readonly unknown[] = [CANARY, { reveal: CANARY }, sealSecret(""), null];
+      const refused: readonly unknown[] = [
+        CANARY,
+        { reveal: CANARY },
+        sealSecret(""),
+        null,
+        {
+          reveal: () => {
+            throw new Error(CANARY);
+          },
+        },
+      ];
       for (const [index, given] of refused.entries()) {
         const what = `put of refused value #${index + 1}`;
         const error = expectFailure(
@@ -305,18 +350,24 @@ const CASES: readonly ContractCase[] = [
     title: "no value shows in an answer, a refusal or the store itself",
     run(make) {
       const store = make();
-      const answers: unknown[] = [
-        store.put(REF_A, sealSecret(CANARY)),
-        store.get(REF_A),
-        store.put(REF_A, sealSecret(OTHER)),
-        store.get(REF_A),
-        store.get(REF_B),
-        store.put("env:" as SecretRef, sealSecret(CANARY)),
-        store.put(REF_B, CANARY as unknown as SecretMaterial),
-        store.delete(REF_A),
-        store,
+      const steps: readonly (readonly [string, () => unknown])[] = [
+        ["put under A", () => store.put(REF_A, sealSecret(CANARY))],
+        ["get of A", () => store.get(REF_A)],
+        ["second put under A", () => store.put(REF_A, sealSecret(OTHER))],
+        ["get of A after the second put", () => store.get(REF_A)],
+        ["get of B", () => store.get(REF_B)],
+        [
+          "put under a malformed reference",
+          () => store.put("env:" as SecretRef, sealSecret(CANARY)),
+        ],
+        ["put of a plain value", () => store.put(REF_B, CANARY as unknown as SecretMaterial)],
+        ["delete of A", () => store.delete(REF_A)],
       ];
-      for (const [index, answer] of answers.entries()) checkHidden(`answer #${index + 1}`, answer);
+      // The store is walked after every step, so a value it holds only while stored is found too.
+      for (const [what, step] of steps) {
+        checkHidden(`the answer to ${what}`, attempt(what, step));
+        checkHidden(`the store after ${what}`, store);
+      }
     },
   },
 ];

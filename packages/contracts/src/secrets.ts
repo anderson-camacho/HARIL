@@ -53,14 +53,22 @@ export type SealedSecretCheck =
   | { readonly ok: false; readonly message: string };
 
 // What a store keeps of a value it is given: a fresh sealed copy, read once. The value must arrive sealed (never as a
-// plain string) and not be empty; the message never quotes what was given.
+// plain string) and not be empty; the message never quotes what was given, nor what reading it threw.
 export function checkSealedSecret(given: unknown): SealedSecretCheck {
-  const reveal: unknown =
-    typeof given === "object" && given !== null && "reveal" in given ? given.reveal : undefined;
-  if (typeof reveal !== "function") {
-    return { ok: false, message: "a secret is given sealed (sealSecret), never as a plain value" };
+  let value: unknown;
+  try {
+    const reveal: unknown =
+      typeof given === "object" && given !== null && "reveal" in given ? given.reveal : undefined;
+    if (typeof reveal !== "function") {
+      return {
+        ok: false,
+        message: "a secret is given sealed (sealSecret), never as a plain value",
+      };
+    }
+    value = reveal.call(given);
+  } catch {
+    return { ok: false, message: "a secret could not be read from what was given" };
   }
-  const value: unknown = reveal.call(given);
   if (typeof value !== "string" || value.length === 0) {
     return { ok: false, message: "a secret must be a non-empty string" };
   }

@@ -81,6 +81,45 @@ describe("sealSecret", () => {
     expect(checkSealedSecret({ reveal: () => 7 }).ok).toBe(false);
   });
 
+  it("refuses a value whose reveal or reveal property throws, with a fixed message that quotes nothing it threw", () => {
+    const throwing = [
+      {
+        reveal: () => {
+          throw new Error(FAKE_SECRET);
+        },
+      },
+      {
+        reveal: () => {
+          throw FAKE_SECRET;
+        },
+      },
+      Object.defineProperty({}, "reveal", {
+        get: () => {
+          throw new Error(FAKE_SECRET);
+        },
+      }),
+      new Proxy(
+        {},
+        {
+          has: () => {
+            throw new Error(FAKE_SECRET);
+          },
+        },
+      ),
+    ];
+    const messages = new Set<string>();
+    for (const given of throwing) {
+      let checked: ReturnType<typeof checkSealedSecret> | undefined;
+      expect(() => {
+        checked = checkSealedSecret(given);
+      }).not.toThrow();
+      expect(checked?.ok).toBe(false);
+      if (checked !== undefined && !checked.ok) messages.add(checked.message);
+      expect(JSON.stringify(checked)).not.toContain(FAKE_SECRET);
+    }
+    expect(messages.size).toBe(1);
+  });
+
   it("cannot be altered to give another value", () => {
     const material = sealSecret(FAKE_SECRET);
     expect(Object.isFrozen(material)).toBe(true);

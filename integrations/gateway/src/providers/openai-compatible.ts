@@ -88,10 +88,25 @@ function count(value: unknown): number | null {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
 }
 
-// A key echoed back by the upstream must not reach an error message, a log or the output.
+// A key echoed back by the upstream must not reach an error message, a log or the output: in clear, in base64 or
+// base64url (padded or not) or URL-encoded, the longest form first so a shorter one never splits a longer one.
 function redact(text: string, credential: SecretMaterial | undefined): string {
   const key = revealed(credential);
-  return key === undefined ? text : text.split(key).join("[redacted]");
+  if (key === undefined) return text;
+  let out = text;
+  for (const form of echoForms(key)) out = out.split(form).join("[redacted]");
+  return out;
+}
+
+function echoForms(key: string): string[] {
+  const bytes = Buffer.from(key, "utf8");
+  const forms = new Set([
+    key,
+    bytes.toString("base64").replace(/=+$/, ""),
+    bytes.toString("base64url"),
+    encodeURIComponent(key),
+  ]);
+  return [...forms].filter((form) => form.length > 0).sort((a, b) => b.length - a.length);
 }
 
 function revealed(credential: SecretMaterial | undefined): string | undefined {

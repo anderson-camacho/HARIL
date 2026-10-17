@@ -25,6 +25,32 @@ describe("FakeSecretStore", () => {
     expect(got.ok && got.value.reveal()).toBe(FAKE_SECRET);
     expect(JSON.stringify(got)).not.toContain(FAKE_SECRET);
   });
+
+  it("treats a blank seed as unset and drops surrounding whitespace, like EnvSecretStore", () => {
+    const blank = envSecretRef("HARIL_TEST_BLANK");
+    const store = new FakeSecretStore({
+      [REF]: `  ${FAKE_SECRET}
+`,
+      [blank]: " 	 ",
+    });
+    const got = store.get(REF);
+    expect(got.ok && got.value.reveal()).toBe(FAKE_SECRET);
+    expect(store.get(blank)).toMatchObject({ ok: false, error: { code: "secret.not_found" } });
+    expect(store.delete(blank)).toEqual({ ok: true, value: { ref: blank, existed: false } });
+  });
+
+  it("refuses a value whose reveal throws as contract.invalid, quoting nothing it threw", () => {
+    const store = new FakeSecretStore();
+    const throwing = {
+      reveal: () => {
+        throw new Error(FAKE_SECRET);
+      },
+    } as unknown as SecretMaterial;
+    const put = store.put(REF, throwing);
+    expect(put).toMatchObject({ ok: false, error: { code: "contract.invalid" } });
+    expect(JSON.stringify(put)).not.toContain(FAKE_SECRET);
+    expect(store.get(REF).ok).toBe(false);
+  });
 });
 
 // A store that keeps every put in one place shared by all its instances: what writing the value to disk looks like
@@ -61,6 +87,38 @@ class PlainStore extends FakeSecretStore {
   }
 }
 
+// Stores that also keep the plain values where JSON.stringify, String and Object.keys do not look: a public Map, a
+// non-enumerable own array, and plain objects inside a Set.
+class PublicMapStore extends FakeSecretStore {
+  readonly plain = new Map<string, string>();
+  override put(ref: SecretRef, material: SecretMaterial) {
+    const receipt = super.put(ref, material);
+    if (receipt.ok) this.plain.set(ref, material.reveal());
+    return receipt;
+  }
+}
+
+class HiddenListStore extends FakeSecretStore {
+  constructor() {
+    super();
+    Object.defineProperty(this, "history", { value: [], enumerable: false });
+  }
+  override put(ref: SecretRef, material: SecretMaterial) {
+    const receipt = super.put(ref, material);
+    if (receipt.ok) (this as unknown as { history: string[] }).history.push(material.reveal());
+    return receipt;
+  }
+}
+
+class SetOfRecordsStore extends FakeSecretStore {
+  readonly log = new Set<{ readonly entry: { readonly value: string } }>();
+  override put(ref: SecretRef, material: SecretMaterial) {
+    const receipt = super.put(ref, material);
+    if (receipt.ok) this.log.add({ entry: { value: material.reveal() } });
+    return receipt;
+  }
+}
+
 // A store that throws on a malformed reference instead of answering contract.invalid.
 class ThrowingStore extends FakeSecretStore {
   override get(ref: SecretRef) {
@@ -80,6 +138,9 @@ describe("SecretStore contract: seeded deviations (V18-5)", () => {
     ["SS-07", "quotes the value it refused", EchoingStore, "shows the value"],
     ["SS-02", "returns the plain value", PlainStore, "sealed"],
     ["SS-06", "throws on a malformed reference", ThrowingStore, "threw"],
+    ["SS-09", "keeps plain values in a public Map", PublicMapStore, "shows the value"],
+    ["SS-09", "keeps plain values in a non-enumerable array", HiddenListStore, "shows the value"],
+    ["SS-09", "keeps plain values in records inside a Set", SetOfRecordsStore, "shows the value"],
   ] as const)("%s fails for a store that %s", async (id, _what, Store, fragment) => {
     disk.clear();
     const make: SecretStoreFactory = () => new Store() as SecretStore;
@@ -88,11 +149,14 @@ describe("SecretStore contract: seeded deviations (V18-5)", () => {
     await expect(run).rejects.toThrow(fragment);
   });
 
-  it.each(["SS-02", "SS-06", "SS-07", "SS-08"])("%s passes for the honest store", async (id) => {
-    await expect(runSecretStoreContractCase(id, () => new FakeSecretStore())).resolves.toBe(
-      undefined,
-    );
-  });
+  it.each(["SS-02", "SS-06", "SS-07", "SS-08", "SS-09"])(
+    "%s passes for the honest store",
+    async (id) => {
+      await expect(runSecretStoreContractCase(id, () => new FakeSecretStore())).resolves.toBe(
+        undefined,
+      );
+    },
+  );
 
   it("refuses an unknown case id", async () => {
     await expect(runSecretStoreContractCase("SS-99", () => new FakeSecretStore())).rejects.toThrow(

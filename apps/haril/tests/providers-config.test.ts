@@ -8,6 +8,8 @@ import type { HostInfo } from "../src/context.js";
 import { loadProviderConfig } from "../src/providers.js";
 
 // haril.json (M3-T7): defaults, the HARIL_CONFIG override, and the validation rules. No network here.
+const FAKE_ENV_VALUE = "fake-env-value";
+const FAKE_STORE_VALUE = "fake-store-value";
 let root: string;
 
 beforeEach(() => {
@@ -59,12 +61,12 @@ describe("provider defaults (no haril.json)", () => {
   });
 
   it("reads the key by reference through the SecretStore it is given, never from the environment directly", () => {
-    const host = hostWith({ HARIL_CLIPROXYAPI_KEY: "fake-env-value" });
+    const host = hostWith({ HARIL_CLIPROXYAPI_KEY: FAKE_ENV_VALUE });
     const fromStore = loadProviderConfig(
       host,
-      new FakeSecretStore({ [envSecretRef("HARIL_CLIPROXYAPI_KEY")]: "fake-store-value" }),
+      new FakeSecretStore({ [envSecretRef("HARIL_CLIPROXYAPI_KEY")]: FAKE_STORE_VALUE }),
     );
-    expect(fromStore.ok && fromStore.providers[0]?.credential?.reveal()).toBe("fake-store-value");
+    expect(fromStore.ok && fromStore.providers[0]?.credential?.reveal()).toBe(FAKE_STORE_VALUE);
     const empty = loadProviderConfig(host, new FakeSecretStore());
     expect(empty.ok && empty.providers[0]?.credential).toBeUndefined();
   });

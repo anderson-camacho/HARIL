@@ -18,6 +18,8 @@ import {
 // Data access (TUI-D4): the shell opens the store like the CLI's openExisting (inspect first, never create it) and
 // reads through the Store facets only. Nothing here starts the runtime or writes task rows.
 
+const FAKE_SECRET = "fake-secret-fixture";
+
 let root: string;
 let dataDir: string;
 let runtimeRoot: string;
@@ -187,7 +189,6 @@ describe("providers and themes", () => {
   });
 
   it("tells whether a key is set through the SecretStore it is given, never from the environment directly", () => {
-    const FAKE_SECRET = "fake-secret-fixture";
     writeFileSync(
       join(runtimeRoot, "config", "haril.json"),
       JSON.stringify({
@@ -236,7 +237,7 @@ describe("providers and themes", () => {
       paths: paths(),
       env: {},
       secrets: new CountingStore({
-        [envSecretRef("HARIL_CLIPROXYAPI_KEY")]: "fake-secret-fixture",
+        [envSecretRef("HARIL_CLIPROXYAPI_KEY")]: FAKE_SECRET,
       }),
     });
     try {

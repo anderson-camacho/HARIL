@@ -14,13 +14,15 @@ import type {
 } from "../src/ports/index.js";
 
 // In-memory SecretStore for tests (BL-024); it passes the same contract suite as EnvSecretStore. It may start with
-// seeded values, and tests seed fake values only (TEST_STRATEGY 1 row 10).
+// seeded values, read like EnvSecretStore reads the environment: surrounding whitespace dropped, a blank value unset.
+// Tests seed fake values only (TEST_STRATEGY 1 row 10).
 export class FakeSecretStore implements SecretStore {
   readonly #secrets = new Map<SecretRef, SecretMaterial>();
 
   constructor(seed: Readonly<Record<SecretRef, string>> = {}) {
     for (const [ref, value] of Object.entries(seed)) {
-      this.#secrets.set(ref as SecretRef, sealSecret(value));
+      const trimmed = value.trim();
+      if (trimmed !== "") this.#secrets.set(ref as SecretRef, sealSecret(trimmed));
     }
   }
 
