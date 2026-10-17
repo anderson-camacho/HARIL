@@ -344,7 +344,8 @@ export interface CommitInput {
   readonly usage: SettleUsage | null;
   // Worst case known when the reply carries no usage (the estimate of the input plus the output so far).
   readonly upperBound: number;
-  readonly modelRequested: string;
+  // Null only when the reservation is settled by the reconciler, which has no request to name (ARCH 13.2 CP4).
+  readonly modelRequested: string | null;
   readonly modelServed: string | null;
 }
 
@@ -380,6 +381,9 @@ export interface BudgetsPort {
   reserve(input: ReserveInput): ReserveResult;
   commit(input: CommitInput): CommitStatus;
   release(reservationId: string): ReleaseStatus;
+  // Settles every open reservation of a run whose runtime is gone, at its upper bound and unreconciled (ARCH
+  // 13.2 CP4). Returns how many were settled; a settled reservation is skipped, so a second call returns 0.
+  settleOpenForRun(runId: string): number;
   // Null when the ledger holds no settled entry for the filter.
   usageSummary(filter?: UsageSummaryFilter): UsageSummary | null;
 }
@@ -460,7 +464,8 @@ export interface Store {
     heartbeat(epoch: number, ttlMs: number): void;
     release(epoch: number, cleanExit: boolean): void;
     // Orphans every running task claimed by another epoch: back to ready (retry_reason orphaned, no attempt
-    // charged, infra_restarts + 1) or failed when infra_restarts would exceed maxInfraRestarts. One transaction.
+    // charged, infra_restarts + 1) or failed when infra_restarts would exceed maxInfraRestarts. The orphaned run's
+    // virtual keys are revoked and its open budget reservations settled (ARCH 13.2 CP1, CP4). One transaction.
     reconcile(epoch: number, maxInfraRestarts: number): readonly RecoveredTask[];
   };
   readonly runs: {
