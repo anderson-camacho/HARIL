@@ -154,20 +154,20 @@ describe("doctor", async () => {
     },
   );
 
-  it.each(["v24.19.0", "v25.1.0", "v26.7.9"])(
-    "reports warn on %s and exits 1 (M1-D2: warnings)",
+  it("reports warn on v24.19.0 and exits 1 (M1-D2: warnings, the kept 24.x deviation)", async () => {
+    const { code, report } = await doctorJson("v24.19.0");
+    expect(code).toBe(1);
+    expect(report.status).toBe("warn");
+  });
+
+  it.each(["v22.12.0", "v25.1.0", "v26.7.9"])(
+    "reports error on %s and exits 2 (M1-D2: errors; INV-19)",
     async (nodeVersion) => {
       const { code, report } = await doctorJson(nodeVersion);
-      expect(code).toBe(1);
-      expect(report.status).toBe("warn");
+      expect(code).toBe(2);
+      expect(report.status).toBe("error");
     },
   );
-
-  it("reports error and exits 2 below Node 24 (M1-D2: errors)", async () => {
-    const { code, report } = await doctorJson("v22.12.0");
-    expect(code).toBe(2);
-    expect(report.status).toBe("error");
-  });
 
   it("prints node, platform and arch in text form", async () => {
     const { io, out } = harness();

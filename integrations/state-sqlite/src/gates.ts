@@ -66,10 +66,19 @@ function nodeGate(nodeVersion: string): StoreGate {
     };
   }
   if (!inNodeRange(version)) {
+    // Kept deviation (M1-D1, MC-D6): a 24.x below the range, the team's host, opens with a warning. Every other
+    // version outside the range (25.x, 26.0 to 26.7) is refused (INV-19).
+    if (version[0] === 24) {
+      return {
+        name: "node",
+        status: "warn",
+        detail: `Node ${nodeVersion} is outside ${NODE_RANGE}. The Pi launch path (M2) refuses it (INV-19).`,
+      };
+    }
     return {
       name: "node",
-      status: "warn",
-      detail: `Node ${nodeVersion} is outside ${NODE_RANGE}. The Pi launch path (M2) refuses it (INV-19).`,
+      status: "error",
+      detail: `Node ${nodeVersion} is outside ${NODE_RANGE}. Remedy: use Node ${NODE_RANGE}.`,
     };
   }
   return { name: "node", status: "ok", detail: `Node ${nodeVersion}` };
