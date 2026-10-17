@@ -24,11 +24,14 @@ function enoent(path: string): Error {
 export interface MemoryFs extends FsPort {
   readonly files: Map<string, Uint8Array>;
   readonly dirs: Set<string>;
+  // Paths passed to setExecutable, in call order without repeats.
+  readonly executables: Set<string>;
 }
 
 export function createMemoryFs(): MemoryFs {
   const files = new Map<string, Uint8Array>();
   const dirs = new Set<string>();
+  const executables = new Set<string>();
   const has = (path: string): boolean =>
     files.has(path) ||
     dirs.has(path) ||
@@ -37,6 +40,10 @@ export function createMemoryFs(): MemoryFs {
   return {
     files,
     dirs,
+    executables,
+    setExecutable: async (path) => {
+      executables.add(path);
+    },
     exists: async (path) => has(path),
     readText: async (path) => {
       const bytes = files.get(path);

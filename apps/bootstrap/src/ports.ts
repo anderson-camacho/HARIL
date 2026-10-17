@@ -13,6 +13,8 @@ export interface FsPort {
   readDir(path: string): Promise<readonly DirEntry[]>;
   // Creates the parent directories when needed.
   writeFile(path: string, data: string | Uint8Array): Promise<void>;
+  // Lets the owner execute the file (mode 0o755); a no-op on win32, which has no mode bits.
+  setExecutable(path: string): Promise<void>;
   mkdirp(path: string): Promise<void>;
   rename(from: string, to: string): Promise<void>;
   // Recursive and silent when the path is missing.
