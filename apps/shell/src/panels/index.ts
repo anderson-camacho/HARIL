@@ -1,8 +1,9 @@
-import type { TaskDetailView } from "../data.js";
+import type { PendingApproval, TaskDetailView } from "../data.js";
+import { planDetailLines, plansView } from "./plan.js";
 import { configView, modelsView, themesView, unavailableView } from "./setup.js";
 import type { PanelContext, PanelId, PanelView } from "./types.js";
 import { eventsView, tokensView } from "./usage.js";
-import { agentsView, projectsView, taskDetailLines, tasksView } from "./work.js";
+import { agentsView, liveView, projectsView, taskDetailLines, tasksView } from "./work.js";
 
 export {
   PANELS,
@@ -35,10 +36,19 @@ export function buildPanelView(id: PanelId, context: PanelContext): PanelView {
     case "services":
     case "terminals":
       return unavailableView();
+    case "plans":
+      return plansView(context);
+    case "live":
+      return liveView(context);
   }
 }
 
 // The detail of one task, the lines Enter on the Tasks panel opens.
 export function buildTaskDetailView(view: TaskDetailView): string[] {
   return taskDetailLines(view);
+}
+
+// The tasks of one proposed plan, the lines Enter on the Plans panel opens (LD-T5).
+export function buildPlanDetailView(approval: PendingApproval, context: PanelContext): string[] {
+  return planDetailLines(approval, context);
 }

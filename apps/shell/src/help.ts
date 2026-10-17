@@ -1,16 +1,20 @@
-// The help overlay (TUI-D7): every key the shell answers to.
+// The help overlay (TUI-D7): every key the shell answers to. It fits an 80x24 terminal without scrolling.
 export const HELP_LINES: readonly string[] = [
   "Keys",
-  "  1-9          open panel 1 to 9",
-  "  Tab          next panel; Shift+Tab goes back (eleven, wrapping)",
+  "  1-9          open panel 1 to 9; Plans and Live have p and l",
+  "  Tab          next panel; Shift+Tab goes back (thirteen, wrapping)",
   "  Up, Down     move the selection; PageUp, PageDown, Home and End jump",
-  "  Enter        open a task; on Projects, pick the project filter; on Themes, apply the theme",
+  "  Enter        open a task or plan; pick a project filter or apply a theme",
+  "  g            plan a goal: objective, planner and model; Enter asks for a plan",
+  "  p            open the Plans panel: the plans waiting for approval",
+  "  y, n         approve or deny the plan under the cursor or open on Plans",
+  "  l            open the Live panel: state, tokens and result of the newest tasks",
   "  a            add a task: title, agent and model (Tab moves, Enter adds, Esc cancels)",
   "  t            open the Themes panel; Enter there applies the theme and saves ui.theme",
-  "  Esc          close the task detail or this help",
+  "  Esc          close a detail, a form or this help",
   "  r            reload from the store",
   "  ?            show or hide this help",
   "  q, Ctrl+C    quit",
   "",
-  "Banner: isolation, pending approvals, runtime, project.",
+  "Banner: isolation, pending approvals, runtime (live while subscribed), project.",
 ];

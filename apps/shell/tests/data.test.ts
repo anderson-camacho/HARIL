@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openShellData, type ShellPaths } from "../src/data.js";
-import { openSeedStore, SEED_TITLES, seedStore } from "./seed.js";
+import { createTask, openSeedStore, proposeExamplePlan, SEED_TITLES, seedStore } from "./seed.js";
 
 // Data access (TUI-D4): the shell opens the store like the CLI's openExisting (inspect first, never create it) and
 // reads through the Store facets only. Nothing here starts the runtime or writes task rows.
@@ -221,6 +221,80 @@ describe("pending approvals (LD-T3)", () => {
     const data = openShellData({ paths: paths(), env: {} });
     try {
       expect(data.load(undefined).pendingApprovals).toBe(1);
+    } finally {
+      data.close();
+    }
+  });
+});
+
+describe("plans waiting for approval (LD-T5)", () => {
+  it("keeps each requested approval with the tasks of its plan, read from the subject", () => {
+    const seeded = seedStore(dataDir);
+    const approvalId = proposeExamplePlan(dataDir, seeded.demoId);
+    const data = openShellData({ paths: paths(), env: {} });
+    try {
+      const snapshot = data.load(undefined);
+      expect(snapshot.pendingApprovals).toBe(1);
+      expect(snapshot.approvals).toHaveLength(1);
+      const [approval] = snapshot.approvals;
+      expect(approval).toMatchObject({
+        approvalId,
+        projectId: seeded.demoId,
+        requestedBy: "cli",
+        error: undefined,
+      });
+      expect(approval?.tasks.map((task) => task.localId)).toEqual([
+        "survey-readme",
+        "draft-section",
+        "insert-section",
+        "verify-readme",
+      ]);
+      expect(approval?.tasks[1]).toEqual({
+        localId: "draft-section",
+        goal: "Draft the new README section",
+        agent: "developer-block",
+        dependsOn: ["survey-readme"],
+      });
+    } finally {
+      data.close();
+    }
+  });
+});
+
+describe("live tasks (LD-T5)", () => {
+  it("keeps the scope's newest tasks with their settled tokens", () => {
+    const seeded = seedStore(dataDir);
+    const data = openShellData({ paths: paths(), env: {} });
+    try {
+      const live = data.load(seeded.demoId).live;
+      expect(live.map((entry) => entry.detail.goal)).toEqual([
+        SEED_TITLES.completed,
+        SEED_TITLES.running,
+        SEED_TITLES.pending,
+      ]);
+      expect(live[0]?.tokens).toEqual({ input: 40, output: 12, unreconciled: 0 });
+      expect(live[1]?.tokens).toBeNull();
+    } finally {
+      data.close();
+    }
+  });
+
+  it("is bounded to the 20 newest tasks, oldest first", () => {
+    const seeded = seedStore(dataDir);
+    const writer = openSeedStore(dataDir);
+    try {
+      for (let index = 1; index <= 25; index++) {
+        createTask(writer, seeded.demoId, seeded.epoch, `Bulk task ${index}`);
+      }
+    } finally {
+      writer.close();
+    }
+    const data = openShellData({ paths: paths(), env: {} });
+    try {
+      const goals = data.load(seeded.demoId).live.map((entry) => entry.detail.goal);
+      expect(goals).toHaveLength(20);
+      expect(goals[0]).toBe("Bulk task 6");
+      expect(goals.at(-1)).toBe("Bulk task 25");
     } finally {
       data.close();
     }

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { TaskDetail } from "@haril/core/ports";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createShellApp, type ShellApp } from "../src/app.js";
 import { openShellData, type ShellData } from "../src/data.js";
@@ -119,7 +120,7 @@ describe("shell app with a seeded store", () => {
     await mounted.app.done;
   });
 
-  it("number keys 1 to 9 select the panel and Tab and Shift+Tab cycle through all eleven", async () => {
+  it("number keys 1 to 9 select the panel and Tab and Shift+Tab cycle through all thirteen", async () => {
     const mounted = mount(open());
     await started(mounted);
     mounted.terminal.send("2");
@@ -132,8 +133,30 @@ describe("shell app with a seeded store", () => {
     expect(frame(mounted)).toContain("runtime active");
     mounted.terminal.send("1");
     expect(frame(mounted)).toContain("all projects");
+    // Plans and Live come after Terminals, so going back from the first panel wraps to Live.
+    mounted.terminal.send(SHIFT_TAB);
+    expect(frame(mounted)).toContain("Newest tasks, oldest first");
+    mounted.terminal.send(SHIFT_TAB);
+    expect(frame(mounted)).toContain("No plans waiting for approval.");
     mounted.terminal.send(SHIFT_TAB);
     expect(frame(mounted)).toContain("Not available in this version.");
+    mounted.terminal.send("q");
+    await mounted.app.done;
+  });
+
+  it("p opens Plans and l opens Live from any panel; Enter on Live opens the task (LD-T5)", async () => {
+    const mounted = mount(open());
+    await started(mounted);
+    mounted.terminal.send("p");
+    expect(frame(mounted)).toContain("No plans waiting for approval.");
+    mounted.terminal.send("l");
+    const live = frame(mounted);
+    expect(live).toContain("Newest tasks, oldest first");
+    expect(live).toMatch(/completed\s+work\s+fake-agent\s+\d+\/1\s+40\/12\s+Summarize the logs/);
+    mounted.terminal.send(ENTER);
+    expect(frame(mounted)).toContain("result: Logs summarized");
+    mounted.terminal.send("p");
+    expect(frame(mounted)).toContain("No plans waiting for approval.");
     mounted.terminal.send("q");
     await mounted.app.done;
   });
@@ -202,6 +225,14 @@ describe("shell app with a seeded store", () => {
     mounted.terminal.send("?");
     const help = frame(mounted);
     for (const key of ["Tab", "Enter", "Esc", "r", "?", "q"]) expect(help).toContain(key);
+    for (const line of [
+      "  g            plan a goal",
+      "  p            open the Plans panel",
+      "  y, n         approve or deny",
+      "  l            open the Live panel",
+    ]) {
+      expect(help).toContain(line);
+    }
     mounted.terminal.send(ESCAPE);
     expect(frame(mounted)).toContain("runtime running");
     mounted.terminal.send("q");
@@ -252,6 +283,80 @@ describe("shell app with a seeded store", () => {
       mounted.terminal.send(key);
       expect(frame(mounted)).toContain(key === "9" ? "Not available in this version." : "Themes");
     }
+    mounted.terminal.send("q");
+    await mounted.app.done;
+  });
+
+  it("text from the store and from agents reaches the terminal with no escape sequence (LD-T5)", async () => {
+    // Clear the screen, set the window title, write the clipboard (OSC 52), conceal text and return the carriage.
+    const hostile = "\x1b[2J\x1b]0;title\x07\x1b]52;c;ZmFrZS1jbGlw\x07\x1b[8mhidden\rover";
+    const writer = openSeedStore(dataDir);
+    try {
+      createTask(writer, seeded.demoId, seeded.epoch, `Goal ${hostile}`);
+    } finally {
+      writer.close();
+    }
+    // An agent's reply and error and a planner's plan, as the runtime would store them.
+    const base = open();
+    const withReply = (detail: TaskDetail): TaskDetail => ({
+      ...detail,
+      result: { text: `Reply ${hostile}` },
+      error: { code: "agent_failed", message: `Error ${hostile}` },
+    });
+    const data: ShellData = {
+      load: (scope) => {
+        const snapshot = base.load(scope);
+        return {
+          ...snapshot,
+          live: snapshot.live.map((entry) => ({ ...entry, detail: withReply(entry.detail) })),
+          pendingApprovals: 1,
+          approvals: [
+            {
+              approvalId: "hostile-approval",
+              projectId: seeded.demoId,
+              requestedAt: snapshot.loadedAt,
+              requestedBy: hostile,
+              tasks: [{ localId: "step", goal: `Plan ${hostile}`, agent: hostile, dependsOn: [] }],
+              error: undefined,
+            },
+          ],
+        };
+      },
+      taskDetail: (taskId) => {
+        const view = base.taskDetail(taskId);
+        return view === undefined ? undefined : { ...view, detail: withReply(view.detail) };
+      },
+      close: () => base.close(),
+    };
+    const mounted = mount(data, { warning: `Warning ${hostile}` });
+    await started(mounted);
+    const frames: string[] = [];
+    for (const key of ["2", ENTER, ESCAPE, "l", "p", ENTER]) {
+      mounted.terminal.send(key);
+      frames.push(frame(mounted));
+    }
+    for (const screen of frames) {
+      expect(screen).not.toContain("\x1b");
+      expect(screen).not.toContain("\r");
+      expect(screen).not.toContain("\x07");
+    }
+    const all = frames.join("\n");
+    // The text is still shown, defused.
+    for (const text of [
+      "Goal ?[2J",
+      "Reply ?[2J",
+      "Plan ?[2J",
+      "Warning ?[2J",
+      "?[8mhidden?over",
+    ]) {
+      expect(all).toContain(text);
+    }
+    const output = mounted.terminal.output.join("");
+    for (const sequence of ["\x1b]0;title", "\x1b]52;", "\x1b[8m", "hidden\rover"]) {
+      expect(output).not.toContain(sequence);
+    }
+    // The theme's own colors are applied after the text is defused.
+    expect(output).toContain("\x1b[38;");
     mounted.terminal.send("q");
     await mounted.app.done;
   });

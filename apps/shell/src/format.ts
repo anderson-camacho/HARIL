@@ -5,15 +5,44 @@ import type { RuntimeLeaseSummary } from "@haril/core/ports";
 
 const SUMMARY_LIMIT = 160;
 
-// Cuts plain text to `columns` cells, marking the cut with an ellipsis.
-export function fit(text: string, columns: number): string {
-  if (visibleWidth(text) <= columns) return text;
-  return `${sliceByColumn(text, 0, Math.max(0, columns - 1))}…`;
+// fit and wrap are the render boundary (LD-T5): every line of the frame passes through one of them, and only then
+// does the theme color it. Text from the store, an agent or the CLI may hold escape sequences that would clear the
+// screen, move the cursor, set the title or the clipboard, or hide text, so both make it plain first.
+
+// Each control character (C0 with ESC and CR, DEL, C1) becomes "?", and a tab a space. One for one, so the lengths
+// the panels padded with stay the same.
+function plain(text: string): string {
+  let out = "";
+  for (const char of text) {
+    const code = char.charCodeAt(0);
+    if (char === "\t") out += " ";
+    else if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) out += "?";
+    else out += char;
+  }
+  return out;
 }
 
-// Word-wraps plain text to `columns` cells; an empty text is one empty line.
+// Cuts text to `columns` cells, marking the cut with an ellipsis. A line break is a control character here.
+export function fit(text: string, columns: number): string {
+  const clean = plain(text);
+  if (visibleWidth(clean) <= columns) return clean;
+  return `${sliceByColumn(clean, 0, Math.max(0, columns - 1))}…`;
+}
+
+// Word-wraps text to `columns` cells; a line break (LF or CRLF) starts a new line and an empty text is one empty
+// line.
 export function wrap(text: string, columns: number): string[] {
-  return text === "" ? [""] : wrapTextWithAnsi(text, Math.max(1, columns));
+  return text
+    .split(/\r?\n/)
+    .flatMap((line) => (line === "" ? [""] : wrapTextWithAnsi(plain(line), Math.max(1, columns))));
+}
+
+// A token count in at most five characters: 999, 18.3k, 120k, 2.5M.
+export function compactCount(count: number): string {
+  if (count < 1000) return String(count);
+  const [value, unit] = count < 999_950 ? [count / 1000, "k"] : [count / 1_000_000, "M"];
+  const text = value >= 100 ? String(Math.round(value)) : value.toFixed(1).replace(/\.0$/, "");
+  return `${text}${unit}`;
 }
 
 export function pad(text: string, width: number): string {

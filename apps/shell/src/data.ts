@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
-import { validateHarilConfig } from "@haril/contracts";
+import { validateHarilConfig, validatePlanSchema } from "@haril/contracts";
 import {
   canonicalJson,
   canTransition,
@@ -10,6 +10,7 @@ import {
   checkTaskKind,
 } from "@haril/core";
 import type {
+  ApprovalRecord,
   Clock,
   EventRecord,
   MetricsSnapshot,
@@ -28,6 +29,8 @@ import { readOptionalFile } from "./theme.js";
 // only to tell whether they are set; their values never leave this module.
 
 const EVENT_LIMIT = 200;
+// The Live panel shows at most this many of the scope's newest tasks (LD-T5).
+const LIVE_LIMIT = 20;
 const DEFAULT_GATEWAY_ID = "cliproxy";
 const DEFAULT_GATEWAY_URL = "http://127.0.0.1:8317/v1";
 const GATEWAY_URL_ENV = "HARIL_GATEWAY_URL";
@@ -62,6 +65,39 @@ interface ProjectMetrics {
   readonly usage: UsageSummary | null;
 }
 
+// One task of a proposed plan, as the Plans panel shows it (LD-T5).
+interface PlanTaskRow {
+  readonly localId: string;
+  readonly goal: string;
+  readonly agent: string;
+  readonly dependsOn: readonly string[];
+}
+
+// An approval waiting for a decision with the tasks of its plan, read from the subject (haril approvals --json does
+// not include the plan).
+export interface PendingApproval {
+  readonly approvalId: string;
+  readonly projectId: string;
+  readonly requestedAt: number;
+  readonly requestedBy: string;
+  readonly tasks: readonly PlanTaskRow[];
+  // Set, with no tasks, when the subject is not a plan.
+  readonly error: string | undefined;
+}
+
+// Settled tokens of one task; null when nothing was settled for it.
+type TaskTokens = {
+  readonly input: number;
+  readonly output: number;
+  readonly unreconciled: number;
+} | null;
+
+// A task of the Live panel: the task with its settled tokens (LD-T5).
+interface LiveTask {
+  readonly detail: TaskDetail;
+  readonly tokens: TaskTokens;
+}
+
 export interface ShellSnapshot {
   // False when the data dir has no store: the data panels then show the empty state.
   readonly initialized: boolean;
@@ -76,6 +112,10 @@ export interface ShellSnapshot {
   readonly runtime: RuntimeLeaseSummary;
   // Approvals waiting for a decision, across every project (LD-T3): the banner shows this count.
   readonly pendingApprovals: number;
+  // The same approvals with their plans, oldest request first (LD-T5).
+  readonly approvals: readonly PendingApproval[];
+  // The scope's newest tasks with their settled tokens, oldest first, at most LIVE_LIMIT (LD-T5).
+  readonly live: readonly LiveTask[];
   readonly metrics: readonly ProjectMetrics[];
   readonly providers: ProviderSnapshot;
   readonly themes: { readonly user: readonly string[] };
@@ -83,11 +123,7 @@ export interface ShellSnapshot {
 
 export interface TaskDetailView {
   readonly detail: TaskDetail;
-  readonly tokens: {
-    readonly input: number;
-    readonly output: number;
-    readonly unreconciled: number;
-  } | null;
+  readonly tokens: TaskTokens;
   readonly permissionDenials: number;
 }
 
@@ -169,6 +205,8 @@ export function openShellData(options: OpenShellDataOptions): ShellData {
         events: [],
         runtime: { status: "none" } as const,
         pendingApprovals: 0,
+        approvals: [],
+        live: [],
         metrics: [],
         providers,
         themes: themes(),
@@ -181,13 +219,20 @@ export function openShellData(options: OpenShellDataOptions): ShellData {
           .list()
           .map((task) => open.tasks.get(task.taskId))
           .filter((task): task is TaskDetail => task !== undefined);
+        const approvals = open.approvals.list({ status: "requested" }).map(pendingApproval);
         return {
           ...base,
           projects,
           tasks,
           events: open.events.list({ projectId: scope, limit: EVENT_LIMIT }),
           runtime: open.runtime.leaseSummary(),
-          pendingApprovals: open.approvals.list({ status: "requested" }).length,
+          pendingApprovals: approvals.length,
+          approvals,
+          // The store lists tasks in creation order, so the newest are the last ones.
+          live: tasks
+            .filter((task) => scope === undefined || task.projectId === scope)
+            .slice(-LIVE_LIMIT)
+            .map((detail) => ({ detail, tokens: tokensOf(open, detail.taskId) })),
           metrics: projects.map((project) => ({
             projectId: project.projectId,
             slug: project.slug,
@@ -204,27 +249,42 @@ export function openShellData(options: OpenShellDataOptions): ShellData {
       if (open === undefined) return undefined;
       const detail = open.tasks.get(taskId);
       if (detail === undefined) return undefined;
-      const usage = open.budgets.usageSummary({ taskId });
       const permissionDenials = open.events
         .list({ taskId })
         .filter((event) => event.type === "security.pathguard.denied").length;
-      return {
-        detail,
-        tokens:
-          usage === null
-            ? null
-            : {
-                input: usage.inputTokens,
-                output: usage.outputTokens,
-                unreconciled: usage.unreconciled,
-              },
-        permissionDenials,
-      };
+      return { detail, tokens: tokensOf(open, taskId), permissionDenials };
     },
     close() {
       store?.close();
       store = undefined;
     },
+  };
+}
+
+function tokensOf(store: Store, taskId: string): TaskTokens {
+  const usage = store.budgets.usageSummary({ taskId });
+  return usage === null
+    ? null
+    : { input: usage.inputTokens, output: usage.outputTokens, unreconciled: usage.unreconciled };
+}
+
+// The store types the subject as plain JSON. It was schema-checked when it was proposed; it is narrowed again here.
+function pendingApproval(record: ApprovalRecord): PendingApproval {
+  const checked = validatePlanSchema(record.subject);
+  return {
+    approvalId: record.approvalId,
+    projectId: record.projectId,
+    requestedAt: record.requestedAt,
+    requestedBy: record.requestedBy,
+    tasks: checked.ok
+      ? checked.plan.tasks.map((task) => ({
+          localId: task.localId,
+          goal: task.goal,
+          agent: task.agent,
+          dependsOn: task.dependsOn,
+        }))
+      : [],
+    error: checked.ok ? undefined : checked.errors.join("; "),
   };
 }
 
