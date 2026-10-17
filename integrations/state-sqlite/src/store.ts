@@ -39,6 +39,7 @@ type TaskState = TaskRecord["state"];
 import { createBudgetFacets } from "./budgets.js";
 import { readPragmas, readUserVersion } from "./connection.js";
 import { StoreError } from "./errors.js";
+import { createMaintenance } from "./maintenance.js";
 
 // Implementation of the Store port over one node:sqlite connection. Writes run in BEGIN IMMEDIATE.
 // Core rules (transition table, plan checks) arrive through `rules`; this file never imports Core values.
@@ -52,6 +53,8 @@ interface StoreOptions {
   readonly storeId: string;
   readonly sqliteVersion: string;
   readonly gates: readonly StoreGate[];
+  // The WAL file of this database, null for an in-memory store (INV-14).
+  readonly walPath: string | null;
 }
 
 const PROJECT_COLUMNS =
@@ -182,6 +185,7 @@ export class SqliteStore implements Store {
   readonly metrics: Store["metrics"];
   readonly budgets: Store["budgets"];
   readonly virtualKeys: Store["virtualKeys"];
+  readonly maintenance: Store["maintenance"];
 
   constructor(options: StoreOptions) {
     this.db = options.db;
@@ -235,6 +239,7 @@ export class SqliteStore implements Store {
     });
     this.budgets = facets.budgets;
     this.virtualKeys = facets.virtualKeys;
+    this.maintenance = createMaintenance({ db: this.db, walPath: options.walPath });
   }
 
   info(): StoreInfo {

@@ -17,6 +17,8 @@ export interface StorePragmas {
   readonly synchronous: number;
   readonly foreignKeys: boolean;
   readonly busyTimeoutMs: number;
+  // Pages between automatic WAL checkpoints (INV-14).
+  readonly walAutocheckpoint: number;
 }
 
 export interface StoreInfo {
@@ -407,8 +409,24 @@ export interface VirtualKeysPort {
   revoke(runId: string, reason: string): number;
 }
 
+// Maintenance of the database file, outside any transaction (ST-30, INV-11, INV-14).
+export interface BackupReport {
+  readonly path: string;
+  readonly size: number;
+  // The copy passed integrity_check before it was renamed to its destination.
+  readonly quickCheckOk: boolean;
+}
+
+export interface StoreMaintenance {
+  // VACUUM INTO a temporary file next to destPath, verify it, then rename it. Refuses an existing destination.
+  backup(destPath: string): BackupReport;
+  // wal_checkpoint(TRUNCATE): the WAL size in bytes afterwards; null for a store without a file.
+  checkpoint(): { readonly walBytes: number | null };
+}
+
 export interface Store {
   info(): StoreInfo;
+  readonly maintenance: StoreMaintenance;
   readonly projects: {
     register(input: RegisterProjectInput): ProjectRecord;
     list(): readonly ProjectRecord[];
