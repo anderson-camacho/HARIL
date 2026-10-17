@@ -5,7 +5,7 @@
 
 import type { ChildProcess } from "node:child_process";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { createWriteStream, promises as fsp, mkdirSync, type WriteStream } from "node:fs";
+import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { join } from "node:path";
 import type {
@@ -28,6 +28,7 @@ import {
   type SpawnFn,
 } from "./launch.js";
 import { createPathGuard, type PathGuard } from "./path-guard.js";
+import { readGuardedFile } from "./read-guarded.js";
 
 export interface PiTimings {
   readonly helloTimeoutMs?: number;
@@ -539,26 +540,25 @@ class PiRun implements PiAgentHandle {
       this.replyBridge(id, { ok: false, error: "path_denied" });
       return;
     }
-    try {
-      const stats = await fsp.stat(check.absolutePath);
-      if (!stats.isFile()) throw new Error("not a regular file");
-      if (stats.size > MAX_READ_BYTES) {
-        this.recordOperation("read", pathSha256, "too_large");
-        this.replyBridge(id, { ok: false, error: "too_large" });
-        return;
-      }
-      const buffer = await fsp.readFile(check.absolutePath);
-      if (buffer.length > MAX_READ_BYTES) {
-        this.recordOperation("read", pathSha256, "too_large");
-        this.replyBridge(id, { ok: false, error: "too_large" });
-        return;
-      }
+    const read = await readGuardedFile(check.absolutePath, { maxBytes: MAX_READ_BYTES });
+    if (read.ok) {
       this.recordOperation("read", pathSha256, "ok");
-      this.replyBridge(id, { ok: true, content: buffer.toString("utf8") });
-    } catch {
-      this.recordOperation("read", pathSha256, "read_failed");
-      this.replyBridge(id, { ok: false, error: "read_failed" });
+      this.replyBridge(id, { ok: true, content: read.content.toString("utf8") });
+      return;
     }
+    // A link or a swapped file found after the guard is a denial too: the path is refused, never read.
+    if (read.reason === "link" || read.reason === "identity_changed") {
+      this.recordOperation("read", pathSha256, "path_denied", read.reason);
+      this.replyBridge(id, { ok: false, error: "path_denied" });
+      return;
+    }
+    if (read.reason === "too_large") {
+      this.recordOperation("read", pathSha256, "too_large");
+      this.replyBridge(id, { ok: false, error: "too_large" });
+      return;
+    }
+    this.recordOperation("read", pathSha256, "read_failed");
+    this.replyBridge(id, { ok: false, error: "read_failed" });
   }
 
   private recordOperation(

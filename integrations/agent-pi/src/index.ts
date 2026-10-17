@@ -1,7 +1,13 @@
 // Public surface of @haril/agent-pi: the AgentRuntime adapter for Pi 1.2.0 (ADR-0004), M2.
 
 export type { SpawnFn } from "./launch.js";
-export { createPathGuard, type PathGuard, type PathGuardResult } from "./path-guard.js";
+export {
+  createPathGuard,
+  type GuardFs,
+  nodeGuardFs,
+  type PathGuard,
+  type PathGuardResult,
+} from "./path-guard.js";
 export {
   type BridgeOperationEvent,
   type BridgeOperationOutcome,
@@ -11,3 +17,9 @@ export {
   type PiDiagnostics,
   type PiTimings,
 } from "./pi-agent-runtime.js";
+export {
+  type GuardedRead,
+  type GuardedReadDenial,
+  readGuardedFile,
+  readGuardedFileSync,
+} from "./read-guarded.js";

@@ -1,5 +1,13 @@
 import { spawn as nodeSpawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -288,6 +296,24 @@ describe("createPiAgentRuntime lifecycle", () => {
       summary: "read denied: path_denied",
     });
     expect(h.events).toEqual([expect.objectContaining({ op: "read", outcome: "path_denied" })]);
+    expect(JSON.stringify(h.events)).not.toContain("secret outside");
+  });
+
+  it("refuses a read through a junction inside the project and records the link reason (ESC-05)", async () => {
+    const h = harness();
+    const linkedOutside = join(tmp, "linked-outside");
+    mkdirSync(linkedOutside, { recursive: true });
+    writeFileSync(join(linkedOutside, "secret.txt"), "secret outside", "utf8");
+    symlinkSync(linkedOutside, join(h.root, "jout"), "junction");
+    const handle = await startHandle(h.runtime("ok_with_read", { readPath: "jout/secret.txt" }));
+    await handle.prompt("go");
+    expect(await handle.settled).toEqual({
+      status: "succeeded",
+      summary: "read denied: path_denied",
+    });
+    expect(h.events).toEqual([
+      expect.objectContaining({ op: "read", outcome: "path_denied", reason: "link" }),
+    ]);
     expect(JSON.stringify(h.events)).not.toContain("secret outside");
   });
 
