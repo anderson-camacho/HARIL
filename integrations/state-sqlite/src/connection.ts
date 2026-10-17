@@ -21,11 +21,13 @@ export function probeSqliteVersion(): string {
 
 // Applies the PRAGMAs and reads them back: a value that did not stick aborts the open (TSK-20).
 export function configureConnection(db: DatabaseSync, journalMode: "wal" | "memory"): StorePragmas {
+  // First: every later PRAGMA may need a lock (switching to WAL needs an exclusive one), and without the timeout a
+  // lock held by the runtime fails the open at once with "database is locked" instead of waiting.
+  db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
   db.exec(`PRAGMA journal_mode = ${journalMode === "wal" ? "WAL" : "MEMORY"}`);
   db.exec(`PRAGMA synchronous = FULL`);
   db.exec(`PRAGMA foreign_keys = ON`);
   db.exec(`PRAGMA trusted_schema = OFF`);
-  db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
   return readPragmas(db);
 }
 
