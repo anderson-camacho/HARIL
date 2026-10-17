@@ -118,7 +118,7 @@ describe("provider routing (M3-T7)", () => {
           hostOf(),
         ),
       ).toBe(0);
-      expect(await run(["start", "--project", "demo"], harness().io, realHost())).toBe(0);
+      expect(await run(["run", "--project", "demo"], harness().io, realHost())).toBe(0);
 
       const view = taskView(ROUTED_GOAL);
       expect(view.state).toBe("completed");
@@ -144,7 +144,7 @@ describe("provider routing (M3-T7)", () => {
           hostOf(),
         ),
       ).toBe(0);
-      expect(await run(["start", "--project", "demo"], harness().io, realHost())).toBe(1);
+      expect(await run(["run", "--project", "demo"], harness().io, realHost())).toBe(1);
 
       const view = taskView(AMBIGUOUS_GOAL);
       expect(view.state).toBe("failed");
@@ -166,7 +166,7 @@ describe("provider routing (M3-T7)", () => {
           hostOf(),
         ),
       ).toBe(0);
-      expect(await run(["start", "--project", "demo"], harness().io, realHost())).toBe(0);
+      expect(await run(["run", "--project", "demo"], harness().io, realHost())).toBe(0);
 
       expect(taskView("Bare alpha").result?.model).toBe("alpha/alpha-only");
       expect(chatsOf(alpha)).toBe(1);

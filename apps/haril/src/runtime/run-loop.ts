@@ -16,6 +16,7 @@ import type {
   AgentHello,
   AgentOutcome,
   AgentRuntime,
+  AgentSpec,
   ClaimedTask,
   Clock,
   RecoveredTask,
@@ -25,12 +26,31 @@ import { StoreError } from "@haril/state-sqlite";
 import { modelProblemOf } from "../providers.js";
 import { projectFileReader, verificationPayload } from "./acceptance.js";
 import type { RealAgentReadiness, RealAgents } from "./real-agent.js";
+import { createShutdown, RUNTIME_STOP, type Shutdown } from "./shutdown.js";
 
-// Foreground runtime loop (M1-D6): acquire the lease, apply the queue, promote, claim, run, complete,
-// until nothing is queued or ready, then release the lease. Tasks run one at a time (concurrency 1 in M1);
-// the core scheduling stays sequential so that a later concurrent executor changes only this file.
+// Runtime loop (M1-D6, LD-T1): take the lease, apply the queue, run the ready tasks, and wait for new work for
+// `idleExitMs` before the lease is released. `idleExitMs` 0 is `haril run`: it stops as soon as nothing is claimable.
+// Tasks run one at a time (concurrency 1 in M1). The queue is checked while an attempt runs too, so a runtime.stop
+// reaches an attempt in flight within one poll.
 const LEASE_TTL_MS = 30_000;
+// The runtime checks its own queue at this interval. The no-polling rule (H6) binds clients, not the runtime.
+const POLL_MS = 1_000;
+// The lease is renewed at this interval, not at every poll: a third of the TTL, and ten times fewer writes than polls,
+// so an idle runtime does not compete for the write lock with the CLI and the shell every second.
 const HEARTBEAT_MS = 10_000;
+
+// Renews the lease when its interval has passed since the last renewal (the first call always renews). The interval
+// is HEARTBEAT_MS, or a third of the TTL when the TTL is shorter (tests), so the lease never lapses between renewals.
+function leaseHeartbeat(store: Store, clock: Clock, epoch: number, ttlMs: number): () => void {
+  const intervalMs = Math.min(HEARTBEAT_MS, Math.floor(ttlMs / 3));
+  let last = Number.NEGATIVE_INFINITY;
+  return () => {
+    const now = clock.now();
+    if (now - last < intervalMs) return;
+    store.runtime.heartbeat(epoch, ttlMs);
+    last = now;
+  };
+}
 
 export interface RunLoopOptions {
   readonly store: Store;
@@ -41,19 +61,31 @@ export interface RunLoopOptions {
   readonly onEvent: (event: RunEvent) => void;
   // Real agents (M2-T6). Without them, every agent keeps the simulated behaviour of M1.
   readonly realAgents?: Pick<RealAgents, "readiness" | "runtime">;
+  // ARCH 4.2: how long the runtime waits after its last activity before it exits. Defaults to 0 (`haril run`).
+  readonly idleExitMs?: number;
+  // Clients subscribed to this runtime (LD-T2, ARCH 4.2). None exist yet, so the default is "no subscribers".
+  readonly hasSubscribers?: () => boolean;
+  // The ordered-stop control (ARCH 4.2). Defaults to a control nobody requests.
+  readonly shutdown?: Shutdown;
+  // Test seams: the lease TTL and the poll interval default to the production values.
+  readonly leaseTtlMs?: number;
+  readonly pollMs?: number;
 }
 
 export type RunLoopResult =
   | { readonly kind: "busy"; readonly pid: number }
-  | { readonly kind: "idle"; readonly summary: RunSummary };
+  | { readonly kind: "idle"; readonly summary: RunSummary }
+  | { readonly kind: "stopped"; readonly summary: RunSummary };
 
 export async function runUntilIdle(options: RunLoopOptions): Promise<RunLoopResult> {
   const { store } = options;
+  const shutdown = options.shutdown ?? createShutdown();
+  const ttlMs = options.leaseTtlMs ?? LEASE_TTL_MS;
   const grant = store.runtime.acquire({
     pid: options.pid,
     nodeVersion: options.nodeVersion,
     sqliteVersion: store.info().sqliteVersion,
-    ttlMs: LEASE_TTL_MS,
+    ttlMs,
   });
   if (!grant.ok) return { kind: "busy", pid: grant.error.pid };
 
@@ -63,49 +95,53 @@ export async function runUntilIdle(options: RunLoopOptions): Promise<RunLoopResu
     events.push(event);
     options.onEvent(event);
   };
-  let cleanExit = false;
   // Checked once per run: the prerequisites of the real agents do not change while the loop runs.
   const setup = options.realAgents?.readiness();
+  const stopNotice = shutdown.onRequest((reason) => emit({ type: "runtime.stopping", reason }));
   try {
     // M1-T7: attempts orphaned by a previous runtime go back to the queue before anything is claimed.
     for (const recovered of store.runtime.reconcile(epoch, MAX_INFRA_RESTARTS)) {
       emit(recoveryEvent(recovered));
     }
-    await drainQueue(options, epoch, emit, setup);
-    cleanExit = true;
+    // serve() releases the lease itself, cleanly, on idle and on a stop.
+    const beat = leaseHeartbeat(store, options.clock, epoch, ttlMs);
+    const kind = await serve(options, shutdown, { epoch, beat, emit, setup });
+    return { kind, summary: summarizeRun(events) };
   } finally {
-    releaseLease(store, epoch, cleanExit);
+    stopNotice();
+    // An exception leaves the lease to be released as a crash would not be: this release is unclean. After serve()
+    // released it, the epoch is no longer active and the store refuses the release, which is expected.
+    releaseLease(store, epoch, false);
   }
-  return { kind: "idle", summary: summarizeRun(events) };
 }
 
-async function drainQueue(
+interface ServeContext {
+  readonly epoch: number;
+  // Renews the lease when due (HEARTBEAT_MS); called at every poll and every attempt tick.
+  readonly beat: () => void;
+  readonly emit: (event: RunEvent) => void;
+  readonly setup: RealAgentReadiness | undefined;
+}
+
+// The loop of one lease: drain the queue, claim and run, and wait while the runtime is not idle.
+async function serve(
   options: RunLoopOptions,
-  epoch: number,
-  emit: (event: RunEvent) => void,
-  setup: RealAgentReadiness | undefined,
-): Promise<void> {
-  const { store } = options;
+  shutdown: Shutdown,
+  context: ServeContext,
+): Promise<"idle" | "stopped"> {
+  const { store, clock } = options;
+  const { epoch, beat, emit, setup } = context;
+  const idleExitMs = options.idleExitMs ?? 0;
+  const pollMs = options.pollMs ?? POLL_MS;
+  const hasSubscribers = options.hasSubscribers ?? (() => false);
   const reported = new Set<string>();
+  let idleSince = clock.now();
   for (;;) {
-    store.runtime.heartbeat(epoch, LEASE_TTL_MS);
-    for (let applied = store.commands.applyNext(epoch); applied !== undefined; ) {
-      emit(
-        applied.outcome === "applied"
-          ? {
-              type: "command.applied",
-              commandId: applied.commandId,
-              commandType: applied.type,
-              taskIds: applied.taskIds,
-            }
-          : {
-              type: "command.rejected",
-              commandId: applied.commandId,
-              commandType: applied.type,
-              reason: applied.reason ?? "",
-            },
-      );
-      applied = store.commands.applyNext(epoch);
+    beat();
+    const applied = applyQueuedCommands(store, epoch, emit, shutdown);
+    if (shutdown.requested) {
+      store.runtime.release(epoch, true);
+      return "stopped";
     }
 
     for (const blocked of store.tasks.promote().blocked) {
@@ -122,45 +158,107 @@ async function drainQueue(
     const notRunnable = skipUnrunnableRealTasks(store, setup, reported, emit);
     const globalMissing = setup !== undefined && !setup.ok;
     const claimed = store.tasks.claimNext(epoch, globalMissing ? REAL_AGENT_REFS : [], notRunnable);
-    if (claimed === undefined) return;
-    emit({
-      type: "task.claimed",
-      taskId: claimed.taskId,
-      goal: claimed.goal,
-      // M1-T8: the number shown is the charged attempts plus one. `attempt` also counts orphan recoveries,
-      // which charge nothing, so showing it would print "attempt 2/1" after a crash.
-      attempt: claimed.attemptsUsed + 1,
-      maxAttempts: claimed.maxAttempts,
-    });
-
-    const outcome = await executeAttempt(options, epoch, claimed);
-    // M3-D7: the host checks the acceptance of a succeeded attempt; the agent never judges its own work.
-    const verification =
-      outcome.status === "succeeded" ? verifyAttempt(store, claimed, outcome.summary) : undefined;
-    if (verification !== undefined) recordVerification(store, claimed, verification);
-    const completion = completionFor(claimed.runId, outcome, verification);
-    const result = store.runs.complete(completion);
-    const code = completion.outcome === "failed" ? completion.error.code : "";
-    if (result.taskState === "completed") {
-      emit({
-        type: "task.completed",
-        taskId: result.taskId,
-        goal: result.goal,
-        simulated: outcome.status === "succeeded" && outcome.simulated === true,
-      });
-    } else if (result.taskState === "ready") {
-      emit({
-        type: "task.retrying",
-        taskId: result.taskId,
-        goal: result.goal,
-        nextAttempt: result.attemptsUsed + 1,
-        maxAttempts: result.maxAttempts,
-        code,
-      });
-    } else {
-      emit({ type: "task.failed", taskId: result.taskId, goal: result.goal, code });
+    if (claimed !== undefined) {
+      await runClaimed(options, shutdown, context, claimed);
+      idleSince = clock.now();
+      continue;
     }
+
+    if (applied > 0 || hasSubscribers()) idleSince = clock.now();
+    if (clock.now() - idleSince >= idleExitMs) {
+      // The queue check and the release are one transaction (ARCH 4.2). A command that arrived meanwhile keeps the
+      // lease, and the next turn applies it.
+      if (store.runtime.releaseIfIdle(epoch)) return "idle";
+      continue;
+    }
+    await sleepUnlessStopped(clock, pollMs, shutdown);
   }
+}
+
+// Runs one claimed task and records its outcome. A stop that cancels the attempt returns the task to ready uncharged.
+async function runClaimed(
+  options: RunLoopOptions,
+  shutdown: Shutdown,
+  context: ServeContext,
+  claimed: ClaimedTask,
+): Promise<void> {
+  const { store } = options;
+  const { epoch, beat, emit } = context;
+  emit({
+    type: "task.claimed",
+    taskId: claimed.taskId,
+    goal: claimed.goal,
+    // M1-T8: the number shown is the charged attempts plus one. `attempt` also counts orphan recoveries,
+    // which charge nothing, so showing it would print "attempt 2/1" after a crash.
+    attempt: claimed.attemptsUsed + 1,
+    maxAttempts: claimed.maxAttempts,
+  });
+
+  const outcome = await executeAttempt(options, shutdown, { epoch, beat }, emit, claimed);
+  if (shutdown.requested && outcome.status !== "succeeded") {
+    // ARCH 4.2 step 3: the run ends as cancelled and its task returns to ready; no attempt and no infra restart.
+    const returned = store.runs.cancel(claimed.runId, "shutdown");
+    emit({ type: "task.returned", taskId: returned.taskId, goal: returned.goal });
+    return;
+  }
+
+  // M3-D7: the host checks the acceptance of a succeeded attempt; the agent never judges its own work.
+  const verification =
+    outcome.status === "succeeded" ? verifyAttempt(store, claimed, outcome.summary) : undefined;
+  if (verification !== undefined) recordVerification(store, claimed, verification);
+  const completion = completionFor(claimed.runId, outcome, verification);
+  const result = store.runs.complete(completion);
+  const code = completion.outcome === "failed" ? completion.error.code : "";
+  if (result.taskState === "completed") {
+    emit({
+      type: "task.completed",
+      taskId: result.taskId,
+      goal: result.goal,
+      simulated: outcome.status === "succeeded" && outcome.simulated === true,
+    });
+  } else if (result.taskState === "ready") {
+    emit({
+      type: "task.retrying",
+      taskId: result.taskId,
+      goal: result.goal,
+      nextAttempt: result.attemptsUsed + 1,
+      maxAttempts: result.maxAttempts,
+      code,
+    });
+  } else {
+    emit({ type: "task.failed", taskId: result.taskId, goal: result.goal, code });
+  }
+}
+
+// Applies every queued command, oldest first. A runtime.stop that applies requests the ordered stop (ARCH 4.2).
+function applyQueuedCommands(
+  store: Store,
+  epoch: number,
+  emit: (event: RunEvent) => void,
+  shutdown: Shutdown,
+): number {
+  let applied = 0;
+  for (let next = store.commands.applyNext(epoch); next !== undefined; ) {
+    applied += 1;
+    emit(
+      next.outcome === "applied"
+        ? {
+            type: "command.applied",
+            commandId: next.commandId,
+            commandType: next.type,
+            taskIds: next.taskIds,
+          }
+        : {
+            type: "command.rejected",
+            commandId: next.commandId,
+            commandType: next.type,
+            reason: next.reason ?? "",
+          },
+    );
+    if (next.type === RUNTIME_STOP && next.outcome === "applied") shutdown.request("command");
+    next = store.commands.applyNext(epoch);
+  }
+  return applied;
 }
 
 function verifyAttempt(store: Store, claimed: ClaimedTask, outputText: string): Verification {
@@ -235,23 +333,28 @@ function recoveryEvent(recovered: RecoveredTask): RunEvent {
   };
 }
 
-// The lease is renewed between tasks and while an attempt runs, so a long attempt does not expire it.
+// While an attempt runs, the lease is renewed and the queue is checked each poll, so a long attempt keeps its lease and
+// a runtime.stop reaches it. The stop itself is handled by runAttempt through the shutdown control.
 async function executeAttempt(
   options: RunLoopOptions,
-  epoch: number,
+  shutdown: Shutdown,
+  lease: { readonly epoch: number; readonly beat: () => void },
+  emit: (event: RunEvent) => void,
   task: ClaimedTask,
 ): Promise<AgentOutcome> {
-  const renew = setInterval(() => {
+  const pollMs = options.pollMs ?? POLL_MS;
+  const tick = setInterval(() => {
     try {
-      options.store.runtime.heartbeat(epoch, LEASE_TTL_MS);
+      lease.beat();
+      applyQueuedCommands(options.store, lease.epoch, emit, shutdown);
     } catch {
       // A fenced epoch is reported by the next turn of the loop, which is the one that must stop.
     }
-  }, HEARTBEAT_MS);
+  }, pollMs);
   try {
-    return await runAttempt(runtimeFor(options, task), options.clock, task);
+    return await runAttempt(runtimeFor(options, task), options.clock, task, shutdown);
   } finally {
-    clearInterval(renew);
+    clearInterval(tick);
   }
 }
 
@@ -261,11 +364,14 @@ function runtimeFor(options: RunLoopOptions, task: ClaimedTask): AgentRuntime {
     : options.agentRuntime;
 }
 
-// One attempt: start, handshake (before any prompt), prompt, settle within the timeout, dispose.
+// One attempt: start, handshake (before any prompt), prompt, settle within the timeout, dispose. A shutdown aborts the
+// run in flight; the handle settles it as aborted, and the race with `settled` keeps a handshake that never answers
+// from holding the stop.
 async function runAttempt(
   agentRuntime: AgentRuntime,
   clock: Clock,
   task: ClaimedTask,
+  shutdown: Shutdown,
 ): Promise<AgentOutcome> {
   const spec = buildAgentSpec(task, { runId: task.runId, attempt: task.attempt });
   const started = await agentRuntime.start(spec);
@@ -273,26 +379,35 @@ async function runAttempt(
     return { status: "failed", code: started.error.code, message: started.error.message };
   }
   const handle = started.value;
+  // A failed abort call is covered by `settled` and by dispose below.
+  const stopping = shutdown.onRequest(() => {
+    handle.abort().catch(() => undefined);
+  });
   try {
-    let hello: AgentHello;
-    try {
-      hello = await handle.hello;
-    } catch (error) {
-      // The adapter refuses a bad handshake by rejecting `hello` with its HarilError: the attempt fails.
-      return failureOf(error);
-    }
-    const handshake = checkHandshake(spec.allowedTools, hello.tools);
-    if (!handshake.ok) {
-      return { status: "failed", code: handshake.error.code, message: handshake.error.message };
-    }
-    const prompted = await handle.prompt(spec.prompt);
-    if (!prompted.ok) {
-      return { status: "failed", code: prompted.error.code, message: prompted.error.message };
-    }
-    return await settleWithin(handle, spec.timeoutMs, clock);
+    return await Promise.race([drive(handle, spec, clock), handle.settled]);
   } finally {
+    stopping();
     await handle.dispose();
   }
+}
+
+async function drive(handle: AgentHandle, spec: AgentSpec, clock: Clock): Promise<AgentOutcome> {
+  let hello: AgentHello;
+  try {
+    hello = await handle.hello;
+  } catch (error) {
+    // The adapter refuses a bad handshake by rejecting `hello` with its HarilError: the attempt fails.
+    return failureOf(error);
+  }
+  const handshake = checkHandshake(spec.allowedTools, hello.tools);
+  if (!handshake.ok) {
+    return { status: "failed", code: handshake.error.code, message: handshake.error.message };
+  }
+  const prompted = await handle.prompt(spec.prompt);
+  if (!prompted.ok) {
+    return { status: "failed", code: prompted.error.code, message: prompted.error.message };
+  }
+  return await settleWithin(handle, spec.timeoutMs, clock);
 }
 
 function failureOf(error: unknown): AgentOutcome {
@@ -313,11 +428,26 @@ function settleWithin(handle: AgentHandle, timeoutMs: number, clock: Clock): Pro
   });
 }
 
+// Waits `ms` of clock time, or until a stop is requested, whichever comes first.
+function sleepUnlessStopped(clock: Clock, ms: number, shutdown: Shutdown): Promise<void> {
+  return new Promise((resolve) => {
+    let unsubscribe: () => void = () => undefined;
+    const cancel = clock.schedule(ms, () => {
+      unsubscribe();
+      resolve();
+    });
+    unsubscribe = shutdown.onRequest(() => {
+      cancel();
+      resolve();
+    });
+  });
+}
+
 function releaseLease(store: Store, epoch: number, cleanExit: boolean): void {
   try {
     store.runtime.release(epoch, cleanExit);
   } catch (error) {
-    // Already lost to a takeover: nothing left to release.
+    // Already lost to a takeover, or released by serve(): nothing left to release.
     if (!(error instanceof StoreError && error.code === "store.fenced")) throw error;
   }
 }

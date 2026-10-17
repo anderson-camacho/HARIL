@@ -116,7 +116,7 @@ async function startRuntime(
   host = sb.host,
 ): Promise<{ code: number; out: string[]; err: string[] }> {
   const h = harness();
-  const code = await run(["start", "--project", "demo"], h.io, host);
+  const code = await run(["run", "--project", "demo"], h.io, host);
   return { code, out: h.out, err: h.err };
 }
 

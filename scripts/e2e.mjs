@@ -395,7 +395,7 @@ const steps = [
   [
     "start runs the queue (exit 1: one task fails)",
     () => {
-      const result = expectCode(["start", "--project", "demo"], [1]);
+      const result = expectCode(["run", "--project", "demo"], [1]);
       const simulated = result.out
         .split("\n")
         .filter((line) => line.startsWith("completed ") && line.endsWith(SIMULATED_NOTE));
@@ -410,7 +410,7 @@ const steps = [
   [
     "second start has no work (exit 0)",
     () => {
-      const result = expectCode(["start", "--project", "demo"], [0]);
+      const result = expectCode(["run", "--project", "demo"], [0]);
       expect(
         result.out.includes("done: 0 completed, 0 failed, 0 blocked"),
         "second start did work",
@@ -503,7 +503,7 @@ const steps = [
   [
     "crash: start recovers and completes the task",
     () => {
-      const result = expectCode(["start", "--project", "demo"], [0]);
+      const result = expectCode(["run", "--project", "demo"], [0]);
       expect(
         /^recovered \S+ Crash \(orphaned, restart 1\/3\)$/m.test(result.out),
         "no recovered line",
@@ -566,7 +566,7 @@ const steps = [
   [
     "M2: start completes the analyst task through the Broker",
     () => {
-      const result = expectCode(["start", "--project", "demo"], [0]);
+      const result = expectCode(["run", "--project", "demo"], [0]);
       expect(
         /^completed \S+ Read README\.md and summarize it$/m.test(result.out),
         "the analyst task did not complete",
@@ -611,7 +611,7 @@ const steps = [
           ["task", "add", "Read outside the project", "--agent", "analyst", "--project", "demo"],
           [0],
         );
-        return expectCode(["start", "--project", "demo"], [0]).out;
+        return expectCode(["run", "--project", "demo"], [0]).out;
       });
       expect(
         /^completed \S+ Read outside the project$/m.test(output),
@@ -648,7 +648,7 @@ const steps = [
           ["task", "add", "Read through a link", "--agent", "analyst", "--project", "demo"],
           [0],
         );
-        return expectCode(["start", "--project", "demo"], [0]).out;
+        return expectCode(["run", "--project", "demo"], [0]).out;
       });
       expect(
         /^completed \S+ Read through a link$/m.test(output),
@@ -687,7 +687,7 @@ const steps = [
         ],
         [0],
       );
-      expectCode(["start", "--project", "demo"], [1]);
+      expectCode(["run", "--project", "demo"], [1]);
       const taskId = statusReport().taskList.find((task) =>
         task.goal.startsWith("LONG REPLY"),
       )?.taskId;
@@ -753,7 +753,7 @@ const steps = [
         ],
         [0],
       );
-      expectCode(["start", "--project", "demo"], [1]);
+      expectCode(["run", "--project", "demo"], [1]);
       const taskId = statusReport().taskList.find((task) => task.goal === "Unmet check")?.taskId;
       expect(taskId !== undefined, "no unmet-check task in status");
       const view = expectJson(["task", "show", taskId, "--json"]);
@@ -788,7 +788,7 @@ const steps = [
         ],
         [0],
       );
-      expectCode(["start", "--project", "demo"], [0]);
+      expectCode(["run", "--project", "demo"], [0]);
       const taskId = statusReport().taskList.find((task) => task.goal === "Verified check")?.taskId;
       expect(taskId !== undefined, "no verified-check task in status");
       const view = expectJson(["task", "show", taskId, "--json"]);
@@ -869,6 +869,8 @@ const steps = [
           existsSync(join(session.installRoot, "app")),
         "uninstall removed the install while a runtime was active",
       );
+      // The runtime now waits for work after its queue is empty, so the slow run is stopped, not waited out (LD-T1).
+      expectCode(["stop"], [0]);
       await waitFor(
         () => statusReport().runtime.status !== "active",
         E2E_STOP_TIMEOUT_MS,

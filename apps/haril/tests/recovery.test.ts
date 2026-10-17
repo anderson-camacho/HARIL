@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { run } from "../src/cli.js";
 import { type Harness, harness, makeSandbox, projectRoot, type Sandbox } from "./helpers.js";
 
-// Recovery through `haril start` (M1-T7) and the simulated agent of non-fake refs (M1 fix a).
+// Recovery through `haril run` (M1-T7) and the simulated agent of non-fake refs (M1 fix a).
 let sb: Sandbox;
 let h: Harness;
 
@@ -56,7 +56,7 @@ function crashWhileRunning(goal: string): string {
 
 async function start(host = sb.host): Promise<number> {
   h = harness();
-  return await run(["start"], h.io, host);
+  return await run(["run"], h.io, host);
 }
 
 describe("haril start after a crash (M1-T7)", () => {

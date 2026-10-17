@@ -1,6 +1,7 @@
 import type { AgentRuntime, Clock, Ids, Store } from "@haril/core/ports";
 import type { StoreInspection } from "@haril/state-sqlite";
 import type { ProviderEntry, ProviderListing } from "./providers.js";
+import type { SignalSource } from "./runtime/shutdown.js";
 
 // Shared shapes of the CLI: io, host ports and exit codes. Command modules depend on this file, never on cli.ts.
 
@@ -29,6 +30,10 @@ export interface HostInfo {
   readonly agentRuntime?: AgentRuntime;
   // Liveness of a lease holder's pid; defaults to the real process check (M1 fix c). Tests inject it.
   readonly isPidAlive?: (pid: number) => boolean;
+  // Signals that stop `haril start` and `haril run` in order (ARCH 4.2); defaults to the process. Tests inject an emitter.
+  readonly signals?: SignalSource;
+  // Exit on a second signal; defaults to process.exit. Tests inject a spy.
+  readonly forceExit?: (code: number) => void;
   // Provider probe used by `doctor` (M3-T7): defaults to the real catalog query of each provider. Tests that do
   // not exercise the network inject a fixed answer so they stay hermetic.
   readonly providerProbe?: (

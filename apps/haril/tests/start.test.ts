@@ -42,7 +42,14 @@ afterEach(async () => {
   sb.cleanup();
 });
 
+// The tests below drain the queue and exit: `haril run` is the command for that (LD-T1).
 async function start(args: string[] = [], host = sb.host): Promise<number> {
+  h = harness();
+  return await run(["run", ...args], h.io, host);
+}
+
+// `haril start` stays up for live work: it exits after --idle-exit-sec of nothing to do.
+async function startLive(args: string[], host = sb.host): Promise<number> {
   h = harness();
   return await run(["start", ...args], h.io, host);
 }
@@ -187,5 +194,38 @@ describe("haril start", async () => {
     } finally {
       fresh.cleanup();
     }
+  });
+});
+
+describe("haril start stays up for live work (LD-T1)", () => {
+  it("waits for --idle-exit-sec of nothing to do, then exits 0", async () => {
+    addTask("Seed");
+    expect(await start()).toBe(0);
+    const began = Date.now();
+    expect(await startLive(["--idle-exit-sec", "1"])).toBe(0);
+    expect(Date.now() - began).toBeGreaterThanOrEqual(900);
+    expect(h.out).toContain("done: 0 completed, 0 failed, 0 blocked");
+  });
+
+  it("runs a task queued during the idle window, then exits after the window has passed", async () => {
+    const began = Date.now();
+    const live = startLive(["--idle-exit-sec", "2"]);
+    setTimeout(() => addTask("Late"), 400);
+    expect(await live).toBe(0);
+    expect(h.out.join("\n")).toMatch(/^completed \S+ Late$/m);
+    expect(Date.now() - began).toBeGreaterThanOrEqual(2_000);
+    expect(stateOf("Late")).toBe("completed");
+  }, 30_000);
+
+  it("rejects a --idle-exit-sec that is not a whole number of seconds", async () => {
+    expect(await startLive(["--idle-exit-sec", "soon"])).toBe(2);
+    expect(h.err.join("\n")).toContain("--idle-exit-sec");
+  });
+
+  it("run exits at once when nothing is queued and takes no --idle-exit-sec", async () => {
+    const began = Date.now();
+    expect(await start()).toBe(0);
+    expect(Date.now() - began).toBeLessThan(5_000);
+    expect(await start(["--idle-exit-sec", "5"])).toBe(2);
   });
 });

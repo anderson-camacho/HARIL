@@ -151,10 +151,10 @@ function main() {
     expect(add.code === 0, `task add exited ${add.code}`);
     console.log("PASS  project init, task add --agent analyst --accept-output");
 
-    const start = runStep(env, ["start", "--project", "real"], START_TIMEOUT_MS);
+    const start = runStep(env, ["run", "--project", "real"], START_TIMEOUT_MS);
     expect(start.code === 0, `start exited ${start.code ?? start.signal}`);
     expect(/^completed \S+ /m.test(start.out), "the analyst task did not complete");
-    console.log("PASS  start: the analyst task completed");
+    console.log("PASS  run: the analyst task completed");
 
     const status = runJson(env, ["status", "--json", "--project", "real"]);
     const task = status.taskList.find((candidate) => candidate.goal === TASK);

@@ -56,7 +56,7 @@ async function runScenario(): Promise<void> {
   await initProject();
   await invoke(["task", "add", "M1", "--agent", "fake:succeed"]);
   await invoke(["task", "add", "M2", "--agent", "fake:fail", "--max-attempts", "2"]);
-  expect(await invoke(["start"])).toBe(1);
+  expect(await invoke(["run"])).toBe(1);
 }
 
 describe("not initialized", () => {

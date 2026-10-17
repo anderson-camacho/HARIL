@@ -49,11 +49,13 @@ Requisitos: Node 24 (recomendado `^24.21.0`; con 24.19 funciona y `doctor` avisa
    .\bin\haril.ps1 plan import examples\plan.valid.json --project demo
    ```
 
-6. Ejecutar la cola. `start` corre en primer plano y sale al quedar ocioso (0 si todo fue bien, 1 si una tarea falló):
+6. Ejecutar la cola. `run` aplica la cola, ejecuta las tareas listas y sale al no tener trabajo (0 si todo fue bien, 1 si una tarea falló):
 
    ```powershell
-   .\bin\haril.ps1 start --project demo
+   .\bin\haril.ps1 run --project demo
    ```
+
+Para trabajo en vivo, `start` se queda en primer plano y sale tras 120 s sin trabajo (`--idle-exit-sec <n>` cambia el plazo). `haril stop` lo detiene en orden: la tarea en curso vuelve a `ready` sin cobrar intento.
 
 7. Consultar el resultado:
 
@@ -95,13 +97,13 @@ $env:HARIL_CLIPROXYAPI_KEY = "<tu clave de cliente de CLIProxyAPI>"
 $env:HARIL_DEFAULT_MODEL = "<id de haril models, por ejemplo cliproxy/gemini-3-flash>"
 .\bin\haril.ps1 models
 .\bin\haril.ps1 task add "Lee README.md y resúmelo en una frase" --project demo --agent analyst
-.\bin\haril.ps1 start --project demo
+.\bin\haril.ps1 run --project demo
 .\bin\haril.ps1 task show <taskId>
 .\bin\haril.ps1 metrics --project demo
 npm run e2e:real
 ```
 
-Si falta el runtime, `start` no reclama la tarea: la muestra como `skipped` con lo que falta y sale con 1; las tareas `fake:*` siguen su curso. Si falta la clave del proveedor del modelo, la tarea falla con `agent.not_ready` y nombra la variable. `task add --agent analyst` sin `--model` ni `HARIL_DEFAULT_MODEL` sale con 2. `npm run e2e:real` imprime `SKIP real lane` y sale con 0 cuando algo falta; si todo está listo, ejecuta una tarea real que lee `README.md` y responde un código secreto, y comprueba que la tarea queda completada y verificada, que el libro registra tokens y que hubo al menos una lectura por el puente.
+Si falta el runtime, `run` no reclama la tarea: la muestra como `skipped` con lo que falta y sale con 1; las tareas `fake:*` siguen su curso. Si falta la clave del proveedor del modelo, la tarea falla con `agent.not_ready` y nombra la variable. `task add --agent analyst` sin `--model` ni `HARIL_DEFAULT_MODEL` sale con 2. `npm run e2e:real` imprime `SKIP real lane` y sale con 0 cuando algo falta; si todo está listo, ejecuta una tarea real que lee `README.md` y responde un código secreto, y comprueba que la tarea queda completada y verificada, que el libro registra tokens y que hubo al menos una lectura por el puente.
 
 Notas:
 
@@ -179,7 +181,7 @@ Fuente: `docs/PRODUCT_VISION.md` 1 y 4.
 Fuente: `docs/ARCHITECTURE.md` 3 a 5.
 
 1. **Hexágono.** Un Core puro (`packages/core`) decide y no toca el mundo; los adaptadores abren archivos, procesos, sockets y la base.
-2. **Un Runtime por raíz de datos**, bajo demanda: nace con `haril start`, toma una lease con época en SQLite y muere por ocio. Sin servicios ni autoarranque.
+2. **Un Runtime por raíz de datos**, bajo demanda: nace con `haril start` (en vivo) o `haril run` (la cola y salir), toma una lease con época en SQLite y muere por ocio o con `haril stop`. Sin servicios ni autoarranque.
 3. **La CLI** (`apps/haril`) lee `haril.db` y encola comandos en `commands`; el Runtime los drena.
 4. **Pi no es frontera de seguridad.** Corre como hijo `--mode rpc`, uno por intento, sin herramientas integradas.
 5. **El puente** (`agent-pi-bridge`, extensión `-e`) reenvía cada operación de archivo y shell al Runtime, que la autoriza (PDP) y la ejecuta.

@@ -463,6 +463,9 @@ export interface Store {
     acquire(input: AcquireLeaseInput): Result<LeaseGrant, RuntimeBusyError>;
     heartbeat(epoch: number, ttlMs: number): void;
     release(epoch: number, cleanExit: boolean): void;
+    // Releases the lease with a clean exit only when no command is queued, in the same transaction (ARCH 4.2).
+    // False leaves the lease held: the caller drains the queue and decides again.
+    releaseIfIdle(epoch: number): boolean;
     // Orphans every running task claimed by another epoch: back to ready (retry_reason orphaned, no attempt
     // charged, infra_restarts + 1) or failed when infra_restarts would exceed maxInfraRestarts. The orphaned run's
     // virtual keys are revoked and its open budget reservations settled (ARCH 13.2 CP1, CP4). One transaction.
@@ -471,6 +474,10 @@ export interface Store {
   readonly runs: {
     // Closes the run and its task in one transaction. Success persists the result before `completed`.
     complete(completion: RunCompletion): CompletedRun;
+    // Ends the run of a stopping runtime (ARCH 4.2, step 3): the run closes as cancelled, the task returns to ready
+    // with retryReason orphaned, no attempt and no infra restart is charged, and the run's keys and open reservations
+    // end. One transaction.
+    cancel(runId: string, reason: "shutdown"): CompletedRun;
   };
   readonly events: {
     append(input: AppendEventInput): EventRecord;
