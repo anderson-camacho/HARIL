@@ -3,7 +3,14 @@ import { checkTaskKind, isRealAgent, type Verification, visibleText } from "@har
 import { allValues, argsProblem, lastValue, type ParsedArgs, parseArgs } from "../args.js";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
 import { storeAccess } from "../host.js";
-import { dataDirFor, openExisting, queueCommand, visibleBlock, withProject } from "./common.js";
+import {
+  dataDirFor,
+  failureReasonText,
+  openExisting,
+  queueCommand,
+  visibleBlock,
+  withProject,
+} from "./common.js";
 
 // `haril task add` (M1-T4): validates the input and queues task.create. `haril start` applies the queue.
 // `haril task show` (M2-T6) prints one task with its result or error and its settled tokens.
@@ -17,6 +24,26 @@ const DEFAULT_MAX_TOKENS = 20000; // M2-D5
 const MODEL_ENV = "HARIL_DEFAULT_MODEL";
 const TASK_ADD_USAGE =
   'usage: haril task add "<title>" [--project <slug>] [--depends-on <taskId>]... [--kind work|plan] [--agent <agentRef>] [--model <id>] [--max-tokens <n>] [--max-attempts <n>] [--timeout-ms <n>] [--accept-file <path>]... [--accept-contains <path>=<text>]... [--accept-output <text>]... [--idempotency-key <key>] [--json] [--data-dir <path>]';
+// `haril task add --help` (MC-T2 fix): the usage and what each flag does.
+const TASK_ADD_HELP: readonly string[] = [
+  TASK_ADD_USAGE,
+  "  --project <slug>                 the project; may be left out when only one exists",
+  "  --depends-on <taskId>            wait for that task to complete and receive its result (repeatable)",
+  "  --kind work|plan                 plan asks a planner agent for a plan, which waits for haril approve",
+  `  --agent <agentRef>               the agent (default ${DEFAULT_AGENT}; analyst and planner are real agents)`,
+  `  --model <id>                     the model of a real agent (default: ${MODEL_ENV}; see haril models)`,
+  `  --max-tokens <n>                 the task's token ceiling (default ${DEFAULT_MAX_TOKENS})`,
+  `  --max-attempts <n>               attempts, retries included (default ${DEFAULT_MAX_ATTEMPTS}); at most 2 retries after failed checks`,
+  `  --timeout-ms <n>                 the time limit of one attempt (default ${DEFAULT_TIMEOUT_MS})`,
+  "  --accept-file <path>             check: the file exists inside the project root (repeatable)",
+  "  --accept-contains <path>=<text>  check: the file contains the text (repeatable)",
+  "  --accept-output <text>           check: the agent's final answer contains the text (repeatable)",
+  "  --idempotency-key <key>          queue the command at most once for this key",
+  "  --json                           print the queued command as JSON",
+  "  --data-dir <path>                the HARIL data directory",
+  "  a failed check fails the attempt; the next attempt is told which checks failed and what was answered",
+];
+const HELP_FLAGS: readonly string[] = ["--help", "-h"];
 const TASK_SHOW_USAGE = "usage: haril task show <taskId> [--json] [--data-dir <path>]";
 const NOT_INITIALIZED =
   "store not initialized (run haril project init <path> --name <name> --yes first)";
@@ -32,6 +59,10 @@ export function task(args: readonly string[], io: CliIo, host: HostInfo): number
 }
 
 function taskAdd(args: readonly string[], io: CliIo, host: HostInfo): number {
+  if (args.some((arg) => HELP_FLAGS.includes(arg))) {
+    for (const line of TASK_ADD_HELP) io.out(line);
+    return EXIT_OK;
+  }
   const parsed = parseArgs(args, {
     values: [
       "--project",
@@ -163,6 +194,9 @@ function taskShow(args: readonly string[], io: CliIo, host: HostInfo): number {
     const permissionDenials = store.events
       .list({ taskId })
       .filter((event) => event.type === "security.pathguard.denied").length;
+    // MC-T2 fix: once a task completed, the newest failed attempt is an earlier one that a later attempt made good, not
+    // the task's error: it is kept as history under its own name.
+    const completed = detail.state === "completed";
     const view = {
       taskId: detail.taskId,
       goal: detail.goal,
@@ -172,9 +206,12 @@ function taskShow(args: readonly string[], io: CliIo, host: HostInfo): number {
       maxTokens: detail.maxTokens,
       attempts: { used: detail.attemptsUsed, max: detail.maxAttempts },
       result: detail.result,
-      error: detail.error,
+      error: completed ? null : detail.error,
+      earlierFailure: completed ? detail.error : null,
+      failureReason: detail.failureReason,
+      verifyRetries: detail.verifyRetries,
       // The host verification of the settled attempt: the result of a completed task, the evidence of a failed one.
-      verification: verificationOf(detail.result, detail.error),
+      verification: verificationOf(detail.result, completed ? null : detail.error),
       permissionDenials,
       tokens:
         usage === null
@@ -194,6 +231,9 @@ function taskShow(args: readonly string[], io: CliIo, host: HostInfo): number {
     io.out(visibleText(`task ${view.taskId}: ${view.goal}`));
     io.out(visibleText(`state ${view.state}, agent ${view.agent}, model ${view.model ?? "none"}`));
     io.out(`attempts ${view.attempts.used}/${view.attempts.max}, max tokens ${view.maxTokens}`);
+    if (view.failureReason !== null) {
+      io.out(`failed: ${failureReasonText(view.failureReason, view.verifyRetries)}`);
+    }
     io.out(`result: ${visibleBlock(resultText(view.result))}`);
     if (view.error !== null) {
       io.out(visibleBlock(`error: ${view.error.code}: ${view.error.message}`));
@@ -202,6 +242,16 @@ function taskShow(args: readonly string[], io: CliIo, host: HostInfo): number {
     // MC-T2: the output the checks of the newest failed attempt rejected; the error message names the checks it failed.
     if (view.error?.output !== undefined) {
       io.out(`rejected output: ${visibleBlock(resultText(view.error.output))}`);
+    }
+    // A completed task's earlier failure is one line of history; --json keeps all of it under earlierFailure.
+    if (view.earlierFailure !== null) {
+      const attempt =
+        view.earlierFailure.attempt === undefined ? "" : ` ${view.earlierFailure.attempt}`;
+      io.out(
+        visibleText(
+          `earlier attempt${attempt} failed: ${view.earlierFailure.code}: ${view.earlierFailure.message}`,
+        ),
+      );
     }
     io.out(`permission denials: ${view.permissionDenials}`);
     io.out(

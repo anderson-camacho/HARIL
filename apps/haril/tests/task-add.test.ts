@@ -223,3 +223,44 @@ describe("haril task add --kind", () => {
     expect(help.out.join("\n")).toContain("--kind work|plan");
   });
 });
+
+// MC-T2 fix: the real demo found `task add --help` refused as an unknown option, and the main help without the
+// acceptance and attempt flags.
+describe("haril task add --help", () => {
+  it("prints the usage of task add with every flag and exits 0, for --help and -h", () => {
+    initProject("demo", "demo");
+    for (const flag of ["--help", "-h"]) {
+      const shown = harness();
+      expect(run(["task", "add", flag], shown.io, sb.host)).toBe(0);
+      const text = shown.out.join("\n");
+      expect(text).toContain('usage: haril task add "<title>"');
+      for (const option of [
+        "--accept-file",
+        "--accept-contains",
+        "--accept-output",
+        "--max-attempts",
+        "--timeout-ms",
+      ]) {
+        expect(text).toContain(option);
+      }
+      expect(shown.err).toEqual([]);
+    }
+    expect(queuedCommands()).toEqual([]);
+  });
+
+  it("is listed with the acceptance and attempt flags in the main help", () => {
+    const shown = harness();
+    expect(run(["help"], shown.io, sb.host)).toBe(0);
+    const text = shown.out.join("\n");
+    for (const option of [
+      "--accept-file <path>",
+      "--accept-contains <path>=<text>",
+      "--accept-output <text>",
+      "--max-attempts <n>",
+      "--timeout-ms <n>",
+      "haril task add --help",
+    ]) {
+      expect(text).toContain(option);
+    }
+  });
+});

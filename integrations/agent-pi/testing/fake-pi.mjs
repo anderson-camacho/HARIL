@@ -182,7 +182,7 @@ function dependencyEcho(prompt) {
 // output_contains check its prompt names ('- output_contains: the result text contains "<text>" (...)', the text quoted
 // as JSON), or "" when the prompt has no rejected attempt. It lets the e2e prove that a retry learned why the previous
 // attempt failed and passed because of it.
-const REJECTED_LABEL = "The previous attempt was rejected by its acceptance checks (";
+const REJECTED_LABEL = "An earlier attempt (attempt ";
 const FAILED_OUTPUT_CHECK = /^- output_contains: the result text contains ("(?:[^"\\]|\\.)*")/;
 
 function retryEcho(prompt) {

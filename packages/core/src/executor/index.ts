@@ -44,7 +44,7 @@ export interface ExecutableTask {
   readonly surfaceRead?: readonly string[];
   // The results of the tasks it depends on, from its claim (MC-T1). They reach the prompt of a real agent only.
   readonly dependencyResults?: readonly DependencyResult[];
-  // The previous attempt when its acceptance checks rejected it, from its claim (MC-T2). It reaches the prompt of a real
+  // The newest attempt its acceptance checks rejected, from its claim (MC-T2). It reaches the prompt of a real
   // agent only.
   readonly rejectedAttempt?: RejectedAttempt | null;
 }

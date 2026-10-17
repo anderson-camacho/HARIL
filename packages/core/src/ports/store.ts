@@ -176,14 +176,21 @@ export interface TaskDetail extends TaskRecord {
   readonly description: string;
   readonly model: string | null;
   readonly maxTokens: number;
-  // The error of the newest failed attempt of the task, if any (M2-T6, haril task show). A verification_failed
-  // attempt keeps its host evidence in `verification` (M3-D7) and the output its checks rejected in `output` (MC-T2).
+  // The error of the newest failed attempt of the task, if any (M2-T6, haril task show), with the attempt number of its
+  // run. A verification_failed attempt keeps its host evidence in `verification` (M3-D7) and the output its checks
+  // rejected in `output` (MC-T2). A completed task may have one too: an attempt before the one that completed it.
   readonly error: {
     readonly code: string;
     readonly message: string;
+    readonly attempt?: number;
     readonly verification?: JsonObject;
     readonly output?: JsonObject;
   } | null;
+  // Why a failed task failed for good when an attempt's own error does not say it (MC-T2 fix; executor.md DR-05): the
+  // reason of its newest task.failed event, null otherwise.
+  readonly failureReason: FailureReason | null;
+  // The verification retries the task was granted (ORCHESTRATION 7.3: at most 2, inside maxAttempts).
+  readonly verifyRetries: number;
   readonly attempt: number;
   readonly attemptsUsed: number;
   readonly maxAttempts: number;
@@ -329,10 +336,10 @@ export type RejectedCheck = AcceptanceCheck & {
   readonly detail: string;
 };
 
-// The newest charged attempt of a task when its acceptance checks rejected it (ORCHESTRATION 7.3, ARCH 7.6; MC-T2):
-// its run's attempt number, every check of it in the task's order, and the output the checks rejected, the result it
-// would have had (null when the run kept none). An agent wrote the output, so the prompt that carries it labels it as
-// data.
+// The newest attempt of a task that its acceptance checks rejected (ORCHESTRATION 7.3, ARCH 7.6; MC-T2), even when a
+// failure for another reason came after it: its run's attempt number, every check of it in the task's order, and the
+// output the checks rejected, the result it would have had (null when the run kept none). An agent wrote the output, so
+// the prompt that carries it labels it as data.
 export interface RejectedAttempt {
   readonly attempt: number;
   readonly checks: readonly RejectedCheck[];
@@ -359,7 +366,7 @@ export interface ClaimedTask {
   readonly surfaceRead: readonly string[];
   // The results of the task's direct dependencies, the oldest dependency first; empty without dependencies (MC-T1).
   readonly dependencyResults: readonly DependencyResult[];
-  // The previous charged attempt when its acceptance checks rejected it, null otherwise (MC-T2).
+  // The newest attempt its acceptance checks rejected, null when none did (MC-T2).
   readonly rejectedAttempt: RejectedAttempt | null;
   readonly attempt: number;
   readonly attemptsUsed: number;
@@ -383,6 +390,10 @@ export type RunCompletion =
       readonly output?: JsonObject;
     };
 
+// Why a task failed for good beyond its last attempt's error (MC-T2 fix): its verification retries ran out
+// (executor.md DR-05), or its infra restarts did (M1-T7).
+export type FailureReason = "verification_exhausted" | "infra_restarts_exhausted";
+
 export interface CompletedRun {
   readonly taskId: string;
   readonly goal: string;
@@ -391,6 +402,10 @@ export interface CompletedRun {
   readonly attemptsUsed: number;
   readonly maxAttempts: number;
   readonly retryReason: RetryReason | null;
+  // A failed task whose verification retries ran out says so (MC-T2 fix); null otherwise.
+  readonly failureReason: FailureReason | null;
+  // The verification retries granted to the task so far.
+  readonly verifyRetries: number;
 }
 
 export interface AppendEventInput {

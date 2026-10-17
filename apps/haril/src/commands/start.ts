@@ -7,7 +7,7 @@ import { createPlanProposals } from "../runtime/plan-proposals.js";
 import { createRealAgents } from "../runtime/real-agent.js";
 import { runUntilIdle } from "../runtime/run-loop.js";
 import { attachStopSignals, createShutdown } from "../runtime/shutdown.js";
-import { dataDirFor, openExisting } from "./common.js";
+import { dataDirFor, failureReasonText, openExisting } from "./common.js";
 
 // `haril start` (M1-T5, LD-T1): the foreground runtime. It applies the queue, runs the ready tasks and stays up for new
 // work until --idle-exit-sec of nothing to do (ARCH 4.2). `haril run` is start until idle: it exits as soon as the
@@ -195,7 +195,9 @@ function formatEvent(event: RunEvent): string {
     case "task.retrying":
       return `failed (retrying ${event.nextAttempt}/${event.maxAttempts}) ${event.taskId} ${event.goal}: ${event.code}`;
     case "task.failed":
-      return `failed ${event.taskId} ${event.goal}: ${event.code}`;
+      return event.reason === undefined
+        ? `failed ${event.taskId} ${event.goal}: ${event.code}`
+        : `failed ${event.taskId} ${event.goal}: ${event.code}, ${failureReasonText(event.reason, event.verifyRetries ?? 0)}`;
     case "task.blocked":
       return `blocked: ${event.reason} ${event.taskId} ${event.goal}`;
     case "task.skipped":

@@ -204,6 +204,14 @@ describe("verification retries (MC-T2)", () => {
     return claimed;
   }
 
+  // The payload of the newest task.failed event.
+  function failedPayload() {
+    return store.events
+      .list()
+      .filter((event) => event.type === "task.failed")
+      .at(-1)?.payload;
+  }
+
   it("keeps the rejected output with the evidence and returns the task to ready as verify_failed", () => {
     enqueue("rejected once", CHECKS, 2);
     const first = claim();
@@ -218,6 +226,7 @@ describe("verification retries (MC-T2)", () => {
     expect(detail?.error).toEqual({
       code: "verification_failed",
       message: "verification failed: output_contains",
+      attempt: 1,
       verification: FAILED,
       output: OUTPUT,
     });
@@ -263,14 +272,52 @@ describe("verification retries (MC-T2)", () => {
       ],
       output: OUTPUT,
     });
-    // A later failure for another reason is the previous attempt now: the claim after it carries no rejection.
+    // A later failure for another reason does not erase the evidence: the claim after it still carries attempt 1, so
+    // the attempt that may spend the last verification retry knows what to fix.
     store.runs.complete({
       runId: second.runId,
       outcome: "failed",
       error: { code: "agent.failed", message: "boom" },
       endCause: "exit",
     });
-    expect(claim().rejectedAttempt).toBeNull();
+    expect(claim().rejectedAttempt).toEqual({
+      attempt: 1,
+      checks: [
+        {
+          kind: "output_contains",
+          text: "done",
+          ok: false,
+          detail: "output does not contain text",
+        },
+        { kind: "file_exists", path: "notes.md", ok: true, detail: "file exists" },
+      ],
+      output: OUTPUT,
+    });
+  });
+
+  it("carries the newest rejection across verify, transient and verify failures", () => {
+    enqueue("verify transient verify", CHECKS, 5);
+    rejectRun(claim().runId);
+    const second = claim();
+    store.runs.complete({
+      runId: second.runId,
+      outcome: "failed",
+      error: { code: "timeout", message: "the attempt exceeded its timeout" },
+      endCause: "timeout",
+    });
+    const third = claim();
+    expect(third.rejectedAttempt?.attempt).toBe(1);
+    expect(
+      rejectRun(third.runId, { text: "third try", model: "e2e/m", warnings: [] }),
+    ).toMatchObject({ taskState: "ready", retryReason: "verify_failed" });
+    const fourth = claim();
+    expect(fourth.rejectedAttempt).toMatchObject({ attempt: 3, output: { text: "third try" } });
+    // Two verification retries were granted (after attempts 1 and 3): the next rejection fails the task.
+    expect(rejectRun(fourth.runId)).toMatchObject({
+      taskState: "failed",
+      failureReason: "verification_exhausted",
+      verifyRetries: 2,
+    });
   });
 
   it("carries the rejection past a run that ended without being charged, and says when no output was kept", () => {
@@ -299,10 +346,51 @@ describe("verification retries (MC-T2)", () => {
       attemptsUsed: 3,
       maxAttempts: 5,
       retryReason: null,
+      failureReason: "verification_exhausted",
+      verifyRetries: 2,
     });
     const detail = store.tasks.get(taskId("never passes"));
-    expect(detail).toMatchObject({ state: "failed", attemptsUsed: 3, retryReason: null });
+    expect(detail).toMatchObject({
+      state: "failed",
+      attemptsUsed: 3,
+      retryReason: null,
+      failureReason: "verification_exhausted",
+      verifyRetries: 2,
+    });
     expect(detail?.error?.output).toEqual(OUTPUT);
+    expect(failedPayload()).toEqual({
+      attempt: 3,
+      attemptsUsed: 3,
+      code: "verification_failed",
+      reason: "verification_exhausted",
+      verifyRetries: 2,
+    });
+  });
+
+  // executor.md DR-05: the reason is the same when the last attempt is also the one that uses up the retries.
+  it("says verification_exhausted on the last attempt too, and nothing when only the attempts ran out", () => {
+    enqueue("three attempts", CHECKS, 3);
+    rejectRun(claim().runId);
+    rejectRun(claim().runId);
+    expect(rejectRun(claim().runId)).toMatchObject({
+      taskState: "failed",
+      attemptsUsed: 3,
+      failureReason: "verification_exhausted",
+    });
+    expect(failedPayload()).toMatchObject({ reason: "verification_exhausted", verifyRetries: 2 });
+
+    enqueue("two attempts", CHECKS, 2);
+    rejectRun(claim().runId);
+    expect(rejectRun(claim().runId)).toMatchObject({
+      taskState: "failed",
+      failureReason: null,
+      verifyRetries: 1,
+    });
+    expect(failedPayload()).toEqual({ attempt: 2, attemptsUsed: 2, code: "verification_failed" });
+    expect(store.tasks.get(taskId("two attempts"))).toMatchObject({
+      failureReason: null,
+      verifyRetries: 1,
+    });
   });
 
   it("does not count a transient retry against the verification retries", () => {

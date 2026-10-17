@@ -425,17 +425,22 @@ const steps = [
         `result ${JSON.stringify(reply)}`,
       );
       expect(view.verification?.verified === true, "the retry is not verified");
-      expect(view.error?.code === "verification_failed", `error ${view.error?.code}`);
+      // The task completed, so the rejection of attempt 1 is history, not its error (MC-T2 fix).
+      expect(view.error === null, `error ${JSON.stringify(view.error)}`);
+      const earlier = view.earlierFailure;
+      expect(earlier?.code === "verification_failed", `earlier failure ${earlier?.code}`);
+      expect(earlier?.attempt === 1, `earlier failure attempt ${earlier?.attempt}`);
       expect(
-        view.error?.output?.text === FAKE_UPSTREAM_REPLY,
-        `rejected output ${JSON.stringify(view.error?.output)}`,
+        earlier?.output?.text === FAKE_UPSTREAM_REPLY,
+        `rejected output ${JSON.stringify(earlier?.output)}`,
       );
       const text = expectCode(["task", "show", task.taskId], [0]).out;
       expect(
-        text.includes(`rejected output: ${FAKE_UPSTREAM_REPLY}`),
-        "task show does not show the rejected output",
+        text.includes("earlier attempt 1 failed: verification_failed"),
+        "task show does not show the earlier rejection as history",
       );
-      return "attempt 1 rejected and kept; attempt 2 named the failed check and passed";
+      expect(!/^error: /m.test(text), "task show prints an error for a completed task");
+      return "attempt 1 rejected and kept as history; attempt 2 named the failed check and passed";
     },
   ],
   [

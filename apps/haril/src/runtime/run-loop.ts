@@ -274,7 +274,15 @@ async function runClaimed(
       code,
     });
   } else {
-    emit({ type: "task.failed", taskId: result.taskId, goal: result.goal, code });
+    emit({
+      type: "task.failed",
+      taskId: result.taskId,
+      goal: result.goal,
+      code,
+      ...(result.failureReason === "verification_exhausted"
+        ? { reason: result.failureReason, verifyRetries: result.verifyRetries }
+        : {}),
+    });
     // LD-T4: a plan task that failed for good leaves no plan to approve. Between retries the plan stays requested, since
     // the next attempt proposes it again and finds the same approval.
     denyPlansOfFailedTask(store, result.taskId, code);

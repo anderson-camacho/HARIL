@@ -14,6 +14,7 @@ import type {
   EnqueueResult,
   EventFilter,
   EventRecord,
+  FailureReason,
   Ids,
   JsonObject,
   LeaseGrant,
@@ -69,8 +70,20 @@ const PROJECT_COLUMNS =
 const TASK_COLUMNS =
   "task_id AS taskId, project_id AS projectId, goal, state, agent_ref AS agentRef, created_at AS createdAt";
 
-// The error column is the newest failed attempt's JSON error (M2-T6), read as text and parsed in getTask.
-const TASK_DETAIL_COLUMNS = `${TASK_COLUMNS}, description, model, budget_max_tokens AS maxTokens, attempt, attempts_used AS attemptsUsed, max_attempts AS maxAttempts, timeout_ms AS timeoutMs, claim_epoch AS claimEpoch, infra_restarts AS infraRestarts, retry_reason AS retryReason, block_reason AS blockReason, result, (SELECT r.error FROM runs r WHERE r.task_id = tasks.task_id AND r.error IS NOT NULL ORDER BY r.attempt DESC LIMIT 1) AS errorJson`;
+// The error column is the newest failed attempt's JSON error (M2-T6), read as text with its run's attempt and parsed in
+// getTask. The failure reason is the one of the task's newest task.failed event (MC-T2 fix).
+const TASK_DETAIL_COLUMNS = `${TASK_COLUMNS}, description, model, budget_max_tokens AS maxTokens, attempt, attempts_used AS attemptsUsed, max_attempts AS maxAttempts, timeout_ms AS timeoutMs, claim_epoch AS claimEpoch, infra_restarts AS infraRestarts, verify_retries AS verifyRetries, retry_reason AS retryReason, block_reason AS blockReason, result, (SELECT json_object('error', json(r.error), 'attempt', r.attempt) FROM runs r WHERE r.task_id = tasks.task_id AND r.error IS NOT NULL ORDER BY r.attempt DESC LIMIT 1) AS errorJson, (SELECT json_extract(e.payload, '$.reason') FROM events e WHERE e.aggregate_type = 'task' AND e.aggregate_id = tasks.task_id AND e.type = 'task.failed' ORDER BY e.seq DESC LIMIT 1) AS failedReason`;
+
+const FAILURE_REASONS: readonly FailureReason[] = [
+  "verification_exhausted",
+  "infra_restarts_exhausted",
+];
+
+// The stored error of a run, with the attempt number of the run next to its own fields.
+function errorOf(errorJson: string): NonNullable<TaskDetail["error"]> {
+  const row = JSON.parse(errorJson) as { error: NonNullable<TaskDetail["error"]>; attempt: number };
+  return { ...row.error, attempt: row.attempt };
+}
 
 const LEASE_COLUMNS =
   "instance_id AS instanceId, pid, started_at AS startedAt, heartbeat_at AS heartbeatAt, expires_at AS expiresAt, status, node_version AS nodeVersion, sqlite_version AS sqliteVersion";
@@ -111,9 +124,11 @@ interface CommandRow extends Omit<CommandRecord, "args" | "projectId"> {
   readonly args: string;
 }
 
-interface TaskDetailRow extends Omit<TaskDetail, "result" | "error" | "dependsOn"> {
+interface TaskDetailRow
+  extends Omit<TaskDetail, "result" | "error" | "dependsOn" | "failureReason"> {
   readonly result: string | null;
   readonly errorJson: string | null;
+  readonly failedReason: string | null;
 }
 
 interface OrphanRow {
@@ -354,16 +369,19 @@ export class SqliteStore implements Store {
       .prepare(`SELECT ${TASK_DETAIL_COLUMNS} FROM tasks WHERE task_id = ?`)
       .get(taskId) as unknown as TaskDetailRow | undefined;
     if (row === undefined) return undefined;
-    const { result, errorJson, ...rest } = row;
+    const { result, errorJson, failedReason, ...rest } = row;
     const dependencies = this.db
       .prepare(
         "SELECT depends_on_task_id AS taskId FROM task_dependencies WHERE task_id = ? ORDER BY rowid",
       )
       .all(taskId) as unknown as Array<{ taskId: string }>;
+    const failure = FAILURE_REASONS.find((reason) => reason === failedReason);
     return {
       ...rest,
       result: result === null ? null : (JSON.parse(result) as JsonObject),
-      error: errorJson === null ? null : (JSON.parse(errorJson) as TaskDetail["error"]),
+      error: errorJson === null ? null : errorOf(errorJson),
+      // Only a task that is failed now failed for that reason.
+      failureReason: rest.state === "failed" && failure !== undefined ? failure : null,
       dependsOn: dependencies.map((dependency) => dependency.taskId),
     };
   }
@@ -987,18 +1005,18 @@ export class SqliteStore implements Store {
     }));
   }
 
-  // The newest charged attempt of a task when its acceptance checks rejected it (MC-T2): a failed run whose error holds
-  // the host evidence. A run cancelled by a stop or orphaned by a crash charged nothing, so a rejection before it still
-  // counts; a failure for another reason after it makes the rejection old. The evidence lists one outcome per check of
-  // the task's acceptance, in its order (evaluateAcceptance skips the verifier references), so each outcome is paired
-  // with its check and the pairing stops at the first one that does not match.
+  // The newest attempt of a task that its acceptance checks rejected (MC-T2): the newest failed run whose error holds the
+  // host evidence. A failure for another reason after it (a timeout, a crash, a stop) does not erase it, so the attempt
+  // that may spend the last verification retry still knows what to fix. The evidence lists one outcome per check of the
+  // task's acceptance, in its order (evaluateAcceptance skips the verifier references), so each outcome is paired with
+  // its check and the pairing stops at the first one that does not match.
   private rejectedAttemptOf(
     taskId: string,
     acceptance: ClaimedTask["acceptance"],
   ): RejectedAttempt | null {
     const row = this.db
       .prepare(
-        "SELECT attempt, error FROM runs WHERE task_id = ? AND status = 'failed' ORDER BY attempt DESC LIMIT 1",
+        "SELECT attempt, error FROM runs WHERE task_id = ? AND status = 'failed' AND json_extract(error, '$.verification') IS NOT NULL ORDER BY attempt DESC LIMIT 1",
       )
       .get(taskId) as { attempt: number; error: string | null } | undefined;
     if (row === undefined || row.error === null) return null;
@@ -1078,6 +1096,8 @@ export class SqliteStore implements Store {
         attempt: run.attempt,
         attemptsUsed: task.attemptsUsed,
         maxAttempts: task.maxAttempts,
+        verifyRetries: task.verifyRetries,
+        failureReason: null,
       };
       const eventBase = {
         aggregateType: "task",
@@ -1156,7 +1176,7 @@ export class SqliteStore implements Store {
             retryReason,
           },
         });
-        return { ...base, attemptsUsed, taskState: "ready", retryReason };
+        return { ...base, attemptsUsed, taskState: "ready", retryReason, verifyRetries };
       }
       this.transition("running", "failed");
       this.db
@@ -1164,8 +1184,10 @@ export class SqliteStore implements Store {
           "UPDATE tasks SET state = 'failed', phase = NULL, attempts_used = ?, completed_at = ?, updated_at = ? WHERE task_id = ?",
         )
         .run(attemptsUsed, now, now, run.taskId);
-      // A verification failure with attempts left has used up its verification retries (executor.md DR-05).
-      const exhausted = verifyFailed && attemptsUsed < task.maxAttempts;
+      // A verification failure after every verification retry was granted has used them up (executor.md DR-05), whether
+      // attempts remain or this was the last one. A task that ran out of attempts first gives no reason.
+      const exhausted = verifyFailed && task.verifyRetries >= MAX_VERIFY_RETRIES;
+      const failureReason = exhausted ? "verification_exhausted" : null;
       this.appendEvent({
         ...eventBase,
         type: "task.failed",
@@ -1173,12 +1195,10 @@ export class SqliteStore implements Store {
           attempt: run.attempt,
           attemptsUsed,
           code: completion.error.code,
-          ...(exhausted
-            ? { reason: "verification_exhausted", verifyRetries: task.verifyRetries }
-            : {}),
+          ...(exhausted ? { reason: failureReason, verifyRetries: task.verifyRetries } : {}),
         },
       });
-      return { ...base, attemptsUsed, taskState: "failed", retryReason: null };
+      return { ...base, attemptsUsed, taskState: "failed", retryReason: null, failureReason };
     });
   }
 
@@ -1198,7 +1218,7 @@ export class SqliteStore implements Store {
       }
       const task = this.db
         .prepare(
-          "SELECT goal, project_id AS projectId, state, claim_epoch AS claimEpoch, attempts_used AS attemptsUsed, max_attempts AS maxAttempts FROM tasks WHERE task_id = ?",
+          "SELECT goal, project_id AS projectId, state, claim_epoch AS claimEpoch, attempts_used AS attemptsUsed, max_attempts AS maxAttempts, verify_retries AS verifyRetries FROM tasks WHERE task_id = ?",
         )
         .get(run.taskId) as
         | {
@@ -1208,6 +1228,7 @@ export class SqliteStore implements Store {
             claimEpoch: number;
             attemptsUsed: number;
             maxAttempts: number;
+            verifyRetries: number;
           }
         | undefined;
       if (task === undefined || task.state !== "running" || task.claimEpoch !== run.claimEpoch) {
@@ -1262,6 +1283,8 @@ export class SqliteStore implements Store {
         attemptsUsed: task.attemptsUsed,
         maxAttempts: task.maxAttempts,
         retryReason: "orphaned",
+        failureReason: null,
+        verifyRetries: task.verifyRetries,
       };
     });
   }
