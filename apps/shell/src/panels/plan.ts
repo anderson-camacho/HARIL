@@ -11,11 +11,11 @@ const HELP_LINE = "Plans waiting for approval. Enter opens one; y approves it, n
 export function plansView(context: PanelContext): PanelView {
   const { snapshot } = context;
   const message = storeMessage(snapshot);
-  const columns = `${pad("ID", 10)}${pad("PROJECT", 10)}${pad("TASKS", 10)}AGE`;
+  const columns = `${pad("ID", 10)}${pad("PROJECT", 10)}${pad("TASKS", 14)}AGE`;
   return {
     header: [...(message === undefined ? [] : [message]), HELP_LINE, `  ${columns}`],
     items: snapshot.approvals.map((approval) => ({
-      text: `${pad(approval.approvalId.slice(0, SHORT_ID_LENGTH), 10)}${pad(slugOf(context, approval), 10)}${pad(`${approval.tasks.length} tasks`, 10)}${age(snapshot.loadedAt - approval.requestedAt)}`,
+      text: `${pad(approval.approvalId.slice(0, SHORT_ID_LENGTH), 10)}${pad(slugOf(context, approval), 10)}${pad(taskCount(approval), 14)}${age(snapshot.loadedAt - approval.requestedAt)}`,
       value: approval.approvalId,
     })),
     empty:
@@ -31,7 +31,7 @@ export function planDetailLines(approval: PendingApproval, context: PanelContext
   const requested = age(context.snapshot.loadedAt - approval.requestedAt);
   return [
     `plan ${approval.approvalId}`,
-    `project ${slugOf(context, approval)}, ${approval.tasks.length} tasks, requested ${requested} ago by ${approval.requestedBy}`,
+    `project ${slugOf(context, approval)}, ${taskCount(approval)}, requested ${requested} ago by ${approval.requestedBy}`,
     ...(approval.error === undefined ? [] : [`the plan could not be read: ${approval.error}`]),
     "",
     ...approval.tasks.flatMap((task, index) => [
@@ -39,6 +39,11 @@ export function planDetailLines(approval: PendingApproval, context: PanelContext
       `   agent ${task.agent}, depends on: ${task.dependsOn.length === 0 ? "none" : task.dependsOn.join(", ")}`,
     ]),
   ];
+}
+
+// A subject that is not a plan shows as such: it can only be denied (the app refuses y for it).
+function taskCount(approval: PendingApproval): string {
+  return approval.error === undefined ? `${approval.tasks.length} tasks` : "invalid plan";
 }
 
 function slugOf(context: PanelContext, approval: PendingApproval): string {

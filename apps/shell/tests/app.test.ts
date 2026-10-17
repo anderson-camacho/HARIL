@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { TaskDetail } from "@haril/core/ports";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createShellApp, type ShellApp } from "../src/app.js";
 import { openShellData, type ShellData } from "../src/data.js";
@@ -282,6 +283,80 @@ describe("shell app with a seeded store", () => {
       mounted.terminal.send(key);
       expect(frame(mounted)).toContain(key === "9" ? "Not available in this version." : "Themes");
     }
+    mounted.terminal.send("q");
+    await mounted.app.done;
+  });
+
+  it("text from the store and from agents reaches the terminal with no escape sequence (LD-T5)", async () => {
+    // Clear the screen, set the window title, write the clipboard (OSC 52), conceal text and return the carriage.
+    const hostile = "\x1b[2J\x1b]0;title\x07\x1b]52;c;ZmFrZS1jbGlw\x07\x1b[8mhidden\rover";
+    const writer = openSeedStore(dataDir);
+    try {
+      createTask(writer, seeded.demoId, seeded.epoch, `Goal ${hostile}`);
+    } finally {
+      writer.close();
+    }
+    // An agent's reply and error and a planner's plan, as the runtime would store them.
+    const base = open();
+    const withReply = (detail: TaskDetail): TaskDetail => ({
+      ...detail,
+      result: { text: `Reply ${hostile}` },
+      error: { code: "agent_failed", message: `Error ${hostile}` },
+    });
+    const data: ShellData = {
+      load: (scope) => {
+        const snapshot = base.load(scope);
+        return {
+          ...snapshot,
+          live: snapshot.live.map((entry) => ({ ...entry, detail: withReply(entry.detail) })),
+          pendingApprovals: 1,
+          approvals: [
+            {
+              approvalId: "hostile-approval",
+              projectId: seeded.demoId,
+              requestedAt: snapshot.loadedAt,
+              requestedBy: hostile,
+              tasks: [{ localId: "step", goal: `Plan ${hostile}`, agent: hostile, dependsOn: [] }],
+              error: undefined,
+            },
+          ],
+        };
+      },
+      taskDetail: (taskId) => {
+        const view = base.taskDetail(taskId);
+        return view === undefined ? undefined : { ...view, detail: withReply(view.detail) };
+      },
+      close: () => base.close(),
+    };
+    const mounted = mount(data, { warning: `Warning ${hostile}` });
+    await started(mounted);
+    const frames: string[] = [];
+    for (const key of ["2", ENTER, ESCAPE, "l", "p", ENTER]) {
+      mounted.terminal.send(key);
+      frames.push(frame(mounted));
+    }
+    for (const screen of frames) {
+      expect(screen).not.toContain("\x1b");
+      expect(screen).not.toContain("\r");
+      expect(screen).not.toContain("\x07");
+    }
+    const all = frames.join("\n");
+    // The text is still shown, defused.
+    for (const text of [
+      "Goal ?[2J",
+      "Reply ?[2J",
+      "Plan ?[2J",
+      "Warning ?[2J",
+      "?[8mhidden?over",
+    ]) {
+      expect(all).toContain(text);
+    }
+    const output = mounted.terminal.output.join("");
+    for (const sequence of ["\x1b]0;title", "\x1b]52;", "\x1b[8m", "hidden\rover"]) {
+      expect(output).not.toContain(sequence);
+    }
+    // The theme's own colors are applied after the text is defused.
+    expect(output).toContain("\x1b[38;");
     mounted.terminal.send("q");
     await mounted.app.done;
   });

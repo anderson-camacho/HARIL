@@ -315,10 +315,20 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
   }
 
   function reload(): void {
+    // Live follows its newest row while the cursor is on it, as tail -f does: new tasks arrive at the end.
+    const followLive = (cursors[LIVE_PANEL] ?? 0) >= snapshot.live.length - 1;
     snapshot = data.load(scope);
+    if (followLive) cursors[LIVE_PANEL] = Math.max(0, snapshot.live.length - 1);
     if (detail !== undefined) detail = data.taskDetail(detail.detail.taskId);
     // A plan decided meanwhile, here or by haril approve elsewhere, leaves its detail for the list.
     if (openApproval() === undefined) plan = undefined;
+  }
+
+  // After a goal or an approval: Live with the cursor on the newest task, so the run is seen as it starts. The frame
+  // scrolls to the cursor.
+  function showLive(): void {
+    selectPanel(LIVE_PANEL);
+    cursors[LIVE_PANEL] = Math.max(0, snapshot.live.length - 1);
   }
 
   // The project a form adds to: the one the filter names, or the only project. Several projects and no filter is a
@@ -372,25 +382,31 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
     }
     runAction(built.args, goal ? "asking for a plan..." : "adding task...", goal, (ok) => {
       if (ok && form === current) form = undefined;
-      if (ok && goal) selectPanel(LIVE_PANEL);
+      if (ok && goal) showLive();
     });
   }
 
   // y and n (LD-T5): approve or deny the open plan, or the one under the cursor on Plans. The CLI records the OS
-  // user as the decider; the runtime queues a granted plan, so an approval switches to Live.
+  // user as the decider; the runtime queues a granted plan, so an approval switches to Live. A subject that is not a
+  // plan can only be denied.
   function decide(verb: "approve" | "deny"): void {
     if (pending) return;
     const approvalId =
       plan ?? (activeId() === "plans" ? activeView().items[cursors[panel] ?? 0]?.value : undefined);
     if (approvalId === undefined) return;
+    const approve = verb === "approve";
+    const subject = snapshot.approvals.find((approval) => approval.approvalId === approvalId);
+    if (approve && subject?.error !== undefined) {
+      status = `plan ${approvalId.slice(0, 8)} is not a valid plan and cannot be approved; n denies it`;
+      return;
+    }
     const args = [verb, approvalId];
     if (settings.dataDir !== undefined) args.push("--data-dir", settings.dataDir);
-    const approve = verb === "approve";
     runAction(args, approve ? "approving plan..." : "denying plan...", approve, (ok) => {
       if (!ok) return;
       plan = undefined;
       textOffset = 0;
-      if (approve) selectPanel(LIVE_PANEL);
+      if (approve) showLive();
     });
   }
 

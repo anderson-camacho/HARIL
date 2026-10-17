@@ -4,9 +4,15 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createHarilActions } from "../src/actions.js";
 import { createShellApp, type ShellApp } from "../src/app.js";
-import { openShellData, type ShellData } from "../src/data.js";
+import { openShellData, type ShellData, type ShellSnapshot } from "../src/data.js";
 import { resolveTheme } from "../src/theme.js";
-import { openSeedStore, proposeExamplePlan, type SeedResult, seedStore } from "./seed.js";
+import {
+  createTask,
+  openSeedStore,
+  proposeExamplePlan,
+  type SeedResult,
+  seedStore,
+} from "./seed.js";
 import { VirtualTerminal } from "./virtual-terminal.js";
 
 // The actions from the TUI: the add-task form (TUI-D13), the goal form and the plan review (LD-T5). Each test checks
@@ -69,6 +75,8 @@ function mount(options: {
   harilEntry?: string;
   defaultModel?: string;
   configPath?: string;
+  // Changes what the store returns, for rows the store itself would refuse to hold.
+  alter?: (snapshot: ShellSnapshot) => ShellSnapshot;
 }): Mounted {
   const data = openShellData({
     paths: {
@@ -79,12 +87,20 @@ function mount(options: {
     env: {},
   });
   opened.push(data);
+  const alter = options.alter;
   const terminal = new VirtualTerminal();
   const app = createShellApp({
     terminal,
     theme: THEME,
     banner: { isolation: "N0" },
-    data,
+    data:
+      alter === undefined
+        ? data
+        : {
+            load: (scope) => alter(data.load(scope)),
+            taskDetail: (taskId) => data.taskDetail(taskId),
+            close: () => data.close(),
+          },
     settings: {
       dataDir: options.dataDir ?? dataDir,
       runtimeRoot,
@@ -293,6 +309,77 @@ describe("goal and plan review with a seeded store (LD-T5)", () => {
     expect(argvOf(entry)).toEqual(["deny", approvalId, "--data-dir", dataDir]);
     expect(frame(mounted)).toContain("Enter open plan");
     expect(frame(mounted)).not.toContain(LIVE_HEADER);
+    mounted.terminal.send("q");
+    await mounted.app.done;
+  });
+
+  it("after g, Live shows the newest task under the cursor and keeps following new ones", async () => {
+    // 3 seeded tasks and 14 more in demo: 17 rows, more than an 80x24 terminal shows at once.
+    const writer = openSeedStore(dataDir);
+    try {
+      for (let index = 1; index <= 14; index++) {
+        createTask(writer, seeded.demoId, seeded.epoch, `Bulk task ${index}`);
+      }
+    } finally {
+      writer.close();
+    }
+    const entry = fakeHaril("command c-8: queued (applied by `haril start`)", 0);
+    const mounted = mount({ harilEntry: entry, defaultModel: "qwen-test" });
+    mounted.app.start();
+    mounted.terminal.send(DOWN);
+    mounted.terminal.send(ENTER);
+    mounted.terminal.send("g");
+    typeText(mounted, "Plan more");
+    mounted.terminal.send(ENTER);
+    await waitForFrame(mounted, "c-8: queued");
+    expect(frame(mounted)).toMatch(/> .*Bulk task 14/);
+
+    // The runtime applies the queued plan task later: the cursor stays on the newest row.
+    const later = openSeedStore(dataDir);
+    try {
+      createTask(later, seeded.demoId, seeded.epoch, "Plan more");
+    } finally {
+      later.close();
+    }
+    mounted.terminal.send("r");
+    expect(frame(mounted)).toMatch(/> .*Plan more/);
+    mounted.terminal.send("q");
+    await mounted.app.done;
+  });
+
+  it("an invalid plan lists as such: y explains and runs nothing, n denies it", async () => {
+    const invalidId = "badplan0-0000-4000-8000-000000000000";
+    const entry = fakeHaril("approval denied by tester", 0);
+    const mounted = mount({
+      harilEntry: entry,
+      alter: (snapshot) => ({
+        ...snapshot,
+        pendingApprovals: 1,
+        approvals: [
+          {
+            approvalId: invalidId,
+            projectId: seeded.demoId,
+            requestedAt: snapshot.loadedAt,
+            requestedBy: "cli",
+            tasks: [],
+            error: "/tasks/0/goal: Expected string",
+          },
+        ],
+      }),
+    });
+    mounted.app.start();
+    mounted.terminal.send("p");
+    expect(frame(mounted)).toContain("invalid plan");
+    mounted.terminal.send("y");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(frame(mounted)).toContain("cannot be approved");
+    expect(existsSync(join(entry, "..", "argv.json"))).toBe(false);
+    mounted.terminal.send(ENTER);
+    mounted.terminal.send("y");
+    expect(existsSync(join(entry, "..", "argv.json"))).toBe(false);
+    mounted.terminal.send("n");
+    await waitForFrame(mounted, "denied by tester");
+    expect(argvOf(entry)).toEqual(["deny", invalidId, "--data-dir", dataDir]);
     mounted.terminal.send("q");
     await mounted.app.done;
   });

@@ -294,4 +294,45 @@ describe("plans and live (LD-T5)", () => {
     expect(view.items[0]?.value).toBe(seeded.completedTaskId);
     expect(view.keys).toEqual(["Enter open task"]);
   });
+
+  it("live: large token counts show in a compact form and are never cut", () => {
+    const seeded = seedStore(dataDir);
+    const snapshot = loadSnapshot(seeded.demoId);
+    const [completed] = snapshot.live;
+    if (completed === undefined) throw new Error("live rows missing");
+    const counts = [
+      { input: 120000, output: 3000, shown: "120k/3k" },
+      { input: 18342, output: 1523, shown: "18.3k/1.5k" },
+      { input: 999, output: 0, shown: "999/0" },
+      { input: 2_460_000, output: 99_960, shown: "2.5M/100k" },
+    ];
+    const live = counts.map(({ input, output }) => ({
+      detail: completed.detail,
+      tokens: { input, output, unreconciled: 0 },
+    }));
+    const lines = texts(buildPanelView("live", contextFor({ ...snapshot, live }, seeded.demoId)));
+    counts.forEach(({ shown }, index) => {
+      expect(lines[index]).toMatch(new RegExp(`\\s${shown.replaceAll(".", "\\.")}\\s+Summarize`));
+    });
+  });
+
+  it("plans: a subject that is not a plan lists as an invalid plan", () => {
+    const seeded = seedStore(dataDir);
+    const snapshot = loadSnapshot(undefined);
+    const invalid = {
+      approvalId: "badplan0-0000-4000-8000-000000000000",
+      projectId: seeded.demoId,
+      requestedAt: snapshot.loadedAt,
+      requestedBy: "cli",
+      tasks: [],
+      error: "/tasks/0/goal: Expected string",
+    };
+    const context = contextFor({ ...snapshot, approvals: [invalid] }, undefined);
+    const text = texts(buildPanelView("plans", context))[0] ?? "";
+    expect(text).toContain("invalid plan");
+    expect(text).not.toContain("0 tasks");
+    const lines = buildPlanDetailView(invalid, context);
+    expect(lines[1]).toMatch(/^project demo, invalid plan, requested/);
+    expect(lines).toContain("the plan could not be read: /tasks/0/goal: Expected string");
+  });
 });

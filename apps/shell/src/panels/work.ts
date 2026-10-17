@@ -1,6 +1,6 @@
 import type { TaskDetail } from "@haril/core/ports";
 import type { TaskDetailView } from "../data.js";
-import { pad, resultText, runtimeState, time, verificationLines } from "../format.js";
+import { compactCount, pad, resultText, runtimeState, time, verificationLines } from "../format.js";
 import { type PanelContext, type PanelView, storeMessage } from "./types.js";
 
 // The panels about work: projects, tasks (with their detail), the agents running now and the live view.
@@ -9,6 +9,8 @@ const DEPS_WIDTH = 12;
 const SHORT_ID_LENGTH = 8;
 // The agents that write a plan instead of doing the work (LD-T4). A task row carries no kind, so the agent tells.
 const PLAN_AGENTS: readonly string[] = ["planner", "fake:plan"];
+// Fits two compact counts of up to five characters each ("99.9k/99.9k") and a space.
+const TOKENS_WIDTH = 12;
 const LIVE_LINE =
   "Newest tasks, oldest first. The view reloads when the runtime wakes the shell, on r and after an action.";
 
@@ -116,20 +118,21 @@ export function agentsView(context: PanelContext): PanelView {
 }
 
 // What runs, without opening a detail (LD-T5): state, kind, agent, the attempt of the run (0 before the first
-// claim), settled tokens and the first line of the outcome of the scope's newest tasks. The rows come with the
-// snapshot, so the view changes only when the store is read again.
+// claim), settled tokens (compact; the detail has the exact counts) and the first line of the outcome of the
+// scope's newest tasks. The rows come with the snapshot, so the view changes only when the store is read again.
 export function liveView(context: PanelContext): PanelView {
   const { snapshot } = context;
   const message = storeMessage(snapshot);
-  const columns = `${pad("STATE", 10)}${pad("KIND", 5)}${pad("AGENT", 13)}${pad("TRY", 5)}${pad("TOKENS", 10)}GOAL · RESULT`;
+  const columns = `${pad("STATE", 10)}${pad("KIND", 5)}${pad("AGENT", 13)}${pad("TRY", 5)}${pad("TOKENS", TOKENS_WIDTH)}GOAL · RESULT`;
   return {
     header: [...withMessage(message), LIVE_LINE, `  ${columns}`],
     items: snapshot.live.map(({ detail: task, tokens }) => {
       const kind = PLAN_AGENTS.includes(task.agentRef) ? "plan" : "work";
-      const settled = tokens === null ? "-" : `${tokens.input}/${tokens.output}`;
+      const settled =
+        tokens === null ? "-" : `${compactCount(tokens.input)}/${compactCount(tokens.output)}`;
       const outcome = outcomeLine(task);
       return {
-        text: `${pad(task.state, 10)}${pad(kind, 5)}${pad(task.agentRef, 13)}${pad(`${task.attempt}/${task.maxAttempts}`, 5)}${pad(settled, 10)}${task.goal}${outcome === undefined ? "" : ` · ${outcome}`}`,
+        text: `${pad(task.state, 10)}${pad(kind, 5)}${pad(task.agentRef, 13)}${pad(`${task.attempt}/${task.maxAttempts}`, 5)}${pad(settled, TOKENS_WIDTH)}${task.goal}${outcome === undefined ? "" : ` · ${outcome}`}`,
         value: task.taskId,
       };
     }),
