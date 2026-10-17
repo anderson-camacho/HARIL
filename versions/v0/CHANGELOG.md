@@ -4,6 +4,54 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.5.0
+
+- **Fecha:** 2026-10-16
+- **Estado:** primera pieza de M4. La interfaz de terminal `haril shell`, construida sobre pi-tui, lee el almacén sin modificarlo; las acciones pasan por la CLI.
+
+### Añadido
+
+- `haril shell`: interfaz interactiva (paquete `apps/shell`) con 11 paneles:
+  - proyectos;
+  - tareas, con sus dependencias y su detalle;
+  - agentes y runtime;
+  - tokens y métricas;
+  - eventos;
+  - modelos configurados;
+  - configuración;
+  - temas;
+  - memoria, servicios y terminales, que aún aparecen como no disponibles.
+
+  Teclas: `1`-`9`, `Tab`, flechas, `Enter`, `Esc`, `a`, `t`, `r`, `?` y `q`.
+- Alta de tareas desde la interfaz (`a`): ejecuta `haril task add` como un proceso corto, de modo que la CLI sigue siendo el único camino de escritura.
+- Temas en el formato JSON de Pi, con un cargador propio:
+  - incluye `haril-dark` y `haril-light`;
+  - los temas del usuario van en `config/themes/`;
+  - el tema elegido se guarda en `ui.theme` de `haril.json` con una escritura atómica.
+- La lectura de tareas incluye los ids de sus dependencias.
+
+### Cambiado
+
+- `haril.json` admite la sección `ui`; un archivo sin `providers` mantiene los proveedores por defecto.
+- El instalador copia también `shell.mjs`.
+- La regla de capas R1 solo permite `@earendil-works/pi-tui` en `apps/shell`.
+- Sin una terminal interactiva, `haril shell` sale con el código 2 y un mensaje claro.
+
+### Corregido
+
+- El control de instalaciones ajenas del E2E ignora el estado que escriben las herramientas abiertas (las transcripciones de Claude Code y las bases internas y registros de Codex). La configuración y los binarios siguen contando.
+- `e2e:real` mantiene los proveedores por defecto cuando `haril.json` no tiene `providers`.
+
+### Verificación
+
+- `pnpm run check` termina sin fallos.
+- `pnpm test` pasa con 702 pruebas de Vitest y 48 de `node:test`.
+- `npm run e2e` pasa sus 37 pasos, con Codex abierto.
+- `shell.mjs` es un solo archivo y solo importa módulos de Node. El helper nativo opcional de pi-tui no se distribuye.
+- En una terminal real (PowerShell), la interfaz muestra los datos de un proyecto de demostración y `Ctrl+C` la cierra limpiamente. Las teclas se probaron con una terminal virtual; falta la prueba manual en Windows Terminal.
+
+---
+
 ## 0.4.1
 
 - **Fecha:** 2026-10-16

@@ -136,6 +136,31 @@ HARIL lee sus proveedores de `HARIL_CONFIG` o, si no está definida, de `config\
 
 > **Aviso sobre gateways y términos de servicio.** `cliproxy` es solo un nombre y una URL local (`127.0.0.1:8317`): HARIL no incluye, instala ni configura ningún gateway, y no publica cuentas, plantillas OAuth ni configuración de terceros. Sirve cualquier endpoint compatible con OpenAI que declares en `haril.json`. Algunos gateways, como CLIProxyAPI, convierten suscripciones de consumo en una API; ese uso puede ir contra los términos de servicio del proveedor del modelo y acabar en la suspensión de la cuenta. Cada usuario es responsable de cumplir los términos de sus proveedores. HARIL no rota cuentas ni cambia solo a planes de pago.
 
+### M4: interfaz de terminal (`haril shell`)
+
+`haril shell` abre una interfaz interactiva sobre los datos de HARIL. Necesita una terminal real (Windows Terminal o PowerShell); sin ella sale con 2. La interfaz solo lee: nunca arranca el runtime y no consulta la base en bucle. Los datos se cargan al abrir, con `r` y después de cada acción.
+
+```powershell
+cd D:\github\haril
+npm run build
+.\bin\haril.ps1 shell
+```
+
+| Tecla | Acción |
+|---|---|
+| `1`-`9`, `Tab`, `Shift+Tab` | Cambiar de panel (11: proyectos, tareas, agentes, tokens, eventos, modelos, configuración, temas, memoria, servicios y terminales) |
+| `↑` `↓` `PageUp` `PageDown` `Home` `End` | Moverse por la lista |
+| `Enter` | En Proyectos filtra por proyecto; en Tareas abre el detalle; en Temas aplica el tema |
+| `Esc` | Cerrar el detalle, la ayuda o el formulario |
+| `a` | Añadir una tarea (título, agente y modelo); se encola con `haril task add` y la ejecuta `haril start` |
+| `t` | Ir a Temas |
+| `r` | Recargar |
+| `?` | Ayuda |
+| `q`, `Ctrl+C` | Salir |
+
+El tema elegido se guarda en `config\haril.json` como `ui.theme` y se mantiene al reabrir. Los temas propios van en `config\themes\<nombre>.json` dentro de la raíz del runtime, con el formato JSON de temas de Pi. Memoria, servicios y terminales todavía muestran «no disponible en esta versión».
+
+
 ## Qué es y qué no es
 
 Fuente: `docs/PRODUCT_VISION.md` 1 y 4.

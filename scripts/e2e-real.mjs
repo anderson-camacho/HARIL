@@ -29,14 +29,17 @@ function runtimeRoot() {
 }
 
 // The environment variable that holds the key of the default model's provider, or undefined when that provider
-// needs none. The provider comes from HARIL_CONFIG or <runtime root>/config/haril.json; without a file the
-// defaults apply, where only cliproxy is keyed (apps/haril/src/providers.ts).
+// needs none. The provider comes from HARIL_CONFIG or <runtime root>/config/haril.json; without a file, or with a
+// file that has no providers (for example only ui.theme), the defaults apply, where only cliproxy is keyed
+// (apps/haril/src/providers.ts).
 function defaultModelKeyEnv(modelRef) {
   const providerId = modelRef.split("/")[0];
+  const defaultKeyEnv = providerId === "cliproxy" ? GATEWAY_KEY_ENV : undefined;
   const configPath = process.env.HARIL_CONFIG || join(runtimeRoot(), "config", "haril.json");
-  if (!existsSync(configPath)) return providerId === "cliproxy" ? GATEWAY_KEY_ENV : undefined;
+  if (!existsSync(configPath)) return defaultKeyEnv;
   try {
-    const providers = JSON.parse(readFileSync(configPath, "utf8")).providers ?? [];
+    const providers = JSON.parse(readFileSync(configPath, "utf8")).providers;
+    if (providers === undefined) return defaultKeyEnv;
     const entry = providers.find((candidate) => candidate.id === providerId);
     return typeof entry?.keyEnv === "string" ? entry.keyEnv : undefined;
   } catch {

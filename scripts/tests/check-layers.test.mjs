@@ -20,6 +20,18 @@ test("R1: @earendil-works/* outside agent-pi and agent-pi-bridge is rejected", (
   ]);
 });
 
+test("R1 exception: pi-tui is only importable from apps/shell; other Pi packages stay forbidden there", () => {
+  const r1 = byRule(checkLayers(fixture("r1-pi-tui-shell")), "R1");
+  assert.deepEqual(r1.map((violation) => violation.file).sort(), [
+    "apps/haril/src/index.ts",
+    "apps/shell/src/index.ts",
+  ]);
+  assert.match(
+    r1.find((violation) => violation.file === "apps/shell/src/index.ts").message,
+    /pi-coding-agent/,
+  );
+});
+
 test("R2: importing another workspace src/ path is rejected (bare and relative)", () => {
   const r2 = byRule(checkLayers(fixture("r2-src-import")), "R2");
   assert.equal(r2.length, 2);
