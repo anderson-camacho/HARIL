@@ -14,11 +14,11 @@ export function applyDecidedApprovals(
   let applied = 0;
   for (const approval of store.approvals.listUnapplied()) {
     const outcome = approval.status === "granted" ? "granted" : "denied";
-    if (outcome === "granted") {
-      store.commands.enqueue(planSubmitCommand(approval.projectId, approval.subject));
-    }
+    const alreadySubmitted =
+      outcome === "granted" &&
+      store.commands.enqueue(planSubmitCommand(approval.projectId, approval.subject)).duplicate;
     store.approvals.markApplied(approval.approvalId, epoch);
-    emit({ type: "approval.applied", approvalId: approval.approvalId, outcome });
+    emit({ type: "approval.applied", approvalId: approval.approvalId, outcome, alreadySubmitted });
     applied += 1;
   }
   return applied;

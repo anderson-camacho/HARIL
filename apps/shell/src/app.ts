@@ -136,7 +136,7 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
       ? "all"
       : (snapshot.projects.find((project) => project.projectId === scope)?.slug ?? "all");
   const bannerText = (): string =>
-    // Approvals do not exist in this version, so the count is always 0 (the caller passes it). "live" shows while
+    // The pending-approval count is read from the store with the rest of the snapshot (LD-T3). "live" shows while
     // the shell holds a subscription to the runtime (LD-T2).
     `isolation ${banner.isolation} · ${snapshot.pendingApprovals} pending approvals · runtime ${runtimeState(snapshot.runtime, snapshot.loadedAt)}${liveMark()} · project ${projectSlug()}`;
   const footerText = (): string => {

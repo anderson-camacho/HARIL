@@ -94,7 +94,12 @@ describe("approvals in the runtime (LD-T3)", () => {
 
     expect(result.kind).toBe("idle");
     expect(store.tasks.list()).toHaveLength(4);
-    expect(events).toContainEqual({ type: "approval.applied", approvalId, outcome: "granted" });
+    expect(events).toContainEqual({
+      type: "approval.applied",
+      approvalId,
+      outcome: "granted",
+      alreadySubmitted: false,
+    });
     expect(store.approvals.get(approvalId)?.appliedAt).not.toBeNull();
     expect(Date.now() - started).toBeGreaterThanOrEqual(1_000);
   }, 15_000);
@@ -111,7 +116,37 @@ describe("approvals in the runtime (LD-T3)", () => {
 
     expect(result.kind).toBe("idle");
     expect(store.tasks.list()).toHaveLength(0);
-    expect(events).toContainEqual({ type: "approval.applied", approvalId, outcome: "denied" });
+    expect(events).toContainEqual({
+      type: "approval.applied",
+      approvalId,
+      outcome: "denied",
+      alreadySubmitted: false,
+    });
+  }, 15_000);
+
+  it("granting a plan that was already submitted queues nothing new and says so", async () => {
+    const store = open();
+    const projectId = projectOf(store);
+    const first = proposeValid(store, projectId);
+    store.approvals.decide({ approvalId: first, outcome: "granted", decidedBy: "ana" });
+    await loop(store, [], 0);
+    expect(store.tasks.list()).toHaveLength(4);
+
+    // The same plan proposed again is a new approval, but its plan.submit is the same request as the first one.
+    const second = proposeValid(store, projectId);
+    expect(second).not.toBe(first);
+    store.approvals.decide({ approvalId: second, outcome: "granted", decidedBy: "ana" });
+    const events: RunEvent[] = [];
+    await loop(store, events, 0);
+
+    expect(store.tasks.list()).toHaveLength(4);
+    expect(events).toContainEqual({
+      type: "approval.applied",
+      approvalId: second,
+      outcome: "granted",
+      alreadySubmitted: true,
+    });
+    expect(store.approvals.get(second)?.appliedAt).not.toBeNull();
   }, 15_000);
 
   it("a pending approval with no decision does not keep the runtime up", async () => {

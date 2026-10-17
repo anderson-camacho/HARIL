@@ -74,9 +74,12 @@ export type RunEvent =
     }
   | {
       // A decision on an approval was applied by the runtime (LD-T3). A granted plan is queued in the same turn.
+      // alreadySubmitted: the granted plan's plan.submit was a duplicate (the same plan was imported or granted
+      // before, or a crash left it queued), so nothing new was queued. Always false for a denial.
       readonly type: "approval.applied";
       readonly approvalId: string;
       readonly outcome: "granted" | "denied";
+      readonly alreadySubmitted: boolean;
     };
 
 export interface RunSummary {

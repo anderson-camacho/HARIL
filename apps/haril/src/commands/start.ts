@@ -160,6 +160,8 @@ function formatEvent(event: RunEvent): string {
     case "task.returned":
       return `returned ${event.taskId} ${event.goal} to ready (stopped, no attempt charged)`;
     case "approval.applied":
-      return `approval ${event.approvalId} ${event.outcome}: applied`;
+      return event.alreadySubmitted
+        ? `approval ${event.approvalId} ${event.outcome}: applied (plan already submitted, nothing new queued)`
+        : `approval ${event.approvalId} ${event.outcome}: applied`;
   }
 }
