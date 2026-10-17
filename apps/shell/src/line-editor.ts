@@ -1,15 +1,18 @@
 import { decodeKittyPrintable, matchesKey, visibleWidth } from "@earendil-works/pi-tui";
-import { plain } from "./format.js";
+import { visibleText } from "./format.js";
 
 // The line editor of the input box (LD-T6b-2): one line of text and a cursor. pi-tui's Input draws its own line with
 // escape sequences (a reverse-video cursor and the hardware cursor marker) and keeps pasted control characters in its
-// value, so it cannot go through fit like every other text of the frame; this editor keeps only plain text instead.
-// Each control character a paste brings becomes "?" (format.ts plain) and its line breaks become spaces, so the box
-// shows exactly what Enter sends. The app colors the view and draws the cursor.
+// value, so it cannot go through fit like every other text of the frame; this editor keeps only visible text instead.
+// Each control character, Unicode format character or lone surrogate becomes "?" (format.ts visibleText) and a paste's
+// line breaks become spaces, so the box shows exactly what Enter sends. The app colors the view and draws the cursor.
 
 const PASTE_START = "\x1b[200~";
 const PASTE_END = "\x1b[201~";
 const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+const LONE_SURROGATE = /[\u{D800}-\u{DFFF}]/gu;
+// The Private Use Area, where the Kitty protocol puts the keys that are not text (F13, Menu, the media keys).
+const PRIVATE_USE = /^[\u{E000}-\u{F8FF}]$/u;
 
 // What the box shows of the text: the graphemes before the cursor, the one under it (a space at the end) and the ones
 // after it that still fit.
@@ -28,6 +31,9 @@ export class LineEditor {
   private cursor = 0;
   // The start of a bracketed paste that has not ended yet.
   private paste: string | undefined;
+  // pi-tui's input buffer hands a character beyond the BMP (an emoji) over as its two UTF-16 halves, one key each:
+  // the high half waits here for the low one. Any other key drops it, so half a character never reaches the text.
+  private high: string | undefined;
 
   get value(): string {
     return this.text;
@@ -46,7 +52,11 @@ export class LineEditor {
 
   // One key or one paste. Keys that are not the editor's (Enter, Tab, the arrows up and down, escape sequences) change
   // nothing.
-  handleInput(data: string): void {
+  handleInput(input: string): void {
+    const high = this.high;
+    this.high = undefined;
+    const data =
+      high !== undefined && isLowSurrogate(input.charCodeAt(0)) ? `${high}${input}` : input;
     if (this.paste !== undefined || data.includes(PASTE_START)) {
       this.takePaste(data);
       return;
@@ -61,9 +71,21 @@ export class LineEditor {
     else if (matchesKey(data, "ctrl+k")) this.cut(this.cursor, this.text.length);
     else if (matchesKey(data, "ctrl+w") || matchesKey(data, "alt+backspace")) this.deleteWord();
     else {
-      const printable = decodeKittyPrintable(data) ?? (hasControl(data) ? undefined : data);
-      if (printable !== undefined) this.insert(printable);
+      const decoded = decodeKittyPrintable(data);
+      if (decoded !== undefined) {
+        if (!PRIVATE_USE.test(decoded)) this.insert(decoded);
+      } else if (!hasControl(data)) {
+        this.type(data);
+      }
     }
+  }
+
+  // Typed text: a high surrogate at its end waits for its low half, and a lone half is dropped.
+  private type(data: string): void {
+    const last = data.charCodeAt(data.length - 1);
+    const waits = last >= 0xd800 && last <= 0xdbff;
+    if (waits) this.high = data.slice(-1);
+    this.insert((waits ? data.slice(0, -1) : data).replace(LONE_SURROGATE, ""));
   }
 
   // The text around the cursor in at most `width` cells. While the text fits it shows from its start; once it does
@@ -111,7 +133,7 @@ export class LineEditor {
   private insert(text: string): void {
     const room = LineEditor.MAX - this.text.length;
     if (room <= 0) return;
-    const clean = cutAtBoundary(plain(text), room);
+    const clean = cutAtBoundary(visibleText(text), room);
     this.text = `${this.text.slice(0, this.cursor)}${clean}${this.text.slice(this.cursor)}`;
     this.cursor += clean.length;
   }
@@ -161,6 +183,10 @@ function hasControl(data: string): boolean {
     if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) return true;
   }
   return false;
+}
+
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff;
 }
 
 // At most `units` UTF-16 units of `text`, never splitting a grapheme.

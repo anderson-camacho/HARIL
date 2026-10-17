@@ -83,6 +83,47 @@ describe("LineEditor", () => {
     expect(editor.value).toBe("a");
   });
 
+  it("never types the Private Use Area code of a Kitty function key", () => {
+    const editor = typed("ok");
+    // Menu, F13 and media Play decode to U+E053, U+E060 and U+E094.
+    for (const code of [57427, 57440, 57492]) editor.handleInput(`${ESC}[${code}u`);
+    expect(editor.value).toBe("ok");
+  });
+
+  it("turns Unicode format characters into ?, typed or pasted, so the box shows what Enter sends", () => {
+    const editor = typed("do");
+    editor.handleInput("\u{200B}");
+    editor.handleInput("it");
+    editor.handleInput(`${ESC}[200~\u{202E}!\u{E0041}\u{E007F}\u{FEFF}${ESC}[201~`);
+    expect(editor.value).toBe("do?it?!???");
+    // The zero-width joiner of an emoji sequence stays.
+    editor.setValue("\u{1F468}\u{200D}\u{1F469}");
+    expect(editor.value).toBe("\u{1F468}\u{200D}\u{1F469}");
+  });
+
+  it("joins a surrogate pair sent in two keys, and never keeps half of one", () => {
+    const editor = new LineEditor();
+    editor.handleInput("\ud83d");
+    editor.handleInput("\ude00");
+    expect(editor.value).toBe("\u{1F600}");
+    // A high surrogate that no low one follows is dropped; a lone low one too.
+    editor.handleInput("\ud83d");
+    editor.handleInput("a");
+    editor.handleInput("\ude00");
+    expect(editor.value).toBe("\u{1F600}a");
+    // A lone surrogate in a paste becomes ?.
+    editor.handleInput(`${ESC}[200~\ud83dz${ESC}[201~`);
+    expect(editor.value).toBe("\u{1F600}a?z");
+  });
+
+  it("at the cap a pair that does not fit is left out whole", () => {
+    const editor = new LineEditor();
+    editor.handleInput(`${ESC}[200~${"x".repeat(LineEditor.MAX - 1)}${ESC}[201~`);
+    editor.handleInput("\ud83d");
+    editor.handleInput("\ude00");
+    expect(editor.value).toBe("x".repeat(LineEditor.MAX - 1));
+  });
+
   it("a bracketed paste joins its lines and turns control characters into ?", () => {
     const editor = typed(">");
     editor.handleInput(`${ESC}[200~one\r\ntwo\x1b]0;title\x07\tend${ESC}[201~`);

@@ -87,3 +87,19 @@ describe("GoalForm", () => {
     expect(lines).toContain("(planner only)");
   });
 });
+
+describe("the goal sent is the goal shown (LD-T6b-2)", () => {
+  it("goalArgs sends format characters, controls and lone surrogates as ?", () => {
+    const built = goalArgs(
+      { goal: "do\u{200B}it\u{202E}\x1b[2J\u{E0041}\ud83d", agent: "fake:plan", model: "" },
+      { slug: "demo", dataDir: undefined },
+    );
+    expect(built.ok && built.args[2]).toBe("do?it??[2J??");
+  });
+
+  it("the form shows the goal as it will be sent", () => {
+    const form = new GoalForm({ projectSlug: "demo", defaultModel: undefined });
+    form.handleInput("\x1b[200~do\u{200B}it\u{E0041}\x1b[201~");
+    expect(form.lines().join("\n")).toContain("goal    do?it?_");
+  });
+});
