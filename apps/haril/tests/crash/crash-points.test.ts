@@ -27,7 +27,21 @@ import { runUntilIdle } from "../../src/runtime/run-loop.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CHILD = join(HERE, "child.mjs");
-const REGISTER = pathToFileURL(join(HERE, "register.mjs")).href;
+// The loader is shared with the store's multi-process tests (integrations/state-sqlite/tests/crash/register.mjs).
+const REGISTER = pathToFileURL(
+  join(
+    HERE,
+    "..",
+    "..",
+    "..",
+    "..",
+    "integrations",
+    "state-sqlite",
+    "tests",
+    "crash",
+    "register.mjs",
+  ),
+).href;
 const KEY_HASH = "crash-key";
 const rules = { canTransition, checkPlan: checkPlanSubmission, checkAcceptance };
 const clock: Clock = {
@@ -94,7 +108,7 @@ describe(
   "[CP1] killed after the claim and the key row, before any effect intent",
   CRASH_OPTIONS,
   () => {
-    it("returns the task to ready without charging an attempt, and revokes the run's key", () => {
+    it("[INV-06] returns the task to ready without charging an attempt, and revokes the run's key", () => {
       expect(crashAt("cp1")).toMatchObject({ reached: true, abnormal: true });
       const store = reopenAfterCrash();
       const recovered = takeOverAndReconcile(store);
@@ -112,7 +126,7 @@ describe(
 );
 
 describe("[CP3] killed when the agent starts, before it confirms", CRASH_OPTIONS, () => {
-  it("orphans the run, adds one infra restart, and the same runtime completes the task", async () => {
+  it("[INV-06] orphans the run, adds one infra restart, and the same runtime completes the task", async () => {
     expect(crashAt("cp3")).toMatchObject({ reached: true, abnormal: true });
     const store = reopenAfterCrash();
     const events: RunEvent[] = [];
@@ -167,7 +181,7 @@ describe("[CP4] killed mid-turn with an open budget reservation", CRASH_OPTIONS,
 });
 
 describe("[CP8] killed halfway through a migration", CRASH_OPTIONS, () => {
-  it("leaves the schema, the applied versions and the seeded rows as they were", () => {
+  it("[INV-12] leaves the schema, the applied versions and the seeded rows as they were", () => {
     expect(crashAt("cp8")).toMatchObject({ reached: true, abnormal: true });
     const raw = new DatabaseSync(join(dir, "haril.db"));
     expect(raw.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 1 });

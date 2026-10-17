@@ -140,7 +140,7 @@ describe("commands.applyNext", () => {
     );
   });
 
-  it("re-validates a plan with a cycle, rejects it and creates nothing", () => {
+  it("[INV-05] re-validates a plan with a cycle, rejects it and creates nothing", () => {
     enqueuePlan(JSON.parse(readFileSync(EXAMPLE_CYCLE, "utf8")));
     const applied = store.commands.applyNext(epoch);
     expect(applied?.outcome).toBe("rejected");
@@ -155,7 +155,7 @@ describe("commands.applyNext", () => {
     expect(store.commands.applyNext(epoch)?.commandId).toBe(second);
   });
 
-  it("is fenced when the epoch is no longer the active lease", () => {
+  it("[INV-07] is fenced when the epoch is no longer the active lease", () => {
     enqueueTask("Never applied");
     const error = caught(() => store.commands.applyNext(epoch + 99));
     expect(error.code).toBe("store.fenced");

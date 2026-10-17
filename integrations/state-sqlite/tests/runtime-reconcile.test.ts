@@ -79,7 +79,7 @@ describe("runtime takeover by liveness (M1 fix c)", () => {
     store.close();
   });
 
-  it("takes over an expired lease even when its pid is still alive", () => {
+  it("[INV-15] takes over an expired lease even when its pid is still alive", () => {
     const clock = manualClock();
     const store = openMemoryStore({
       clock,
@@ -96,7 +96,7 @@ describe("runtime takeover by liveness (M1 fix c)", () => {
 });
 
 describe("reconciliation of orphaned attempts (M1 fix d)", () => {
-  it("returns a task left running by a crashed runtime to ready, without charging an attempt", () => {
+  it("[INV-06] returns a task left running by a crashed runtime to ready, without charging an attempt", () => {
     const clock = manualClock();
     const crashed = openFile(clock, () => true, 1);
     const project = crashed.projects.register({ slug: "demo", name: "Demo", rootPath: dir });
@@ -158,7 +158,7 @@ describe("reconciliation of orphaned attempts (M1 fix d)", () => {
     store.close();
   });
 
-  it("fails the task on the fourth orphaning, with reason infra_restarts_exhausted", () => {
+  it("[INV-06] fails the task on the fourth orphaning, with reason infra_restarts_exhausted", () => {
     const clock = manualClock();
     const first = openFile(clock, () => false, 1);
     const project = first.projects.register({ slug: "demo", name: "Demo", rootPath: dir });

@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Clock, Ids, Store, StoreGate, StoreRules } from "@haril/core/ports";
+import { withBusyRetry } from "./busy.js";
 import {
   configureConnection,
   DB_FILE_NAME,
@@ -49,9 +50,12 @@ export function openStore(options: OpenStoreOptions): Store {
   const gates = [location, ...evaluateGates(versions)];
   if (hasErrorGate(gates)) throw gateError(gates);
   mkdirSync(options.dataDir, { recursive: true });
-  const db = new DatabaseSync(join(options.dataDir, DB_FILE_NAME));
+  const file = join(options.dataDir, DB_FILE_NAME);
   const walPath = join(options.dataDir, `${DB_FILE_NAME}-wal`);
-  return openConnection(db, options, versions, gates, "wal", walPath);
+  // Each attempt opens its own connection: openConnection closes the one it was given when it fails.
+  return withBusyRetry(() =>
+    openConnection(new DatabaseSync(file), options, versions, gates, "wal", walPath),
+  );
 }
 
 // Same store over ":memory:", for the contract suite (M1-D3). Nothing touches the disk.

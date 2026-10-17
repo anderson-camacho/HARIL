@@ -102,7 +102,7 @@ describe("file store lifecycle", () => {
     connection.close();
   });
 
-  it("a migration whose checksum changed aborts the open (INV-12)", () => {
+  it("[INV-12] a migration whose checksum changed aborts the open", () => {
     open().close();
     const connection = raw();
     connection.exec("UPDATE schema_migrations SET checksum = 'tampered' WHERE version = 1");
@@ -112,7 +112,7 @@ describe("file store lifecycle", () => {
     expect(error.code).toBe("store.migration_failed");
   });
 
-  it("rows for a newer migration are ignored, not validated or removed", () => {
+  it("[INV-12] rows for a newer migration are ignored, not validated or removed", () => {
     open().close();
     const connection = raw();
     connection.exec(
@@ -136,7 +136,7 @@ describe("file store lifecycle", () => {
 });
 
 describe("open gates", () => {
-  it("a SQLite below 3.51.3 is refused before any file is created (INV-16)", () => {
+  it("[INV-16] a SQLite below 3.51.3 is refused before any file is created", () => {
     const target = join(dir, "blocked");
     const error = caught(() => open({ sqliteVersion: "3.50.7" }, target));
     expect(error.code).toBe("store.gate_failed");
@@ -170,7 +170,7 @@ describe("open gates", () => {
     expect(error.details).toMatchObject({ gate: "application_id" });
   });
 
-  it("a database with a newer user_version is refused and never downgraded (TSK-21)", () => {
+  it("[INV-12] a database with a newer user_version is refused and never downgraded (TSK-21)", () => {
     open().close();
     const connection = raw();
     connection.exec("PRAGMA user_version = 99");

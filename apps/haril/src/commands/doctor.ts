@@ -20,7 +20,8 @@ import { readRuntime, runtimeRootFor } from "../runtime.js";
 import { VERSION } from "../version.js";
 import { dataDirFor } from "./common.js";
 
-// `haril doctor` (M1-D2): read-only. Node outside the supported range is a warning; below Node 24 an error.
+// `haril doctor` (M1-D2): read-only. A 24.x below the supported range is a warning (the kept deviation, MC-D6); any
+// other version outside the range is an error, as the store gate refuses it (INV-19).
 
 const NODE_REQUIREMENT = "^24.21.0 || >=26.8.0";
 
@@ -46,11 +47,12 @@ function satisfiesRequirement(version: Version): boolean {
   return onLine24 || compareVersions(version, [26, 8, 0]) >= 0;
 }
 
-// Below Node 24 is a hard error (exit 2); a version that does not satisfy the range is only a warning.
+// Outside the range is a hard error (exit 2), except a 24.x below 24.21.0, which is only a warning.
 function nodeStatus(nodeVersion: string): NodeStatus {
   const version = parseVersion(nodeVersion);
-  if (version === null || version[0] < 24) return "error";
-  return satisfiesRequirement(version) ? "ok" : "warn";
+  if (version === null) return "error";
+  if (satisfiesRequirement(version)) return "ok";
+  return version[0] === 24 ? "warn" : "error";
 }
 
 function worst(...statuses: Status[]): Status {

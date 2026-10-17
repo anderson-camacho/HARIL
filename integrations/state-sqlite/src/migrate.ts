@@ -17,9 +17,10 @@ function checksumOf(sql: string): string {
   return createHash("sha256").update(sql, "utf8").digest("hex");
 }
 
-// One transaction per migration (BEGIN IMMEDIATE). A known version with a different checksum is corruption.
-// `migrations` defaults to the release's list. It is a test-only seam (ARCH 13.2 CP8): the crash harness applies
-// a list whose step kills the process, and production code always calls migrate with the default.
+// One transaction per migration (BEGIN IMMEDIATE), taken only for a pending one: an open of a current schema reads
+// without a write lock, so it never waits for another writer (ARCH 8.4). A known version with a different checksum
+// is corruption. `migrations` defaults to the release's list. It is a test-only seam (ARCH 13.2 CP8): the crash
+// harness applies a list whose step kills the process, and production code always calls migrate with the default.
 export function migrate(
   db: DatabaseSync,
   clock: Clock,
@@ -27,8 +28,27 @@ export function migrate(
   migrations: readonly Migration[] = KNOWN_MIGRATIONS,
 ): void {
   for (const migration of migrations) {
+    if (isAppliedUnchanged(db, migration)) continue;
     applyOne(db, migration, clock, ids);
   }
+}
+
+// Read-only check (no transaction, so no lock). A pending migration returns false and is applied under the lock,
+// where applyOne checks the row again.
+function isAppliedUnchanged(db: DatabaseSync, migration: Migration): boolean {
+  const applied = appliedChecksum(db, migration.version);
+  if (applied === undefined) return false;
+  const checksum = checksumOf(migration.sql);
+  if (applied !== checksum) throw checksumMismatch(migration, checksum, applied);
+  return true;
+}
+
+function checksumMismatch(migration: Migration, expected: string, found: string): StoreError {
+  return new StoreError(
+    "store.migration_failed",
+    `migration ${migration.name} was applied with a different checksum. Remedy: restore the last backup; the database was changed outside HARIL.`,
+    { version: migration.version, expected, found },
+  );
 }
 
 function applyOne(db: DatabaseSync, migration: Migration, clock: Clock, ids: Ids): void {
@@ -38,13 +58,7 @@ function applyOne(db: DatabaseSync, migration: Migration, clock: Clock, ids: Ids
     const applied = appliedChecksum(db, migration.version);
     if (applied !== undefined) {
       db.exec("ROLLBACK");
-      if (applied !== checksum) {
-        throw new StoreError(
-          "store.migration_failed",
-          `migration ${migration.name} was applied with a different checksum. Remedy: restore the last backup; the database was changed outside HARIL.`,
-          { version: migration.version, expected: checksum, found: applied },
-        );
-      }
+      if (applied !== checksum) throw checksumMismatch(migration, checksum, applied);
       return;
     }
     if (migration.version === 1) {

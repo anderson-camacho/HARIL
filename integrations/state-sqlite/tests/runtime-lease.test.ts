@@ -69,7 +69,7 @@ describe("runtime lease", () => {
     expect(store.runtime.leaseSummary()).toMatchObject({ status: "active", pid: 200 });
   });
 
-  it("fences a heartbeat from the epoch that lost its lease", () => {
+  it("[INV-07] fences a heartbeat from the epoch that lost its lease", () => {
     acquire();
     clock.advance(TTL + 1);
     acquire();
@@ -84,7 +84,7 @@ describe("runtime lease", () => {
     expect(next.ok && next.value.epoch).toBe(2);
   });
 
-  it("fences a release from an epoch that is no longer active", () => {
+  it("[INV-07] fences a release from an epoch that is no longer active", () => {
     acquire();
     clock.advance(TTL + 1);
     acquire();

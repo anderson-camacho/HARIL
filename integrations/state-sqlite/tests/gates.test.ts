@@ -6,7 +6,7 @@ function statusOf(nodeVersion: string, sqliteVersion: string, name: "node" | "sq
   return gate?.status;
 }
 
-describe("sqlite gate (hard, INV-16)", () => {
+describe("[INV-16] sqlite gate (hard)", () => {
   it.each([
     ["3.53.3", "ok"],
     ["3.51.3", "ok"],
@@ -22,14 +22,14 @@ describe("sqlite gate (hard, INV-16)", () => {
   });
 });
 
-describe("node gate (warning outside the range, M1-D1)", () => {
+describe("node gate (24.x below the range warns, M1-D1; other versions outside it are refused, INV-19)", () => {
   it.each([
     ["v24.21.0", "ok"],
     ["v24.22.1", "ok"],
     ["v26.8.0", "ok"],
     ["v24.19.0", "warn"],
-    ["v25.1.0", "warn"],
-    ["v26.7.9", "warn"],
+    ["v25.1.0", "error"],
+    ["v26.7.9", "error"],
     ["v22.12.0", "error"],
   ])("Node %s is %s", (nodeVersion, status) => {
     expect(statusOf(nodeVersion, "3.53.3", "node")).toBe(status);
