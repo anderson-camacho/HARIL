@@ -188,3 +188,86 @@ describe("reconciliation of orphaned attempts (M1 fix d)", () => {
     }
   });
 });
+
+// Authority of an orphaned run (ARCH 13.2 CP1 and CP4): its virtual keys are revoked and its open budget
+// reservations are settled exactly once. Both happen in the reconciliation transaction.
+describe("reconciliation of an orphaned run's authority (CP1, CP4)", () => {
+  it("[CP1] revokes the virtual keys of an orphaned run and returns the task to ready", () => {
+    const clock = manualClock();
+    const crashed = openFile(clock, () => true, 1);
+    const project = crashed.projects.register({ slug: "demo", name: "Demo", rootPath: dir });
+    expect(grant(crashed, 100).ok).toBe(true);
+    const taskId = enqueue(crashed, project.projectId, "A");
+    const claimed = crashed.tasks.claimNext(1);
+    const budgetId = crashed.budgets.ensure({
+      scopeType: "project",
+      scopeId: project.projectId,
+      projectId: project.projectId,
+      hardLimit: 1000,
+    }).budgetId;
+    crashed.virtualKeys.issue({
+      runId: claimed?.runId ?? "",
+      keyHash: "hash-cp1",
+      routeGrant: { providerId: "p" },
+      budgetIds: [budgetId],
+      expiresAt: clock.now() + 60_000,
+    });
+    crashed.close(); // CP1: the key row exists, no effect intent was recorded
+
+    const next = openFile(clock, () => false, 2);
+    const takeover = grant(next, 200);
+    if (!takeover.ok) throw new Error("takeover refused");
+    next.runtime.reconcile(takeover.value.epoch, MAX_INFRA_RESTARTS);
+
+    expect(next.virtualKeys.findActiveByHash("hash-cp1")).toBeUndefined();
+    expect(next.virtualKeys.revoke(claimed?.runId ?? "", "again")).toBe(0);
+    expect(next.tasks.get(taskId)).toMatchObject({ state: "ready", attemptsUsed: 0 });
+    next.close();
+  });
+
+  it("[CP4] settles an open reservation of an orphaned run at its upper bound, exactly once", () => {
+    const clock = manualClock();
+    const crashed = openFile(clock, () => true, 1);
+    const project = crashed.projects.register({ slug: "demo", name: "Demo", rootPath: dir });
+    expect(grant(crashed, 100).ok).toBe(true);
+    enqueue(crashed, project.projectId, "A");
+    const claimed = crashed.tasks.claimNext(1);
+    const budgetId = crashed.budgets.ensure({
+      scopeType: "project",
+      scopeId: project.projectId,
+      projectId: project.projectId,
+      hardLimit: 1000,
+    }).budgetId;
+    const reservation = crashed.budgets.reserve({
+      budgetIds: [budgetId],
+      amount: 300,
+      idempotencyKey: "cp4-reserve",
+      runId: claimed?.runId ?? "",
+      taskId: claimed?.taskId ?? "",
+      routeId: "route-paid",
+    });
+    expect(reservation.ok).toBe(true);
+    crashed.close(); // CP4: mid-turn, the reservation is open and no usage was reported
+
+    const next = openFile(clock, () => false, 2);
+    const takeover = grant(next, 200);
+    if (!takeover.ok) throw new Error("takeover refused");
+    next.runtime.reconcile(takeover.value.epoch, MAX_INFRA_RESTARTS);
+
+    // Route cost kind is not in the ledger, so the reservation is charged at its upper bound, unreconciled.
+    expect(next.budgets.get(budgetId)).toMatchObject({ spent: 300, reserved: 0 });
+    expect(next.budgets.usageSummary({ projectId: project.projectId })).toMatchObject({
+      settled: 1,
+      unreconciled: 1,
+    });
+
+    // A second reconciliation finds nothing open: the totals and the ledger do not move.
+    expect(next.runtime.reconcile(takeover.value.epoch, MAX_INFRA_RESTARTS)).toEqual([]);
+    expect(next.budgets.get(budgetId)).toMatchObject({ spent: 300, reserved: 0 });
+    expect(next.budgets.usageSummary({ projectId: project.projectId })?.settled).toBe(1);
+    expect(next.budgets.release(reservation.ok ? reservation.reservationId : "")).toBe(
+      "already_settled",
+    );
+    next.close();
+  });
+});

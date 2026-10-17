@@ -1054,6 +1054,9 @@ export class SqliteStore implements Store {
               }),
               run.runId,
             );
+          // ARCH 13.2 CP1 and CP4: the run's authority ends with the run. Keys first, then open reservations.
+          this.virtualKeys.revoke(run.runId, "orphaned");
+          this.budgets.settleOpenForRun(run.runId);
         }
         if (exhausted) {
           this.db
@@ -1252,6 +1255,8 @@ export class SqliteStore implements Store {
   }
 
   private inTransaction<T>(work: () => T): T {
+    // A nested call (the reconciler settles budgets inside its own transaction) joins the open one.
+    if (this.db.isTransaction) return work();
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const value = work();
