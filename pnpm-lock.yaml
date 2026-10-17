@@ -196,6 +196,9 @@ importers:
       '@haril/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@haril/control':
+        specifier: workspace:*
+        version: link:../../integrations/control
       '@haril/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -221,6 +224,9 @@ importers:
       '@haril/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@haril/control':
+        specifier: workspace:*
+        version: link:../../integrations/control
       '@haril/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -246,6 +252,12 @@ importers:
         version: 24.19.2
 
   integrations/agent-pi-bridge:
+    devDependencies:
+      '@types/node':
+        specifier: 24.19.2
+        version: 24.19.2
+
+  integrations/control:
     devDependencies:
       '@types/node':
         specifier: 24.19.2

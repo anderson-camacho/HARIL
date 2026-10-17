@@ -1,3 +1,4 @@
+import type { ControlServer } from "@haril/control";
 import {
   buildAgentSpec,
   checkHandshake,
@@ -25,6 +26,7 @@ import type {
 import { StoreError } from "@haril/state-sqlite";
 import { modelProblemOf } from "../providers.js";
 import { projectFileReader, verificationPayload } from "./acceptance.js";
+import { controlEventOf } from "./control-events.js";
 import type { RealAgentReadiness, RealAgents } from "./real-agent.js";
 import { createShutdown, RUNTIME_STOP, type Shutdown } from "./shutdown.js";
 
@@ -63,8 +65,14 @@ export interface RunLoopOptions {
   readonly realAgents?: Pick<RealAgents, "readiness" | "runtime">;
   // ARCH 4.2: how long the runtime waits after its last activity before it exits. Defaults to 0 (`haril run`).
   readonly idleExitMs?: number;
-  // Clients subscribed to this runtime (LD-T2, ARCH 4.2). None exist yet, so the default is "no subscribers".
+  // Clients subscribed to this runtime (LD-T2, ARCH 4.2). Defaults to the subscribers of the control channel.
   readonly hasSubscribers?: () => boolean;
+  // The control channel (LD-T2, ARCH 4.3): opened once the lease is taken and closed before the lease is released.
+  // Its clients only wake the loop, and a nudge makes it check the queue at once. Without it, the loop only polls.
+  readonly control?: Pick<
+    ControlServer,
+    "start" | "close" | "notify" | "subscriberCount" | "onNudge"
+  >;
   // The ordered-stop control (ARCH 4.2). Defaults to a control nobody requests.
   readonly shutdown?: Shutdown;
   // Test seams: the lease TTL and the poll interval default to the production values.
@@ -94,11 +102,15 @@ export async function runUntilIdle(options: RunLoopOptions): Promise<RunLoopResu
   const emit = (event: RunEvent): void => {
     events.push(event);
     options.onEvent(event);
+    // Every event reaches the subscribers as its type and task id only, followed by a wake (LD-T2).
+    options.control?.notify(controlEventOf(event));
   };
   // Checked once per run: the prerequisites of the real agents do not change while the loop runs.
   const setup = options.realAgents?.readiness();
   const stopNotice = shutdown.onRequest((reason) => emit({ type: "runtime.stopping", reason }));
+  let channelOpen = false;
   try {
+    channelOpen = await openChannel(options.control);
     // M1-T7: attempts orphaned by a previous runtime go back to the queue before anything is claimed.
     for (const recovered of store.runtime.reconcile(epoch, MAX_INFRA_RESTARTS)) {
       emit(recoveryEvent(recovered));
@@ -109,9 +121,24 @@ export async function runUntilIdle(options: RunLoopOptions): Promise<RunLoopResu
     return { kind, summary: summarizeRun(events) };
   } finally {
     stopNotice();
+    // The channel closes before the lease is released (ARCH 4.3). Its files are removed only while they still belong to
+    // this runtime, so a successor that took the lease in the meantime keeps its own.
+    if (channelOpen) await options.control?.close();
     // An exception leaves the lease to be released as a crash would not be: this release is unclean. After serve()
     // released it, the epoch is no longer active and the store refuses the release, which is expected.
     releaseLease(store, epoch, false);
+  }
+}
+
+// A channel that cannot open (its endpoint is taken, for instance) leaves the runtime working: the queue is still
+// polled, and only the wake-ups are lost. Returns whether the channel is open.
+async function openChannel(control: RunLoopOptions["control"]): Promise<boolean> {
+  if (control === undefined) return false;
+  try {
+    await control.start();
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -133,7 +160,11 @@ async function serve(
   const { epoch, beat, emit, setup } = context;
   const idleExitMs = options.idleExitMs ?? 0;
   const pollMs = options.pollMs ?? POLL_MS;
-  const hasSubscribers = options.hasSubscribers ?? (() => false);
+  const control = options.control;
+  const hasSubscribers = options.hasSubscribers ?? (() => (control?.subscriberCount() ?? 0) > 0);
+  // A nudge ends the wait before the poll interval does (LD-T2).
+  const onNudge = (listener: () => void): (() => void) =>
+    control?.onNudge(listener) ?? (() => undefined);
   const reported = new Set<string>();
   let idleSince = clock.now();
   for (;;) {
@@ -171,7 +202,7 @@ async function serve(
       if (store.runtime.releaseIfIdle(epoch)) return "idle";
       continue;
     }
-    await sleepUnlessStopped(clock, pollMs, shutdown);
+    await sleepUnlessWoken(clock, pollMs, shutdown, onNudge);
   }
 }
 
@@ -428,18 +459,26 @@ function settleWithin(handle: AgentHandle, timeoutMs: number, clock: Clock): Pro
   });
 }
 
-// Waits `ms` of clock time, or until a stop is requested, whichever comes first.
-function sleepUnlessStopped(clock: Clock, ms: number, shutdown: Shutdown): Promise<void> {
+// Waits `ms` of clock time, or until a stop is requested, or until a nudge arrives, whichever comes first (LD-T2).
+// Every listener is removed when the wait ends, so the loop does not accumulate them.
+function sleepUnlessWoken(
+  clock: Clock,
+  ms: number,
+  shutdown: Shutdown,
+  onNudge: (listener: () => void) => () => void,
+): Promise<void> {
   return new Promise((resolve) => {
-    let unsubscribe: () => void = () => undefined;
-    const cancel = clock.schedule(ms, () => {
-      unsubscribe();
-      resolve();
-    });
-    unsubscribe = shutdown.onRequest(() => {
+    let unsubscribeStop: () => void = () => undefined;
+    let unsubscribeNudge: () => void = () => undefined;
+    const finish = (): void => {
       cancel();
+      unsubscribeStop();
+      unsubscribeNudge();
       resolve();
-    });
+    };
+    const cancel = clock.schedule(ms, finish);
+    unsubscribeStop = shutdown.onRequest(finish);
+    unsubscribeNudge = onNudge(finish);
   });
 }
 
