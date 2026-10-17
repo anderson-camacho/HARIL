@@ -6,7 +6,7 @@ Una consola, múltiples inteligencias, un solo propósito.
 HARIL es una plataforma **local** de orquestación de agentes de IA, desarrollo de software y automatización, con un solo comando: `haril`.
 Un núcleo propio controla la ejecución; Pi, Engram, Herdr y los proveedores de modelos quedan detrás de puertos reemplazables.
 
-> **Estado real (2026-10-17): MVP cerrado, versión 0.6.0.** Los 15 criterios de aceptación del MVP se cumplen o tienen un desvío explícito y justificado (ver `versions/`). La CI pública pasa en Windows y Linux. Ya está en marcha M4: la interfaz `haril shell` (0.5.0) es su primera pieza.
+> **Estado real (2026-10-17): versión 0.7.0, demo en vivo de M4.** El MVP se cerró en 0.6.0: sus 15 criterios de aceptación se cumplen o tienen un desvío explícito y justificado (ver `versions/`). En 0.7.0, desde `haril` y en una sola ventana, se escribe un objetivo, se revisa y se aprueba el plan que propone el agente `planner` y se siguen sus tareas en vivo; está probado con un modelo real a través de CLIProxyAPI (ver [Demo en vivo](#demo-en-vivo)). La CI pública corre en Windows y Linux en cada PR, con la demo hermética incluida.
 > **Carril real verificado (2026-10-16):** `npm run e2e:real` pasa en esta máquina con Pi 1.2.0 real y CLIProxyAPI (`cliproxy/gemini-3-flash`): una tarea `analyst` lee `README.md` con la herramienta del puente, responde el código pedido, HARIL lo verifica (`verified: true`) y el libro registra los tokens reales. Ollama no viene por defecto (demasiado pesado para el equipo de referencia). Bitácora: `odd/tasks/haril-phase4-real-lane.md`; matriz de criterios: `odd/tasks/haril-phase4-m3.md`.
 
 > **Nota sobre la documentación.** La documentación de diseño (`docs/`) se publicará al final del proyecto. Hasta entonces, los enlaces a `docs/` y a `odd/` de este README no están disponibles en el repositorio público.
@@ -143,11 +143,10 @@ node apps/bootstrap/dist/haril-bootstrap.mjs install
 
 ### M2: agente real `analyst` (opt-in)
 
-`analyst` ejecuta Pi 1.2.0, aislado en un Node propio, a través del Broker de HARIL y de un gateway compatible con OpenAI (CLIProxyAPI). Necesita un runtime instalado, una clave de cliente del gateway y un modelo de `haril models`. HARIL no guarda la clave: la lee solo de la variable de entorno de la sesión y nunca la escribe en el repositorio, en la base de datos, en los eventos ni en la salida.
+`analyst` ejecuta Pi 1.2.0, aislado en un Node propio, a través del Broker de HARIL y de un gateway compatible con OpenAI (CLIProxyAPI). Necesita un runtime instalado, una clave de cliente del gateway y un modelo de `haril models`. HARIL no guarda la clave: la lee solo del entorno y nunca la escribe en el repositorio, en la base de datos, en los eventos ni en la salida. Crea la variable de usuario `HARIL_CLIPROXYAPI_KEY` desde «Editar las variables de entorno de tu cuenta» de Windows y abre una terminal nueva; no la escribas en la terminal, donde quedaría en el historial.
 
 ```powershell
 npm run runtime:install
-$env:HARIL_CLIPROXYAPI_KEY = "<tu clave de cliente de CLIProxyAPI>"
 $env:HARIL_DEFAULT_MODEL = "<id de haril models, por ejemplo cliproxy/gemini-3-flash>"
 .\bin\haril.ps1 models
 .\bin\haril.ps1 task add "Lee README.md y resúmelo en una frase" --project demo --agent analyst
@@ -244,10 +243,51 @@ npm run build
 | `?` | Ayuda |
 | `q`, `Ctrl+C` | Salir (`Ctrl+C` también en modo entrada) |
 
-Flujo de demostración, entero desde `haril` en una sola ventana: escribes el objetivo y `Enter` pide un plan (o `g` en modo navegación) y la interfaz arranca el runtime; `/plans` lo muestra, `/approve` lo aprueba y `/deny` lo rechaza (o `p`, `y` y `n`), y En vivo sigue sus tareas hasta que terminan. No hace falta `haril start` en otra terminal.
+Flujo de demostración, entero desde `haril` en una sola ventana: escribes el objetivo y `Enter` pide un plan (o `g` en modo navegación) y la interfaz arranca el runtime; `/plans` lo muestra, `/approve` lo aprueba y `/deny` lo rechaza (o `p`, `y` y `n`), y En vivo sigue sus tareas hasta que terminan. No hace falta `haril start` en otra terminal. La guía paso a paso con un modelo real está en [Demo en vivo](#demo-en-vivo).
 
 **Temas.** El predeterminado es `haril-crimson` (rojo sobre negro); vienen también `haril-blossom` (rosa sobre negro), `haril-dark` y `haril-light`. Para cambiarlo, `t` abre Temas: se elige con las flechas y `Enter` lo aplica al momento y lo guarda en `config\haril.json` como `ui.theme`, que se mantiene al reabrir. Los temas propios van en `config\themes\<nombre>.json` dentro de la raíz del runtime, con el formato JSON de temas de Pi; los colores `border`, `ok` y `danger` son opcionales (si faltan, se usan `muted`, `accent` y `warning`). Memoria, servicios y terminales todavía muestran «no disponible en esta versión».
 
+### Demo en vivo
+
+La demo de 0.7.0: escribes un objetivo, el agente `planner` propone un plan con un modelo real, lo revisas entero, lo apruebas y sigues sus tareas en vivo hasta el resultado, todo en una ventana.
+
+**Requisitos**
+
+- CLIProxyAPI en marcha en `127.0.0.1:8317`, o cualquier endpoint compatible con OpenAI declarado en `haril.json` (lee antes el aviso de términos de servicio de la sección M3).
+- La CLI compilada (`npm run build`) y el runtime de Pi instalado (`npm run runtime:install`).
+- La clave de cliente en la variable de entorno de usuario `HARIL_CLIPROXYAPI_KEY`, creada desde «Editar las variables de entorno de tu cuenta» de Windows. Nunca en un archivo ni en una línea de comandos, donde quedaría en el historial: HARIL solo la lee del entorno.
+- `HARIL_DEFAULT_MODEL=cliproxy/gemini-3-flash`, también como variable de usuario. Abre una terminal nueva para que las dos lleguen y comprueba con `haril models` que el modelo aparece.
+- Un proyecto registrado con algo que leer, por ejemplo una carpeta con un `README.md` (pasos 3 y 4 de [Cómo probarlo](#cómo-probarlo)).
+
+**En la interfaz**
+
+1. Abre `haril` (desde el repositorio, `.\bin\haril.ps1`). Se abre en modo entrada, con la caja lista para escribir.
+2. Escribe el objetivo, por ejemplo `Escribe un CONTRIBUTING.md para este repositorio`, y pulsa `Enter`: se encola una tarea de plan para `planner` con el modelo por defecto y la interfaz arranca el runtime. Con varios proyectos, elige antes uno en Proyectos (`Esc`, `1`, `↓`, `Enter` e `i`).
+3. Cuando el planner termina, el plan aparece en Planes (`/plans`). `Enter` lo abre: lee cada tarea entera (objetivo, descripción, agente, archivos que lee y escribe, límites y comprobaciones) y el modelo con que correrá.
+4. Apruébalo con `/approve` (o `y` en modo navegación); `/deny` (o `n`) lo rechaza y no crea tareas.
+5. En vivo (`/live`) sigue cada tarea con su estado, agente, intento, tokens y la primera línea del resultado hasta que termina.
+6. Con la tarea seleccionada y la caja vacía, `Enter` abre su detalle con el resultado completo.
+
+**Con la CLI**, el mismo flujo:
+
+```powershell
+.\bin\haril.ps1 task add "Escribe un CONTRIBUTING.md para este repositorio" --kind plan --agent planner --model cliproxy/gemini-3-flash --project demo
+.\bin\haril.ps1 run --project demo
+.\bin\haril.ps1 approvals
+.\bin\haril.ps1 approvals show <id>
+.\bin\haril.ps1 approve <id>
+.\bin\haril.ps1 run --project demo
+.\bin\haril.ps1 task show <taskId>
+```
+
+**Qué esperar**
+
+- Lo normal es un plan de una sola tarea `analyst`: las tareas de un plan no ven los resultados de las demás, así que el planner pone cada resultado entero en una tarea.
+- A veces la primera propuesta omite la `description` de una tarea: el runtime la rechaza, el planner recibe el motivo y la corrige en el mismo run (`haril events` muestra el motivo).
+- Si el objetivo pide un archivo, nadie lo escribe en el disco: `analyst` solo lee, así que la última tarea devuelve el contenido completo como resultado y tú lo aplicas.
+- `task show` y En vivo muestran los tokens y los intentos (por ejemplo `attempts 1/3`). El coste no se registra (`n/a`). En el equipo de referencia, dos demos completas terminaron todas sus tareas al primer intento, en unos 22 s y con unos 15 800 tokens en total.
+
+Para comprobar el flujo sin red ni tokens está `npm run e2e:demo` (ver la tabla «Calidad del repositorio» en [M2](#m2-agente-real-analyst-opt-in)), que también corre en la CI.
 
 ## Qué es y qué no es
 
@@ -371,7 +411,7 @@ Los dossiers de `docs/research/` se leen solo bajo demanda, cuando un documento 
 
 ## Versiones
 
-Versión actual: **0.4.1**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
+Versión actual: **0.7.0**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
 
 ## Licencia
 

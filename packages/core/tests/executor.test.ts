@@ -63,7 +63,7 @@ describe("buildAgentSpec", () => {
     expect(spec.prompt).toContain("List the headings.");
     expect(spec.prompt).toContain("haril_propose_plan");
     expect(spec.prompt).toContain('"schemaVersion": 1');
-    expect(spec.prompt).toContain("2 to 5 tasks");
+    expect(spec.prompt).toContain("1 to 5 tasks");
     expect(spec.prompt).toContain("read-only");
     for (const field of [
       "localId",
@@ -103,6 +103,11 @@ describe("buildAgentSpec", () => {
     expect(prompt).toContain(
       'the goal of the last task says "Return the full content of <file> as the result", never "write"',
     );
+    // The third real demo planned a task that only read the README, with a check on the later file's name: tasks do not
+    // see each other's results, so that task could never pass and the whole plan failed.
+    expect(prompt).toMatch(/Tasks do not see each other's results/);
+    expect(prompt).toMatch(/a task that only reads produces nothing/);
+    expect(prompt).toMatch(/An acceptance check tests the text of that task's own result/);
   });
 
   // LD-T7c fix: the planner's surface.read reaches the agent; without one the prompt is the goal and the description.
@@ -128,7 +133,7 @@ describe("buildAgentSpec", () => {
       prompt.startsWith("Survey the README\n\nList the headings.\n\nFiles to read: README.md"),
     ).toBe(true);
     expect(prompt).toContain(
-      "You answer in your result text; you cannot write files or run commands.",
+      "Do what the goal asks and put your complete answer in your result text; you cannot write files or run commands.",
     );
     expect(prompt).toContain(
       "When the goal asks for the content of a file, the result is that content alone: no preamble, no closing remarks and no code fence around it.",

@@ -80,17 +80,20 @@ export function buildAgentSpec(task: ExecutableTask, run: RunIdentity): AgentSpe
 
 // What a planner is asked after the goal and the description (LD-T4): the plan shape of schemas.md section 6, the
 // required PlanTask fields and the read-only rule. Since LD-T7c it also says what the agent of the plan can do, what
-// its read surface means, how the last task asks for a requested file and what a description adds. The Core checks the
-// proposal again (plan-graph.ts); this text only guides the agent.
+// its read surface means, how the last task asks for a requested file, what a description adds, that tasks do not see
+// each other's results and what an acceptance check tests. The Core checks the proposal again (plan-graph.ts); this
+// text only guides the agent.
 const PLANNER_INSTRUCTIONS: readonly string[] = [
   `You plan this goal; you do not do the work. Read what you need, then call the tool ${PROPOSE_PLAN_TOOL} once with a plan. A person approves the plan before any of its tasks runs.`,
   [
     'The agent of every task is "analyst", a read-only agent: "analyst" reads project files and answers in its result text; it cannot write files or run commands.',
     'A task\'s "surface.read" lists the files the task tells it to read; it is not an access limit.',
     'If the goal asks for a file or a change, the goal of the last task says "Return the full content of <file> as the result", never "write"; the person applies it.',
+    "Tasks do not see each other's results: each task gets only its goal, its description and its files to read, so every task does a whole piece of the work by itself, and a task that only reads produces nothing. One task per result is usually enough; dependsOn only orders tasks.",
+    "An acceptance check tests the text of that task's own result; when unsure, use [].",
   ].join(" "),
   [
-    'The plan is a JSON object {"schemaVersion": 1, "tasks": [...]} with 2 to 5 tasks. Every task has exactly these fields:',
+    'The plan is a JSON object {"schemaVersion": 1, "tasks": [...]} with 1 to 5 tasks. Every task has exactly these fields:',
     '- "localId": a short id of letters, digits, "-" or "_", unique in the plan',
     '- "dependsOn": the localIds of the tasks it waits for, [] for none, without cycles',
     '- "goal": one sentence; "description": the concrete detail the goal lacks (what to read, what the result must contain), never a copy of the goal',
@@ -108,10 +111,10 @@ const PLANNER_INSTRUCTIONS: readonly string[] = [
 
 // What a read-only analyst is told after its task (LD-T7c): its result is its only output, and a requested file comes
 // back as the bare content, since the person applies it as it is. The second real demo wrapped the file in chat and a
-// code fence.
+// code fence; in the third, an analyst answered a README read with a fragment, so it is told to do the goal in full.
 const ANALYST_INSTRUCTIONS: readonly string[] = [
   [
-    "You answer in your result text; you cannot write files or run commands.",
+    "Do what the goal asks and put your complete answer in your result text; you cannot write files or run commands.",
     "When the goal asks for the content of a file, the result is that content alone: no preamble, no closing remarks and no code fence around it.",
   ].join(" "),
 ];
