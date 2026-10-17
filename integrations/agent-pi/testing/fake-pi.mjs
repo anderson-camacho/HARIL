@@ -18,9 +18,15 @@
 // haril_propose_plan) proposes a plan of analyst tasks with the token ceiling the planner prompt asks for; any other
 // run answers through the Broker, as ok_via_broker does, and adds the first line of the first dependency result its
 // prompt carries (MC-T1) and the text of the first output_contains check a rejected attempt failed (MC-T2).
+// hang_with_tool: on the prompt it starts fake-tool-command.mjs through the shell, as Pi's bash tool runs a command,
+// then hangs as hang does. On Windows the command's process escapes the job object that kills a Node child with its
+// parent, so only a tree kill that walks from the live Pi reaches it.
 // Test-only: the real Pi is never replaced outside HARIL_PI_CLI_OVERRIDE.
 
+import { spawn } from "node:child_process";
 import { connect } from "node:net";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const scenario = process.env.FAKE_PI_SCENARIO ?? "ok";
 const runId = process.env.HARIL_RUN_ID ?? "";
@@ -262,6 +268,16 @@ function emitAssistant(
   emit({ type: "message_end", message });
 }
 
+// The child env carries no ComSpec, so the Windows shell is named by its path.
+function startToolCommand() {
+  const tool = fileURLToPath(new URL("./fake-tool-command.mjs", import.meta.url));
+  const shell =
+    process.platform === "win32"
+      ? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "cmd.exe")
+      : true;
+  spawn(`"${process.execPath}" "${tool}"`, { shell, stdio: "ignore", windowsHide: true });
+}
+
 async function runPrompt() {
   emit({ type: "agent_start" });
   emit({ type: "future_event_xyz", payload: "ignored" });
@@ -271,6 +287,10 @@ async function runPrompt() {
   }
   if (scenario === "huge_line") {
     process.stdout.write(`${"x".repeat(LARGE_LINE_BYTES)}\n`);
+    return;
+  }
+  if (scenario === "hang_with_tool") {
+    startToolCommand();
     return;
   }
   if (scenario === "hang" || scenario === "hang_abortable") return;
@@ -411,7 +431,7 @@ process.stdin.on("data", (chunk) => {
   });
 });
 process.stdin.on("end", () => {
-  if (scenario === "hang") return;
+  if (scenario === "hang" || scenario === "hang_with_tool") return;
   if (scenario === "nonzero_after_settled") {
     exitAfterFlush(3);
     return;

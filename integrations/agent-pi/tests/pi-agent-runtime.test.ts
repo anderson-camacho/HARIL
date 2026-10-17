@@ -63,6 +63,8 @@ interface Harness {
 
 let tmp = "";
 const handles: AgentHandle[] = [];
+// Processes a fake Pi started; any still alive after a test is killed, so a failing test leaks nothing.
+const strays: number[] = [];
 
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "haril-pi-adapter-"));
@@ -70,8 +72,33 @@ beforeEach(() => {
 
 afterEach(async () => {
   for (const handle of handles.splice(0)) await handle.dispose();
+  for (const pid of strays.splice(0)) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      continue;
+    }
+    await until(() => !alive(pid), `stray ${pid} gone`);
+  }
   rmSync(tmp, { recursive: true, force: true });
 });
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function until(condition: () => boolean, what: string, timeoutMs = 3000): Promise<void> {
+  const started = Date.now();
+  while (!condition()) {
+    if (Date.now() - started > timeoutMs) throw new Error(`${what}: not met in ${timeoutMs} ms`);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
 
 function harness(): Harness {
   const root = join(tmp, "project");
@@ -455,6 +482,20 @@ describe("createPiAgentRuntime lifecycle", () => {
     await handle.abort();
     expect(await handle.settled).toEqual({ status: "aborted" });
     expect(Date.now() - started).toBeLessThan(5000);
+  });
+
+  it("the tree kill also takes a tool command Pi started through the shell", async () => {
+    const h = harness();
+    const handle = await startHandle(h.runtime("hang_with_tool"));
+    await handle.prompt("go");
+    const pidFile = join(h.runsDir, "run-1", "fake-tool.pid");
+    await until(() => existsSync(pidFile), "the tool command started");
+    const tool = Number(readFileSync(pidFile, "utf8"));
+    strays.push(tool);
+    expect(alive(tool)).toBe(true);
+    await handle.abort();
+    expect(await handle.settled).toEqual({ status: "aborted" });
+    await until(() => !alive(tool), "the tool command killed with Pi");
   });
 
   it("aborts cooperatively when Pi answers abort with agent_settled", async () => {
