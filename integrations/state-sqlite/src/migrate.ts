@@ -18,8 +18,15 @@ function checksumOf(sql: string): string {
 }
 
 // One transaction per migration (BEGIN IMMEDIATE). A known version with a different checksum is corruption.
-export function migrate(db: DatabaseSync, clock: Clock, ids: Ids): void {
-  for (const migration of KNOWN_MIGRATIONS) {
+// `migrations` defaults to the release's list. It is a test-only seam (ARCH 13.2 CP8): the crash harness applies
+// a list whose step kills the process, and production code always calls migrate with the default.
+export function migrate(
+  db: DatabaseSync,
+  clock: Clock,
+  ids: Ids,
+  migrations: readonly Migration[] = KNOWN_MIGRATIONS,
+): void {
+  for (const migration of migrations) {
     applyOne(db, migration, clock, ids);
   }
 }

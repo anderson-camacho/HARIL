@@ -294,6 +294,34 @@ export function createBudgetFacets(options: BudgetFacetOptions): BudgetFacets {
       });
     },
 
+    // ARCH 13.2 CP4: the reconciler settles the open reservations of an orphaned run. The ledger keeps the route's
+    // provider and the reserved amount, not its cost kind, so a free route cannot be told from a paid or unknown
+    // one. Every such reservation is therefore charged at its upper bound and flagged unreconciled: the
+    // spend is never under-counted, and a free route is over-counted until a release records its kind.
+    settleOpenForRun(runId: string): number {
+      return write(() => {
+        const open = db
+          .prepare(
+            `SELECT reservation_id AS reservationId, MAX(amount) AS upperBound
+             FROM budget_ledger
+             WHERE run_id = ? AND kind = 'reserve'
+               AND reservation_id NOT IN (SELECT reservation_id FROM budget_ledger WHERE kind IN ('commit', 'release'))
+             GROUP BY reservation_id ORDER BY MIN(entry_id)`,
+          )
+          .all(runId) as unknown as Array<{ reservationId: string; upperBound: number }>;
+        for (const reservation of open) {
+          budgets.commit({
+            reservationId: reservation.reservationId,
+            usage: null,
+            upperBound: reservation.upperBound,
+            modelRequested: null,
+            modelServed: null,
+          });
+        }
+        return open.length;
+      });
+    },
+
     usageSummary(filter?: UsageSummaryFilter): UsageSummary | null {
       // Counted once per reservation, on the budget of the scope: the task budget when a task is named,
       // otherwise the project budget (every broker reservation holds one).
