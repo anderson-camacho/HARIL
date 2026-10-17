@@ -8,6 +8,7 @@ import { createShellApp, type ShellApp, type ShellAppOptions } from "../src/app.
 import { openShellData, type ShellData } from "../src/data.js";
 import type { ConnectControl } from "../src/live.js";
 import { resolveTheme } from "../src/theme.js";
+import { inNavigationMode } from "./navigation.js";
 import { createTask, openSeedStore, type SeedResult, seedStore } from "./seed.js";
 import { VirtualTerminal } from "./virtual-terminal.js";
 
@@ -107,7 +108,7 @@ function mount(
     connectControl,
     ...extra,
   });
-  return { terminal, app, data };
+  return { terminal, app: inNavigationMode(app, terminal), data };
 }
 
 function sleep(ms: number): Promise<void> {

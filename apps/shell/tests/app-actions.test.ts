@@ -6,6 +6,7 @@ import { createHarilActions } from "../src/actions.js";
 import { createShellApp, type ShellApp } from "../src/app.js";
 import { openShellData, type ShellData, type ShellSnapshot } from "../src/data.js";
 import { resolveTheme } from "../src/theme.js";
+import { inNavigationMode } from "./navigation.js";
 import {
   createTask,
   openSeedStore,
@@ -111,7 +112,7 @@ function mount(options: {
     actions: createHarilActions({ harilEntry: options.harilEntry }),
     defaultModel: options.defaultModel,
   });
-  return { terminal, app };
+  return { terminal, app: inNavigationMode(app, terminal) };
 }
 
 function frame(mounted: Mounted): string {

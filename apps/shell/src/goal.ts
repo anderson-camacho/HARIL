@@ -13,10 +13,17 @@ const FIELDS = ["goal", "agent", "model"] as const;
 
 type GoalField = (typeof FIELDS)[number];
 
-interface GoalValues {
+export interface GoalValues {
   readonly goal: string;
   readonly agent: string;
   readonly model: string;
+}
+
+// A goal with the form's defaults: with a default model, planner and that model; without one, the simulated planner.
+// The input box sends its goal with these (LD-T6b-2), so Enter there queues what g and Enter would.
+export function goalDefaults(goal: string, defaultModel: string | undefined): GoalValues {
+  const model = defaultModel?.trim() ?? "";
+  return { goal, agent: model === "" ? SIMULATED : PLANNER, model };
 }
 
 // The argv of a plan task. Only planner takes a model; the simulated planner never does.
@@ -58,13 +65,11 @@ export class GoalForm {
 
   constructor(options: GoalFormOptions) {
     this.projectSlug = options.projectSlug;
-    const defaultModel = options.defaultModel?.trim() ?? "";
+    const defaults = goalDefaults("", options.defaultModel);
     const items: SelectItem[] = PLANNER_REFS.map((ref) => ({ value: ref, label: ref }));
     this.agentList = new SelectList(items, items.length, PLAIN_THEME);
-    this.agentList.setSelectedIndex(
-      Math.max(0, PLANNER_REFS.indexOf(defaultModel === "" ? SIMULATED : PLANNER)),
-    );
-    this.modelInput.setValue(defaultModel);
+    this.agentList.setSelectedIndex(Math.max(0, PLANNER_REFS.indexOf(defaults.agent)));
+    this.modelInput.setValue(defaults.model);
   }
 
   get field(): GoalField {

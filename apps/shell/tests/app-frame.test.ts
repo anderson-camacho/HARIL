@@ -18,6 +18,8 @@ import { VirtualTerminal } from "./virtual-terminal.js";
 const THEME = resolveTheme({ name: "haril-crimson", runtimeRoot: "/nonexistent-haril-root" }).theme;
 const ENTER = "\r";
 const DOWN = "\x1b[B";
+const ESC = "\x1b";
+const CTRL_C = "\x03";
 const WIDE = { columns: 120, rows: 40 } as const;
 const NARROW = { columns: 80, rows: 24 } as const;
 const TAGLINE = "Many minds. One flow.";
@@ -114,9 +116,15 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Ctrl+C quits in both keyboard modes (LD-T6b-2).
 async function quit(mounted: Mounted): Promise<void> {
-  mounted.terminal.send("q");
+  mounted.terminal.send(CTRL_C);
   await mounted.app.done;
+}
+
+// The shell opens in input mode (LD-T6b-2); Esc switches to navigation mode, where the single keys act.
+function keys(mounted: Mounted): void {
+  mounted.terminal.send(ESC);
 }
 
 function expectShape(lines: readonly string[], size: { columns: number; rows: number }): void {
@@ -161,11 +169,18 @@ describe("the frame at 120x40 (LD-T6b-1)", () => {
     expect(screen).toContain("not connected (M4)");
     expect(screen).toContain("isolation N0");
     expect(mounted.gitReads).toEqual(["/work/solo"]);
-    // The bottom box of the main area holds the keys; the status line is the last line.
-    expect(lines[36]).toMatch(/^┌─+┐ /);
-    expect(lines[37]).toMatch(/^│ .*g goal.*│ /);
-    expect(lines[38]).toMatch(/^└─+┘ /);
-    expect(lines[39]).toMatch(/^qwen-test · runtime idle · tok 0\/0 +\? help · q quit$/);
+    // The input box closes the main area (LD-T6b-2): the mode in its top border, the typed line, the keys in its bottom
+    // border; the status line is the last line.
+    expect(lines[36]).toMatch(/^┌─ Input ─+┐ /);
+    expect(lines[37]).toMatch(/^│ > type your goal, or \/ for commands +│ /);
+    expect(lines[38]).toMatch(/^└─ Esc keys · \/ commands · Ctrl\+C quit ─+┘ /);
+    expect(lines[39]).toMatch(/^qwen-test · runtime idle · tok 0\/0 +input · Ctrl\+C quit$/);
+    // In navigation mode the bottom border holds the keys.
+    keys(mounted);
+    const keyed = mounted.app.frameText();
+    expect(keyed[36]).toMatch(/^┌─ Keys ─+┐ /);
+    expect(keyed[38]).toMatch(/^└─ i type · .*g goal.*┘ /);
+    expect(keyed[39]).toMatch(/^qwen-test · runtime idle · tok 0\/0 +keys · \? help · q quit$/);
     await quit(mounted);
   });
 
@@ -237,9 +252,9 @@ describe("the frame at 80x24 (LD-T6b-1)", () => {
     expect(screen).toContain(TAGLINE);
     expect(screen).toContain("██");
     expect(lines[0]).toMatch(/^◆ HARIL ◇ solo ◇ qwen-test .*runtime idle$/);
-    expect(lines[20]).toMatch(/^┌─+┐$/);
-    expect(lines[22]).toMatch(/^└─+┘$/);
-    expect(lines[23]).toMatch(/\? help · q quit$/);
+    expect(lines[20]).toMatch(/^┌─ Input ─+┐$/);
+    expect(lines[22]).toMatch(/^└─ Esc keys .*─┘$/);
+    expect(lines[23]).toMatch(/input · Ctrl\+C quit$/);
     await quit(mounted);
   });
 
@@ -282,6 +297,7 @@ describe("the frame at 80x24 (LD-T6b-1)", () => {
     idleStore();
     const mounted = mount(NARROW);
     await started(mounted);
+    keys(mounted);
     mounted.terminal.send("?");
     const lines = mounted.app.frameText();
     expectShape(lines, NARROW);
@@ -311,6 +327,7 @@ describe("the home view and git (LD-T6b-1)", () => {
     expect(mounted.gitReads).toEqual(["/work/solo"]);
     await sleep(100);
     expect(mounted.gitReads).toHaveLength(1);
+    keys(mounted);
     mounted.terminal.send("r");
     await sleep(5);
     expect(mounted.gitReads).toHaveLength(2);
@@ -330,6 +347,7 @@ describe("the home view and git (LD-T6b-1)", () => {
     });
     await started(mounted);
     expect(mounted.gitReads).toHaveLength(1);
+    keys(mounted);
     for (const _ of [1, 2, 3]) mounted.terminal.send("r");
     expect(mounted.gitReads).toHaveLength(1);
     answers[0]?.({ branch: "first", changes: 0 });
@@ -364,6 +382,7 @@ describe("the home view and git (LD-T6b-1)", () => {
     } finally {
       writer.close();
     }
+    keys(mounted);
     mounted.terminal.send("r");
     const screen = mounted.app.frameText().join("\n");
     expect(screen).not.toContain("Newest tasks, oldest first");
@@ -392,6 +411,7 @@ describe("the frame with hostile or unusual text (LD-T6b-1)", () => {
     ]) {
       const mounted = mount(size, git, extra);
       expectShape(await started(mounted), size);
+      keys(mounted);
       for (const key of ["1", "8", "?"]) {
         mounted.terminal.send(key);
         expectShape(mounted.app.frameText(), size);
@@ -407,6 +427,7 @@ describe("the frame with hostile or unusual text (LD-T6b-1)", () => {
     const size = { columns: 40, rows: 10 };
     const mounted = mount(size);
     expectShape(await started(mounted), size);
+    keys(mounted);
     for (const key of ["1", DOWN, "?", "l", "8"]) {
       mounted.terminal.send(key);
       expectShape(mounted.app.frameText(), size);
@@ -418,6 +439,7 @@ describe("the frame with hostile or unusual text (LD-T6b-1)", () => {
     idleStore({ slug: "solo", name: "Name\x1b]0;evil\x07", rootPath: "/work/\x1b[2Jroot" });
     const mounted = mount(WIDE);
     const frames = [(await started(mounted)).join("\n")];
+    keys(mounted);
     mounted.terminal.send("1");
     frames.push(mounted.app.frameText().join("\n"));
     const all = frames.join("\n");
@@ -437,7 +459,7 @@ describe("the frame with hostile or unusual text (LD-T6b-1)", () => {
     expect(lines[0]).toContain("◆ HARIL ◇ solo ◇ m?]0;X?");
     // The right side of the top bar is whole: the layout measured the defused text.
     expect(lines[0]).toMatch(/ctx n\/a ◇ tok 0\/0 ◇ runtime idle$/);
-    expect(lines.at(-1)).toMatch(/^m\?\]0;X\? · runtime idle · tok 0\/0 +\? help · q quit$/);
+    expect(lines.at(-1)).toMatch(/^m\?\]0;X\? · runtime idle · tok 0\/0 +input · Ctrl\+C quit$/);
     await quit(mounted);
   });
 });
@@ -447,7 +469,7 @@ describe("the status line names the branch below 100 columns (LD-T6b-1)", () => 
     idleStore();
     const narrow = mount(NARROW);
     expect((await started(narrow)).at(-1)).toMatch(
-      /^qwen-test · runtime idle · tok 0\/0 · git main · 3 changed +\? help · q quit$/,
+      /^qwen-test · runtime idle · tok 0\/0 · git main · 3 changed +input · Ctrl\+C quit$/,
     );
     await quit(narrow);
     const wide = mount(WIDE);
@@ -459,7 +481,7 @@ describe("the status line names the branch below 100 columns (LD-T6b-1)", () => 
     idleStore();
     const mounted = mount(NARROW, { branch: `feature/${"x".repeat(40)}`, changes: 1 });
     expect((await started(mounted)).at(-1)).toMatch(
-      /^qwen-test · runtime idle · tok 0\/0 +\? help · q quit$/,
+      /^qwen-test · runtime idle · tok 0\/0 +input · Ctrl\+C quit$/,
     );
     await quit(mounted);
   });

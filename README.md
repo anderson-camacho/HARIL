@@ -161,7 +161,7 @@ HARIL lee sus proveedores de `HARIL_CONFIG` o, si no está definida, de `config\
 | Barra superior | Proyecto, modelo, contexto de la tarea en curso (`ctx`), tokens y estado del runtime |
 | Centro | Las pestañas y el panel activo. En reposo (nada en marcha ni planes por aprobar), el banner HARIL con los datos principales; con trabajo, En vivo |
 | Columna derecha (100 columnas o más) | Cajas de estado: proyecto, rama y cambios de git, runtime, aprobaciones, taxis y tokens |
-| Abajo | Una caja con las teclas y la línea de estado: modelo, runtime con su pid, tokens, `? help` y `q quit` |
+| Abajo | La caja de entrada, siempre visible: el modo en su borde superior (`Input` o `Keys`), lo escrito en medio y las teclas de lo que está abierto en el borde inferior. Debajo, la línea de estado: modelo, runtime con su pid, tokens y el modo (`input · Ctrl+C quit` o `keys · ? help · q quit`) |
 
 Funciona desde 80x24: por debajo de 100 columnas se oculta la columna derecha, las aprobaciones pendientes pasan a la barra superior y la rama con sus cambios a la línea de estado. Git se lee al abrir, con `r`, al cambiar el filtro y después de cada acción; cuando el runtime avisa de un cambio, como mucho una vez cada 5 s; nunca con un temporizador. La interfaz solo lee git en las raíces de proyecto que registraste, con la misma confianza que tu editor da a ese repositorio: la configuración de un repositorio puede hacer que git ejecute programas (por ejemplo un filtro `clean`), y los agentes de HARIL no pueden escribir en `.git`.
 
@@ -173,12 +173,26 @@ npm run build
 .\bin\haril.ps1 shell
 ```
 
-| Tecla | Acción |
+**Entrada y modos.** La interfaz se abre en modo entrada: lo que escribes va a la caja (`type your goal, or / for commands`) y `Enter` lo envía como objetivo igual que `g`: una tarea de plan con `haril task add --kind plan`, para `planner` con el modelo por defecto (o `fake:plan` si no hay), y la caja se vacía. `Enter` con la caja vacía hace lo mismo que `Enter` en el panel activo. Mientras escribes, `↑` `↓` `PageUp` `PageDown` siguen moviendo la selección del panel y `Tab` y `Shift+Tab` cambian de panel. `Esc` cierra lo que esté abierto (la lista de comandos, la ayuda o un detalle) y, si no hay nada, pasa al modo navegación sin perder lo escrito: ahí cada tecla de la tabla de abajo hace lo de siempre, e `i` o `Esc` vuelven a la entrada. `Ctrl+C` sale en los dos modos. Lo que pegas se ve tal y como se enviará: los saltos de línea pasan a espacios y los caracteres de control a `?`.
+
+**Comandos `/`.** Una línea que empieza por `/` es un comando (por eso un objetivo no puede empezar por `/`; para eso está `g`). Al escribir `/` aparece encima de la caja la lista de los comandos que empiezan por lo escrito, con una línea de descripción cada uno: `↑` `↓` eligen, `Tab` completa, `Enter` ejecuta el elegido y `Esc` cierra la lista sin cambiar de modo. Un comando desconocido lo dice (`unknown command /x · /help lists them`) y deja la línea para corregirla.
+
+| Comando | Acción |
+|---|---|
+| `/projects`, `/tasks`, `/agents`, `/tokens`, `/events`, `/models`, `/themes`, `/plans`, `/live` | Abrir ese panel |
+| `/approve [id]`, `/deny [id]` | Aprobar o rechazar el plan cuyo id empieza por `id`; sin id, el seleccionado en Planes o, si solo hay uno pendiente, ese. Con varios y ninguno seleccionado, pide el id. Van por `haril approve` y `haril deny`, como `y` y `n` |
+| `/add` | Añadir una tarea (el formulario de `a`) |
+| `/reload` | Recargar, como `r` |
+| `/help` | Ayuda: los modos, los comandos y las teclas |
+| `/quit` | Salir |
+
+| Tecla (modo navegación) | Acción |
 |---|---|
 | `1`-`9`, `Tab`, `Shift+Tab` | Cambiar de panel (13: proyectos, tareas, agentes, tokens, eventos, modelos, configuración, temas, memoria, servicios, terminales, planes y en vivo) |
 | `↑` `↓` `PageUp` `PageDown` `Home` `End` | Moverse por la lista |
 | `Enter` | En Proyectos filtra por proyecto; en Tareas y En vivo abre el detalle; en Planes abre el plan; en Temas aplica el tema |
-| `Esc` | Cerrar el detalle, la ayuda o el formulario |
+| `Esc` | Cerrar el detalle, la ayuda o el formulario; sin nada abierto, volver al modo entrada |
+| `i` | Volver al modo entrada, con lo que estaba escrito |
 | `g` | Pedir un plan para un objetivo (objetivo, agente planificador y modelo); se encola con `haril task add --kind plan` |
 | `p` | Ir a Planes: los planes que esperan aprobación, con sus tareas |
 | `y`, `n` | Aprobar o rechazar el plan seleccionado o abierto (`haril approve` o `haril deny`) |
@@ -187,9 +201,9 @@ npm run build
 | `t` | Ir a Temas |
 | `r` | Recargar la base y git; si hay trabajo pendiente y ningún runtime, lo arranca |
 | `?` | Ayuda |
-| `q`, `Ctrl+C` | Salir |
+| `q`, `Ctrl+C` | Salir (`Ctrl+C` también en modo entrada) |
 
-Flujo de demostración, entero desde `haril` en una sola ventana: `g` pide un plan y la interfaz arranca el runtime, `p` lo muestra para aprobarlo con `y` o rechazarlo con `n`, y `l` sigue sus tareas hasta que terminan. No hace falta `haril start` en otra terminal.
+Flujo de demostración, entero desde `haril` en una sola ventana: escribes el objetivo y `Enter` pide un plan (o `g` en modo navegación) y la interfaz arranca el runtime; `/plans` lo muestra, `/approve` lo aprueba y `/deny` lo rechaza (o `p`, `y` y `n`), y En vivo sigue sus tareas hasta que terminan. No hace falta `haril start` en otra terminal.
 
 **Temas.** El predeterminado es `haril-crimson` (rojo sobre negro); vienen también `haril-blossom` (rosa sobre negro), `haril-dark` y `haril-light`. Para cambiarlo, `t` abre Temas: se elige con las flechas y `Enter` lo aplica al momento y lo guarda en `config\haril.json` como `ui.theme`, que se mantiene al reabrir. Los temas propios van en `config\themes\<nombre>.json` dentro de la raíz del runtime, con el formato JSON de temas de Pi; los colores `border`, `ok` y `danger` son opcionales (si faltan, se usan `muted`, `accent` y `warning`). Memoria, servicios y terminales todavía muestran «no disponible en esta versión».
 

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createShellApp, type ShellApp } from "../src/app.js";
 import { openShellData, type ShellData } from "../src/data.js";
 import { resolveTheme } from "../src/theme.js";
+import { inNavigationMode } from "./navigation.js";
 import { seedStore } from "./seed.js";
 import { VirtualTerminal } from "./virtual-terminal.js";
 
@@ -63,7 +64,7 @@ function mount(): Mounted {
       themeLabel: "haril-dark",
     },
   });
-  return { terminal, app };
+  return { terminal, app: inNavigationMode(app, terminal) };
 }
 
 function frame(mounted: Mounted): string {

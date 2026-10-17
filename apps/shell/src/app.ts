@@ -1,8 +1,21 @@
-import { type Component, matchesKey, type Terminal, TuiMainScreen } from "@earendil-works/pi-tui";
+import {
+  type Component,
+  isKeyRelease,
+  matchesKey,
+  type Terminal,
+  TuiMainScreen,
+} from "@earendil-works/pi-tui";
 import type { GitStatus } from "@haril/git";
 import shellPackage from "../package.json" with { type: "json" };
 import { createHarilActions, type ShellActions } from "./actions.js";
 import { AddTaskForm, addTaskArgs } from "./add-task.js";
+import {
+  commandListLines,
+  commandMatches,
+  parseCommand,
+  SLASH_COMMANDS,
+  type SlashCommand,
+} from "./commands.js";
 import { saveThemeChoice } from "./config-file.js";
 import type { PendingApproval, ShellData, ShellSnapshot, TaskDetailView } from "./data.js";
 import { fit, plain, wrap } from "./format.js";
@@ -14,12 +27,14 @@ import {
   RIGHT_COLUMN_WIDTH,
   type RuntimeState,
   rightColumn,
+  type ShellMode,
   statusLine,
   topBar,
 } from "./frame-view.js";
-import { GoalForm, goalArgs } from "./goal.js";
+import { GoalForm, goalArgs, goalDefaults } from "./goal.js";
 import { HELP_LINES } from "./help.js";
 import { clampOffset, followCursor, packTabs } from "./layout.js";
+import { LineEditor } from "./line-editor.js";
 import { type ConnectControl, createLiveFeed } from "./live.js";
 import {
   buildPanelView,
@@ -34,11 +49,13 @@ import type { RuntimeStarter, SpawnedRuntime } from "./runtime-start.js";
 import { readOptionalFile, resolveTheme, type Theme } from "./theme.js";
 
 // The shell app (TUI-T3). The frame (LD-T6b-1): a top bar; the main area with the tab strip, the active panel's body
-// (the HARIL banner while nothing runs) and a bordered box with its keys; a right column of status boxes from 100
-// columns on; a status line. The app only reads through ShellData; its state is the selected panel, one cursor and
-// scroll offset per panel, the project filter, an open task or plan detail, an open form, the help overlay and the
-// home view. Each key changes that state and the next frame shows it. Every write is a haril child process
-// (TUI-D13), and so is the runtime it may start (LD-T6).
+// (the HARIL banner while nothing runs) and the input box; a right column of status boxes from 100 columns on; a
+// status line. The input box (LD-T6b-2) is always there: in input mode, the default, keys are typed into it, Enter
+// sends a goal or runs a / command and typing / lists the commands above it; Esc switches to navigation mode, where
+// the single keys act. The app only reads through ShellData; its state is the keyboard mode, the typed line, the
+// selected panel, one cursor and scroll offset per panel, the project filter, an open task or plan detail, an open
+// form, the help overlay and the home view. Each key changes that state and the next frame shows it. Every write is a
+// haril child process (TUI-D13), and so is the runtime it may start (LD-T6).
 
 interface ShellBanner {
   readonly isolation: string;
@@ -104,9 +121,18 @@ function motionOf(input: string, pages: number): Motion | undefined {
 }
 
 const NUMBER_KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9"] as const;
-// The keys box at the bottom of the main area (LD-T6b-1): one line of keys inside a border. ? help and q quit are on
-// the status line below it.
-const KEYS_BOX_ROWS = 3;
+// The input box at the bottom of the main area (LD-T6b-2): the typed line inside a border, the keyboard mode in the
+// top border and the keys of what is open in the bottom one.
+const INPUT_BOX_ROWS = 3;
+const PLACEHOLDER = "type your goal, or / for commands";
+const INPUT_FOOTER = "Esc keys · / commands · Ctrl+C quit";
+const LIST_FOOTER = "↑↓ choose · Tab complete · Enter run · Esc close";
+const INPUT_VIEW_FOOTER = "↑↓ scroll · Esc back · Ctrl+C quit";
+const INPUT_PLAN_FOOTER = "↑↓ scroll · /approve · /deny · Esc back";
+// The keys that keep acting on the panels in input mode; every other key but Enter and Esc is the editor's.
+const PANEL_KEYS = ["up", "down", "pageUp", "pageDown", "tab", "shift+tab"] as const;
+// In input mode Enter on a project would send the typed line again: the way to a filter goes through navigation mode.
+const PICK_PROJECT = "several projects: pick one on Projects first (Esc, 1, ↓ and Enter, then i)";
 const COMMON_KEYS = ["g goal", "a add", "p plans", "l live", "t themes", "r reload", "Tab panels"];
 const HOME_KEYS = ["1-9 panels", ...COMMON_KEYS.filter((key) => key !== "Tab panels")];
 // Tasks the runtime runs at once (the run loop's concurrency, apps/haril/src/runtime/run-loop.ts): the Taxis box.
@@ -171,6 +197,12 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
   let gitStartedAt = Number.NEGATIVE_INFINITY;
   const now = options.now ?? (() => Date.now());
   let quitting = false;
+  // The keyboard mode and the input box (LD-T6b-2): the typed line, whether Esc closed the command list for it and the
+  // command selected in the list.
+  let mode: ShellMode = "input";
+  const editor = new LineEditor();
+  let listClosed = false;
+  let suggestion = 0;
   // The add-task or goal form while it is open, and one line of outcome under the tabs (TUI-D13).
   let form: AddTaskForm | GoalForm | undefined;
   let pending = false;
@@ -329,6 +361,12 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
     plan === undefined
       ? undefined
       : snapshot.approvals.find((approval) => approval.approvalId === plan);
+  // The plan y and n act on: the open one, or the one under the cursor on Plans.
+  const selectedApproval = (): string | undefined =>
+    plan ?? (activeId() === "plans" ? activeView().items[cursors[panel] ?? 0]?.value : undefined);
+  // The commands the typed line lists (LD-T6b-2): in input mode, with no form open, until Esc closes the list.
+  const suggestions = (): SlashCommand[] =>
+    mode !== "input" || form !== undefined || listClosed ? [] : commandMatches(editor.value);
   // The text views over the panels: help, a task detail or a plan detail. Undefined shows the active panel.
   const textLines = (): readonly string[] | undefined => {
     if (helpOpen) return HELP_LINES;
@@ -336,17 +374,25 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
     const approval = openApproval();
     return approval === undefined ? undefined : buildPlanDetailView(approval, context());
   };
-  // The keys box: the keys of what is open, else of the home view or the active panel. One line; it is cut to the box.
+  // The keys of navigation mode: of what is open, else of the home view or the active panel.
   const keysText = (homeShown: boolean): string => {
-    if (form !== undefined) return form instanceof GoalForm ? GOAL_FOOTER : FORM_FOOTER;
     if (helpOpen) return "↑↓ scroll · Esc close help · q quit";
     if (detail !== undefined) return "↑↓ scroll · Esc back · r reload · q quit";
     if (openApproval() !== undefined) return PLAN_FOOTER;
     if (homeShown) return HOME_KEYS.join(" · ");
     return [...activeView().keys, ...COMMON_KEYS].join(" · ");
   };
+  // The bottom border of the input box: the keys of an open form; in input mode those of the command list or of an
+  // open view; in navigation mode i and the keys above. One line; it is cut to the border.
+  const footerText = (homeShown: boolean): string => {
+    if (form !== undefined) return form instanceof GoalForm ? GOAL_FOOTER : FORM_FOOTER;
+    if (mode === "navigation") return `i type · ${keysText(homeShown)}`;
+    if (suggestions().length > 0) return LIST_FOOTER;
+    if (helpOpen || detail !== undefined) return INPUT_VIEW_FOOTER;
+    return openApproval() === undefined ? INPUT_FOOTER : INPUT_PLAN_FOOTER;
+  };
   const pageSize = (columns: number, rows: number): number =>
-    Math.max(1, bodyRows(columns, rows) - 1);
+    Math.max(1, panelRows(columns, rows) - 1);
 
   // The main area's width: all of it, or what the right column leaves from RIGHT_COLUMN_FROM columns on.
   function mainWidth(columns: number): number {
@@ -373,9 +419,21 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
     return lines;
   }
 
-  // The body's rows: the frame less the top bar, the status line, the head of the main area and the keys box.
+  // The body's rows: the frame less the top bar, the status line, the head of the main area and the input box.
   function bodyRows(columns: number, rows: number): number {
-    return Math.max(0, rows - 2 - headLines(mainWidth(columns)).length - KEYS_BOX_ROWS);
+    return Math.max(0, rows - 2 - headLines(mainWidth(columns)).length - INPUT_BOX_ROWS);
+  }
+
+  // The rows of the panel or the open view: the body less the command list.
+  function panelRows(columns: number, rows: number): number {
+    const height = bodyRows(columns, rows);
+    return height - commandList(mainWidth(columns), height).length;
+  }
+
+  // The command list while it shows, right above the input box, in the body's last rows.
+  function commandList(width: number, height: number): FrameLine[] {
+    const matches = suggestions();
+    return commandListLines(matches, clamp(suggestion, 0, matches.length - 1), height, width);
   }
 
   // The home view's lines when it shows: on the home, with nothing running, ready or waiting for approval, nothing
@@ -387,7 +445,7 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
   }
 
   function homeShownAt(columns: number, rows: number): boolean {
-    return homeView(mainWidth(columns), bodyRows(columns, rows)) !== undefined;
+    return homeView(mainWidth(columns), panelRows(columns, rows)) !== undefined;
   }
 
   // The body: a form, help or a task or plan detail as text, the home view, otherwise the active panel with its cursor.
@@ -436,26 +494,59 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
     return all.slice(offsets[panel], (offsets[panel] ?? 0) + height);
   }
 
+  // The line of the input box: the prompt and the text around the cursor, or the placeholder while it is empty. The
+  // cursor shows while the keys are typed into the box: in input mode, with no form open.
+  function inputLine(inner: number): FrameLine {
+    const typing = mode === "input" && form === undefined;
+    const prompt = segment("> ", typing ? "accent" : "muted");
+    if (editor.value === "") {
+      return typing
+        ? [
+            prompt,
+            { text: PLACEHOLDER.slice(0, 1), tone: "muted", inverse: true },
+            segment(PLACEHOLDER.slice(1), "muted"),
+          ]
+        : [prompt, segment(PLACEHOLDER, "muted")];
+    }
+    const view = editor.view(Math.max(0, inner - 2));
+    return typing
+      ? [
+          prompt,
+          segment(view.before, "text"),
+          { text: view.at, tone: "text", inverse: true },
+          segment(view.after, "text"),
+        ]
+      : [prompt, segment(`${view.before}${view.at}${view.after}`, "muted")];
+  }
+
   function frame(columns: number, rows: number): FrameLine[] {
     const wide = columns >= RIGHT_COLUMN_FROM;
     const width = mainWidth(columns);
     const middle = Math.max(0, rows - 2);
     const height = bodyRows(columns, rows);
     const shownFacts = facts();
-    const homeShown = homeView(width, height) !== undefined;
-    const body = bodyLines(width, height);
-    while (body.length < height) body.push([]);
+    const listed = commandList(width, height);
+    const panelHeight = height - listed.length;
+    const homeShown = homeView(width, panelHeight) !== undefined;
+    const body = bodyLines(width, panelHeight);
+    while (body.length < panelHeight) body.push([]);
     const main: FrameLine[] = [
       ...headLines(width),
       ...body,
-      ...box(undefined, [[segment(keysText(homeShown), "muted")]], width),
+      ...listed,
+      ...box(
+        mode === "input" ? "Input" : "Keys",
+        [inputLine(width - 4)],
+        width,
+        footerText(homeShown),
+      ),
     ];
     const lines: FrameLine[] = [
       topBar(shownFacts, columns, !wide),
       ...(wide
         ? joinColumns(main, width, rightColumn(shownFacts, middle), RIGHT_COLUMN_WIDTH, middle)
         : main.slice(0, middle)),
-      statusLine(shownFacts, columns, !wide),
+      statusLine(shownFacts, columns, !wide, mode),
     ];
     // Exactly `rows` lines, none wider than the terminal: pi-tui fails on a line wider than its width.
     while (lines.length < rows) lines.splice(lines.length - 1, 0, []);
@@ -546,9 +637,9 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
     cursors[LIVE_PANEL] = Math.max(0, snapshot.live.length - 1);
   }
 
-  // The project a form adds to: the one the filter names, or the only project. Several projects and no filter is a
-  // message: the shell never guesses where a task goes (TUI-D13).
-  function formProject(key: string, purpose: string): Project | undefined {
+  // The project a form or the input box adds to: the one the filter names, or the only project. Several projects and
+  // no filter is the message `several`: the shell never guesses where a task goes (TUI-D13).
+  function formProject(several: string): Project | undefined {
     helpOpen = false;
     detail = undefined;
     plan = undefined;
@@ -561,16 +652,17 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
     const chosen =
       snapshot.projects.find((project) => project.projectId === scope) ??
       (snapshot.projects.length === 1 ? snapshot.projects[0] : undefined);
-    status =
-      chosen === undefined
-        ? `several projects: choose one on Projects (Enter), then press ${key} to ${purpose}`
-        : undefined;
+    status = chosen === undefined ? several : undefined;
     return chosen;
   }
 
-  // a: the add-task form (TUI-D13).
+  // a and /add: the add-task form (TUI-D13).
   function openAddTask(): void {
-    const chosen = formProject("a", "add a task");
+    const chosen = formProject(
+      mode === "input"
+        ? `${PICK_PROJECT}, then /add again`
+        : "several projects: choose one on Projects (Enter), then press a to add a task",
+    );
     if (chosen !== undefined) {
       form = new AddTaskForm({ projectSlug: chosen.slug, defaultModel: options.defaultModel });
     }
@@ -578,7 +670,9 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
 
   // g: the goal form, a plan task for a planner agent (LD-T5).
   function openGoal(): void {
-    const chosen = formProject("g", "plan a goal");
+    const chosen = formProject(
+      "several projects: choose one on Projects (Enter), then press g to plan a goal",
+    );
     if (chosen !== undefined) {
       form = new GoalForm({ projectSlug: chosen.slug, defaultModel: options.defaultModel });
     }
@@ -601,19 +695,16 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
     });
   }
 
-  // y and n (LD-T5): approve or deny the open plan, or the one under the cursor on Plans. The CLI records the OS
-  // user as the decider; the runtime queues a granted plan, so an approval switches to Live. A subject that is not a
-  // plan can only be denied.
-  function decide(verb: "approve" | "deny"): void {
-    if (pending) return;
-    const approvalId =
-      plan ?? (activeId() === "plans" ? activeView().items[cursors[panel] ?? 0]?.value : undefined);
-    if (approvalId === undefined) return;
+  // y and n (LD-T5): approve or deny the open plan, or the one under the cursor on Plans; /approve and /deny pass the
+  // plan they chose (LD-T6b-2). The CLI records the OS user as the decider; the runtime queues a granted plan, so an
+  // approval switches to Live. A subject that is not a plan can only be denied. Whether the CLI was run.
+  function decide(verb: "approve" | "deny", approvalId = selectedApproval()): boolean {
+    if (pending || approvalId === undefined) return false;
     const approve = verb === "approve";
     const subject = snapshot.approvals.find((approval) => approval.approvalId === approvalId);
     if (approve && subject?.error !== undefined) {
       status = `plan ${approvalId.slice(0, 8)} is not a valid plan and cannot be approved; n denies it`;
-      return;
+      return false;
     }
     const args = [verb, approvalId];
     if (settings.dataDir !== undefined) args.push("--data-dir", settings.dataDir);
@@ -623,6 +714,121 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
       textOffset = 0;
       if (approve) showLive();
     });
+    return true;
+  }
+
+  // /approve [id] and /deny [id] (LD-T6b-2): the pending plan whose id starts with `id`; without one, the plan y and n
+  // would take, else the only pending plan. Anything else is a message and runs nothing. The plans are the snapshot's.
+  function decideCommand(verb: "approve" | "deny", id: string | undefined): boolean {
+    if (pending) return false;
+    const plans = snapshot.approvals;
+    if (id !== undefined) {
+      const wanted = id.toLowerCase();
+      const found = plans.filter((approval) =>
+        approval.approvalId.toLowerCase().startsWith(wanted),
+      );
+      if (found.length !== 1) {
+        status =
+          found.length === 0
+            ? `no pending plan matches ${id}`
+            : `several pending plans start with ${id}: type more of the id`;
+        return false;
+      }
+      return decide(verb, found[0]?.approvalId);
+    }
+    const chosen = selectedApproval() ?? (plans.length === 1 ? plans[0]?.approvalId : undefined);
+    if (chosen === undefined) {
+      status =
+        plans.length === 0
+          ? "no plan waits for approval"
+          : `${plans.length} plans wait for approval: /${verb} <id>, or select one on Plans`;
+      return false;
+    }
+    return decide(verb, chosen);
+  }
+
+  // Enter in input mode (LD-T6b-2): a line that starts with / is a command; any other text is a goal; an empty line is
+  // the active panel's Enter.
+  function submitInput(input: string, columns: number, rows: number): void {
+    const text = editor.value.trim();
+    if (text === "") handleKey(input, columns, rows);
+    else if (text.startsWith("/")) runCommand(text);
+    else submitGoal(editor.value);
+  }
+
+  // The typed goal as a plan task, with the defaults of the goal form and the same CLI call (LD-T5): Enter here queues
+  // what g, the goal and Enter would. The line is cleared once the CLI took it; on a refusal it stays to be fixed.
+  function submitGoal(goal: string): void {
+    const chosen = formProject(`${PICK_PROJECT}, then Enter sends the goal`);
+    if (chosen === undefined) return;
+    const built = goalArgs(goalDefaults(goal, options.defaultModel), {
+      slug: chosen.slug,
+      dataDir: settings.dataDir,
+    });
+    if (!built.ok) {
+      status = built.message;
+      return;
+    }
+    const sent = editor.value;
+    runAction(built.args, "asking for a plan...", true, (ok) => {
+      if (!ok) return;
+      if (editor.value === sent) clearInput();
+      showLive();
+    });
+  }
+
+  // Runs one / command. One that was carried out clears the line; an unknown command, a wrong argument or one that
+  // could not run leaves it, with a message, to be fixed.
+  function runCommand(text: string): void {
+    const { name, argument } = parseCommand(text);
+    const command = SLASH_COMMANDS.find((entry) => entry.name === name);
+    if (command === undefined) {
+      status = `unknown command /${name} · /help lists them`;
+      return;
+    }
+    if (argument !== undefined && (command.argument === undefined || /\s/.test(argument))) {
+      status =
+        command.argument === undefined ? `/${name} takes no argument` : `/${name} takes one id`;
+      return;
+    }
+    if (perform(name, argument)) clearInput();
+  }
+
+  // What each command does: what its key does in navigation mode. Whether it was carried out.
+  function perform(name: string, argument: string | undefined): boolean {
+    const panelIndex = PANELS.findIndex((entry) => entry.id === name);
+    if (panelIndex >= 0) {
+      helpOpen = false;
+      selectPanel(panelIndex);
+      return true;
+    }
+    switch (name) {
+      case "approve":
+      case "deny":
+        return decideCommand(name, argument);
+      case "add":
+        openAddTask();
+        return form !== undefined;
+      case "reload":
+        reload();
+        followRuntime();
+        return true;
+      case "help":
+        helpOpen = true;
+        textOffset = 0;
+        return true;
+      case "quit":
+        quit();
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  function clearInput(): void {
+    editor.clear();
+    listClosed = false;
+    suggestion = 0;
   }
 
   // Runs one CLI action in the background (TUI-D13). The outcome is one line; then the store is read again and the
@@ -783,16 +989,29 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
     }
   }
 
+  // Closes the help, a task detail or a plan detail, the one on top; false when none is open.
+  function closeView(): boolean {
+    if (helpOpen) helpOpen = false;
+    else if (detail !== undefined) detail = undefined;
+    else if (plan !== undefined) plan = undefined;
+    else return false;
+    textOffset = 0;
+    return true;
+  }
+
+  // A key in navigation mode. Input mode passes Enter on an empty line, the arrows up and down, the page keys and Tab
+  // here too, so they act the same in both modes.
   function handleKey(input: string, columns: number, rows: number): void {
-    if (matchesKey(input, "?")) {
-      helpOpen = !helpOpen;
-      textOffset = 0;
+    if (matchesKey(input, "escape")) {
+      if (!closeView()) mode = "input";
       return;
     }
-    if (matchesKey(input, "escape")) {
-      if (helpOpen) helpOpen = false;
-      else if (detail !== undefined) detail = undefined;
-      else plan = undefined;
+    if (matchesKey(input, "i")) {
+      mode = "input";
+      return;
+    }
+    if (matchesKey(input, "?")) {
+      helpOpen = !helpOpen;
       textOffset = 0;
       return;
     }
@@ -850,6 +1069,49 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
     if (matchesKey(input, "enter")) enter();
   }
 
+  // A key in input mode (LD-T6b-2). Esc closes the command list, then an open view, then switches to navigation mode.
+  // While the list shows, the arrows up and down choose in it, Tab completes the chosen command and Enter runs it.
+  // Otherwise Enter submits the line, the panel keys act on the panels, and every other key edits the line.
+  function handleInputKey(input: string, columns: number, rows: number): void {
+    const matches = suggestions();
+    if (matchesKey(input, "escape")) {
+      if (matches.length > 0) listClosed = true;
+      else if (!closeView()) mode = "navigation";
+      return;
+    }
+    const chosen = matches[clamp(suggestion, 0, matches.length - 1)];
+    if (chosen !== undefined) {
+      if (matchesKey(input, "up") || matchesKey(input, "down")) {
+        suggestion = clamp(suggestion + (matchesKey(input, "up") ? -1 : 1), 0, matches.length - 1);
+        return;
+      }
+      if (matchesKey(input, "tab")) {
+        // A command with an argument completes with a space after it, ready for the id.
+        editor.setValue(`/${chosen.name}${chosen.argument === undefined ? "" : " "}`);
+        suggestion = 0;
+        return;
+      }
+      if (matchesKey(input, "enter")) {
+        runCommand(`/${chosen.name}`);
+        return;
+      }
+    }
+    if (matchesKey(input, "enter")) {
+      submitInput(input, columns, rows);
+      return;
+    }
+    if (PANEL_KEYS.some((key) => matchesKey(input, key))) {
+      handleKey(input, columns, rows);
+      return;
+    }
+    const before = editor.value;
+    editor.handleInput(input);
+    if (editor.value !== before) {
+      listClosed = false;
+      suggestion = 0;
+    }
+  }
+
   // While the form is open every key is the form's, except Ctrl+C: q and the digits are text in the title.
   function handleFormKey(input: string): void {
     const current = form;
@@ -893,15 +1155,20 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
     invalidate: () => {},
   };
   tui.addChild(root);
+  // Ctrl+C quits in every mode; q only in navigation mode with no form open. A key release (Kitty) is no key.
   tui.addInputListener((input) => {
-    if (quitting) return { consume: true };
-    if (matchesKey(input, "ctrl+c") || (form === undefined && matchesKey(input, "q"))) {
+    if (quitting || isKeyRelease(input)) return { consume: true };
+    const quits =
+      matchesKey(input, "ctrl+c") ||
+      (form === undefined && mode === "navigation" && matchesKey(input, "q"));
+    if (quits) {
       quit();
       return { consume: true };
     }
     if (form !== undefined) handleFormKey(input);
+    else if (mode === "input") handleInputKey(input, terminal.columns, terminal.rows);
     else handleKey(input, terminal.columns, terminal.rows);
-    tui.requestRender();
+    if (!quitting) tui.requestRender();
     return { consume: true };
   });
 
@@ -930,9 +1197,11 @@ function taskSummary(tasks: readonly { readonly state: string }[]): string {
     .join(", ");
 }
 
+// The colors and weight of a segment, applied after fit cut its text: the only escape sequences the frame writes.
 function styled(theme: Theme, part: Segment): string {
   const painted = theme.fg(part.tone, part.text);
-  return part.bold === true ? theme.bold(painted) : painted;
+  const weighted = part.bold === true ? theme.bold(painted) : painted;
+  return part.inverse === true ? `\x1b[7m${weighted}\x1b[27m` : weighted;
 }
 
 function clamp(value: number, min: number, max: number): number {
