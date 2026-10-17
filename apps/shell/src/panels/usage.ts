@@ -46,7 +46,7 @@ export function eventsView(context: PanelContext): PanelView {
       `newest ${snapshot.events.length} events, oldest first`,
     ],
     items: snapshot.events.map((event) => ({
-      text: `${time(event.ts)}  ${pad(event.type, 22)}${event.aggregateType}:${event.aggregateId.slice(0, 8)}  ${payloadSummary(event.payload)}`,
+      text: `${time(event.ts)}  ${pad(event.type, 26)}${event.aggregateType}:${event.aggregateId.slice(0, 8)}  ${payloadSummary(event.payload)}`,
     })),
     empty: snapshot.events.length === 0 && message === undefined ? "No events yet." : undefined,
     keys: [],

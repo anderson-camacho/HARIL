@@ -191,7 +191,7 @@ export function openShellData(options: OpenShellDataOptions): ShellData {
       const usage = open.budgets.usageSummary({ taskId });
       const permissionDenials = open.events
         .list({ taskId })
-        .filter((event) => event.type === "tool.denied").length;
+        .filter((event) => event.type === "security.pathguard.denied").length;
       return {
         detail,
         tokens:

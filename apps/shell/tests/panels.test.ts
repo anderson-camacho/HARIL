@@ -135,7 +135,7 @@ describe("panel builders with a seeded store", () => {
     const snapshot = loadSnapshot(undefined);
     const lines = texts(buildPanelView("events", contextFor(snapshot, undefined)));
     expect(lines.some((line) => line.includes("task.created"))).toBe(true);
-    expect(lines.some((line) => line.includes("tool.denied"))).toBe(true);
+    expect(lines.some((line) => line.includes("security.pathguard.denied"))).toBe(true);
   });
 
   it("tokens: a block per project with runs, success rate and ledger tokens", () => {

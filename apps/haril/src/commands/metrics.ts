@@ -10,7 +10,7 @@ const NOT_INITIALIZED =
   "store not initialized (run haril project init <path> --name <name> --yes first)";
 const NOT_YET = "tokens and cost are available from M2 (Broker)";
 const NO_COST = "cost is not tracked in M2 (token budgets only)";
-const PERMISSION_DENIED = "tool.denied";
+const PERMISSION_DENIED = "security.pathguard.denied";
 const TASK_STATES = [
   "pending",
   "ready",
@@ -33,7 +33,7 @@ interface MetricsView {
   };
   readonly retries: number;
   readonly orphanedRecoveries: number;
-  // PathGuard denials recorded as tool.denied events (criterion 12).
+  // PathGuard denials recorded as security.pathguard.denied events (criterion 12).
   readonly permissionDenials: number;
   // Completed tasks whose host checks all passed, and the ones completed without a passing verification (M3-D7).
   readonly verifiedCompletions: number;

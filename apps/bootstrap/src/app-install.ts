@@ -78,6 +78,8 @@ interface PayloadFile {
   readonly dest: string;
   readonly bytes: Uint8Array;
   readonly sha256: string;
+  // The sh launcher: POSIX shells only run it with the execute bit set.
+  readonly executable?: boolean;
 }
 
 interface NodeChoice {
@@ -145,6 +147,7 @@ export async function installApp(deps: AppInstallDeps): Promise<AppInstallResult
       dest: ops.join(binDir, name),
       bytes,
       sha256: sha256Hex(bytes),
+      executable: name === "haril",
     };
   });
 
@@ -362,12 +365,14 @@ async function writeIfChanged(
 ): Promise<"ok" | "skipped"> {
   let written = 0;
   for (const file of files) {
-    if (await fs.exists(file.dest)) {
-      const current = await fs.readBytes(file.dest);
-      if (sha256Hex(current) === file.sha256) continue;
+    const unchanged =
+      (await fs.exists(file.dest)) && sha256Hex(await fs.readBytes(file.dest)) === file.sha256;
+    if (!unchanged) {
+      await fs.writeFile(file.dest, file.bytes);
+      written++;
     }
-    await fs.writeFile(file.dest, file.bytes);
-    written++;
+    // Also for unchanged bytes: an earlier install may have left the launcher without the execute bit.
+    if (file.executable === true) await fs.setExecutable(file.dest);
   }
   return written === 0 ? "skipped" : "ok";
 }
