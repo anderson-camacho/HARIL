@@ -1,18 +1,26 @@
 // Supervision of `engram serve` (ADR-0008 D4, D5; MEMORY.md 4.4, 9, 11.3; memory.md 9.4 points 1 to 4 and 11): one
 // serve per data dir, child of the Runtime, launched on the first memory operation. Before the launch the data dir
 // and port guards run; the binary is an absolute path (never a PATH lookup); the environment is built from scratch
-// with ENGRAM_DATA_DIR, ENGRAM_PORT and a token new on every launch. The serve is ready when GET /health answers on
-// its port with the .instance-id of HARIL's data dir; one that exits 0 first (#1462) or another server on the port
-// is never trusted nor reused. A crash is relaunched on the next connect, after a backoff and up to a cap; stop()
-// kills the whole tree. The pid, its start time and the reconciliation of an orphan of an earlier Runtime need the
+// with ENGRAM_DATA_DIR, ENGRAM_PORT, a token new on every launch and a home HARIL owns. The serve is ready when GET
+// /health answers on its port with the .instance-id of HARIL's data dir while the child is alive, and then the one
+// token-protected route takes the launch token; one that exits 0 first (#1462) or another server on the port is never
+// trusted nor reused. A crash is relaunched on the next connect, after a backoff and up to a cap; stop() kills the
+// whole tree. The pid, its start time and the reconciliation of an orphan of an earlier Runtime need the
 // Store and belong to the Runtime (memory.md 9.4 point 8; MC-T6).
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, win32 } from "node:path";
 import type { HarilError, Result } from "@haril/core/ports";
-import { checkEngramDataDir, checkEngramPort, engramDataDirOf, pickEngramPort } from "./guards.js";
+import {
+  checkEngramDataDir,
+  checkEngramHome,
+  checkEngramPort,
+  engramDataDirOf,
+  engramHomeOf,
+  pickEngramPort,
+} from "./guards.js";
 import type { EngramEndpoint, FetchFn } from "./http.js";
 import { readHealth } from "./wire.js";
 
@@ -103,15 +111,26 @@ const OUTPUT_TAIL_CHARS = 2_000;
 // The data dirs that have a supervisor in this process: one serve per data dir, one opener of its SQLite (D4).
 const held = new Set<string>();
 
+// %SystemRoot% as the parent states it, when it is a plain local Windows directory; C:\Windows otherwise.
+function systemRootOf(osEnv: Env): string {
+  const stated = osEnv.SystemRoot ?? osEnv.SYSTEMROOT ?? osEnv.windir ?? osEnv.WINDIR ?? "";
+  return /^[A-Za-z]:\\[^\\/:*?"<>|]+$/.test(stated) ? stated : "C:\\Windows";
+}
+
 // MEMORY.md 4.4: a whitelist built from scratch. Left out on purpose: ENGRAM_PROJECT, ENGRAM_AGENT_CLI,
-// ENGRAM_CLOUD_*, ENGRAM_SOCKET and ENGRAM_URL, and PATH, HOME and USERPROFILE, so nothing can lead Engram back to
-// ~/.engram. ENGRAM_STARTUP_POLICY=deny is memory.md 9.4 point 3; that ENGRAM_NO_UPDATE_CHECK stops a network check
-// is NOT VERIFIED.
+// ENGRAM_CLOUD_*, ENGRAM_SOCKET and ENGRAM_URL. The home is HARIL's own (engramHomeOf), so nothing can lead Engram to
+// the user's home and its ~/.engram. On Windows libuv adds HOMEDRIVE, HOMEPATH, LOGONSERVER, PATH, SYSTEMDRIVE,
+// SYSTEMROOT, TEMP, USERDOMAIN, USERNAME, USERPROFILE and WINDIR to a child when they are missing, copied from the
+// parent's real environment; each is therefore set, the user's identity to empty (measured on Node 24.19).
+// ENGRAM_STARTUP_POLICY=deny is memory.md 9.4 point 3; that ENGRAM_NO_UPDATE_CHECK stops a network check is NOT
+// VERIFIED, and so is that Engram starts with this environment (MC-T6).
 export function buildEngramEnv(input: {
   readonly dataDir: string;
+  readonly home: string;
   readonly port: number;
   readonly token: string;
   readonly osEnv: Env;
+  readonly platform?: NodeJS.Platform;
 }): Record<string, string> {
   const env: Record<string, string> = {
     ENGRAM_DATA_DIR: input.dataDir,
@@ -119,38 +138,78 @@ export function buildEngramEnv(input: {
     ENGRAM_HTTP_TOKEN: input.token,
     ENGRAM_STARTUP_POLICY: "deny",
     ENGRAM_NO_UPDATE_CHECK: "1",
+    HOME: input.home,
   };
-  // Windows needs these to start a process (as in integrations/agent-pi).
-  for (const name of ["SystemRoot", "TEMP", "TMP"] as const) {
-    const value = input.osEnv[name];
-    if (value !== undefined && value !== "") env[name] = value;
+  if ((input.platform ?? process.platform) !== "win32") {
+    return { ...env, TMPDIR: join(input.home, "tmp") };
   }
-  return env;
+  const systemRoot = systemRootOf(input.osEnv);
+  const temp = win32.join(input.home, "tmp");
+  return {
+    ...env,
+    SystemRoot: systemRoot,
+    WINDIR: systemRoot,
+    SYSTEMDRIVE: systemRoot.slice(0, 2),
+    PATH: win32.join(systemRoot, "System32"),
+    USERPROFILE: input.home,
+    HOMEDRIVE: input.home.slice(0, 2),
+    HOMEPATH: input.home.slice(2),
+    TEMP: temp,
+    TMP: temp,
+    USERNAME: "",
+    USERDOMAIN: "",
+    LOGONSERVER: "",
+  };
+}
+
+// Text with every occurrence of `secret` replaced, and a cut-off tail of it at the start removed too.
+function redacted(text: string, secret: string | undefined): string {
+  if (secret === undefined || secret === "") return text;
+  const whole = text.split(secret).join("[REDACTED]");
+  const head = /^[0-9a-f]+/.exec(whole)?.[0] ?? "";
+  return head !== "" && secret.endsWith(head) ? `[REDACTED]${whole.slice(head.length)}` : whole;
 }
 
 const defaultSpawn: EngramSpawnFn = (command, args, options) => spawn(command, [...args], options);
 
-// Windows: taskkill /T takes the whole tree; POSIX: the child leads its own process group (detached). The same
-// approach as integrations/agent-pi's killProcessTree, which an integration cannot import (ADR-0015 matrix).
-function killTree(child: ChildProcess, osEnv: Env, platform: NodeJS.Platform): void {
+export type KillerSpawnFn = (command: string, args: readonly string[]) => ChildProcess;
+
+const defaultKillerSpawn: KillerSpawnFn = (command, args) =>
+  spawn(command, [...args], { shell: false, windowsHide: true, stdio: "ignore" });
+
+// Windows: taskkill /T takes the whole tree, then the child itself goes, also when taskkill cannot start; POSIX: the
+// child leads its own process group (detached). The same approach as integrations/agent-pi's killProcessTree, which
+// an integration cannot import (ADR-0015 matrix); here the child is killed after taskkill, not before it, so the tree
+// is still there to walk.
+export function killProcessTree(
+  child: ChildProcess,
+  osEnv: Env,
+  platform: NodeJS.Platform,
+  spawnKiller: KillerSpawnFn = defaultKillerSpawn,
+): void {
   const pid = child.pid;
   if (pid === undefined) {
     child.kill("SIGKILL");
     return;
   }
   if (platform === "win32") {
-    const systemRoot = osEnv.SystemRoot ?? osEnv.windir ?? "C:\\Windows";
-    const killer = spawn(
-      join(systemRoot, "System32", "taskkill.exe"),
-      ["/F", "/T", "/PID", String(pid)],
-      {
-        shell: false,
-        windowsHide: true,
-        stdio: "ignore",
-      },
-    );
-    killer.on("error", () => {});
-    killer.on("exit", () => child.kill("SIGKILL"));
+    const last = (): void => {
+      if (child.exitCode === null) child.kill("SIGKILL");
+    };
+    let killer: ChildProcess;
+    try {
+      killer = spawnKiller(join(systemRootOf(osEnv), "System32", "taskkill.exe"), [
+        "/F",
+        "/T",
+        "/PID",
+        String(pid),
+      ]);
+    } catch {
+      last();
+      return;
+    }
+    killer.once("error", last);
+    killer.once("exit", last);
     return;
   }
   try {
@@ -188,6 +247,8 @@ class Supervisor implements EngramServe {
   private port: number | null = null;
   private lastError: string | null = null;
   private output = "";
+  // The token of the current launch, kept out of every recorded text.
+  private secret: string | undefined;
 
   constructor(options: EngramServeOptions) {
     this.options = options;
@@ -238,8 +299,7 @@ class Supervisor implements EngramServe {
     this.state = "stopped";
     await this.starting?.catch(() => undefined);
     await this.terminate();
-    if (this.holding !== undefined) held.delete(this.holding);
-    this.holding = undefined;
+    this.release();
     this.endpoint = undefined;
     this.state = "stopped";
   }
@@ -257,6 +317,14 @@ class Supervisor implements EngramServe {
       platform: this.platform,
     });
     if (!guarded.ok) return this.note(failure("data_dir_refused", guarded.message));
+    const homed = checkEngramHome({
+      candidate: engramHomeOf(options.harilDataDir, this.platform),
+      harilDataDir: options.harilDataDir,
+      homeDir: options.homeDir,
+      env: options.osEnv,
+      platform: this.platform,
+    });
+    if (!homed.ok) return this.note(failure("data_dir_refused", homed.message));
     if (!isAbsolute(options.binary.path) || !existsSync(options.binary.path)) {
       return this.note(
         failure("binary_refused", `${options.binary.path} is not an absolute path to a file`),
@@ -275,22 +343,30 @@ class Supervisor implements EngramServe {
       held.add(key);
       this.holding = key;
     }
-    await mkdir(guarded.dataDir, { recursive: true });
+    try {
+      await mkdir(guarded.dataDir, { recursive: true });
+      await mkdir(join(homed.dataDir, "tmp"), { recursive: true });
+    } catch (error) {
+      return this.note(
+        failure("data_dir_refused", `the data dir cannot be created: ${String(error)}`),
+      );
+    }
     if (this.state === "stopped") return failure("stopped", "engram serve was stopped");
     const token = randomBytes(32).toString("hex");
+    this.secret = token;
     this.state = "starting";
     this.port = port;
-    this.spawnChild(guarded.dataDir, port, token);
+    this.spawnChild(guarded.dataDir, homed.dataDir, port, token);
     return this.awaitReady(guarded.dataDir, port, token);
   }
 
-  private spawnChild(dataDir: string, port: number, token: string): void {
+  private spawnChild(dataDir: string, home: string, port: number, token: string): void {
     const { binary, osEnv } = this.options;
     this.exit = undefined;
     this.output = "";
     const child = this.spawnFn(binary.path, [...(binary.leadingArgs ?? []), "serve"], {
       cwd: dataDir,
-      env: buildEngramEnv({ dataDir, port, token, osEnv }),
+      env: buildEngramEnv({ dataDir, home, port, token, osEnv, platform: this.platform }),
       shell: false,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -298,8 +374,10 @@ class Supervisor implements EngramServe {
     });
     this.child = child;
     this.lastPid = child.pid ?? null;
+    // Redacted as it arrives, over what came before, so a token split across chunks is caught too.
     const keep = (chunk: Buffer): void => {
-      this.output = `${this.output}${chunk.toString("utf8")}`.slice(-OUTPUT_TAIL_CHARS);
+      const joined = redacted(`${this.output}${chunk.toString("utf8")}`, this.secret);
+      this.output = redacted(joined.slice(-OUTPUT_TAIL_CHARS), this.secret);
     };
     child.stdout?.on("data", keep);
     child.stderr?.on("data", keep);
@@ -309,7 +387,11 @@ class Supervisor implements EngramServe {
     child.once("exit", (code) => this.exited(child, code));
   }
 
-  // Polls GET /health until it names the data dir's .instance-id, the child exits, or the deadline passes.
+  // Polls GET /health until it names the data dir's .instance-id, the child exits, or the deadline passes. The token
+  // goes out only after that, with the child alive, to GET /compatibility (requireAuth in v3.4.0, 06 sec3.2 [V]); the
+  // serve is ours when it takes it and the child is still alive a poll later. Neither check proves who holds the port
+  // without the token (/health names no pid): a server that answers this data dir's instance id has read the data
+  // dir, so it is a process of the same user that ADR-0008 D6.6 leaves out of scope, and it may see the token.
   private async awaitReady(
     dataDir: string,
     port: number,
@@ -332,26 +414,22 @@ class Supervisor implements EngramServe {
           `engram serve exited before it was ready (${exit.error ?? `code ${exit.code}`})`,
         );
       }
-      const instanceId = await this.probe(baseUrl, Math.max(1, deadline - Date.now()));
-      if (instanceId !== undefined) {
-        const own = await readFile(join(dataDir, ".instance-id"), "utf8").then(
-          (text) => text.trim(),
-          () => undefined,
+      const proof = await this.proveOurs(baseUrl, dataDir, token, deadline);
+      if (proof.verdict === "ours") {
+        this.state = "ready";
+        this.readyAt = Date.now();
+        this.lastError = null;
+        this.endpoint = { baseUrl, token, instanceId: proof.instanceId, dataDir };
+        return { ok: true, value: this.endpoint };
+      }
+      if (proof.verdict !== "not_yet") {
+        this.kill();
+        return this.down(
+          "foreign_instance",
+          proof.verdict === "other_instance"
+            ? `the server on 127.0.0.1:${port} is not the instance of ${dataDir}`
+            : `the server on 127.0.0.1:${port} does not take this launch's token`,
         );
-        if (own !== undefined && own !== "") {
-          if (instanceId !== own) {
-            this.kill();
-            return this.down(
-              "foreign_instance",
-              `the server on 127.0.0.1:${port} is not the instance of ${dataDir}`,
-            );
-          }
-          this.state = "ready";
-          this.readyAt = Date.now();
-          this.lastError = null;
-          this.endpoint = { baseUrl, token, instanceId: own, dataDir };
-          return { ok: true, value: this.endpoint };
-        }
       }
       await delay(this.timings.pollMs);
     }
@@ -360,6 +438,41 @@ class Supervisor implements EngramServe {
       "not_ready",
       `engram serve was not ready within ${this.timings.readinessMs} ms`,
     );
+  }
+
+  // Whether the server on the port is the child: /health (no token) must name the data dir's instance while the
+  // child is alive; only then does the token go to GET /compatibility, which must take it; and the child must still
+  // be alive a poll later. "not_yet" while any of that has no answer.
+  private async proveOurs(
+    baseUrl: string,
+    dataDir: string,
+    token: string,
+    deadline: number,
+  ): Promise<
+    | { readonly verdict: "ours"; readonly instanceId: string }
+    | { readonly verdict: "other_instance" | "token_refused" | "not_yet" }
+  > {
+    const notYet = { verdict: "not_yet" } as const;
+    const answered = await this.probe(baseUrl, Math.max(1, deadline - Date.now()));
+    const own = answered === undefined ? undefined : await this.ownInstance(dataDir);
+    if (answered === undefined || own === undefined) return notYet;
+    if (answered !== own) return { verdict: "other_instance" };
+    if (!this.childAlive()) return notYet;
+    const taken = await this.takesToken(baseUrl, token, Math.max(1, deadline - Date.now()));
+    if (taken === false) return { verdict: "token_refused" };
+    if (taken === undefined) return notYet;
+    await delay(this.timings.pollMs);
+    const stillOurs = this.childAlive() && this.state === "starting";
+    return stillOurs ? { verdict: "ours", instanceId: own } : notYet;
+  }
+
+  // The data dir's .instance-id, once Engram has published it.
+  private async ownInstance(dataDir: string): Promise<string | undefined> {
+    const text = await readFile(join(dataDir, ".instance-id"), "utf8").then(
+      (content) => content.trim(),
+      () => "",
+    );
+    return text === "" ? undefined : text;
   }
 
   // The instance_id GET /health answers, or undefined while nothing answers.
@@ -374,6 +487,30 @@ class Supervisor implements EngramServe {
     } catch {
       return undefined;
     }
+  }
+
+  // true when GET /compatibility takes the token, false when it refuses it, undefined without an answer.
+  private async takesToken(
+    baseUrl: string,
+    token: string,
+    remainingMs: number,
+  ): Promise<boolean | undefined> {
+    try {
+      const response = await this.fetchFn(`${baseUrl}/compatibility`, {
+        headers: { authorization: `Bearer ${token}` },
+        redirect: "error",
+        signal: AbortSignal.timeout(Math.min(1_000, remainingMs)),
+      });
+      await response.arrayBuffer();
+      if (response.status === 200) return true;
+      return response.status === 401 || response.status === 403 ? false : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private childAlive(): boolean {
+    return this.child !== undefined && this.exit === undefined && this.child.exitCode === null;
   }
 
   private exited(child: ChildProcess, code: number | null): void {
@@ -402,16 +539,23 @@ class Supervisor implements EngramServe {
     );
     this.nextLaunchAt = Date.now() + backoff;
     this.state = "down";
-    this.lastError = this.output === "" ? message : `${message}: ${this.output.trim().slice(-300)}`;
+    const output = redacted(this.output.trim().slice(-300), this.secret);
+    this.lastError = output === "" ? message : `${message}: ${output}`;
   }
 
-  // A failure no relaunch will fix: the supervisor stays failed until a new one is created.
+  // A failure no relaunch will fix: the supervisor stays failed until a new one is created, and lets its data dir go.
   private fail(code: string, message: string): Result<never, HarilError> {
     this.kill();
     this.state = "failed";
     this.lastError = message;
     this.failedWith = failure(code, message);
+    this.release();
     return this.failedWith;
+  }
+
+  private release(): void {
+    if (this.holding !== undefined) held.delete(this.holding);
+    this.holding = undefined;
   }
 
   // A refusal before anything was launched: the state does not change, so a corrected setup can launch.
@@ -422,15 +566,16 @@ class Supervisor implements EngramServe {
 
   private kill(): void {
     const child = this.child;
-    if (child !== undefined && child.exitCode === null)
-      killTree(child, this.options.osEnv, this.platform);
+    if (child !== undefined && child.exitCode === null) {
+      killProcessTree(child, this.options.osEnv, this.platform);
+    }
   }
 
   private async terminate(): Promise<void> {
     const child = this.child;
     if (child === undefined || child.exitCode !== null) return;
     const gone = new Promise<void>((resolve) => child.once("exit", () => resolve()));
-    killTree(child, this.options.osEnv, this.platform);
+    killProcessTree(child, this.options.osEnv, this.platform);
     await Promise.race([gone, delay(this.timings.stopMs)]);
   }
 }

@@ -5,18 +5,22 @@ import { join, sep } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   checkEngramDataDir,
+  checkEngramHome,
   checkEngramPort,
   type EngramDataDirInput,
   engramDataDirOf,
+  engramHomeOf,
   type GuardFs,
+  nodeGuardFs,
   pickEngramPort,
   RESERVED_PORTS,
 } from "../src/index.js";
 
 // The guards that run before `engram serve` is launched (ADR-0008 D5, T3; MEMORY.md 11.2; memory.md 9.4 point 2):
 // ENGRAM_DATA_DIR is absolute, local, HARIL's own <data>/memory/engram and never ~/.engram or inside it, case
-// variants, trailing separators, 8.3 short names and junctions included; ENGRAM_PORT is explicit, free, never 0 and
-// never 7437. The corpus runs on a fake file system with Windows paths, so it means the same on every CI runner, and
+// variants, trailing separators, 8.3 short names, names Win32 renames (a trailing dot or space) and junctions
+// included, and never a link that points nowhere; the home the child gets is HARIL's own too; ENGRAM_PORT is explicit,
+// free, never 0 and never 7437. The corpus runs on a fake file system with Windows paths, so it means the same on every CI runner, and
 // a real junction (a symlink on POSIX) proves the canonical check on this machine. Nothing here touches the real
 // ~/.engram: the home directory is always a fixture.
 
@@ -25,7 +29,8 @@ const USER_ENGRAM = `${HOME}\\.engram`;
 const HARIL_DATA = "C:\\haril\\data";
 const OWNED = `${HARIL_DATA}\\memory\\engram`;
 
-// realpath of a fake Windows volume: the identity, except the aliases given (a short name, a junction).
+// realpath of a fake Windows volume: the identity, except the aliases given (a short name, a junction); nothing else
+// exists on it.
 function fakeFs(aliases: Readonly<Record<string, string>> = {}): GuardFs & { calls: string[] } {
   const calls: string[] = [];
   return {
@@ -36,6 +41,10 @@ function fakeFs(aliases: Readonly<Record<string, string>> = {}): GuardFs & { cal
         ([alias]) => path.toLowerCase() === alias.toLowerCase(),
       );
       return hit === undefined ? path : hit[1];
+    },
+    exists(path) {
+      calls.push(path);
+      return false;
     },
   };
 }
@@ -102,6 +111,31 @@ describe("the ENGRAM_DATA_DIR guard (ADR-0008 T3 corpus)", () => {
     expect(oneDrive).toMatchObject({ ok: false, reason: "not_local" });
   });
 
+  it("refuses a segment Win32 would rename or read as a device, wherever it is", () => {
+    const trailingDot = `${HOME}\\.engram.`;
+    expect(windows(`${trailingDot}\\memory\\engram`, { harilDataDir: trailingDot })).toMatchObject({
+      ok: false,
+      reason: "ambiguous_name",
+    });
+    const cases: readonly (readonly [string, string])[] = [
+      ["a trailing dot", "C:\\haril\\data."],
+      ["a trailing space", "C:\\haril\\data "],
+      ["only dots", "C:\\haril\\..."],
+      ["a device name", "C:\\haril\\nul"],
+      ["a device name with an extension", "C:\\haril\\COM1.txt"],
+      ["an alternate data stream", "C:\\haril\\data:stream"],
+      ["a wildcard", "C:\\haril\\da*ta"],
+      ["a control character", "C:\\haril\\da\u0001ta"],
+    ];
+    for (const [label, harilDataDir] of cases) {
+      const candidate = `${harilDataDir}\\memory\\engram`;
+      expect(windows(candidate, { harilDataDir }), label).toMatchObject({
+        ok: false,
+        reason: "ambiguous_name",
+      });
+    }
+  });
+
   it("never resolves a path inside ~/.engram, even to refuse it", () => {
     const fs = fakeFs({ "C:\\haril\\data\\memory": USER_ENGRAM });
     expect(windows(OWNED, { fs })).toMatchObject({ ok: false, reason: "user_engram" });
@@ -137,6 +171,10 @@ describe("the ENGRAM_DATA_DIR guard on this machine's file system", () => {
         calls.push(path);
         return realpathSync.native(path);
       },
+      exists(path) {
+        calls.push(path);
+        return nodeGuardFs.exists(path);
+      },
     };
     const result = checkEngramDataDir({
       candidate: engramDataDirOf(harilData),
@@ -164,6 +202,51 @@ describe("the ENGRAM_DATA_DIR guard on this machine's file system", () => {
       env: {},
     });
     expect(result).toMatchObject({ ok: false, reason: "user_engram" });
+  });
+
+  it("refuses a link that points nowhere yet: into a missing ~/.engram/notyet, or into a ~/.engram not created yet", () => {
+    const home = join(root, "home");
+    mkdirSync(join(home, ".engram"), { recursive: true });
+    const harilData = join(root, "haril", "data");
+    mkdirSync(join(harilData, "memory"), { recursive: true });
+    symlinkSync(join(home, ".engram", "notyet"), engramDataDirOf(harilData), "junction");
+    const into = {
+      candidate: engramDataDirOf(harilData),
+      harilDataDir: harilData,
+      homeDir: home,
+      env: {},
+    };
+    expect(checkEngramDataDir(into)).toMatchObject({ ok: false, reason: "unresolvable" });
+
+    const laterHome = join(root, "later-home");
+    mkdirSync(laterHome, { recursive: true });
+    const laterData = join(root, "later", "data");
+    mkdirSync(laterData, { recursive: true });
+    symlinkSync(join(laterHome, ".engram"), join(laterData, "memory"), "junction");
+    const before = {
+      candidate: engramDataDirOf(laterData),
+      harilDataDir: laterData,
+      homeDir: laterHome,
+      env: {},
+    };
+    expect(checkEngramDataDir(before)).toMatchObject({ ok: false, reason: "unresolvable" });
+    expect(readdirSync(laterHome)).toEqual([]);
+  });
+
+  it("refuses an Engram home that is, or holds, the user's home with its ~/.engram", () => {
+    const home = join(root, "home");
+    mkdirSync(join(home, ".engram"), { recursive: true });
+    const harilData = join(root, "haril", "data");
+    mkdirSync(join(harilData, "memory"), { recursive: true });
+    const input = {
+      candidate: engramHomeOf(harilData),
+      harilDataDir: harilData,
+      homeDir: home,
+      env: {},
+    };
+    expect(checkEngramHome(input)).toEqual({ ok: true, dataDir: engramHomeOf(harilData) });
+    symlinkSync(home, engramHomeOf(harilData), "junction");
+    expect(checkEngramHome(input)).toMatchObject({ ok: false, reason: "user_engram" });
   });
 
   it("accepts HARIL's own directory before it exists", () => {

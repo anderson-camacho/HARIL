@@ -50,15 +50,18 @@ export function kindOfType(type: string): MemoryReadKind {
   return KINDS.find((kind) => kind === type) ?? "unknown";
 }
 
-// The Engram types a read may return: the scope's kind and the query's kinds narrow them; undefined is every type
-// and an empty list is none (the two narrow to nothing).
-export function typesOf(
+// The kinds a read may return: the scope's kind and the query's kinds narrow them; undefined is every kind and an
+// empty list is none (the two narrow to nothing).
+export function kindsOf(
   scopeKind: string | undefined,
   kinds: readonly MemoryKind[] | undefined,
-): readonly string[] | undefined {
-  const narrowed =
-    scopeKind === undefined ? kinds : (kinds ?? KINDS).filter((kind) => kind === scopeKind);
-  return narrowed === undefined ? undefined : [...new Set(narrowed.map(engramTypeOf))];
+): readonly MemoryKind[] | undefined {
+  return scopeKind === undefined ? kinds : (kinds ?? KINDS).filter((kind) => kind === scopeKind);
+}
+
+// The Engram types of those kinds, one request each; undefined is one request without a type.
+export function typesOf(kinds: readonly MemoryKind[] | undefined): readonly string[] | undefined {
+  return kinds === undefined ? undefined : [...new Set(kinds.map(engramTypeOf))];
 }
 
 // Engram's normalizeScope keeps personal and global; anything else is project (06 sec3.6).

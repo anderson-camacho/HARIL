@@ -11,12 +11,14 @@ export {
 } from "./engram-provider.js";
 export {
   checkEngramDataDir,
+  checkEngramHome,
   checkEngramPort,
   type DataDirRefusal,
   type EngramDataDirCheck,
   type EngramDataDirInput,
   type EngramPortCheck,
   engramDataDirOf,
+  engramHomeOf,
   type GuardFs,
   loopbackPortProbe,
   nodeGuardFs,
@@ -37,4 +39,6 @@ export {
   type EngramServeTimings,
   type EngramSpawnFn,
   type EngramSpawnOptions,
+  type KillerSpawnFn,
+  killProcessTree,
 } from "./serve.js";

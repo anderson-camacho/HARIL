@@ -1,11 +1,10 @@
 // EngramMemoryProvider (memory.md 9.4; MEMORY.md 4; ADR-0008 D4, D6): the MemoryProvider port over the HTTP API of a
 // `engram serve` HARIL started, on 127.0.0.1 only. Every scoped request names its project and session explicitly
 // (never all_projects, never the cwd); every write sends capture_prompt false and its operationId; an answer maps to
-// a typed failure (memory.md 4.4; MEMORY.md 4.2 [S]); each call has its own deadline. Before it is used, a serve must
-// prove it is the instance of HARIL's data dir and the pinned version (GET /health), and it proves it again after any
-// failure. Time, ids and hashes come from the injected dependencies; the network deadline is real time.
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+// a typed failure (answers.ts); an ambiguous write is settled before it returns (settle.ts); each call has its own
+// deadline. Before it is used, a serve must prove it is the instance of HARIL's data dir and the pinned version (GET
+// /health), and it proves it again after any failure. Time, ids and hashes come from the injected dependencies; the
+// network deadline is real time.
 import type {
   ConsolidationOutcome,
   ConsolidationRequest,
@@ -16,8 +15,8 @@ import type {
   ImportReport,
   MemoryCapabilities,
   MemoryHealth,
-  MemoryHit,
   MemoryHitPage,
+  MemoryKind,
   MemoryQuery,
   MemoryRecord,
   MemoryRef,
@@ -39,14 +38,17 @@ import type {
   MemoryProviderDeps,
   Result,
 } from "@haril/core/ports";
+import { cancelled, failureOfExchange, isSuccess, lostFailure } from "./answers.js";
+import { exportFileOf, readArtifact, writeExport } from "./archive.js";
 import {
-  cancelled,
-  failureOf,
-  isAmbiguous,
-  isSuccess,
-  lostFailure,
-  readFailure,
-} from "./answers.js";
+  capabilitiesOf,
+  copyCapabilities,
+  MAX_CONTENT_BYTES,
+  MAX_RECALL_BYTES,
+  MAX_SEARCH_RESULTS,
+  PROVIDER,
+  TOPIC_KEY_MAX_BYTES,
+} from "./capabilities.js";
 import {
   type CallBudget,
   type EngramEndpoint,
@@ -55,16 +57,25 @@ import {
   exchange,
   type FetchFn,
 } from "./http.js";
+import { OperationLedger } from "./ledger.js";
 import { endpointProblem } from "./loopback.js";
 import {
   engramProject,
   engramTypeOf,
   kindOfType,
-  ownerOf,
+  kindsOf,
   PROJECT_SEPARATOR,
   typesOf,
-  visibilityOf,
 } from "./mapping.js";
+import { belongsTo, byRelevance, hitOf, recordOf, refOf } from "./records.js";
+import {
+  type Channel,
+  compareSummary,
+  endSession,
+  eraseObservation,
+  prepare,
+  settleStore,
+} from "./settle.js";
 import {
   checked,
   contractInvalid,
@@ -72,24 +83,19 @@ import {
   type Outcome,
   ok,
   queryTerms,
-  truncateUtf8,
   unavailable,
   unknownResult,
   utf8Length,
 } from "./support.js";
 import {
-  errorCodeOf,
   isEngramId,
   readContext,
   readExport,
   readHealth,
   readImport,
   readObservation,
-  readSaveResult,
   readSearch,
-  readSession,
   type WireObservation,
-  type WireSaveResult,
 } from "./wire.js";
 
 // The serve to talk to: the supervisor's connect(), which launches it on first use, or a fixed one in a test.
@@ -111,128 +117,17 @@ export interface EngramMemoryProviderOptions {
   readonly fetch?: FetchFn;
 }
 
-const PROVIDER = "engram";
 // [S]: under the 5 s an outbox drain allows (MC-T4), with room for the lookup that resolves an ambiguous write.
 export const ENGRAM_CALL_DEADLINE_MS = 4_000;
 export const ENGRAM_REQUEST_TIMEOUT_MS = 1_500;
-// Engram 3.4.0 limits, 06 sec3.6 [V]: 50 000 bytes of content, 20 search results, a /context of 64 KiB at most, a
-// 15-minute dedupe without topic_key, a topic_key of 120 bytes; export format 0.2.0, and 0.1.0 still imports (sec3.11).
-const MAX_CONTENT_BYTES = 50_000;
-const MAX_SEARCH_RESULTS = 20;
-const MAX_RECALL_BYTES = 65_536;
-const DEDUPE_WINDOW_MS = 900_000;
-const TOPIC_KEY_MAX_BYTES = 120;
-const EXPORT_VERSION = "0.2.0";
-const IMPORT_VERSIONS = ["0.2.0", "0.1.0"];
-// The versions whose behaviour the capabilities below describe; any other one declares nothing optional (MP-01).
-const KNOWN_VERSIONS = new Set(["3.4.0"]);
-const SNIPPET_CHARS = 160;
-// Engram's redaction, (?is)<private>.*?</private> (06 sec3.6), applied before sending so the receipt can say it.
-const PRIVATE_TAG = /<private>[\s\S]*?<\/private>/gi;
-const REDACTED = "[REDACTED]";
-// The project the real read of health() searches: no workspace can produce it (a StoreId has no underscore prefix).
-const HEALTH_PROJECT = `_haril${PROJECT_SEPARATOR}health`;
-// Summaries and forgets carry no operation_id in Engram, so the adapter keeps their first answer [S]: bounded, and
-// lost on restart, where the server-side comparison of 4.2 still answers.
-const LEDGER_LIMIT = 10_000;
-const EXPORT_SEGMENT = /^[A-Za-z0-9_-]{1,128}$/;
-const DEVICE_NAMES = /^(con|prn|aux|nul|com\d|lpt\d)$/i;
-
-interface LedgerEntry {
-  readonly operation: "summarize" | "forget";
-  readonly fingerprint: string;
-  readonly receipt: WriteReceipt | ForgetReceipt;
-}
-
-interface Prepared {
-  readonly title: string;
-  readonly content: string;
-  readonly redacted: boolean;
-  readonly truncated: boolean;
-  readonly originalBytes: number;
-}
-
-function capabilitiesOf(version: string, visibilities: readonly Visibility[]): MemoryCapabilities {
-  const known = KNOWN_VERSIONS.has(version);
-  return {
-    schemaVersion: 1,
-    provider: PROVIDER,
-    providerVersion: known ? version : null,
-    persistent: true,
-    sessionTracking: true,
-    supportsOperationId: known,
-    topicKeyUpsert: known,
-    // That the history exists over HTTP is NOT VERIFIED (memory.md 4.2), so it is not declared.
-    versionHistory: false,
-    // mem_consolidate exists only on main, not in 3.4.0 (memory.md 4.2).
-    planConfirmConsolidation: false,
-    conflictJudgment: false,
-    hardDelete: known,
-    ttl: false,
-    semanticSearch: false,
-    searchSyntax: "fts5-trigram",
-    maxContentBytes: MAX_CONTENT_BYTES,
-    maxSearchResults: MAX_SEARCH_RESULTS,
-    maxRecallBytes: MAX_RECALL_BYTES,
-    dedupeWindowMs: DEDUPE_WINDOW_MS,
-    exportVersion: known ? EXPORT_VERSION : null,
-    importVersions: known ? [...IMPORT_VERSIONS] : [],
-    pagination: false,
-    visibilities: ["project", ...visibilities.filter((visibility) => visibility !== "project")],
-  };
-}
-
-function copyCapabilities(capabilities: MemoryCapabilities): MemoryCapabilities {
-  return {
-    ...capabilities,
-    importVersions: [...capabilities.importVersions],
-    visibilities: [...capabilities.visibilities],
-  };
-}
+// HARIL's own Engram projects start with this workspace prefix, which a StoreId (a ULID) never has; a scope that
+// would produce one is refused, so no caller can reach them.
+const RESERVED_WORKSPACE = "_haril";
+// The project the real read of health() searches.
+const HEALTH_PROJECT = `${RESERVED_WORKSPACE}${PROJECT_SEPARATOR}health`;
 
 function sameEndpoint(a: EngramEndpoint, b: EngramEndpoint): boolean {
   return a.baseUrl === b.baseUrl && a.instanceId === b.instanceId && a.token === b.token;
-}
-
-// Redaction first, then truncation measured after it, as Engram does (06 sec3.6), cut between code points.
-function prepare(write: MemoryWrite): Prepared {
-  const title = write.title.replace(PRIVATE_TAG, REDACTED);
-  const full = write.content.replace(PRIVATE_TAG, REDACTED);
-  const originalBytes = utf8Length(full);
-  const truncated = originalBytes > MAX_CONTENT_BYTES;
-  return {
-    title,
-    content: truncated ? truncateUtf8(full, MAX_CONTENT_BYTES) : full,
-    redacted: title !== write.title || full !== write.content,
-    truncated,
-    originalBytes,
-  };
-}
-
-function refOf(observation: WireObservation): MemoryRef {
-  const ref: MemoryRef = { provider: PROVIDER, providerRef: observation.id };
-  return observation.syncId === undefined ? ref : { ...ref, syncId: observation.syncId };
-}
-
-function scopeOf(observation: WireObservation, asked: ScopeRef): ScopeRef {
-  const owner = ownerOf(observation.project) ?? asked;
-  return {
-    workspaceId: owner.workspaceId,
-    projectKey: owner.projectKey,
-    visibility: visibilityOf(observation.scope),
-    // A session id from elsewhere (an import) may not be one of HARIL's: the asking scope's stands in.
-    sessionId: observation.sessionId.length === 26 ? observation.sessionId : asked.sessionId,
-    kind: kindOfType(observation.type),
-  };
-}
-
-function byRelevance(a: WireObservation, b: WireObservation): number {
-  return (
-    Number(b.pinned) - Number(a.pinned) ||
-    (b.score ?? 0) - (a.score ?? 0) ||
-    b.updatedAt - a.updatedAt ||
-    Number(b.id) - Number(a.id)
-  );
 }
 
 function forgetFingerprint(request: ForgetRequest): string {
@@ -251,16 +146,6 @@ function forgetFingerprint(request: ForgetRequest): string {
   ]);
 }
 
-// A file name segment for an export directory: the projectKey as it is (a ULID, or _knowledge), never a path.
-function exportSegment(projectKey: string): string | undefined {
-  return EXPORT_SEGMENT.test(projectKey) && !DEVICE_NAMES.test(projectKey) ? projectKey : undefined;
-}
-
-function isInside(root: string, path: string): boolean {
-  const between = relative(resolve(root), resolve(path));
-  return between !== "" && !between.startsWith("..") && !isAbsolute(between);
-}
-
 export class EngramMemoryProvider implements MemoryProvider {
   private readonly deps: MemoryProviderDeps;
   private readonly options: EngramMemoryProviderOptions;
@@ -272,7 +157,7 @@ export class EngramMemoryProvider implements MemoryProvider {
   private verified: EngramEndpoint | undefined;
   // Sessions this adapter opened (session id -> Engram project); summarize removes its own.
   private readonly openSessions = new Map<string, string>();
-  private readonly ledger = new Map<string, LedgerEntry>();
+  private readonly ledger = new OperationLedger();
   // The adapter's own single-consumer queue of writes towards serve (memory.md 9.4 point 7).
   private writes: Promise<unknown> = Promise.resolve();
 
@@ -330,7 +215,7 @@ export class EngramMemoryProvider implements MemoryProvider {
     if (!input.ok) return input;
     const refused = this.refusal(input.value, options);
     if (refused !== undefined) return refused;
-    return this.guard(async () => {
+    return this.catchingDefects(async () => {
       const budget = this.budget(options);
       const connected = await this.connection(budget);
       if (!connected.ok) return connected;
@@ -370,11 +255,11 @@ export class EngramMemoryProvider implements MemoryProvider {
           `Engram ${this.options.engramVersion} has no topic_key upsert`,
         );
       }
-      const endpoint = connected.value;
-      const opened = await this.openSession(endpoint, budget, accepted.scope);
+      const channel = this.channel(connected.value, budget);
+      const opened = await channel.openSession(accepted.scope);
       if (!opened.ok) return opened;
       const prepared = prepare(accepted);
-      const sent = await this.send(endpoint, budget, {
+      const sent = await channel.send({
         method: "POST",
         path: "/observations",
         body: {
@@ -389,7 +274,7 @@ export class EngramMemoryProvider implements MemoryProvider {
           capture_prompt: false,
         },
       });
-      return this.stored(endpoint, budget, accepted, prepared, sent);
+      return settleStore(channel, accepted, prepared, sent);
     });
   }
 
@@ -406,21 +291,18 @@ export class EngramMemoryProvider implements MemoryProvider {
         ? contractInvalid(`the search limit is over ${this.caps.maxSearchResults}`)
         : undefined);
     if (refused !== undefined) return refused;
-    return this.guard(async () => {
+    return this.catchingDefects(async () => {
       const budget = this.budget(options);
       const connected = await this.connection(budget);
       if (!connected.ok) return connected;
-      const found = await this.searchTypes(connected.value, budget, accepted.scope, {
+      const found = await this.searchKinds(connected.value, budget, accepted.scope, {
         text: accepted.text,
         matchMode: accepted.matchMode,
         limit: accepted.limit,
-        types: typesOf(accepted.scope.kind, accepted.kinds),
+        kinds: kindsOf(accepted.scope.kind, accepted.kinds),
       });
       if (!found.ok) return found;
-      const items = [...found.value]
-        .sort(byRelevance)
-        .slice(0, accepted.limit)
-        .map((observation) => this.hitOf(observation));
+      const items = [...found.value].sort(byRelevance).slice(0, accepted.limit).map(hitOf);
       return ok({ items });
     });
   }
@@ -436,7 +318,7 @@ export class EngramMemoryProvider implements MemoryProvider {
     if (!scopeInput.ok) return scopeInput;
     const refused = this.foreignRef(refInput.value) ?? this.refusal(scopeInput.value, options);
     if (refused !== undefined) return refused;
-    return this.guard(async () => {
+    return this.catchingDefects(async () => {
       const budget = this.budget(options);
       const connected = await this.connection(budget);
       if (!connected.ok) return connected;
@@ -448,7 +330,7 @@ export class EngramMemoryProvider implements MemoryProvider {
       if (found.value.project !== engramProject(scopeInput.value)) {
         return memoryFailure("ScopeMismatch", "the record belongs to another project");
       }
-      return ok(this.recordOf(found.value, scopeInput.value));
+      return ok(recordOf(found.value, scopeInput.value));
     });
   }
 
@@ -463,16 +345,20 @@ export class EngramMemoryProvider implements MemoryProvider {
     const accepted = input.value;
     const refused = this.refusal(accepted.scope, options);
     if (refused !== undefined) return refused;
-    return this.guard(async () => {
+    return this.catchingDefects(async () => {
       const budget = this.budget(options);
       const connected = await this.connection(budget);
       if (!connected.ok) return connected;
       const endpoint = connected.value;
-      const types = typesOf(accepted.scope.kind, accepted.kinds);
+      const kinds = kindsOf(accepted.scope.kind, accepted.kinds);
       const project = engramProject(accepted.scope);
+      const wanted = (observation: WireObservation): boolean =>
+        belongsTo(observation, project, accepted.scope, kinds) &&
+        (accepted.includePinned || !observation.pinned);
       const merged = new Map<string, WireObservation>();
       let universe = 0;
-      for (const type of types ?? [undefined]) {
+      let filtersHeld = true;
+      for (const type of typesOf(kinds) ?? [undefined]) {
         const answer = await this.send(endpoint, budget, {
           method: "GET",
           path: "/context",
@@ -486,24 +372,24 @@ export class EngramMemoryProvider implements MemoryProvider {
         });
         const context =
           answer.kind === "answer" && answer.status === 200 ? readContext(answer.body) : undefined;
-        if (context === undefined) return readFailure(answer);
+        if (context === undefined) return failureOfExchange(answer);
         universe += context.total;
-        for (const observation of context.observations) merged.set(observation.id, observation);
+        for (const observation of context.observations) {
+          if (!wanted(observation)) filtersHeld = false;
+          merged.set(observation.id, observation);
+        }
       }
       if (accepted.query !== undefined && queryTerms(accepted.query).length > 0) {
-        const hits = await this.searchTypes(endpoint, budget, accepted.scope, {
+        const hits = await this.searchKinds(endpoint, budget, accepted.scope, {
           text: accepted.query,
           matchMode: "any",
           limit: MAX_SEARCH_RESULTS,
-          types,
+          kinds,
         });
         if (!hits.ok) return hits;
         for (const hit of hits.value) merged.set(hit.id, hit);
       }
-      const candidates = [...merged.values()]
-        .filter((observation) => observation.project === project && !observation.deleted)
-        .filter((observation) => accepted.includePinned || !observation.pinned)
-        .sort(byRelevance);
+      const candidates = [...merged.values()].filter(wanted).sort(byRelevance);
       const items: RecallItem[] = [];
       let usedTokens = 0;
       for (const observation of candidates) {
@@ -525,13 +411,16 @@ export class EngramMemoryProvider implements MemoryProvider {
           updatedAt: observation.updatedAt,
         });
       }
+      // A /context that ignored scope, type or pinned counts in its total rows the adapter drops, so then only what
+      // was seen is counted [S].
+      const seen = filtersHeld ? Math.max(universe, candidates.length) : candidates.length;
       return ok({
         schemaVersion: 1,
         scope: { ...accepted.scope },
         budgetTokens: accepted.budgetTokens,
         usedTokens,
         items,
-        omittedCount: Math.max(universe, candidates.length) - items.length,
+        omittedCount: seen - items.length,
         degraded: false,
       });
     });
@@ -561,22 +450,24 @@ export class EngramMemoryProvider implements MemoryProvider {
         ? contractInvalid(`the summary is over ${MAX_CONTENT_BYTES} bytes`)
         : undefined);
     if (refused !== undefined) return refused;
-    const replay = this.replay(accepted.operationId, "summarize", accepted.textSha256);
-    if (replay !== undefined) return replay as Outcome<WriteReceipt>;
+    const replay = this.ledger.replay<WriteReceipt>(
+      accepted.operationId,
+      "summarize",
+      accepted.textSha256,
+    );
+    if (replay !== undefined) return replay;
     const budget = this.budget(options);
     return this.serialized(async () => {
       const connected = await this.connection(budget);
       if (!connected.ok) return connected;
-      const endpoint = connected.value;
+      const channel = this.channel(connected.value, budget);
       const sessionPath = `/sessions/${encodeURIComponent(accepted.scope.sessionId)}`;
-      const ended = await this.endSession(endpoint, budget, accepted, sessionPath);
-      this.openSessions.delete(accepted.scope.sessionId);
+      const ended = await endSession(channel, accepted, sessionPath);
+      channel.dropSession(accepted.scope.sessionId);
       const result =
-        ended === "compare"
-          ? await this.compareSummary(endpoint, budget, accepted, sessionPath)
-          : ended;
+        ended === "compare" ? await compareSummary(channel, accepted, sessionPath) : ended;
       if (result.ok) {
-        this.remember(accepted.operationId, "summarize", accepted.textSha256, result.value);
+        this.ledger.remember(accepted.operationId, "summarize", accepted.textSha256, result.value);
       }
       return result;
     });
@@ -590,7 +481,7 @@ export class EngramMemoryProvider implements MemoryProvider {
     if (!input.ok) return input;
     const refused = this.refusal(input.value.scope, options);
     if (refused !== undefined) return refused;
-    return this.guard(async () => {
+    return this.catchingDefects(async () => {
       const connected = await this.connection(this.budget(options));
       if (!connected.ok) return connected;
       // core/memory consolidates with search, store and forget (CM-05).
@@ -602,7 +493,8 @@ export class EngramMemoryProvider implements MemoryProvider {
   }
 
   // A soft forget hides (DELETE keeps the row); a hard one deletes and leaves Engram's relations behind (#1780). The
-  // record is read first, so another project's record is refused before any DELETE and a forgotten one is told.
+  // record is read first, so another project's record is refused before any DELETE and a forgotten one is told; a
+  // hard forget this adapter sent whose answer was lost finds the record gone on its retry, and that is its success.
   async forget(
     request: ForgetRequest,
     options?: MemoryCallOptions,
@@ -613,8 +505,8 @@ export class EngramMemoryProvider implements MemoryProvider {
     const refused = this.foreignRef(accepted.ref) ?? this.refusal(accepted.expectedScope, options);
     if (refused !== undefined) return refused;
     const fingerprint = forgetFingerprint(accepted);
-    const replay = this.replay(accepted.operationId, "forget", fingerprint);
-    if (replay !== undefined) return replay as Outcome<ForgetReceipt>;
+    const replay = this.ledger.replay<ForgetReceipt>(accepted.operationId, "forget", fingerprint);
+    if (replay !== undefined) return replay;
     const budget = this.budget(options);
     return this.serialized(async () => {
       const connected = await this.connection(budget);
@@ -622,13 +514,7 @@ export class EngramMemoryProvider implements MemoryProvider {
       if (accepted.mode === "hard" && !this.caps.hardDelete) {
         return memoryFailure("Unsupported", "a hard forget needs hardDelete");
       }
-      const endpoint = connected.value;
-      const project = engramProject(accepted.expectedScope);
-      const found = await this.observation(endpoint, budget, accepted.ref.providerRef);
-      if (!found.ok) return found;
-      if (found.value.project !== project) {
-        return memoryFailure("ScopeMismatch", "the record belongs to another project");
-      }
+      const channel = this.channel(connected.value, budget);
       const receipt = (outcome: ForgetReceipt["outcome"]): ForgetReceipt => ({
         schemaVersion: 1,
         operationId: accepted.operationId,
@@ -637,11 +523,30 @@ export class EngramMemoryProvider implements MemoryProvider {
         outcome,
         erasure: accepted.mode === "hard" ? "deleted_with_residue" : "hidden",
       });
-      const result =
-        found.value.deleted && accepted.mode === "soft"
-          ? ok(receipt("already_forgotten"))
-          : await this.erase(endpoint, budget, accepted, project, receipt("forgotten"));
-      if (result.ok) this.remember(accepted.operationId, "forget", fingerprint, result.value);
+      const found = await channel.observation(accepted.ref.providerRef);
+      let result: Outcome<ForgetReceipt>;
+      if (!found.ok) {
+        const sentBefore =
+          found.error.code === "NotFound" &&
+          accepted.mode === "hard" &&
+          this.ledger.sentHardForget(accepted.operationId);
+        if (!sentBefore) return found;
+        result = ok(receipt("forgotten"));
+      } else if (found.value.project !== engramProject(accepted.expectedScope)) {
+        return memoryFailure("ScopeMismatch", "the record belongs to another project");
+      } else if (found.value.deleted && accepted.mode === "soft") {
+        result = ok(receipt("already_forgotten"));
+      } else {
+        if (accepted.mode === "hard") this.ledger.sendingHardForget(accepted.operationId);
+        result = await eraseObservation(
+          channel,
+          accepted,
+          engramProject(accepted.expectedScope),
+          receipt("forgotten"),
+        );
+      }
+      if (result.ok)
+        this.ledger.remember(accepted.operationId, "forget", fingerprint, result.value);
       return result;
     });
   }
@@ -662,7 +567,7 @@ export class EngramMemoryProvider implements MemoryProvider {
     }
     const formatInput = checked("export-format", format);
     if (!formatInput.ok) return formatInput;
-    return this.guard(async () => {
+    return this.catchingDefects(async () => {
       const budget = this.budget(options);
       const connected = await this.connection(budget);
       if (!connected.ok) return connected;
@@ -675,33 +580,25 @@ export class EngramMemoryProvider implements MemoryProvider {
           `Engram exports version ${this.caps.exportVersion ?? "none"}`,
         );
       }
-      const segment = owner === undefined ? "all" : exportSegment(owner.projectKey);
-      if (segment === undefined)
-        return contractInvalid("the projectKey cannot name an export directory");
+      const file = exportFileOf(this.options.harilDataDir, owner?.projectKey, this.deps.ids.next());
+      if (!file.ok) return file;
       const answer = await this.send(connected.value, budget, {
         method: "GET",
         path: "/export",
         query: { project: owner === undefined ? undefined : engramProject(owner) },
       });
-      if (answer.kind === "lost" || answer.status !== 200) return readFailure(answer);
+      if (answer.kind === "lost" || answer.status !== 200) return failureOfExchange(answer);
       const exported = readExport(answer.body);
       if (exported === undefined || exported.version !== formatInput.value.version) {
         return unavailable("GET /export answered something that is not a version 0.2.0 export");
       }
-      const directory =
-        owner === undefined
-          ? join(this.options.harilDataDir, "memory", "exports")
-          : join(this.options.harilDataDir, "projects", segment, "exports");
-      const path = join(directory, `engram-${segment}-${this.deps.ids.next()}.json`);
-      await mkdir(directory, { recursive: true });
-      await writeFile(`${path}.tmp`, answer.text, { encoding: "utf8", flag: "wx" });
-      await rename(`${path}.tmp`, path);
+      await writeExport(file.value, answer.text);
       return ok({
         schemaVersion: 1,
         format: { ...formatInput.value },
         provider: PROVIDER,
         scope: owner === undefined ? "all" : { ...owner },
-        path,
+        path: file.value.path,
         sha256: this.deps.hasher.sha256(answer.text),
         size: Buffer.byteLength(answer.text, "utf8"),
         recordCount: exported.records,
@@ -731,37 +628,18 @@ export class EngramMemoryProvider implements MemoryProvider {
           `Engram does not import version ${accepted.format.version}`,
         );
       }
-      if (!isAbsolute(accepted.path) || !isInside(this.options.harilDataDir, accepted.path)) {
-        return contractInvalid("the artifact is not a file under HARIL's data dir");
-      }
-      let text: string;
-      try {
-        text = await readFile(accepted.path, "utf8");
-      } catch {
-        return contractInvalid("the artifact's file cannot be read");
-      }
-      if (this.deps.hasher.sha256(text) !== accepted.sha256) {
-        return contractInvalid("the artifact's file does not match its sha256");
-      }
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(text);
-      } catch {
-        return contractInvalid("the artifact's file is not JSON");
-      }
-      const exported = readExport(parsed);
-      if (exported === undefined || exported.version !== accepted.format.version) {
-        return memoryFailure("Unsupported", "the artifact's file is not the version it declares");
-      }
+      const text = await readArtifact(this.options.harilDataDir, accepted, this.deps.hasher);
+      if (!text.ok) return text;
       const answer = await this.send(connected.value, budget, {
         method: "POST",
         path: "/import",
-        body: text,
+        body: text.value,
       });
-      if (answer.kind === "lost" || answer.status !== 200) return readFailure(answer);
+      if (answer.kind === "lost" || answer.status !== 200) return failureOfExchange(answer);
       const report = readImport(answer.body);
-      if (report === undefined)
+      if (report === undefined) {
         return unknownResult("POST /import answered something the adapter cannot read");
+      }
       return ok({
         schemaVersion: 1,
         format: { ...accepted.format },
@@ -779,7 +657,7 @@ export class EngramMemoryProvider implements MemoryProvider {
   }
 
   // What every scoped call refuses before it is sent: a visibility without opt-in (MP-22), a cancelled signal, and a
-  // workspaceId that would blur the Engram project.
+  // workspaceId that would blur the Engram project or reach one of HARIL's own.
   private refusal(
     scope: ScopeRef,
     options: MemoryCallOptions | undefined,
@@ -790,6 +668,9 @@ export class EngramMemoryProvider implements MemoryProvider {
     if (options?.signal?.cancelled === true) return cancelled();
     if (scope.workspaceId.includes(PROJECT_SEPARATOR)) {
       return contractInvalid(`a workspaceId cannot contain "${PROJECT_SEPARATOR}"`);
+    }
+    if (scope.workspaceId.startsWith(RESERVED_WORKSPACE)) {
+      return contractInvalid(`a workspaceId cannot start with "${RESERVED_WORKSPACE}"`);
     }
     return undefined;
   }
@@ -815,7 +696,11 @@ export class EngramMemoryProvider implements MemoryProvider {
     const problem = endpointProblem(endpoint.baseUrl);
     if (problem !== undefined) return unavailable(problem, { refused: true });
     if (this.verified !== undefined && sameEndpoint(this.verified, endpoint)) return ok(endpoint);
-    const answer = await this.send(endpoint, budget, { method: "GET", path: "/health" });
+    const answer = await this.send(endpoint, budget, {
+      method: "GET",
+      path: "/health",
+      anonymous: true,
+    });
     if (answer.kind === "lost") return lostFailure(answer);
     const health = answer.status === 200 ? readHealth(answer.body) : undefined;
     if (health === undefined) return unavailable(`GET /health answered ${answer.status}`);
@@ -852,6 +737,19 @@ export class EngramMemoryProvider implements MemoryProvider {
     return answer;
   }
 
+  // The requests of one call to a verified serve, as settle.ts needs them.
+  private channel(endpoint: EngramEndpoint, budget: CallBudget): Channel {
+    return {
+      send: (request) => this.send(endpoint, budget, request),
+      openSession: (scope) => this.openSession(endpoint, budget, scope),
+      dropSession: (sessionId) => {
+        this.openSessions.delete(sessionId);
+      },
+      observation: (providerRef) => this.observation(endpoint, budget, providerRef),
+      hasher: this.deps.hasher,
+    };
+  }
+
   // POST /sessions, idempotent while the session is open; a session this adapter opened is not asked again.
   private async openSession(
     endpoint: EngramEndpoint,
@@ -869,7 +767,7 @@ export class EngramMemoryProvider implements MemoryProvider {
       this.openSessions.set(scope.sessionId, project);
       return ok(undefined);
     }
-    return readFailure(answer);
+    return failureOfExchange(answer);
   }
 
   private async observation(
@@ -877,19 +775,21 @@ export class EngramMemoryProvider implements MemoryProvider {
     budget: CallBudget,
     providerRef: string,
   ): Promise<Outcome<WireObservation>> {
-    if (!isEngramId(providerRef))
+    if (!isEngramId(providerRef)) {
       return memoryFailure("NotFound", "the ref is not an Engram observation id");
+    }
     const answer = await this.send(endpoint, budget, {
       method: "GET",
       path: `/observations/${encodeURIComponent(providerRef)}`,
     });
     const observation =
       answer.kind === "answer" && answer.status === 200 ? readObservation(answer.body) : undefined;
-    return observation === undefined ? readFailure(answer) : ok(observation);
+    return observation === undefined ? failureOfExchange(answer) : ok(observation);
   }
 
-  // GET /search once per Engram type (one request when no type narrows), only rows of the scope's project kept.
-  private async searchTypes(
+  // GET /search once per Engram type (one request when no kind narrows); only the rows that belong to the scope, by
+  // project, visibility and kind, are kept, whatever the serve did with its scope and type parameters.
+  private async searchKinds(
     endpoint: EngramEndpoint,
     budget: CallBudget,
     scope: ScopeRef,
@@ -897,12 +797,12 @@ export class EngramMemoryProvider implements MemoryProvider {
       readonly text: string;
       readonly matchMode: MemoryQuery["matchMode"];
       readonly limit: number;
-      readonly types: readonly string[] | undefined;
+      readonly kinds: readonly MemoryKind[] | undefined;
     },
   ): Promise<Outcome<WireObservation[]>> {
     const project = engramProject(scope);
     const found = new Map<string, WireObservation>();
-    for (const type of query.types ?? [undefined]) {
+    for (const type of typesOf(query.kinds) ?? [undefined]) {
       const answer = await this.send(endpoint, budget, {
         method: "GET",
         path: "/search",
@@ -917,241 +817,29 @@ export class EngramMemoryProvider implements MemoryProvider {
       });
       const results =
         answer.kind === "answer" && answer.status === 200 ? readSearch(answer.body) : undefined;
-      if (results === undefined) return readFailure(answer);
+      if (results === undefined) return failureOfExchange(answer);
       for (const observation of results) {
-        if (observation.project === project && !observation.deleted)
+        if (belongsTo(observation, project, scope, query.kinds)) {
           found.set(observation.id, observation);
+        }
       }
     }
     return ok([...found.values()]);
   }
 
-  // The answer of POST /observations; an ambiguous one is resolved through save-result before it is returned (R-O6).
-  private async stored(
-    endpoint: EngramEndpoint,
-    budget: CallBudget,
-    write: MemoryWrite,
-    prepared: Prepared,
-    sent: Exchange,
-  ): Promise<Outcome<WriteReceipt>> {
-    if (sent.kind === "lost" && sent.cause === "cancelled") return cancelled();
-    if (sent.kind === "answer") {
-      const saved = isSuccess(sent) ? readSaveResult(sent.body) : undefined;
-      if (saved !== undefined) return ok(this.storeReceipt(write, prepared, saved));
-      if (sent.status === 409 && errorCodeOf(sent.body, sent.text) === "session_already_ended") {
-        this.openSessions.delete(write.scope.sessionId);
-      }
-      if (sent.status === 404) {
-        // The session this adapter opened is unknown to the serve (its data dir changed): open it on the retry.
-        this.openSessions.delete(write.scope.sessionId);
-        return unavailable("engram serve does not know the session", { status: 404 });
-      }
-      // A 409 that names no session or scope code is a reused operationId with other content (CM-12).
-      if (sent.status >= 400 && !isAmbiguous(sent)) return failureOf(sent);
-    }
-    const lookup = await this.send(endpoint, budget, {
-      method: "GET",
-      path: "/observations/save-result",
-      query: { operation_id: write.operationId },
-    });
-    if (lookup.kind === "answer") {
-      if (lookup.status === 200) {
-        const saved = readSaveResult(lookup.body);
-        if (saved !== undefined) return ok(this.storeReceipt(write, prepared, saved));
-        return unknownResult("save-result answered something the adapter cannot read");
-      }
-      if (lookup.status === 404) {
-        return unavailable("the write was not applied; its retry is safe", { notApplied: true });
-      }
-      if (lookup.status === 410)
-        return unknownResult("save-result no longer knows the operation (410)");
-    } else if (lookup.cause === "cancelled") {
-      return cancelled();
-    }
-    // Not known yet: a retry with the same operationId goes through Engram's ledger and cannot write twice.
-    const why = sent.kind === "lost" ? sent : lookup.kind === "lost" ? lookup : undefined;
-    return unavailable("the result of the write is not known yet", {
-      ...(why === undefined ? {} : why.cause === "timeout" ? { timeout: true } : { network: true }),
-    });
-  }
-
-  private storeReceipt(
-    write: MemoryWrite,
-    prepared: Prepared,
-    saved: WireSaveResult,
-  ): WriteReceipt {
-    return {
-      schemaVersion: 1,
-      operationId: write.operationId,
-      provider: PROVIDER,
-      providerRef: saved.id,
-      ...(saved.syncId === undefined ? {} : { syncId: saved.syncId }),
-      outcome: saved.outcome,
-      truncated: prepared.truncated,
-      redacted: prepared.redacted,
-      ...(prepared.truncated
-        ? { originalBytes: prepared.originalBytes, limitBytes: MAX_CONTENT_BYTES }
-        : {}),
-    };
-  }
-
-  private summaryReceipt(write: SummarizeWrite, outcome: WriteReceipt["outcome"]): WriteReceipt {
-    return {
-      schemaVersion: 1,
-      operationId: write.operationId,
-      provider: PROVIDER,
-      outcome,
-      truncated: false,
-      redacted: false,
-    };
-  }
-
-  // The ended session's summary decides: the same text is deduped, another one SessionEnded; a session still open
-  // means the end was not applied.
-  private async compareSummary(
-    endpoint: EngramEndpoint,
-    budget: CallBudget,
-    write: SummarizeWrite,
-    sessionPath: string,
-  ): Promise<Outcome<WriteReceipt>> {
-    const answer = await this.send(endpoint, budget, { method: "GET", path: sessionPath });
-    const session =
-      answer.kind === "answer" && answer.status === 200 ? readSession(answer.body) : undefined;
-    if (session === undefined) {
-      if (answer.kind === "lost") return lostFailure(answer);
-      return answer.status === 200
-        ? unknownResult("GET /sessions answered something unreadable")
-        : failureOf(answer);
-    }
-    if (session.project !== engramProject(write.scope)) {
-      return memoryFailure("ScopeMismatch", "the session belongs to another project");
-    }
-    if (!session.ended)
-      return unavailable("the session did not end; its retry is safe", { notApplied: true });
-    if (session.summary !== null && this.deps.hasher.sha256(session.summary) === write.textSha256) {
-      return ok(this.summaryReceipt(write, "deduped"));
-    }
-    return memoryFailure("SessionEnded", "the session already ended with another summary");
-  }
-
-  // What POST /sessions/{id}/end settled: a receipt, a failure, or "compare" when only the stored summary can tell
-  // (the session had already ended, or the answer was lost or ambiguous).
-  private async endSession(
-    endpoint: EngramEndpoint,
-    budget: CallBudget,
-    write: SummarizeWrite,
-    sessionPath: string,
-  ): Promise<Outcome<WriteReceipt> | "compare"> {
-    const opened = await this.openSession(endpoint, budget, write.scope);
-    if (!opened.ok) return opened.error.code === "SessionEnded" ? "compare" : opened;
-    const sent = await this.send(endpoint, budget, {
-      method: "POST",
-      path: `${sessionPath}/end`,
-      body: { summary: write.text },
-    });
-    if (sent.kind === "lost") return sent.cause === "cancelled" ? cancelled() : "compare";
-    if (isSuccess(sent)) return ok(this.summaryReceipt(write, "created"));
-    if (isAmbiguous(sent)) return "compare";
-    const failure = failureOf(sent);
-    return !failure.ok && failure.error.code === "SessionEnded" ? "compare" : failure;
-  }
-
-  // DELETE /observations/{id}?expected_project=X[&hard=true]. After an ambiguous answer the record says whether it
-  // went: hidden or gone is forgotten, still live means the forget was not applied.
-  private async erase(
-    endpoint: EngramEndpoint,
-    budget: CallBudget,
-    request: ForgetRequest,
-    project: string,
-    forgotten: ForgetReceipt,
-  ): Promise<Outcome<ForgetReceipt>> {
-    const sent = await this.send(endpoint, budget, {
-      method: "DELETE",
-      path: `/observations/${encodeURIComponent(request.ref.providerRef)}`,
-      query: { expected_project: project, hard: request.mode === "hard" ? "true" : undefined },
-    });
-    if (isSuccess(sent)) return ok(forgotten);
-    if (sent.kind === "lost" && sent.cause === "cancelled") return cancelled();
-    if (sent.kind === "answer" && !isAmbiguous(sent)) return failureOf(sent);
-    const after = await this.observation(endpoint, budget, request.ref.providerRef);
-    if (!after.ok) {
-      return after.error.code === "NotFound" && request.mode === "hard" ? ok(forgotten) : after;
-    }
-    if (request.mode === "soft" && after.value.deleted) return ok(forgotten);
-    return unavailable("the forget was not applied; its retry is safe", { notApplied: true });
-  }
-
-  private replay(operationId: string, operation: LedgerEntry["operation"], fingerprint: string) {
-    const first = this.ledger.get(operationId);
-    if (first === undefined) return undefined;
-    if (first.operation !== operation || first.fingerprint !== fingerprint) {
-      return contractInvalid("the operationId was already used with another request");
-    }
-    return ok(structuredClone(first.receipt));
-  }
-
-  private remember(
-    operationId: string,
-    operation: LedgerEntry["operation"],
-    fingerprint: string,
-    receipt: WriteReceipt | ForgetReceipt,
-  ): void {
-    if (this.ledger.size >= LEDGER_LIMIT) {
-      const oldest = this.ledger.keys().next().value;
-      if (oldest !== undefined) this.ledger.delete(oldest);
-    }
-    this.ledger.set(operationId, { operation, fingerprint, receipt: structuredClone(receipt) });
-  }
-
-  private hitOf(observation: WireObservation): MemoryHit {
-    const hit: MemoryHit = {
-      ref: refOf(observation),
-      kind: kindOfType(observation.type),
-      title: observation.title,
-      snippet: Array.from(observation.content).slice(0, SNIPPET_CHARS).join(""),
-      score: observation.score ?? null,
-      pinned: observation.pinned,
-      updatedAt: observation.updatedAt,
-    };
-    return observation.topicKey === undefined ? hit : { ...hit, topicKey: observation.topicKey };
-  }
-
-  private recordOf(observation: WireObservation, asked: ScopeRef): MemoryRecord {
-    const record: MemoryRecord = {
-      ref: refOf(observation),
-      scope: scopeOf(observation, asked),
-      kind: kindOfType(observation.type),
-      title: observation.title,
-      content: observation.content,
-      pinned: observation.pinned,
-      ...(observation.revisionCount !== undefined && observation.revisionCount >= 1
-        ? { revisionCount: observation.revisionCount }
-        : {}),
-      ...(observation.duplicateCount === undefined
-        ? {}
-        : { duplicateCount: observation.duplicateCount }),
-      createdAt: observation.createdAt,
-      updatedAt: observation.updatedAt,
-      deleted: observation.deleted,
-    };
-    return observation.topicKey === undefined
-      ? record
-      : { ...record, topicKey: observation.topicKey };
-  }
-
   // Writes towards serve run one at a time, in call order.
   private serialized<T>(run: () => Promise<Outcome<T>>): Promise<Outcome<T>> {
     const next = this.writes.then(
-      () => this.guard(run),
-      () => this.guard(run),
+      () => this.catchingDefects(run),
+      () => this.catchingDefects(run),
     );
     this.writes = next;
     return next;
   }
 
-  // An expected failure is a typed result; an unexpected one (a defect, a file system error) becomes an unknown
-  // result rather than a throw, because a write may have gone through.
-  private async guard<T>(run: () => Promise<Outcome<T>>): Promise<Outcome<T>> {
+  // An expected failure is a typed result; an unexpected exception (a defect, a file system error) becomes an
+  // unknown result rather than a throw, because a write may have gone through.
+  private async catchingDefects<T>(run: () => Promise<Outcome<T>>): Promise<Outcome<T>> {
     try {
       return await run();
     } catch (error) {

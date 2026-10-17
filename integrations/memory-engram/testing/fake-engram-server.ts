@@ -13,6 +13,7 @@ import type { AddressInfo, Socket } from "node:net";
 
 export type FakeRoute =
   | "health"
+  | "compatibility"
   | "sessions.open"
   | "sessions.get"
   | "sessions.end"
@@ -45,8 +46,13 @@ export interface FakeEngramOptions {
   // The clock of created_at, updated_at and the dedupe window. Absent: Date.now.
   readonly now?: () => number;
   readonly slowMs?: number;
+  // Answer /search and /context without honouring their scope and type parameters, which 06 does not list for them:
+  // the adapter must filter on its side.
+  readonly ignoreFilters?: boolean;
   // Test-only route POST /__fake/exit?code=N, for the fake executable: it answers, then calls this.
   readonly onExitRequest?: (code: number) => void;
+  // Test-only route GET /__fake/env, for the fake executable: what it answers (its process environment).
+  readonly onEnvRequest?: () => unknown;
 }
 
 export interface FakeRequest {
@@ -104,7 +110,13 @@ const TOPIC_KEY_MAX_BYTES = 120;
 const EXPORT_VERSION = "0.2.0";
 const IMPORT_VERSIONS = ["0.2.0", "0.1.0"];
 const PRIVATE_TAG = /<private>[\s\S]*?<\/private>/gi;
-const PROTECTED: readonly FakeRoute[] = ["observations.delete", "export", "import"];
+// The routes requireAuth guards in v3.4.0 that the adapter or the supervisor use (06 sec3.2 [V]).
+const PROTECTED: readonly FakeRoute[] = [
+  "compatibility",
+  "observations.delete",
+  "export",
+  "import",
+];
 
 function sqliteTime(ms: number): string {
   return new Date(ms).toISOString().slice(0, 19).replace("T", " ");
@@ -124,6 +136,7 @@ function normalizeTopicKey(key: string): string {
 function routeOf(method: string, parts: readonly string[]): FakeRoute | "unknown" {
   const [head, id, tail] = parts;
   if (method === "GET" && head === "health" && id === undefined) return "health";
+  if (method === "GET" && head === "compatibility" && id === undefined) return "compatibility";
   if (head === "sessions") {
     if (method === "POST" && id === undefined) return "sessions.open";
     if (method === "GET" && id !== undefined && tail === undefined) return "sessions.get";
@@ -157,7 +170,9 @@ export class FakeEngramServer {
   private readonly requestedPort: number;
   private readonly now: () => number;
   private readonly slowMs: number;
+  private readonly ignoreFilters: boolean;
   private readonly onExitRequest: ((code: number) => void) | undefined;
+  private readonly onEnvRequest: (() => unknown) | undefined;
   private readonly server: Server;
   private readonly sockets = new Set<Socket>();
   private readonly timers = new Set<NodeJS.Timeout>();
@@ -175,7 +190,9 @@ export class FakeEngramServer {
     this.version = options.version ?? "3.4.0";
     this.now = options.now ?? Date.now;
     this.slowMs = options.slowMs ?? 1000;
+    this.ignoreFilters = options.ignoreFilters ?? false;
     this.onExitRequest = options.onExitRequest;
+    this.onEnvRequest = options.onEnvRequest;
     this.server = createServer((req, res) => this.receive(req, res));
     this.server.on("connection", (socket) => {
       this.sockets.add(socket);
@@ -271,6 +288,10 @@ export class FakeEngramServer {
       setImmediate(() => this.onExitRequest?.(code));
       return;
     }
+    if (method === "GET" && parts[0] === "__fake" && parts[1] === "env") {
+      this.send(res, 200, this.onEnvRequest?.() ?? {});
+      return;
+    }
     const route = routeOf(method, parts);
     const query = Object.fromEntries(url.searchParams.entries());
     const authorization = req.headers.authorization;
@@ -351,6 +372,9 @@ export class FakeEngramServer {
             capabilities: {},
           },
         ];
+      case "compatibility":
+        // The facts of the store at start-up [S]; the supervisor only needs the status.
+        return [200, { status: "ok" }];
       case "sessions.open":
         return this.openSession(body);
       case "sessions.get":
@@ -574,23 +598,28 @@ export class FakeEngramServer {
     return [200, { id, deleted: "soft" }];
   }
 
-  private scoped(query: URLSearchParams): [string, string] | [number, unknown] {
+  // The project and the scope (undefined: every scope, when the fake ignores the filters) of a read.
+  private scoped(query: URLSearchParams): [string, string | undefined] | [number, unknown] {
     if (query.has("all_projects")) return [400, { error: "all_projects is refused by the fake" }];
     const project = query.get("project");
     if (project === null || project === "") return [409, { error: "ambiguous_project" }];
-    return [project, query.get("scope") ?? "project"];
+    return [project, this.ignoreFilters ? undefined : (query.get("scope") ?? "project")];
+  }
+
+  private typeOf(query: URLSearchParams): string | null {
+    return this.ignoreFilters ? null : query.get("type");
   }
 
   private search(query: URLSearchParams): [number, unknown] {
     const scoped = this.scoped(query);
     if (typeof scoped[0] === "number") return scoped as [number, unknown];
-    const [project, scope] = scoped as [string, string];
+    const [project, scope] = scoped as [string, string | undefined];
     const terms = (query.get("q") ?? "")
       .toLowerCase()
       .split(/\s+/)
       .filter((term) => term !== "");
     const any = query.get("match_mode") === "any";
-    const type = query.get("type");
+    const type = this.typeOf(query);
     const limit = Math.min(MAX_SEARCH_RESULTS, Math.max(1, Number(query.get("limit") ?? "10")));
     const results = this.live(project, scope)
       .filter((observation) => type === null || observation.type === type)
@@ -613,8 +642,8 @@ export class FakeEngramServer {
   private context(query: URLSearchParams): [number, unknown] {
     const scoped = this.scoped(query);
     if (typeof scoped[0] === "number") return scoped as [number, unknown];
-    const [project, scope] = scoped as [string, string];
-    const type = query.get("type");
+    const [project, scope] = scoped as [string, string | undefined];
+    const type = this.typeOf(query);
     const pinned = query.get("pinned") !== "false";
     const maxBytes = Math.min(
       MAX_CONTEXT_BYTES,
@@ -691,12 +720,12 @@ export class FakeEngramServer {
     return [200, { imported, updated, unchanged, rejected: 0 }];
   }
 
-  private live(project: string, scope: string): FakeObservation[] {
+  private live(project: string, scope: string | undefined): FakeObservation[] {
     return [...this.observations.values()].filter(
       (observation) =>
         observation.deleted_at === null &&
         observation.project === project &&
-        observation.scope === scope,
+        (scope === undefined || observation.scope === scope),
     );
   }
 

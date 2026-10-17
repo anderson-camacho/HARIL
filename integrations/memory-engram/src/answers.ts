@@ -79,8 +79,8 @@ export function failureOf(answer: Answer): Outcome<never> {
   return unknownResult(`engram serve answered ${status}`, { status });
 }
 
-// The failure of a read whose answer was lost, refused, or a 200 the adapter cannot read.
-export function readFailure(answer: Exchange): Outcome<never> {
+// The failure of any exchange that did not give the adapter what it needed: lost, refused, or a 200 it cannot read.
+export function failureOfExchange(answer: Exchange): Outcome<never> {
   if (answer.kind === "lost") return lostFailure(answer);
   if (answer.status === 200) {
     return unavailable("engram serve answered something the adapter cannot read");

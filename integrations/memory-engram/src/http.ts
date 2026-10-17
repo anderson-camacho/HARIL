@@ -1,7 +1,8 @@
 // One HTTP exchange with a verified `engram serve`, bounded by the call's own deadline (memory.md 4.1 "Plazos"): a
 // call in flight is not interrupted by the outbox drain's budget, so the adapter cuts it itself. The Bearer token goes
-// on every request (it protects only some routes, 06 sec3.2), a redirect is an error (the adapter never leaves
-// loopback), and a cancelled CancelSignal aborts the request at once.
+// on every request but the identity check (it protects only some routes, 06 sec3.2, and a server that has not proven
+// it is ours must not see it), a redirect is an error (the adapter never leaves loopback), and a cancelled
+// CancelSignal aborts the request at once.
 import type { CancelSignal } from "@haril/core/ports";
 
 // A serve the adapter may talk to, as the supervisor (or a test) hands it over.
@@ -28,6 +29,8 @@ export interface EngramRequest {
   readonly query?: Readonly<Record<string, string | undefined>>;
   // JSON-encoded unless it is a string, which is sent as it is (an export file).
   readonly body?: unknown;
+  // Without the token: the identity check, before the server has proven it is the serve HARIL launched.
+  readonly anonymous?: true;
 }
 
 export interface Answer {
@@ -100,10 +103,8 @@ export async function exchange(
     stopped = "cancelled";
     controller.abort();
   });
-  const headers: Record<string, string> = {
-    accept: "application/json",
-    authorization: `Bearer ${endpoint.token}`,
-  };
+  const headers: Record<string, string> = { accept: "application/json" };
+  if (request.anonymous !== true) headers.authorization = `Bearer ${endpoint.token}`;
   let body: string | undefined;
   if (request.body !== undefined) {
     headers["content-type"] = "application/json";

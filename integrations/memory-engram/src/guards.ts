@@ -1,22 +1,35 @@
 // The guards that run before `engram serve` is launched (ADR-0008 D5; MEMORY.md 4.4, 11.2; memory.md 9.4 point 2).
 // ENGRAM_DATA_DIR must be absolute, local, never ~/.engram nor inside it (lexically and canonically: case variants,
-// trailing separators, 8.3 short names, junctions and symlinks) and HARIL's own <data>/memory/engram. ENGRAM_PORT
-// must be explicit, valid, never 0, never 7437 or another reserved port, and free on loopback. Any refusal is
-// fail-closed: the caller does not fall back to another directory or port (I6).
-import { realpathSync } from "node:fs";
+// trailing separators, 8.3 short names, junctions and symlinks), free of names Win32 renames, without a link that
+// points nowhere, and HARIL's own <data>/memory/engram. The home the child gets passes the same checks and must not
+// hold the user's ~/.engram. ENGRAM_PORT must be explicit, valid, never 0, never 7437 or another reserved port, and
+// free on loopback. Any refusal is fail-closed: the caller does not fall back to another directory or port (I6).
+import { lstatSync, realpathSync } from "node:fs";
 import { createServer } from "node:net";
 import { posix, win32 } from "node:path";
 import { portProblem } from "./loopback.js";
 
 type Env = Readonly<Record<string, string | undefined>>;
 
-// The file system the data dir guard reads: only the canonical form of a path that exists.
+// The file system the data dir guard reads: the canonical form of a path that exists, and whether an entry exists.
 export interface GuardFs {
   // Junctions, symlinks and 8.3 short names resolved; throws for a path that does not exist.
   realpath(path: string): string;
+  // Whether there is an entry at the path itself, a link not followed (lstat).
+  exists(path: string): boolean;
 }
 
-export const nodeGuardFs: GuardFs = { realpath: (path) => realpathSync.native(path) };
+export const nodeGuardFs: GuardFs = {
+  realpath: (path) => realpathSync.native(path),
+  exists: (path) => {
+    try {
+      lstatSync(path);
+      return true;
+    } catch {
+      return false;
+    }
+  },
+};
 
 export interface EngramDataDirInput {
   // The ENGRAM_DATA_DIR value to check.
@@ -35,6 +48,7 @@ export type DataDirRefusal =
   | "empty"
   | "relative"
   | "not_local"
+  | "ambiguous_name"
   | "user_engram"
   | "unresolvable"
   | "not_owned";
@@ -67,6 +81,22 @@ export function engramDataDirOf(
 ): string {
   return pathsOf(platform).join(harilDataDir, "memory", "engram");
 }
+
+// The home the serve's environment names (USERPROFILE, HOME, HOMEDRIVE and HOMEPATH) [S]: a directory HARIL owns next
+// to the data dir, so nothing in the child can reach the user's home and its ~/.engram. No document names it.
+export function engramHomeOf(
+  harilDataDir: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  return pathsOf(platform).join(harilDataDir, "memory", "engram-home");
+}
+
+// A Win32 name that Win32 APIs (Go, .NET) read differently from Node: a trailing dot or space is dropped, a device
+// name is the device whatever its extension, a colon opens an alternate data stream, and the reserved and control
+// characters.
+const RENAMED_SEGMENT = /[. ]$|[<>:"|?*]/;
+const DEVICE_SEGMENT =
+  /^(con|prn|aux|nul|com[0-9\u00b9\u00b2\u00b3]|lpt[0-9\u00b9\u00b2\u00b3]|conin\$|conout\$)(\..*)?$/i;
 
 function refused(reason: DataDirRefusal, message: string): EngramDataDirCheck {
   return { ok: false, reason, message };
@@ -117,6 +147,22 @@ class PathRules {
     return this.windows ? /^[A-Za-z]:[\\/]/.test(path) : path.startsWith("/");
   }
 
+  // On Windows, a segment Win32 would rename or read as a device (RENAMED_SEGMENT, DEVICE_SEGMENT).
+  ambiguous(path: string): boolean {
+    if (!this.windows) return false;
+    const normal = this.normal(path);
+    return normal
+      .slice(this.paths.parse(normal).root.length)
+      .split(/[\\/]+/)
+      .some(
+        (part) =>
+          part !== "" &&
+          (RENAMED_SEGMENT.test(part) ||
+            DEVICE_SEGMENT.test(part) ||
+            [...part].some((char) => (char.codePointAt(0) ?? 0) < 0x20)),
+      );
+  }
+
   // The canonical form, resolved from the root down one segment at a time: a part that does not exist yet is
   // appended as it is, and the walk stops as soon as it reaches a place `stop` names, so it never looks inside it.
   // undefined when an existing part cannot be resolved (fail-closed).
@@ -139,18 +185,35 @@ class PathRules {
     return current;
   }
 
-  // The real path; undefined when it does not exist, null when it exists and cannot be resolved.
+  // The real path; undefined when nothing is there, null when something is there and cannot be resolved (a link that
+  // points nowhere, a file where a directory goes, a permission error).
   private real(path: string, fs: GuardFs): string | undefined | null {
     try {
       return this.normal(fs.realpath(path));
     } catch (error) {
       const code = (error as { code?: unknown }).code;
-      return code === "ENOENT" || code === "ENOTDIR" ? undefined : null;
+      if (code !== "ENOENT" && code !== "ENOTDIR") return null;
+      return fs.exists(path) ? null : undefined;
     }
   }
 }
 
 export function checkEngramDataDir(input: EngramDataDirInput): EngramDataDirCheck {
+  const platform = input.platform ?? process.platform;
+  return checkOwned(input, engramDataDirOf(input.harilDataDir, platform), false);
+}
+
+// The same checks for the child's home, which also must not be, or hold, the user's home with its ~/.engram.
+export function checkEngramHome(input: EngramDataDirInput): EngramDataDirCheck {
+  const platform = input.platform ?? process.platform;
+  return checkOwned(input, engramHomeOf(input.harilDataDir, platform), true);
+}
+
+function checkOwned(
+  input: EngramDataDirInput,
+  ownedPath: string,
+  isHome: boolean,
+): EngramDataDirCheck {
   const platform = input.platform ?? process.platform;
   const rules = new PathRules(platform);
   const fs = input.fs ?? nodeGuardFs;
@@ -163,6 +226,12 @@ export function checkEngramDataDir(input: EngramDataDirInput): EngramDataDirChec
   }
   if (!rules.absolute(candidate))
     return refused("relative", `${candidate} is not an absolute path`);
+  if (rules.ambiguous(candidate)) {
+    return refused(
+      "ambiguous_name",
+      `${candidate} has a segment Win32 would rename or read as a device`,
+    );
+  }
   for (const name of ONEDRIVE_VARIABLES) {
     const oneDrive = input.env[name];
     if (oneDrive !== undefined && oneDrive.trim() !== "" && rules.within(candidate, oneDrive)) {
@@ -183,7 +252,14 @@ export function checkEngramDataDir(input: EngramDataDirInput): EngramDataDirChec
   if (intoUserEngram(real)) {
     return refused("user_engram", `${candidate} resolves to the user's ~/.engram (${real})`);
   }
-  const owned = rules.canonical(engramDataDirOf(input.harilDataDir, platform), fs, intoUserEngram);
+  if (
+    isHome &&
+    (rules.within(userEngram, real) ||
+      (realUserEngram !== undefined && rules.within(realUserEngram, real)))
+  ) {
+    return refused("user_engram", `${candidate} would hold the user's ~/.engram (${real})`);
+  }
+  const owned = rules.canonical(ownedPath, fs, intoUserEngram);
   if (owned === undefined || intoUserEngram(owned)) {
     return refused("user_engram", "HARIL's data dir resolves into the user's ~/.engram");
   }

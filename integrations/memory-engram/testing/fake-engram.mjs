@@ -1,14 +1,17 @@
 // Fake `engram` executable for the supervision tests: `node fake-engram.mjs serve` serves the fake Engram HTTP
 // server (fake-engram-server.ts, loaded with Node's type stripping) on 127.0.0.1:ENGRAM_PORT for ENGRAM_DATA_DIR.
-// Not an Engram build: every behaviour is a simulation chosen by FAKE_ENGRAM_SCENARIO, which only the tests' spawn
-// wrapper sets. It never reads or writes outside ENGRAM_DATA_DIR and refuses the two traps of 06 sec7 the way a
+// Not an Engram build: every behaviour is a simulation chosen by a --scenario=<name> argument before `serve` (the tests
+// pass it as a leading argument, so the environment stays the one the supervisor built). It never reads or writes
+// outside ENGRAM_DATA_DIR and refuses the two traps of 06 sec7 the way a
 // careful caller must notice them: an empty data dir (Engram would fall back to ~/.engram) and a port of 0 or an
 // invalid one (Engram would fall back to 7437).
 //
 // Scenarios: ok (default), never_ready (stays alive without listening), exit0 (exits 0 at once, as a serve that found
 // its own instance does, #1462), wrong_instance (answers /health with an instance_id that is not .instance-id),
-// grandchild (spawns a long-lived child and writes its pid to fake-grandchild.pid, then serves).
-// POST /__fake/exit?code=N makes it exit with N after answering.
+// grandchild (spawns a long-lived child and writes its pid to fake-grandchild.pid, then serves), leak_token (prints
+// its ENGRAM_HTTP_TOKEN to stderr and exits 1). --start-delay-ms=N waits before it binds; if the port is taken it
+// exits 4.
+// POST /__fake/exit?code=N makes it exit with N after answering; GET /__fake/env answers its process environment.
 
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -16,7 +19,10 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { FakeEngramServer } from "./fake-engram-server.ts";
 
-const scenario = process.env.FAKE_ENGRAM_SCENARIO ?? "ok";
+const option = (name) =>
+  process.argv.find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3);
+const scenario = option("scenario") ?? "ok";
+const startDelayMs = Number(option("start-delay-ms") ?? "0");
 const dataDir = process.env.ENGRAM_DATA_DIR ?? "";
 const rawPort = process.env.ENGRAM_PORT ?? "";
 const port = Number(rawPort);
@@ -44,6 +50,10 @@ if (!existsSync(instanceFile)) writeFileSync(instanceFile, `${randomBytes(16).to
 const instanceId = readFileSync(instanceFile, "utf8").trim();
 
 if (scenario === "exit0") process.exit(0);
+if (scenario === "leak_token") {
+  process.stderr.write(`fake-engram: token ${process.env.ENGRAM_HTTP_TOKEN ?? ""}\n`);
+  process.exit(1);
+}
 if (scenario === "never_ready") {
   setInterval(() => {}, 1000);
 } else {
@@ -59,7 +69,16 @@ if (scenario === "never_ready") {
     token: process.env.ENGRAM_HTTP_TOKEN ?? "",
     instanceId: scenario === "wrong_instance" ? randomBytes(16).toString("hex") : instanceId,
     onExitRequest: (code) => process.exit(code),
+    onEnvRequest: () => ({ ...process.env }),
   });
-  await server.start();
+  if (startDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, startDelayMs));
+  try {
+    await server.start();
+  } catch (error) {
+    process.stderr.write(
+      `fake-engram: cannot listen on 127.0.0.1:${port}: ${error.code ?? error}\n`,
+    );
+    process.exit(4);
+  }
   process.stdout.write(`fake-engram: listening on 127.0.0.1:${port}\n`);
 }

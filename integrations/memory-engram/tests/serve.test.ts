@@ -7,6 +7,8 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
@@ -19,30 +21,25 @@ import {
   EngramMemoryProvider,
   type EngramServe,
   type EngramServeOptions,
+  type EngramSpawnOptions,
   engramDataDirOf,
+  engramHomeOf,
 } from "../src/index.js";
+import { killProcessTree } from "../src/serve.js";
+import { FakeEngramServer } from "../testing/fake-engram-server.js";
 
 // Supervision of `engram serve` (ADR-0008 D4, D5; MEMORY.md 4.4, 11.3; memory.md 9.4 points 1 to 4) with the fake
 // executable testing/fake-engram.mjs run by the host Node: a real child process on an ephemeral loopback port, with a
-// temporary data dir and a fixture home. The scenario reaches the fake through a test-only spawn wrapper, because the
-// supervisor builds the child's environment from scratch (MEM-T5).
+// temporary data dir and a fixture home. The scenario is a leading argument of the binary, so the child's environment
+// is exactly the one the supervisor builds (MEM-T5) and the tests read it back from the child itself.
 
 const FAKE_ENGRAM = fileURLToPath(new URL("../testing/fake-engram.mjs", import.meta.url));
-const ALLOWED_ENV = new Set([
-  "ENGRAM_DATA_DIR",
-  "ENGRAM_PORT",
-  "ENGRAM_HTTP_TOKEN",
-  "ENGRAM_STARTUP_POLICY",
-  "ENGRAM_NO_UPDATE_CHECK",
-  "SystemRoot",
-  "TEMP",
-  "TMP",
-]);
+const WINDOWS = process.platform === "win32";
 
 interface SpawnCall {
   readonly command: string;
   readonly args: readonly string[];
-  readonly options: { readonly env: Record<string, string>; readonly shell: false };
+  readonly options: EngramSpawnOptions;
 }
 
 let root = "";
@@ -50,6 +47,7 @@ let harilData = "";
 let home = "";
 const serves: EngramServe[] = [];
 const busy: Server[] = [];
+const foreign: FakeEngramServer[] = [];
 
 beforeEach(() => {
   root = realpathSync.native(mkdtempSync(join(tmpdir(), "haril-engram-serve-")));
@@ -64,16 +62,23 @@ afterEach(async () => {
   for (const server of busy.splice(0)) {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+  for (const server of foreign.splice(0)) await server.close();
   rmSync(root, { recursive: true, force: true });
 });
 
+// A supervisor of the fake. `beforeChild` runs in the spawn wrapper, after every guard and before the child starts.
 function serve(
   scenario: string,
   overrides: Partial<EngramServeOptions> = {},
+  beforeChild?: (options: EngramSpawnOptions) => void,
+  extraArgs: readonly string[] = [],
 ): { serve: EngramServe; calls: SpawnCall[] } {
   const calls: SpawnCall[] = [];
   const created = createEngramServe({
-    binary: { path: process.execPath, leadingArgs: [FAKE_ENGRAM] },
+    binary: {
+      path: process.execPath,
+      leadingArgs: [FAKE_ENGRAM, `--scenario=${scenario}`, ...extraArgs],
+    },
     harilDataDir: harilData,
     homeDir: home,
     osEnv: process.env,
@@ -81,10 +86,8 @@ function serve(
     ...overrides,
     spawn: (command, args, options) => {
       calls.push({ command, args: [...args], options: { ...options } });
-      return nodeSpawn(command, [...args], {
-        ...options,
-        env: { ...options.env, FAKE_ENGRAM_SCENARIO: scenario },
-      }) as ChildProcess;
+      beforeChild?.(options);
+      return nodeSpawn(command, [...args], options) as ChildProcess;
     },
   });
   serves.push(created);
@@ -116,34 +119,85 @@ async function freeBusyPort(): Promise<number> {
   return typeof address === "object" && address !== null ? address.port : 0;
 }
 
+// The parent's environment at its worst: everything that could lead Engram to the user's files or to 7437.
+function poisonedEnv(): Record<string, string | undefined> {
+  return {
+    SystemRoot: process.env.SystemRoot,
+    PATH: "C:\\fake-evil\\bin",
+    Path: "C:\\fake-evil\\bin",
+    USERPROFILE: "C:\\Users\\fake-victim",
+    HOME: "/home/fake-victim",
+    HOMEDRIVE: "Z:",
+    HOMEPATH: "\\fake-victim",
+    TEMP: "C:\\fake-evil-temp",
+    TMP: "C:\\fake-evil-temp",
+    TMPDIR: "/tmp/fake-evil",
+    USERNAME: "fake-victim",
+    USERDOMAIN: "FAKE-DOMAIN",
+    LOGONSERVER: "\\\\FAKE-SERVER",
+    ENGRAM_PROJECT: "fake-leak",
+    ENGRAM_URL: "http://127.0.0.1:7437",
+    ENGRAM_AGENT_CLI: "claude",
+    ENGRAM_DATA_DIR: join(home, ".engram"),
+    ENGRAM_PORT: "7437",
+  };
+}
+
 describe("launching engram serve", () => {
-  it("launches by absolute path with a from-scratch environment and is ready when /health shows its own instance", async () => {
-    const { serve: engram, calls } = serve("ok");
+  it("launches by absolute path, and the child's real environment is exactly the one built from scratch", async () => {
+    const { serve: engram, calls } = serve("ok", { osEnv: poisonedEnv() });
     const connected = await engram.connect();
     if (!connected.ok) throw new Error(connected.error.message);
     const endpoint = connected.value;
     const dataDir = engramDataDirOf(harilData);
+    const engramHome = engramHomeOf(harilData);
     expect(endpoint.baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
     expect(endpoint.dataDir).toBe(dataDir);
     expect(endpoint.instanceId).toBe(readFileSync(join(dataDir, ".instance-id"), "utf8").trim());
+    expect(existsSync(join(engramHome, "tmp"))).toBe(true);
 
     expect(calls).toHaveLength(1);
     const call = calls[0];
     if (call === undefined) throw new Error("no spawn");
     expect(call.command).toBe(process.execPath);
-    expect(call.args).toEqual([FAKE_ENGRAM, "serve"]);
+    expect(call.args).toEqual([FAKE_ENGRAM, "--scenario=ok", "serve"]);
     expect(call.options.shell).toBe(false);
-    const env = call.options.env;
-    for (const name of Object.keys(env)) expect(ALLOWED_ENV.has(name), name).toBe(true);
-    expect(env).toMatchObject({
+
+    const port = new URL(endpoint.baseUrl).port;
+    const expected: Record<string, string> = {
       ENGRAM_DATA_DIR: dataDir,
-      ENGRAM_PORT: new URL(endpoint.baseUrl).port,
+      ENGRAM_PORT: port,
+      ENGRAM_HTTP_TOKEN: endpoint.token,
       ENGRAM_STARTUP_POLICY: "deny",
       ENGRAM_NO_UPDATE_CHECK: "1",
-    });
-    expect(env.ENGRAM_HTTP_TOKEN).toMatch(/^[0-9a-f]{64}$/);
-    expect(endpoint.token).toBe(env.ENGRAM_HTTP_TOKEN);
-    expect(Number(env.ENGRAM_PORT)).not.toBe(7437);
+      HOME: engramHome,
+    };
+    if (WINDOWS) {
+      const systemRoot = process.env.SystemRoot ?? "";
+      Object.assign(expected, {
+        SystemRoot: systemRoot,
+        WINDIR: systemRoot,
+        SYSTEMDRIVE: systemRoot.slice(0, 2),
+        PATH: join(systemRoot, "System32"),
+        USERPROFILE: engramHome,
+        HOMEDRIVE: engramHome.slice(0, 2),
+        HOMEPATH: engramHome.slice(2),
+        TEMP: join(engramHome, "tmp"),
+        TMP: join(engramHome, "tmp"),
+        USERNAME: "",
+        USERDOMAIN: "",
+        LOGONSERVER: "",
+      });
+    } else {
+      expected.TMPDIR = join(engramHome, "tmp");
+    }
+    const childEnv = (await (await fetch(`${endpoint.baseUrl}/__fake/env`)).json()) as Record<
+      string,
+      string
+    >;
+    expect(childEnv).toEqual(expected);
+    expect(endpoint.token).toMatch(/^[0-9a-f]{64}$/);
+    expect(Number(port)).not.toBe(7437);
 
     // The adapter over the supervised serve, end to end.
     const deps = fakeMemoryDeps("serve");
@@ -193,6 +247,18 @@ describe("launching engram serve", () => {
     expect(readdirSync(userEngram)).toEqual([]);
   });
 
+  it("refuses, typed, a data dir whose link points nowhere yet", async () => {
+    mkdirSync(join(harilData, "memory"), { recursive: true });
+    symlinkSync(join(home, ".engram", "notyet"), engramDataDirOf(harilData), "junction");
+    const { serve: engram, calls } = serve("ok");
+    expect(await engram.connect()).toMatchObject({
+      ok: false,
+      error: { code: "memory.serve.data_dir_refused" },
+    });
+    expect(calls).toEqual([]);
+    expect(readdirSync(join(home, ".engram"))).toEqual([]);
+  });
+
   it("refuses 7437 and a port already in use without launching anything", async () => {
     for (const port of [7437, await freeBusyPort()]) {
       const { serve: engram, calls } = serve("ok", { port });
@@ -218,6 +284,16 @@ describe("launching engram serve", () => {
     await first.stop();
     expect((await second.connect()).ok).toBe(true);
   });
+
+  it("keeps the launch token out of the error it records from the child's output", async () => {
+    const { serve: engram, calls } = serve("leak_token");
+    expect(await engram.connect()).toMatchObject({ ok: false });
+    const token = calls[0]?.options.env.ENGRAM_HTTP_TOKEN ?? "";
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+    const lastError = engram.status().lastError ?? "";
+    expect(lastError).toContain("fake-engram: token [REDACTED]");
+    expect(lastError).not.toContain(token);
+  });
 });
 
 describe("readiness and identity", () => {
@@ -235,7 +311,7 @@ describe("readiness and identity", () => {
     expect(calls).toHaveLength(1);
   });
 
-  it("does not trust nor relaunch a serve that exits 0 before it is ready (#1462)", async () => {
+  it("does not trust nor relaunch a serve that exits 0 before it is ready (#1462), and frees its data dir", async () => {
     const { serve: engram, calls } = serve("exit0");
     expect(await engram.connect()).toMatchObject({
       ok: false,
@@ -243,6 +319,7 @@ describe("readiness and identity", () => {
     });
     expect(await engram.connect()).toMatchObject({ ok: false });
     expect(calls).toHaveLength(1);
+    expect((await serve("ok").serve.connect()).ok).toBe(true);
   });
 
   it("refuses a server on its port that is not this data dir's instance, and does not reuse it", async () => {
@@ -251,6 +328,70 @@ describe("readiness and identity", () => {
       ok: false,
       error: { code: "memory.serve.foreign_instance" },
     });
+    const pid = engram.status().lastPid;
+    await until(() => !alive(pid ?? 0));
+  });
+
+  // The race of the verifier: another server binds the chosen port after the port check and before the child, which
+  // starts late (--start-delay-ms) and then cannot bind it.
+  async function race(echoInstance: boolean): Promise<{
+    readonly engram: EngramServe;
+    readonly impostor: () => FakeEngramServer;
+    readonly token: () => string;
+  }> {
+    let impostor: FakeEngramServer | undefined;
+    let token = "";
+    const { serve: engram } = serve(
+      "ok",
+      {},
+      (options) => {
+        token = options.env.ENGRAM_HTTP_TOKEN ?? "";
+        const dataDir = options.env.ENGRAM_DATA_DIR ?? "";
+        const instanceId = "fake0000000000000000000000000001";
+        if (echoInstance) writeFileSync(join(dataDir, ".instance-id"), `${instanceId}\n`);
+        impostor = new FakeEngramServer({
+          port: Number(options.env.ENGRAM_PORT),
+          token: "fake-impostor-token",
+          ...(echoInstance ? { instanceId } : {}),
+        });
+        foreign.push(impostor);
+        void impostor.start();
+      },
+      ["--start-delay-ms=400"],
+    );
+    return {
+      engram,
+      impostor: () => {
+        if (impostor === undefined) throw new Error("no impostor");
+        return impostor;
+      },
+      token: () => token,
+    };
+  }
+
+  it("refuses a server that took its port before the child, without ever sending it the token", async () => {
+    const { engram, impostor, token } = await race(false);
+    expect(await engram.connect()).toMatchObject({
+      ok: false,
+      error: { code: "memory.serve.foreign_instance" },
+    });
+    expect(token()).toMatch(/^[0-9a-f]{64}$/);
+    expect(impostor().requests.length).toBeGreaterThan(0);
+    expect(impostor().requests.every((request) => request.authorization === undefined)).toBe(true);
+    const pid = engram.status().lastPid;
+    await until(() => !alive(pid ?? 0));
+  });
+
+  it("refuses a server that took its port and copies the data dir's instance id: it does not take the launch token", async () => {
+    const { engram, impostor } = await race(true);
+    expect(await engram.connect()).toMatchObject({
+      ok: false,
+      error: { code: "memory.serve.foreign_instance" },
+    });
+    expect(engram.status().state).not.toBe("ready");
+    // The token goes only to the one token-protected check, after the instance id matched and the child was alive.
+    const withToken = impostor().requests.filter((request) => request.authorization !== undefined);
+    expect(withToken.map((request) => request.route)).toEqual(["compatibility"]);
     const pid = engram.status().lastPid;
     await until(() => !alive(pid ?? 0));
   });
@@ -301,5 +442,19 @@ describe("restart and stop", () => {
       ok: false,
       error: { code: "memory.serve.stopped" },
     });
+  });
+
+  it("kills the child itself when the Windows tree killer cannot be started", async () => {
+    const child = nodeSpawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    const pid = child.pid ?? 0;
+    expect(alive(pid)).toBe(true);
+    const missing = join(root, "fake-missing-taskkill.exe");
+    killProcessTree(child, { SystemRoot: "C:\\Windows" }, "win32", (command, args) =>
+      nodeSpawn(missing, [...args, command], { stdio: "ignore" }),
+    );
+    await until(() => !alive(pid));
   });
 });

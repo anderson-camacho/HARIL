@@ -444,6 +444,8 @@ describe("the identity of the serve", () => {
       expect(health.state).toBe("degraded");
     }
     expect(server.requests.filter((request) => request.route !== "health")).toEqual([]);
+    // The identity check itself goes without the token: a server that is not ours never sees it.
+    expect(server.requests.every((request) => request.authorization === undefined)).toBe(true);
   });
 
   it("never contacts a reserved port such as 7437, a port 0 or a host that is not 127.0.0.1", async () => {
@@ -472,6 +474,163 @@ describe("the identity of the serve", () => {
       expect((await memory.health()).state).toBe("degraded");
     }
     expect(calls).toEqual([]);
+  });
+});
+
+describe("what the adapter checks on its side", () => {
+  it("never returns another visibility or kind than asked, even from a serve that ignores scope and type", async () => {
+    const lax = new FakeEngramServer({ ignoreFilters: true });
+    await lax.start();
+    try {
+      const connect: EngramMemoryProviderOptions["connect"] = async () => ({
+        ok: true,
+        value: { baseUrl: lax.url, token: lax.token, instanceId: lax.instanceId, dataDir: null },
+      });
+      const optedIn = provider({ connect, visibilities: ["project", "personal"] });
+      const personal: MemoryWriteScope = { ...SCOPE, visibility: "personal", kind: "preference" };
+      for (const fields of [
+        { scope: personal, title: "zqxlax personal", content: "zqxlax personal" },
+        {
+          scope: { ...SCOPE, kind: "decision" as const },
+          title: "zqxlax decision",
+          content: "zqxlax decision",
+        },
+        {
+          scope: { ...SCOPE, kind: "pattern" as const },
+          title: "zqxlax pattern",
+          content: "zqxlax pattern",
+        },
+      ]) {
+        expect((await optedIn.store(write(fields))).ok).toBe(true);
+      }
+      const memory = provider({ connect });
+      const titles = (items: readonly { readonly title: string }[]) =>
+        items.map((item) => item.title).sort();
+      const search = await memory.search({
+        schemaVersion: 1,
+        scope: SCOPE,
+        text: "zqxlax",
+        matchMode: "all",
+        limit: 20,
+      });
+      expect(search.ok && titles(search.value.items)).toEqual([
+        "zqxlax decision",
+        "zqxlax pattern",
+      ]);
+      const decisions = await memory.search({
+        schemaVersion: 1,
+        scope: SCOPE,
+        text: "zqxlax",
+        kinds: ["decision"],
+        matchMode: "all",
+        limit: 20,
+      });
+      expect(decisions.ok && titles(decisions.value.items)).toEqual(["zqxlax decision"]);
+      const recall = await memory.recall({
+        schemaVersion: 1,
+        scope: SCOPE,
+        budgetTokens: 100_000,
+        includePinned: true,
+        maxItems: 50,
+      });
+      if (!recall.ok) throw new Error(recall.error.message);
+      expect(titles(recall.value.items)).toEqual(["zqxlax decision", "zqxlax pattern"]);
+      expect(recall.value.omittedCount).toBe(0);
+      const patterns = await memory.recall({
+        schemaVersion: 1,
+        scope: SCOPE,
+        budgetTokens: 100_000,
+        kinds: ["pattern"],
+        includePinned: true,
+        maxItems: 50,
+      });
+      expect(patterns.ok && titles(patterns.value.items)).toEqual(["zqxlax pattern"]);
+      expect(patterns.ok && patterns.value.omittedCount).toBe(0);
+    } finally {
+      await lax.close();
+    }
+  });
+
+  it("refuses a workspace that could name one of HARIL's reserved Engram projects", async () => {
+    const memory = provider();
+    for (const workspaceId of ["_haril", "_haril-fake"]) {
+      const scope: ScopeRef = { ...SCOPE, workspaceId, projectKey: "health" };
+      for (const call of [
+        memory.open(scope),
+        memory.store(write({ scope: { ...scope, kind: "discovery" } })),
+        memory.search({
+          schemaVersion: 1,
+          scope,
+          text: "haril health",
+          matchMode: "all",
+          limit: 1,
+        }),
+        memory.recall({
+          schemaVersion: 1,
+          scope,
+          budgetTokens: 10,
+          includePinned: true,
+          maxItems: 1,
+        }),
+      ]) {
+        expect((await failureOf(call)).code, workspaceId).toBe("contract.invalid");
+      }
+    }
+    expect(server.requests).toEqual([]);
+  });
+
+  it("a hard forget whose answer and confirming read were lost succeeds on its retry", async () => {
+    const memory = provider();
+    const stored = await memory.store(write({ content: "zqxhard lost" }));
+    if (!stored.ok) throw new Error(stored.error.message);
+    const request = {
+      schemaVersion: 1 as const,
+      operationId: "fake-op-hard-lost",
+      ref: { provider: "engram", providerRef: stored.value.providerRef ?? "" },
+      mode: "hard" as const,
+      expectedScope: SCOPE,
+      authorizedBy: "fake-approval-1",
+    };
+    server.setFault("observations.delete", "ambiguous", {
+      times: 1,
+      thenFail: ["observations.get"],
+    });
+    const lost = await failureOf(memory.forget(request));
+    expect(lost).toMatchObject({ code: "Unavailable", retryable: true });
+    expect(server.stored().filter((row) => row.content === "zqxhard lost")).toEqual([]);
+    const retried = await memory.forget(request);
+    if (!retried.ok) throw new Error(retried.error.message);
+    expect(retried.value).toMatchObject({ outcome: "forgotten", mode: "hard" });
+    expect(retried.value.erasure).not.toBe("hidden");
+  });
+
+  it("a write answered 2xx with an unreadable body that save-result does not know is an unknown result", async () => {
+    const fetch: typeof globalThis.fetch = async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/health") {
+        return Response.json({ status: "ok", version: "3.4.0", instance_id: "fake-instance" });
+      }
+      if (url.pathname === "/sessions") return Response.json({ id: SESSION }, { status: 201 });
+      if (url.pathname === "/observations" && init?.method === "POST") {
+        return new Response("fake garbage", { status: 200 });
+      }
+      return Response.json({ error: "operation_not_found" }, { status: 404 });
+    };
+    const memory = provider({
+      fetch,
+      connect: async () => ({
+        ok: true,
+        value: {
+          baseUrl: server.url,
+          token: "fake-token",
+          instanceId: "fake-instance",
+          dataDir: null,
+        },
+      }),
+    });
+    const failure = await failureOf(memory.store(write()));
+    expect(failure).toMatchObject({ code: "Unavailable", retryable: false });
+    expect(failure.details?.unknownResult).toBe(true);
   });
 });
 
