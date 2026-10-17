@@ -8,16 +8,16 @@
 // machine and no real model or key is used. Each step prints PASS or FAIL; the first failure prints the runtime log
 // tail and the status, and exits 1. Temporary directories are removed, and the metadata of other tools' installs must
 // not change across the run (AR-G7).
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  cleanUpSession,
   createCli,
   expect,
   guardForeignInstalls,
   isAlive,
-  killHard,
   runSteps,
   spawnDetached,
   waitFor,
@@ -189,9 +189,23 @@ async function awaitApproval(goal, model) {
     text.includes(row.approvalId) && text.includes(`model ${model ?? "none"}`),
     `approvals does not show the approval with model ${model ?? "none"}`,
   );
+  // Nothing of the plan runs before the approval: once the planner's attempt is over, the plan has no task and no
+  // plan.submit waits in the queue.
+  const report = await waitFor(
+    () => {
+      const current = statusReport();
+      return plannerTaskOf(current, goal)?.state === "completed" ? current : undefined;
+    },
+    APPROVAL_TIMEOUT_MS,
+    "the planner task to complete",
+  );
+  const early = planTasksOf(report, goal).length;
+  expect(early === 0, `the plan created ${early} tasks before its approval`);
+  const queued = report.queuedCommands.filter((command) => command.type === "plan.submit");
+  expect(queued.length === 0, `${queued.length} plan.submit commands queued before the approval`);
   session.approvalId = row.approvalId;
   session.approvalTasks = row.tasks;
-  return `${row.approvalId}: ${row.tasks} tasks, model ${model ?? "none"}`;
+  return `${row.approvalId}: ${row.tasks} tasks, model ${model ?? "none"}; 0 plan tasks before approval`;
 }
 
 function approve() {
@@ -422,6 +436,24 @@ const steps = [
   ["real lane: stop", stopRuntime],
 ];
 
+// Every step, then the foreign-installs check. Returns the exit code.
+async function runAndCheck(foreign) {
+  const started = Date.now();
+  const passed = await runSteps(steps, printDiagnostics);
+  if (!passed) return 1;
+  const changes = foreign.changes();
+  if (changes.length > 0) {
+    console.log("FAIL  foreign installs changed during the demo run:");
+    for (const change of changes) console.log(`      ${change}`);
+    return 1;
+  }
+  const seconds = ((Date.now() - started) / 1000).toFixed(1);
+  console.log(`PASS  all demo steps (goal, plan, approval, done; hermetic) in ${seconds} s`);
+  // One PASS line per compared root plus the user PATH.
+  console.log(`PASS  foreign installs untouched (${foreign.rootCount} roots compared)`);
+  return 0;
+}
+
 async function main() {
   session.root = mkdtempSync(join(tmpdir(), "haril-e2e-demo-"));
   session.env = withoutHarilEnv(process.env, {
@@ -431,29 +463,17 @@ async function main() {
   session.projectDir = join(session.root, "demo-project");
   mkdirSync(session.projectDir);
   const foreign = guardForeignInstalls();
-  const started = Date.now();
 
+  let code = 1;
   try {
-    const passed = await runSteps(steps, printDiagnostics);
-    if (!passed) return 1;
-    const changes = foreign.changes();
-    if (changes.length > 0) {
-      console.log("FAIL  foreign installs changed during the demo run:");
-      for (const change of changes) console.log(`      ${change}`);
-      return 1;
-    }
-    const seconds = ((Date.now() - started) / 1000).toFixed(1);
-    console.log(`PASS  all demo steps (goal, plan, approval, done; hermetic) in ${seconds} s`);
-    // One PASS line per compared root plus the user PATH.
-    console.log(`PASS  foreign installs untouched (${foreign.rootCount} roots compared)`);
-    return 0;
+    code = await runAndCheck(foreign);
   } finally {
-    await session.upstream?.close();
-    if (session.runtimePid !== undefined && isAlive(session.runtimePid)) {
-      killHard(session.runtimePid);
-    }
-    rmSync(session.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    // The temporary root is removed whatever happened; anything left running or open fails the run.
+    const problems = await cleanUpSession(session);
+    for (const problem of problems) console.log(`FAIL  cleanup: ${redact(problem)}`);
+    if (problems.length > 0) code = 1;
   }
+  return code;
 }
 
 main().then(

@@ -1,14 +1,74 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { waitFor, withoutHarilEnv, writeFakePiWrapper } from "../lib/e2e-harness.mjs";
+import {
+  cleanUpSession,
+  isAlive,
+  killHard,
+  waitFor,
+  withoutHarilEnv,
+  writeFakePiWrapper,
+} from "../lib/e2e-harness.mjs";
 import { startUpstream } from "../lib/fake-upstream.mjs";
 
 // Helpers of the hermetic e2e scripts (LD-T7b). The values below are fixtures, not keys.
 
 const FAKE_SECRET = "fake-secret-fixture";
+
+test("killHard of a process that has already exited is not an error", () => {
+  // A runtime may exit by itself between the cleanup's liveness check and its kill.
+  const exited = spawnSync(process.execPath, ["-e", ""], { windowsHide: true });
+  assert.equal(exited.status, 0);
+  assert.equal(isAlive(exited.pid), false);
+  assert.equal(killHard(exited.pid), false);
+});
+
+test("killHard kills a live process at once", async () => {
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  await once(child, "spawn");
+  const exit = once(child, "exit");
+  assert.equal(killHard(child.pid), true);
+  await exit;
+  assert.equal(isAlive(child.pid), false);
+});
+
+test("cleanUpSession always removes the temporary root and reports what went wrong before", async () => {
+  const root = mkdtempSync(join(tmpdir(), "haril-harness-test-"));
+  writeFileSync(join(root, "runtime.log"), "a log line\n");
+  const exited = spawnSync(process.execPath, ["-e", ""], { windowsHide: true });
+  const problems = await cleanUpSession({
+    root,
+    runtimePid: exited.pid,
+    upstream: {
+      close: async () => {
+        throw new Error("fixture close failure");
+      },
+    },
+  });
+  assert.deepEqual(problems, ["the fake upstream did not close: fixture close failure"]);
+  assert.equal(existsSync(root), false);
+});
+
+test("a fake upstream worker that fails before it listens rejects with a clear message", {
+  timeout: 10_000,
+}, async () => {
+  // No model: the worker refuses to serve. If it listened anyway, close it so the test still ends.
+  const started = startUpstream({ key: FAKE_SECRET }).then(async (upstream) => {
+    await upstream.close();
+    return upstream;
+  });
+  await assert.rejects(
+    started,
+    /the fake-upstream worker failed before it listened: .*needs a key and a model/,
+  );
+});
 
 test("withoutHarilEnv drops every HARIL_* variable by name, in any case, then adds the given ones", () => {
   const env = withoutHarilEnv(

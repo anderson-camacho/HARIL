@@ -1,8 +1,9 @@
 // Shared helpers of the hermetic end-to-end scripts (scripts/e2e.mjs, scripts/e2e-demo.mjs): the CLI in a child
 // process against one session's temporary root and environment, the step runner, polling with a deadline, process
-// control, the fake Pi wrapper and the foreign-installs guard (AR-G7, M3-T2). Nothing here starts a step on its own.
+// control and cleanup, the fake Pi wrapper and the foreign-installs guard (AR-G7, M3-T2). Nothing here starts a step on
+// its own.
 import { spawn, spawnSync } from "node:child_process";
-import { closeSync, openSync, writeFileSync } from "node:fs";
+import { closeSync, openSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -100,13 +101,47 @@ export async function waitFor(predicate, timeoutMs, what) {
   }
 }
 
+// Kills pid at once. Returns true when it killed the process and false when the process had already exited: a runtime
+// may exit by itself between a liveness check and the kill, which is not an error. Throws only when a process that is
+// still alive could not be killed.
 export function killHard(pid) {
   if (process.platform === "win32") {
-    const result = spawnSync("taskkill", ["/F", "/PID", String(pid)], { encoding: "utf8" });
-    expect(result.status === 0, `taskkill /F /PID ${pid} failed: ${result.stderr ?? ""}`);
-  } else {
-    process.kill(pid, "SIGKILL");
+    const result = spawnSync("taskkill", ["/F", "/PID", String(pid)], {
+      encoding: "utf8",
+      windowsHide: true,
+    });
+    if (result.status === 0) return true;
+    if (!isAlive(pid)) return false;
+    throw new Error(`taskkill /F /PID ${pid} failed: ${(result.stderr ?? "").trim()}`);
   }
+  try {
+    process.kill(pid, "SIGKILL");
+    return true;
+  } catch (error) {
+    if (error.code === "ESRCH") return false;
+    throw error;
+  }
+}
+
+// The cleanup of one session, in an order that never skips its last step: the fake upstream closes, a runtime that is
+// still alive is killed, and the temporary root is removed whatever happened before. Returns what went wrong before the
+// removal, for the caller to report; only a root that cannot be removed throws.
+export async function cleanUpSession(session) {
+  const problems = [];
+  try {
+    await session.upstream?.close();
+  } catch (error) {
+    problems.push(`the fake upstream did not close: ${error.message}`);
+  }
+  try {
+    if (session.runtimePid !== undefined && isAlive(session.runtimePid)) {
+      killHard(session.runtimePid);
+    }
+  } catch (error) {
+    problems.push(`the runtime was not stopped: ${error.message}`);
+  }
+  rmSync(session.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  return problems;
 }
 
 // Starts `node <entry> <args>` detached, with stdout and stderr in logPath (truncated first). The caller stops it, or

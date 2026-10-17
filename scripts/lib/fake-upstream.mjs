@@ -8,15 +8,37 @@ import { isMainThread, parentPort, Worker, workerData } from "node:worker_thread
 const UPSTREAM_ROLE = "fake-upstream";
 const CATALOG_ROLE = "fake-catalog";
 const REPLY_CHUNKS = ["Hello ", "from the e2e model."];
+const WORKER_START_TIMEOUT_MS = 10_000;
 
 // The text of every ordinary streamed reply.
 export const FAKE_UPSTREAM_REPLY = REPLY_CHUNKS.join("");
 
+// Starts one worker and settles once: with its port when it listens, or with a clear refusal when it fails, exits or
+// stays silent before listening, so a broken server never hangs a script.
 function startWorker(data) {
   const worker = new Worker(fileURLToPath(import.meta.url), { workerData: data });
   return new Promise((resolve, reject) => {
-    worker.once("message", (port) => resolve({ port, close: () => worker.terminate() }));
-    worker.once("error", reject);
+    let settled = false;
+    const settle = () => {
+      const first = !settled;
+      settled = true;
+      clearTimeout(timer);
+      return first;
+    };
+    const fail = (why) => {
+      if (!settle()) return;
+      void worker.terminate();
+      reject(new Error(`the ${data.role} worker ${why}`));
+    };
+    const timer = setTimeout(
+      () => fail(`did not listen within ${WORKER_START_TIMEOUT_MS} ms`),
+      WORKER_START_TIMEOUT_MS,
+    );
+    worker.once("message", (port) => {
+      if (settle()) resolve({ port, close: () => worker.terminate() });
+    });
+    worker.once("error", (error) => fail(`failed before it listened: ${error.message}`));
+    worker.once("exit", (code) => fail(`exited with code ${code} before it listened`));
   });
 }
 
@@ -38,6 +60,7 @@ function sendError(response, status, type, message) {
 }
 
 function serveCatalog(modelIds) {
+  if (!Array.isArray(modelIds)) throw new Error("the fake catalog needs a list of model ids");
   const server = createServer((request, response) => {
     if (request.method === "GET" && request.url === "/v1/models") {
       response.writeHead(200, { "content-type": "application/json" });
@@ -53,6 +76,9 @@ function serveCatalog(modelIds) {
 }
 
 function serveUpstream({ key, model, longMarker, longChunks }) {
+  if (typeof key !== "string" || key === "" || typeof model !== "string" || model === "") {
+    throw new Error("the fake upstream needs a key and a model");
+  }
   const server = createServer((request, response) => {
     if (request.headers.authorization !== `Bearer ${key}`) {
       sendError(response, 401, "auth", "bad key");

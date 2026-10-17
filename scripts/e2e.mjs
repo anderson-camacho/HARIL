@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // End-to-end check of the M1 flow through the built CLI (M1-T8). It builds nothing: `npm run e2e` runs the
-// build first. Every step runs the CLI in a child process against temporary directories (HARIL_HOME and a
-// project root). Each step prints PASS or FAIL; the first failing step exits 1. Temporary directories are removed.
+// build first. Every step runs the CLI in a child process against temporary directories (HARIL_HOME, HARIL_RUNTIME_DIR
+// and a project root); no HARIL_* variable of the parent reaches it. Each step prints PASS or FAIL; the first failing
+// step exits 1. Temporary directories are removed.
 // M3: the installer of HARIL (haril-bootstrap install/uninstall) runs into a temporary root, and the metadata of
 // other tools' installs must not change across the whole run (AR-G7, M3-T2).
 import { spawnSync } from "node:child_process";
@@ -12,7 +13,6 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
-  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  cleanUpSession,
   createCli,
   expect,
   guardForeignInstalls,
@@ -28,6 +29,7 @@ import {
   runSteps,
   spawnDetached,
   waitFor,
+  withoutHarilEnv,
   writeFakePiWrapper,
 } from "./lib/e2e-harness.mjs";
 import { FAKE_UPSTREAM_REPLY, startCatalogServer, startUpstream } from "./lib/fake-upstream.mjs";
@@ -315,9 +317,12 @@ const steps = [
     "crash: kill -9 the runtime mid-run",
     async () => {
       const pid = session.runtimePid;
-      killHard(pid);
+      // The crash must be this kill: a runtime that had already exited would not test the recovery.
+      expect(killHard(pid), `pid ${pid} had exited before the kill`);
       await waitFor(() => !isAlive(pid), 5_000, `pid ${pid} to exit`);
       session.runtime = undefined;
+      // Gone for good: the cleanup must not kill whatever process reuses the pid later.
+      session.runtimePid = undefined;
       return `pid ${pid} killed`;
     },
   ],
@@ -716,39 +721,50 @@ const steps = [
   ],
 ];
 
+// Every step, then the foreign-installs check. Returns the exit code.
+async function runAndCheck(foreign) {
+  const passed = await runSteps(steps, () => {
+    if (existsSync(session.runtimeLog)) {
+      console.log(`      runtime log: ${session.runtimeLog}`);
+    }
+  });
+  if (!passed) return 1;
+  const changes = foreign.changes();
+  if (changes.length > 0) {
+    console.log("FAIL  foreign installs changed during the E2E run:");
+    for (const change of changes) console.log(`      ${change}`);
+    return 1;
+  }
+  console.log("PASS  all E2E steps (M1 and M2 hermetic)");
+  // One PASS line per compared root plus the user PATH.
+  console.log(`PASS  foreign installs untouched (${foreign.rootCount} roots compared)`);
+  return 0;
+}
+
 async function main() {
   session.root = mkdtempSync(join(tmpdir(), "haril-e2e-"));
-  session.env = { ...process.env, HARIL_HOME: join(session.root, "home") };
+  // No HARIL_* variable of the parent reaches the children: no key, model, gateway or config of the user. The runtime
+  // root is temporary too, so no provider file of the user is read. The M2 steps set their own HARIL_* variables.
+  session.env = withoutHarilEnv(process.env, {
+    HARIL_HOME: join(session.root, "home"),
+    HARIL_RUNTIME_DIR: join(session.root, "runtime-root"),
+  });
   session.projectDir = join(session.root, "demo-project");
   session.runtimeLog = join(session.root, "runtime.log");
   session.installRoot = join(session.root, "install");
   mkdirSync(session.projectDir);
   const foreign = guardForeignInstalls();
 
+  let code = 1;
   try {
-    const passed = await runSteps(steps, () => {
-      if (existsSync(session.runtimeLog)) {
-        console.log(`      runtime log: ${session.runtimeLog}`);
-      }
-    });
-    if (!passed) return 1;
-    const changes = foreign.changes();
-    if (changes.length > 0) {
-      console.log("FAIL  foreign installs changed during the E2E run:");
-      for (const change of changes) console.log(`      ${change}`);
-      return 1;
-    }
-    console.log("PASS  all E2E steps (M1 and M2 hermetic)");
-    // One PASS line per compared root plus the user PATH.
-    console.log(`PASS  foreign installs untouched (${foreign.rootCount} roots compared)`);
-    return 0;
+    code = await runAndCheck(foreign);
   } finally {
-    await session.upstream?.close();
-    if (session.runtimePid !== undefined && isAlive(session.runtimePid)) {
-      killHard(session.runtimePid);
-    }
-    rmSync(session.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    // The temporary root is removed whatever happened; anything left running or open fails the run.
+    const problems = await cleanUpSession(session);
+    for (const problem of problems) console.log(`FAIL  cleanup: ${problem}`);
+    if (problems.length > 0) code = 1;
   }
+  return code;
 }
 
 main().then(
