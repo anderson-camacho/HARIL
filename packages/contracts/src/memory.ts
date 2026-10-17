@@ -485,6 +485,7 @@ const MEMORY_SCHEMAS = {
   "consolidation-request": ConsolidationRequestSchema,
   "consolidation-outcome": ConsolidationOutcomeSchema,
   query: MemoryQuerySchema,
+  hit: MemoryHitSchema,
   "hit-page": MemoryHitPageSchema,
   record: MemoryRecordSchema,
   "recall-request": RecallRequestSchema,

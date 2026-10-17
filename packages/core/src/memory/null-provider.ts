@@ -32,18 +32,21 @@ import type {
 } from "../ports/index.js";
 import {
   CORE_PROVIDER_VERSION,
-  cancelledCall,
   checked,
   contractInvalid,
   copyCapabilities,
   foreignRef,
   foreignSession,
+  inProcessHealth,
   type MemoryOutcome,
   memoryFailure,
   mismatchedHash,
   ok,
+  refusal,
   searchBounds,
-  unsupportedVisibility,
+  unsupportedConsolidation,
+  unsupportedExport,
+  unsupportedImport,
 } from "./support.js";
 
 const PROVIDER = "null";
@@ -90,17 +93,7 @@ export class NullMemoryProvider implements MemoryProvider {
   }
 
   async health(): Promise<MemoryHealth> {
-    return {
-      schemaVersion: 1,
-      provider: PROVIDER,
-      state: "active",
-      checkedAt: this.deps.clock.now(),
-      realReadOk: true,
-      version: CORE_PROVIDER_VERSION,
-      instanceId: null,
-      dataDir: null,
-      lastError: null,
-    };
+    return inProcessHealth(PROVIDER, this.deps.clock.now());
   }
 
   async open(scope: ScopeRef, options?: MemoryCallOptions): Promise<MemoryOutcome<MemorySession>> {
@@ -198,11 +191,12 @@ export class NullMemoryProvider implements MemoryProvider {
     request: ConsolidationRequest,
     options?: MemoryCallOptions,
   ): Promise<MemoryOutcome<ConsolidationOutcome>> {
-    const input = checked("consolidation-request", request);
-    if (!input.ok) return input;
-    const refused = this.refuse(input.value.scope, options);
-    if (refused !== undefined) return refused;
-    return memoryFailure("Unsupported", "the null provider does not consolidate");
+    return unsupportedConsolidation(
+      NULL_CAPABILITIES,
+      request,
+      options,
+      "the null provider does not consolidate",
+    );
   }
 
   async forget(
@@ -226,32 +220,24 @@ export class NullMemoryProvider implements MemoryProvider {
     format: ExportFormat,
     options?: MemoryCallOptions,
   ): Promise<MemoryOutcome<ExportArtifact>> {
-    if (scope !== "all") {
-      const input = checked("scope-ref", scope);
-      if (!input.ok) return input;
-      const refused = this.refuse(input.value, options);
-      if (refused !== undefined) return refused;
-    }
-    const formatInput = checked("export-format", format);
-    if (!formatInput.ok) return formatInput;
-    return memoryFailure("Unsupported", "the null provider has nothing to export");
+    return unsupportedExport(
+      NULL_CAPABILITIES,
+      scope,
+      format,
+      options,
+      "the null provider has nothing to export",
+    );
   }
 
   // A function property (see MemoryProvider.import).
-  readonly import = (artifact: ExportArtifact): Promise<MemoryOutcome<ImportReport>> =>
-    this.importArtifact(artifact);
-
-  private async importArtifact(artifact: ExportArtifact): Promise<MemoryOutcome<ImportReport>> {
-    const input = checked("export-artifact", artifact);
-    if (!input.ok) return input;
-    return memoryFailure("Unsupported", "the null provider does not import");
-  }
+  readonly import = async (artifact: ExportArtifact): Promise<MemoryOutcome<ImportReport>> =>
+    unsupportedImport(artifact, "the null provider does not import");
 
   private refuse(
     scope: ScopeRef,
     options: MemoryCallOptions | undefined,
   ): MemoryOutcome<never> | undefined {
-    return unsupportedVisibility(NULL_CAPABILITIES, scope) ?? cancelledCall(options);
+    return refusal(NULL_CAPABILITIES, scope, options);
   }
 
   // The same receipt for every call with this operationId and hash; another hash is contract.invalid.

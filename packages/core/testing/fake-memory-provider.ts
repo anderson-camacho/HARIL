@@ -183,10 +183,11 @@ export class FakeMemoryProvider implements MemoryProvider, MemoryFaultControls {
     return this.call("export", logged, undefined, () => this.inner.export(scope, format, options));
   }
 
-  import(artifact: ExportArtifact): MemoryResult<ImportReport> {
+  // A function property, as the port declares it.
+  readonly import = (artifact: ExportArtifact): MemoryResult<ImportReport> => {
     const scope = artifact?.scope === "all" ? undefined : artifact?.scope;
     return this.call("import", scope, undefined, () => this.inner.import(artifact));
-  }
+  };
 
   // ---- Internals ----
 

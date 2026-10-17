@@ -212,4 +212,18 @@ describe("validateMemoryValue", () => {
     expect(validateMemoryValue("write-receipt", undefined).ok).toBe(false);
     expect(validateMemoryValue("recall-request", 42).ok).toBe(false);
   });
+
+  it("knows memory.hit (memory.md 3.2) on its own, not only inside a page", () => {
+    const hit = {
+      ref: { provider: "in-memory", providerRef: "mem-1" },
+      kind: "unknown",
+      title: "Use the outbox",
+      snippet: "Every write goes",
+      score: null,
+      pinned: false,
+      updatedAt: 0,
+    };
+    expect(validateMemoryValue("hit", hit)).toEqual({ ok: true, value: hit });
+    expect(validateMemoryValue("hit", { ...hit, score: "high" }).ok).toBe(false);
+  });
 });

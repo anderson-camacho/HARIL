@@ -79,6 +79,7 @@ interface ContractCase {
 }
 
 const WORKSPACE = "fake-workspace";
+const OTHER_WORKSPACE = "fake-workspace-other";
 const PROJECT_A = "fake-project-a";
 const PROJECT_B = "fake-project-b";
 
@@ -97,6 +98,13 @@ const SCOPE_B: ScopeRef = {
   projectKey: PROJECT_B,
   visibility: "project",
   sessionId: sessionId(2),
+};
+// The closest collision with A: the same projectKey in another workspace (another user's haril.db).
+const SCOPE_A_ELSEWHERE: ScopeRef = {
+  workspaceId: OTHER_WORKSPACE,
+  projectKey: PROJECT_A,
+  visibility: "project",
+  sessionId: sessionId(4),
 };
 
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
@@ -354,15 +362,24 @@ class CaseContext {
     return validated(what, "health", health);
   }
 
-  async searchRefs(scope: ScopeRef, text: string): Promise<string[]> {
+  async searchRefs(
+    scope: ScopeRef,
+    text: string,
+    narrowed: Partial<Pick<MemoryQuery, "kinds" | "matchMode" | "limit">> = {},
+  ): Promise<string[]> {
     const page = await expectOk(`search "${text}"`, "hit-page", () =>
-      this.provider.search(this.query(scope, text)),
+      this.provider.search({ ...this.query(scope, text), ...narrowed }),
     );
     check(
       page.next === undefined || this.caps.pagination,
       "search returned a cursor without pagination",
     );
     return page.items.map((hit) => hit.ref.providerRef);
+  }
+
+  // The providerRefs of retained writes, sorted; none for a discarding provider.
+  refsOf(receipts: readonly WriteReceipt[]): string[] {
+    return this.retains ? receipts.map((receipt) => this.refOf(receipt).providerRef).sort() : [];
   }
 
   async storedContent(receipt: WriteReceipt, scope: ScopeRef = SCOPE_A): Promise<string> {
@@ -658,11 +675,15 @@ const CASES: readonly ContractCase[] = [
   },
   {
     id: "MP-09",
-    title: "nothing written under project A is visible under B through search, recall or get",
+    title:
+      "nothing written under project A is visible under B, or under A of another workspace, through search, recall or get",
     async run(ctx) {
       const title = "zqxshared title";
       const a = await ctx.storeOk(ctx.write({ scope: SCOPE_A, title, content: "zqxshared alpha" }));
       const b = await ctx.storeOk(ctx.write({ scope: SCOPE_B, title, content: "zqxshared beta" }));
+      const elsewhere = await ctx.storeOk(
+        ctx.write({ scope: SCOPE_A_ELSEWHERE, title, content: "zqxshared gamma" }),
+      );
       const hits = await ctx.searchRefs(SCOPE_A, "zqxshared");
       const bundle = await ctx.recallOk(ctx.recall(SCOPE_A, 100000));
       if (!ctx.retains) {
@@ -682,7 +703,15 @@ const CASES: readonly ContractCase[] = [
       await expectFailure("get of B's record under A", "ScopeMismatch", () =>
         ctx.provider.get(ctx.refOf(b), SCOPE_A),
       );
+      await expectFailure("get of another workspace's record under A", "ScopeMismatch", () =>
+        ctx.provider.get(ctx.refOf(elsewhere), SCOPE_A),
+      );
       same(await ctx.searchRefs(SCOPE_B, "zqxshared"), [b.providerRef], "the search under B");
+      same(
+        await ctx.searchRefs(SCOPE_A_ELSEWHERE, "zqxshared"),
+        [elsewhere.providerRef],
+        "the search under A of another workspace",
+      );
     },
   },
   {
@@ -795,6 +824,17 @@ const CASES: readonly ContractCase[] = [
           check(bundle.items.length > 0, `${what}: a large budget recalls something`);
         }
       }
+      const maxItems = 5;
+      const limited = await ctx.recallOk(ctx.recall(SCOPE_A, 200000, maxItems), "a short recall");
+      check(
+        limited.items.length <= maxItems,
+        `recall returned ${limited.items.length} items for maxItems ${maxItems}`,
+      );
+      check(
+        limited.omittedCount === (ctx.retains ? total : 0) - limited.items.length,
+        `a short recall: omittedCount ${limited.omittedCount} for ${limited.items.length} items`,
+      );
+      if (ctx.retains) check(limited.items.length > 0, "a short recall recalls something");
     },
   },
   {
@@ -834,6 +874,23 @@ const CASES: readonly ContractCase[] = [
         ctx.provider.forget({ ...ctx.forget(ref, "soft"), expectedScope: SCOPE_B }),
       );
       same(await ctx.searchRefs(SCOPE_A, "zqxforget"), [ref.providerRef], "the record lives on");
+      if (ctx.caps.hardDelete) {
+        await expectFailure(
+          "hard forget with another project's expectedScope",
+          "ScopeMismatch",
+          () => ctx.provider.forget({ ...ctx.forget(ref, "hard"), expectedScope: SCOPE_B }),
+        );
+        same(
+          await ctx.searchRefs(SCOPE_A, "zqxforget"),
+          [ref.providerRef],
+          "the record after a refused hard forget",
+        );
+        same(
+          await ctx.storedContent(kept),
+          "zqxforget it",
+          "the record after a refused hard forget",
+        );
+      }
       const request = ctx.forget(ref, "soft");
       const receipt = await expectOk("soft forget", "forget-receipt", () =>
         ctx.provider.forget(request),
@@ -854,6 +911,11 @@ const CASES: readonly ContractCase[] = [
         ),
         receipt,
         "the repeated forget receipt",
+      );
+      await expectFailure(
+        "the same forget operationId with another expectedScope",
+        "contract.invalid",
+        () => ctx.provider.forget({ ...request, expectedScope: SCOPE_B }),
       );
       const repeat = await expectOk("a new forget of the same record", "forget-receipt", () =>
         ctx.provider.forget(ctx.forget(ref, "soft")),
@@ -893,6 +955,18 @@ const CASES: readonly ContractCase[] = [
       "export and import keep the counts; an unsupported version is Unsupported before any change",
     async run(ctx) {
       const format = ctx.exportFormat();
+      const written = 3;
+      for (let i = 0; i < written; i++) {
+        await ctx.storeOk(
+          ctx.write({ title: `zqxexport ${i}`, content: `zqxexport content ${i}` }),
+        );
+      }
+      // What a reader can observe of the provider: its search and its recall.
+      const observed = async () => ({
+        hits: (await ctx.searchRefs(SCOPE_A, "zqxexport")).sort(),
+        recall: await ctx.recallOk(ctx.recall(SCOPE_A, 1_000_000)),
+      });
+      const before = await observed();
       if (ctx.caps.exportVersion === null) {
         await expectFailure("export without exportVersion", "Unsupported", () =>
           ctx.provider.export(SCOPE_A, format),
@@ -902,14 +976,9 @@ const CASES: readonly ContractCase[] = [
         await expectFailure("import of a version the provider does not read", "Unsupported", () =>
           ctx.provider.import(ctx.artifact()),
         );
+        same(await observed(), before, "the provider after a refused import");
       }
       if (ctx.caps.exportVersion === null || !ctx.retains) return;
-      const written = 3;
-      for (let i = 0; i < written; i++) {
-        await ctx.storeOk(
-          ctx.write({ title: `zqxexport ${i}`, content: `zqxexport content ${i}` }),
-        );
-      }
       const artifact = await expectOk("export", "export-artifact", () =>
         ctx.provider.export(SCOPE_A, format),
       );
@@ -1043,6 +1112,9 @@ const CASES: readonly ContractCase[] = [
     id: "MP-22",
     title: "a visibility the provider does not support is Unsupported; project needs no opt-in",
     async run(ctx) {
+      const kept = ctx.retains
+        ? ctx.refOf(await ctx.storeOk(ctx.write({ content: "zqxvisible kept" })))
+        : ctx.ref("fake-ref-1");
       for (const visibility of ["personal", "global"] as const) {
         const scope = { ...SCOPE_A, visibility };
         if (ctx.caps.visibilities.includes(visibility)) {
@@ -1055,6 +1127,7 @@ const CASES: readonly ContractCase[] = [
           ["open", () => ctx.provider.open(scope)],
           ["store", () => ctx.provider.store(ctx.write({ scope }))],
           ["search", () => ctx.provider.search(ctx.query(scope, "zqxvisible"))],
+          ["get", () => ctx.provider.get(kept, scope)],
           ["recall", () => ctx.provider.recall(ctx.recall(scope, 100))],
         ];
         for (const [operation, call] of calls) {
@@ -1065,9 +1138,10 @@ const CASES: readonly ContractCase[] = [
     },
   },
   {
-    // Not a row of memory.md 8.1: the preconditions of search and recall in 4.2.
+    // Not a row of memory.md 8.1: the preconditions of search and recall in 4.2, and what limit, kinds and matchMode do.
     id: "MP-X1",
-    title: "a search or recall outside its bounds is contract.invalid",
+    title:
+      "a search or recall outside its bounds is contract.invalid; limit, kinds and matchMode narrow a search",
     async run(ctx) {
       const query = ctx.query(SCOPE_A, "zqxbounds");
       const recall = ctx.recall(SCOPE_A, 100);
@@ -1084,15 +1158,44 @@ const CASES: readonly ContractCase[] = [
       for (const [label, call] of calls) {
         await expectFailure(`a call with ${label}`, "contract.invalid", call);
       }
+      const first = await ctx.storeOk(
+        ctx.write({ kind: "decision", title: "zqxfilter one", content: "zqxfilt zqxfirst" }),
+      );
+      const second = await ctx.storeOk(
+        ctx.write({ kind: "pattern", title: "zqxfilter two", content: "zqxfilt zqxsecond" }),
+      );
+      const third = await ctx.storeOk(
+        ctx.write({ kind: "pattern", title: "zqxfilter three", content: "zqxfilt zqxthird" }),
+      );
+      const limit = Math.min(2, ctx.caps.maxSearchResults);
+      const limited = await ctx.searchRefs(SCOPE_A, "zqxfilt", { limit });
+      check(
+        limited.length === (ctx.retains ? limit : 0),
+        `a search with limit ${limit} returned ${limited.length} of ${ctx.retains ? 3 : 0} matches`,
+      );
+      same(
+        (await ctx.searchRefs(SCOPE_A, "zqxfilt", { kinds: ["decision"] })).sort(),
+        ctx.refsOf([first]),
+        "a search narrowed to decisions",
+      );
+      same(
+        (await ctx.searchRefs(SCOPE_A, "zqxfilt", { kinds: ["pattern"] })).sort(),
+        ctx.refsOf([second, third]),
+        "a search narrowed to patterns",
+      );
+      same(
+        await ctx.searchRefs(SCOPE_A, "zqxfirst zqxsecond"),
+        [],
+        "a search for every term of two records",
+      );
+      same(
+        (await ctx.searchRefs(SCOPE_A, "zqxfirst zqxsecond", { matchMode: "any" })).sort(),
+        ctx.refsOf([first, second]),
+        "a search for any term",
+      );
     },
   },
 ];
-
-// The ids and titles of the cases, in order.
-export const MEMORY_PROVIDER_CONTRACT_CASES: readonly {
-  readonly id: string;
-  readonly title: string;
-}[] = CASES.map(({ id, title }) => ({ id, title }));
 
 async function runCase(
   contractCase: ContractCase,

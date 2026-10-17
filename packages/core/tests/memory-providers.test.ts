@@ -1,5 +1,9 @@
 import type {
+  ExportArtifact,
+  ForgetReceipt,
+  ForgetRequest,
   MemoryQuery,
+  MemoryRef,
   MemoryWrite,
   RecallRequest,
   ScopeRef,
@@ -7,7 +11,11 @@ import type {
 } from "@haril/contracts";
 import { describe, expect, it } from "vitest";
 import { estimateTokens, InMemoryMemoryProvider, NullMemoryProvider } from "../src/memory/index.js";
-import type { MemoryCallOptions, MemoryProviderDeps } from "../src/ports/index.js";
+import type {
+  MemoryCallOptions,
+  MemoryGetOptions,
+  MemoryProviderDeps,
+} from "../src/ports/index.js";
 import {
   ContractViolation,
   cancelSignal,
@@ -274,21 +282,26 @@ describe("InMemoryMemoryProvider (memory.md 9.2)", () => {
     expect(bundle.omittedCount).toBe(1);
   });
 
-  it("searches case-insensitive substrings by all or any term, kind and limit", async () => {
+  // Limit, kinds and matchMode are held by the suite (MP-X1); the ranking is this provider's own.
+  it("searches case-insensitive substrings and ranks by the terms matched", async () => {
     const { deps, provider } = setup();
     await value(provider.store(write(deps, { title: "Alpha Notes", content: "the zqxone fact" })));
     await value(provider.store(write(deps, { title: "beta", content: "the zqxtwo fact" })));
     expect((await value(provider.search(query("ALPHA zqxone")))).items).toHaveLength(1);
-    expect((await value(provider.search(query("zqxone zqxtwo")))).items).toHaveLength(0);
     const any = await value(provider.search(query("zqxone zqxtwo alpha", { matchMode: "any" })));
     // The record that matches two terms comes first.
     expect(any.items.map((hit) => hit.title)).toEqual(["Alpha Notes", "beta"]);
     expect(any.items[0]?.score).toBe(2);
-    expect((await value(provider.search(query("fact", { limit: 1 })))).items).toHaveLength(1);
-    expect((await value(provider.search(query("fact", { kinds: ["decision"] })))).items).toEqual(
-      [],
-    );
     expect(await code(provider.search(query("   ")))).toBe("contract.invalid");
+  });
+
+  it("refuses a dedupe window that is negative, fractional or not finite", () => {
+    const deps = fakeMemoryDeps();
+    for (const dedupeWindowMs of [-1, 1.5, Number.POSITIVE_INFINITY, Number.NaN]) {
+      expect(() => new InMemoryMemoryProvider(deps, { dedupeWindowMs })).toThrow(RangeError);
+    }
+    const accepted = new InMemoryMemoryProvider(deps, { dedupeWindowMs: 0 });
+    expect(accepted.capabilities().dedupeWindowMs).toBe(0);
   });
 
   it("rejects a topicKey over 120 bytes and a ref of another provider", async () => {
@@ -321,14 +334,32 @@ describe("InMemoryMemoryProvider (memory.md 9.2)", () => {
     );
   });
 
-  it("returns copies, so a caller cannot change what is stored", async () => {
+  it("returns copies, so a caller cannot change what is stored or what a replay answers", async () => {
     const { deps, provider } = setup();
-    const receipt = await value(provider.store(write(deps, { content: "zqxcopy original" })));
+    const stored = write(deps, { content: "zqxcopy original" });
+    const receipt = await value(provider.store(stored));
     const ref = { provider: "in-memory", providerRef: receipt.providerRef ?? "" };
     const record = await value(provider.get(ref, SCOPE_A));
     (record as { content: string }).content = "changed";
     (record.scope as { projectKey: string }).projectKey = "fake-project-b";
     expect(await value(provider.get(ref, SCOPE_A))).toMatchObject({ content: "zqxcopy original" });
+    (receipt as { outcome: string }).outcome = "deduped";
+    expect((await value(provider.store(stored))).outcome).toBe("created");
+    const ended = summary(deps, "in-memory", "zqxcopy summary");
+    const summarized = await value(provider.summarize(ended));
+    (summarized as { providerRef?: string }).providerRef = "changed";
+    expect((await value(provider.summarize(ended))).providerRef).not.toBe("changed");
+    const forget = {
+      schemaVersion: 1,
+      operationId: operationId(),
+      ref,
+      mode: "soft",
+      expectedScope: SCOPE_A,
+    } as const;
+    const forgotten = await value(provider.forget(forget));
+    (forgotten.ref as { providerRef: string }).providerRef = "changed";
+    (forgotten as { outcome: string }).outcome = "already_forgotten";
+    expect(await value(provider.forget(forget))).toMatchObject({ outcome: "forgotten", ref });
   });
 
   it("answers already_forgotten after a hard forget and a cancelled read as Unavailable", async () => {
@@ -455,6 +486,94 @@ class LeaksOtherProjects extends InMemoryMemoryProvider {
   }
 }
 
+const OTHER_WORKSPACE = "fake-workspace-other";
+
+class LeaksOtherWorkspaces extends InMemoryMemoryProvider {
+  override async search(request: MemoryQuery, options?: MemoryCallOptions) {
+    const own = await super.search(request, options);
+    const scope = { ...request.scope, workspaceId: OTHER_WORKSPACE };
+    const other = await super.search({ ...request, scope }, options);
+    if (!own.ok || !other.ok || request.scope.workspaceId === OTHER_WORKSPACE) return own;
+    return { ok: true as const, value: { items: [...own.value.items, ...other.value.items] } };
+  }
+}
+
+class IgnoresMaxItems extends InMemoryMemoryProvider {
+  override async recall(request: RecallRequest, options?: MemoryCallOptions) {
+    return super.recall({ ...request, maxItems: 1000 }, options);
+  }
+}
+
+class IgnoresLimit extends InMemoryMemoryProvider {
+  override async search(request: MemoryQuery, options?: MemoryCallOptions) {
+    const max = this.capabilities().maxSearchResults;
+    const valid = request.limit >= 1 && request.limit <= max;
+    return super.search(valid ? { ...request, limit: max } : request, options);
+  }
+}
+
+class IgnoresKinds extends InMemoryMemoryProvider {
+  override async search(request: MemoryQuery, options?: MemoryCallOptions) {
+    const { kinds: _kinds, ...unfiltered } = request;
+    return super.search(unfiltered, options);
+  }
+}
+
+class ReadsAnyAsAll extends InMemoryMemoryProvider {
+  override async search(request: MemoryQuery, options?: MemoryCallOptions) {
+    return super.search({ ...request, matchMode: "all" }, options);
+  }
+}
+
+class GetIgnoresVisibility extends InMemoryMemoryProvider {
+  override async get(ref: MemoryRef, scope: ScopeRef, options?: MemoryGetOptions) {
+    return super.get(ref, { ...scope, visibility: "project" }, options);
+  }
+}
+
+class HardForgetIgnoresScope extends InMemoryMemoryProvider {
+  override async forget(request: ForgetRequest, options?: MemoryCallOptions) {
+    if (request.mode !== "hard") return super.forget(request, options);
+    return super.forget({ ...request, expectedScope: SCOPE_A }, options);
+  }
+}
+
+class ReplaysForgetBlindly extends InMemoryMemoryProvider {
+  private readonly seen = new Map<string, ForgetReceipt>();
+
+  override async forget(request: ForgetRequest, options?: MemoryCallOptions) {
+    const first = this.seen.get(request.operationId);
+    if (first !== undefined) return { ok: true as const, value: first };
+    const result = await super.forget(request, options);
+    if (result.ok) this.seen.set(request.operationId, result.value);
+    return result;
+  }
+}
+
+class ImportWritesFirst extends InMemoryMemoryProvider {
+  override readonly import = async (_artifact: ExportArtifact) => {
+    const content = "zqxexport intruder";
+    await this.store({
+      schemaVersion: 1,
+      operationId: "fake-intruder-op",
+      scope: { ...SCOPE_A, kind: "discovery" },
+      title: content,
+      content,
+      contentSha256: new Sha256Hasher().sha256(content),
+      origin: "import",
+    });
+    return {
+      ok: false as const,
+      error: {
+        code: "Unsupported" as const,
+        category: "memory" as const,
+        retryable: false,
+        message: "fake refusal",
+      },
+    };
+  };
+}
+
 function subject(
   Provider: typeof InMemoryMemoryProvider,
   options?: { dedupeWindowMs?: number },
@@ -469,22 +588,50 @@ describe("MemoryProvider contract suite: seeded deviations fail", () => {
   const retains = { retainsWrites: true };
   const window = { dedupeWindowMs: 900_000 };
 
+  // Each deviant must fail on the check it targets, named by a fragment of the violation.
   it.each([
-    ["MP-02", "accepts a search without ScopeRef", subject(AcceptsMissingScope)],
-    ["MP-05", "answers created for a dedupe", subject(HidesDedupe, window)],
-    ["MP-12", "recalls past the budget", subject(IgnoresBudget)],
-    ["MP-09", "recalls another project's memory", subject(LeaksOtherProjects)],
-  ] as const)("%s fails for a provider that %s", async (id, _what, make) => {
-    await expect(runMemoryProviderContractCase(id, make, retains)).rejects.toBeInstanceOf(
-      ContractViolation,
-    );
+    ["MP-02", "accepts a search without ScopeRef", subject(AcceptsMissingScope), "no scope"],
+    ["MP-05", "answers created for a dedupe", subject(HidesDedupe, window), "dedupe window"],
+    ["MP-12", "recalls past the budget", subject(IgnoresBudget), "tokens"],
+    ["MP-09", "recalls another project's memory", subject(LeaksOtherProjects), "recall under A"],
+    ["MP-09", "reads another workspace", subject(LeaksOtherWorkspaces), "search under A"],
+    ["MP-12", "recalls past maxItems", subject(IgnoresMaxItems), "for maxItems 5"],
+    ["MP-X1", "searches past its limit", subject(IgnoresLimit), "with limit 2 returned"],
+    ["MP-X1", "ignores the kinds of a search", subject(IgnoresKinds), "narrowed to decisions"],
+    ["MP-X1", "reads matchMode any as all", subject(ReadsAnyAsAll), "for any term"],
+    ["MP-22", "gets with a personal scope", subject(GetIgnoresVisibility), "get with personal"],
+    [
+      "MP-14",
+      "hard-forgets another project's record",
+      subject(HardForgetIgnoresScope),
+      "hard forget with another project's expectedScope",
+    ],
+    [
+      "MP-14",
+      "replays a forget whatever its expectedScope",
+      subject(ReplaysForgetBlindly),
+      "forget operationId with another expectedScope",
+    ],
+    [
+      "MP-15",
+      "changes before it refuses an import",
+      subject(ImportWritesFirst),
+      "after a refused import",
+    ],
+  ] as const)("%s fails for a provider that %s", async (id, _what, make, fragment) => {
+    const run = runMemoryProviderContractCase(id, make, retains);
+    await expect(run).rejects.toBeInstanceOf(ContractViolation);
+    await expect(run).rejects.toThrow(fragment);
   });
 
-  it.each(["MP-02", "MP-05", "MP-09", "MP-12"])("%s passes for the honest provider", async (id) => {
-    await expect(
-      runMemoryProviderContractCase(id, subject(InMemoryMemoryProvider, window), retains),
-    ).resolves.toBeUndefined();
-  });
+  it.each(["MP-02", "MP-05", "MP-09", "MP-12", "MP-14", "MP-15", "MP-22", "MP-X1"])(
+    "%s passes for the honest provider",
+    async (id) => {
+      await expect(
+        runMemoryProviderContractCase(id, subject(InMemoryMemoryProvider, window), retains),
+      ).resolves.toBeUndefined();
+    },
+  );
 
   it("refuses an unknown case id", async () => {
     await expect(

@@ -38,26 +38,30 @@ import type {
 } from "../ports/index.js";
 import {
   CORE_PROVIDER_VERSION,
-  cancelledCall,
   checked,
   contractInvalid,
   copyCapabilities,
   foreignRef,
   foreignSession,
+  inProcessHealth,
   type MemoryOutcome,
   memoryFailure,
   mismatchedHash,
   ok,
   queryTerms,
+  refusal,
   searchBounds,
   truncateUtf8,
-  unsupportedVisibility,
+  unsupportedConsolidation,
+  unsupportedExport,
+  unsupportedImport,
   utf8Length,
 } from "./support.js";
 
 export interface InMemoryMemoryProviderOptions {
   // Two writes of the same title, content and kind, without topicKey, within this window collapse into one record with
-  // a deduped receipt. memory.md 9.2 proposes 0, no dedupe [S]; a test sets a window to exercise the receipt.
+  // a deduped receipt. memory.md 9.2 proposes 0, no dedupe [S]; a test sets a window to exercise the receipt. A
+  // non-negative integer of milliseconds.
   readonly dedupeWindowMs?: number;
 }
 
@@ -155,6 +159,29 @@ function writeReceipt(
   };
 }
 
+// A copy, so a caller cannot change the receipt a replay answers.
+function copyForgetReceipt(receipt: ForgetReceipt): ForgetReceipt {
+  return { ...receipt, ref: { ...receipt.ref } };
+}
+
+// What makes two forgets with one operationId the same forget: the ref, the mode and the expectedScope (authorizedBy is
+// informative). Another one is a reused operationId.
+function forgetFingerprint(request: ForgetRequest): string {
+  const { ref, mode, expectedScope: scope } = request;
+  return JSON.stringify([
+    ref.providerRef,
+    ref.syncId ?? null,
+    mode,
+    scope.workspaceId,
+    scope.projectKey,
+    scope.visibility,
+    scope.sessionId,
+    scope.agentId ?? null,
+    scope.taskId ?? null,
+    scope.kind ?? null,
+  ]);
+}
+
 function forgetReceipt(
   request: ForgetRequest,
   outcome: ForgetReceipt["outcome"],
@@ -185,7 +212,12 @@ export class InMemoryMemoryProvider implements MemoryProvider {
 
   constructor(deps: MemoryProviderDeps, options: InMemoryMemoryProviderOptions = {}) {
     this.deps = deps;
-    this.dedupeWindowMs = options.dedupeWindowMs ?? 0;
+    const dedupeWindowMs = options.dedupeWindowMs ?? 0;
+    // A programming error of the composition root, not a result of a call.
+    if (!Number.isSafeInteger(dedupeWindowMs) || dedupeWindowMs < 0) {
+      throw new RangeError(`dedupeWindowMs must be a non-negative integer, got ${dedupeWindowMs}`);
+    }
+    this.dedupeWindowMs = dedupeWindowMs;
     this.caps = {
       schemaVersion: 1,
       provider: PROVIDER,
@@ -217,17 +249,7 @@ export class InMemoryMemoryProvider implements MemoryProvider {
   }
 
   async health(): Promise<MemoryHealth> {
-    return {
-      schemaVersion: 1,
-      provider: PROVIDER,
-      state: "active",
-      checkedAt: this.deps.clock.now(),
-      realReadOk: true,
-      version: CORE_PROVIDER_VERSION,
-      instanceId: null,
-      dataDir: null,
-      lastError: null,
-    };
+    return inProcessHealth(PROVIDER, this.deps.clock.now());
   }
 
   async open(scope: ScopeRef, options?: MemoryCallOptions): Promise<MemoryOutcome<MemorySession>> {
@@ -398,13 +420,11 @@ export class InMemoryMemoryProvider implements MemoryProvider {
     request: ConsolidationRequest,
     options?: MemoryCallOptions,
   ): Promise<MemoryOutcome<ConsolidationOutcome>> {
-    const input = checked("consolidation-request", request);
-    if (!input.ok) return input;
-    const refused = this.refuse(input.value.scope, options);
-    if (refused !== undefined) return refused;
     // core/memory consolidates with search, store and forget for every provider (CM-05).
-    return memoryFailure(
-      "Unsupported",
+    return unsupportedConsolidation(
+      this.caps,
+      request,
+      options,
       "the in-memory provider has no plan-and-confirm consolidation",
     );
   }
@@ -419,18 +439,18 @@ export class InMemoryMemoryProvider implements MemoryProvider {
     const refused =
       foreignRef(accepted.ref, PROVIDER) ?? this.refuse(accepted.expectedScope, options);
     if (refused !== undefined) return refused;
-    const fingerprint = `${accepted.ref.providerRef}\n${accepted.mode}`;
+    const fingerprint = forgetFingerprint(accepted);
     if (this.writes.has(accepted.operationId)) return this.reusedOperationId();
     const first = this.forgets.get(accepted.operationId);
     if (first !== undefined) {
       return first.fingerprint === fingerprint
-        ? ok({ ...first.receipt })
+        ? ok(copyForgetReceipt(first.receipt))
         : this.reusedOperationId();
     }
     const erased = this.erase(accepted);
     if (!erased.ok) return erased;
     this.forgets.set(accepted.operationId, { fingerprint, receipt: erased.value });
-    return ok({ ...erased.value });
+    return ok(copyForgetReceipt(erased.value));
   }
 
   async export(
@@ -438,26 +458,18 @@ export class InMemoryMemoryProvider implements MemoryProvider {
     format: ExportFormat,
     options?: MemoryCallOptions,
   ): Promise<MemoryOutcome<ExportArtifact>> {
-    if (scope !== "all") {
-      const input = checked("scope-ref", scope);
-      if (!input.ok) return input;
-      const refused = this.refuse(input.value, options);
-      if (refused !== undefined) return refused;
-    }
-    const formatInput = checked("export-format", format);
-    if (!formatInput.ok) return formatInput;
-    return memoryFailure("Unsupported", "the in-memory provider does not export");
+    return unsupportedExport(
+      this.caps,
+      scope,
+      format,
+      options,
+      "the in-memory provider does not export",
+    );
   }
 
   // A function property (see MemoryProvider.import).
-  readonly import = (artifact: ExportArtifact): Promise<MemoryOutcome<ImportReport>> =>
-    this.importArtifact(artifact);
-
-  private async importArtifact(artifact: ExportArtifact): Promise<MemoryOutcome<ImportReport>> {
-    const input = checked("export-artifact", artifact);
-    if (!input.ok) return input;
-    return memoryFailure("Unsupported", "the in-memory provider does not import");
-  }
+  readonly import = async (artifact: ExportArtifact): Promise<MemoryOutcome<ImportReport>> =>
+    unsupportedImport(artifact, "the in-memory provider does not import");
 
   // ---- Internals ----
 
@@ -465,11 +477,11 @@ export class InMemoryMemoryProvider implements MemoryProvider {
     scope: ScopeRef,
     options: MemoryCallOptions | undefined,
   ): MemoryOutcome<never> | undefined {
-    return unsupportedVisibility(this.caps, scope) ?? cancelledCall(options);
+    return refusal(this.caps, scope, options);
   }
 
   private reusedOperationId(): MemoryOutcome<never> {
-    return contractInvalid("the operationId was already used with other content");
+    return contractInvalid("the operationId was already used with another request");
   }
 
   // The first receipt of an operationId used with the same hash; contract.invalid for other content (CM-12).

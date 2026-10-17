@@ -1,8 +1,12 @@
 // What the Core's memory providers share: typed failures, input checks against the memory schemas, cancellation and
 // UTF-8 byte counting. Pure.
 import {
+  type ConsolidationRequest,
+  type ExportArtifact,
+  type ExportFormat,
   type MemoryCapabilities,
   type MemoryErrorCode,
+  type MemoryHealth,
   type MemoryQuery,
   type MemoryRef,
   type MemorySchemaName,
@@ -12,6 +16,7 @@ import {
   validateMemoryValue,
 } from "@haril/contracts";
 import type {
+  EpochMs,
   Hasher,
   MemoryCallOptions,
   MemoryFailure,
@@ -71,20 +76,78 @@ export function checked<N extends MemorySchemaName>(
 
 // The failure of a call whose signal is cancelled. For a write it is ambiguous, so it is Unavailable and the outbox
 // retries it with the same operationId (memory.md 4.1).
-export function cancelledCall(
-  options: MemoryCallOptions | undefined,
-): MemoryOutcome<never> | undefined {
+function cancelledCall(options: MemoryCallOptions | undefined): MemoryOutcome<never> | undefined {
   if (options?.signal?.cancelled !== true) return undefined;
   return memoryFailure("Unavailable", "the memory call was cancelled", { cancelled: true });
 }
 
 // personal and global need an opt-in the provider declares in capabilities().visibilities (MP-22).
-export function unsupportedVisibility(
+function unsupportedVisibility(
   capabilities: MemoryCapabilities,
   scope: ScopeRef,
 ): MemoryOutcome<never> | undefined {
   if (capabilities.visibilities.includes(scope.visibility)) return undefined;
   return memoryFailure("Unsupported", `the visibility ${scope.visibility} is not supported`);
+}
+
+// Why a scoped call is refused before it is looked at: a visibility without opt-in, or a cancelled signal.
+export function refusal(
+  capabilities: MemoryCapabilities,
+  scope: ScopeRef,
+  options: MemoryCallOptions | undefined,
+): MemoryOutcome<never> | undefined {
+  return unsupportedVisibility(capabilities, scope) ?? cancelledCall(options);
+}
+
+// The health of a provider in the Runtime's process: always active, its own memory always readable.
+export function inProcessHealth(provider: string, now: EpochMs): MemoryHealth {
+  return {
+    schemaVersion: 1,
+    provider,
+    state: "active",
+    checkedAt: now,
+    realReadOk: true,
+    version: CORE_PROVIDER_VERSION,
+    instanceId: null,
+    dataDir: null,
+    lastError: null,
+  };
+}
+
+// consolidate, export and import of a provider without the capability: the input is checked, then Unsupported.
+export function unsupportedConsolidation(
+  capabilities: MemoryCapabilities,
+  request: ConsolidationRequest,
+  options: MemoryCallOptions | undefined,
+  message: string,
+): MemoryOutcome<never> {
+  const input = checked("consolidation-request", request);
+  if (!input.ok) return input;
+  return refusal(capabilities, input.value.scope, options) ?? memoryFailure("Unsupported", message);
+}
+
+export function unsupportedExport(
+  capabilities: MemoryCapabilities,
+  scope: ScopeRef | "all",
+  format: ExportFormat,
+  options: MemoryCallOptions | undefined,
+  message: string,
+): MemoryOutcome<never> {
+  if (scope !== "all") {
+    const input = checked("scope-ref", scope);
+    if (!input.ok) return input;
+    const refused = refusal(capabilities, input.value, options);
+    if (refused !== undefined) return refused;
+  }
+  const formatInput = checked("export-format", format);
+  if (!formatInput.ok) return formatInput;
+  return memoryFailure("Unsupported", message);
+}
+
+export function unsupportedImport(artifact: ExportArtifact, message: string): MemoryOutcome<never> {
+  const input = checked("export-artifact", artifact);
+  if (!input.ok) return input;
+  return memoryFailure("Unsupported", message);
 }
 
 // A copy, so a caller cannot change the provider's capabilities.
