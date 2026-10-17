@@ -12,9 +12,12 @@ import { dataDirFor, openExisting } from "./common.js";
 // `haril start` (M1-T5, LD-T1): the foreground runtime. It applies the queue, runs the ready tasks and stays up for new
 // work until --idle-exit-sec of nothing to do (ARCH 4.2). `haril run` is start until idle: it exits as soon as the
 // queue is empty. A runtime.stop, a first Ctrl+C or SIGTERM stops it in order; a second signal exits at once.
+// `--started-by shell` (LD-T6, ADR-0022) is how haril shell starts it: the same runtime, which also records
+// runtime.started_by_shell once it holds the lease, because the shell never writes the store.
 const IDLE_EXIT_SEC = 120;
+const STARTED_BY_SHELL = "shell";
 const START_USAGE =
-  "usage: haril start [--project <slug>] [--json] [--data-dir <path>] [--idle-exit-sec <n>]";
+  "usage: haril start [--project <slug>] [--json] [--data-dir <path>] [--idle-exit-sec <n>] [--started-by shell]";
 const RUN_USAGE = "usage: haril run [--project <slug>] [--json] [--data-dir <path>]";
 const NOT_INITIALIZED =
   "store not initialized (run haril project init <path> --name <name> --yes first)";
@@ -36,7 +39,7 @@ async function serve(
   const parsed = parseArgs(args, {
     values:
       mode === "start"
-        ? ["--project", "--data-dir", "--idle-exit-sec"]
+        ? ["--project", "--data-dir", "--idle-exit-sec", "--started-by"]
         : ["--project", "--data-dir"],
     flags: ["--json"],
   });
@@ -50,6 +53,11 @@ async function serve(
   const idleExitSec = idleExitSecOf(parsed.values, mode);
   if (idleExitSec === undefined) {
     io.err("haril: --idle-exit-sec takes a whole number of seconds, 0 or more");
+    return EXIT_USAGE;
+  }
+  const startedBy = lastValue(parsed, "--started-by");
+  if (startedBy !== undefined && startedBy !== STARTED_BY_SHELL) {
+    io.err(`haril: --started-by only takes ${STARTED_BY_SHELL}`);
     return EXIT_USAGE;
   }
 
@@ -104,6 +112,7 @@ async function serve(
       planProposals,
       control,
       idleExitMs: idleExitSec * 1000,
+      startedByShell: startedBy === STARTED_BY_SHELL,
       shutdown,
       onEvent: (event) => {
         if (!json) io.out(formatEvent(event));

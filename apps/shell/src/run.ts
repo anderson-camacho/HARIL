@@ -4,17 +4,20 @@ import { createHarilActions } from "./actions.js";
 import { createShellApp } from "./app.js";
 import { openShellData } from "./data.js";
 import type { ShellSettings } from "./panels/index.js";
+import { createRuntimeStarter, type SpawnRuntime } from "./runtime-start.js";
 import { DEFAULT_THEME_NAME, readOptionalFile, resolveTheme } from "./theme.js";
 
 // Entry logic of the shell (TUI-D3, TUI-D8). The CLI passes resolved paths; this process opens the store read-only
-// (never creates it) and never starts the runtime. main.ts wires the real process; tests inject the streams, the
-// terminal, the environment and the files.
+// (never creates it). It may start the runtime as a detached `haril start` when work waits and none runs (LD-T6,
+// ADR-0022), never with --no-runtime. main.ts wires the real process; tests inject the streams, the terminal, the
+// environment, the files and the spawn of the runtime.
 
 const EXIT_OK = 0;
 const EXIT_USAGE = 2;
 
 const USAGE =
-  "usage: shell [--data-dir <path>] [--runtime-root <path>] [--config <path>] [--haril <path>]";
+  "usage: shell [--data-dir <path>] [--runtime-root <path>] [--config <path>] [--haril <path>] [--no-runtime]";
+const NO_RUNTIME = "--no-runtime";
 const NOT_A_TERMINAL =
   "haril shell needs an interactive terminal: stdin and stdout must both be a TTY. Run it in a terminal window.";
 
@@ -29,9 +32,11 @@ export interface ShellRunDeps {
   // The environment, read only to tell whether provider key variables are set. Defaults to none.
   readonly env?: Readonly<Record<string, string | undefined>>;
   readonly createTerminal: () => Terminal;
+  // Starts the runtime as a detached child (LD-T6). Defaults to the real spawn; tests record the command instead.
+  readonly spawnRuntime?: SpawnRuntime;
 }
 
-interface ShellArgs {
+interface ShellPathArgs {
   readonly dataDir: string | undefined;
   readonly runtimeRoot: string | undefined;
   readonly config: string | undefined;
@@ -39,7 +44,12 @@ interface ShellArgs {
   readonly haril: string | undefined;
 }
 
-const VALUE_FLAGS: Readonly<Record<string, keyof ShellArgs>> = {
+interface ShellArgs extends ShellPathArgs {
+  // --no-runtime: the shell never starts a runtime (LD-T6).
+  readonly noRuntime: boolean;
+}
+
+const VALUE_FLAGS: Readonly<Record<string, keyof ShellPathArgs>> = {
   "--data-dir": "dataDir",
   "--runtime-root": "runtimeRoot",
   "--config": "config",
@@ -81,6 +91,19 @@ export async function runShell(argv: readonly string[], deps: ShellRunDeps): Pro
     themeName: requested.name,
     themeLabel: theme.name,
   };
+  // Starting a runtime needs the CLI to run, the data dir to name and the runtime root for its log.
+  const runtimeStarter =
+    args.noRuntime ||
+    args.haril === undefined ||
+    args.dataDir === undefined ||
+    args.runtimeRoot === undefined
+      ? undefined
+      : createRuntimeStarter({
+          harilEntry: args.haril,
+          dataDir: args.dataDir,
+          runtimeRoot: args.runtimeRoot,
+          ...(deps.spawnRuntime === undefined ? {} : { spawn: deps.spawnRuntime }),
+        });
   try {
     const app = createShellApp({
       terminal: deps.createTerminal(),
@@ -92,6 +115,7 @@ export async function runShell(argv: readonly string[], deps: ShellRunDeps): Pro
       actions: createHarilActions({ harilEntry: args.haril }),
       defaultModel: nonEmpty(deps.env?.[DEFAULT_MODEL_ENV]),
       connectControl: connect,
+      ...(runtimeStarter === undefined ? {} : { runtimeStarter }),
     });
     app.start();
     await app.done;
@@ -101,16 +125,21 @@ export async function runShell(argv: readonly string[], deps: ShellRunDeps): Pro
   return EXIT_OK;
 }
 
-// Only the flags listed in VALUE_FLAGS, each with one value. Anything else is a usage error.
+// The flags listed in VALUE_FLAGS, each with one value, and --no-runtime. Anything else is a usage error.
 function parseArgs(argv: readonly string[]): ShellArgs | undefined {
   const values: { -readonly [K in keyof ShellArgs]: ShellArgs[K] } = {
     dataDir: undefined,
     runtimeRoot: undefined,
     config: undefined,
     haril: undefined,
+    noRuntime: false,
   };
   for (let index = 0; index < argv.length; index++) {
     const flag = argv[index];
+    if (flag === NO_RUNTIME) {
+      values.noRuntime = true;
+      continue;
+    }
     const key = flag === undefined ? undefined : VALUE_FLAGS[flag];
     const value = argv[index + 1];
     if (key === undefined || value === undefined || value.startsWith("--")) return undefined;

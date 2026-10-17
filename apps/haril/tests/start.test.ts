@@ -241,3 +241,48 @@ describe("haril start stays up for live work (LD-T1)", () => {
     expect(await start(["--idle-exit-sec", "5"])).toBe(2);
   });
 });
+
+describe("haril start --started-by shell (LD-T6)", () => {
+  interface EventView {
+    type: string;
+    aggregateType: string;
+    payload: Record<string, unknown>;
+  }
+
+  function startedByShell(): EventView[] {
+    const report = harness();
+    run(["events", "--json"], report.io, sb.host);
+    return parseJson<EventView[]>(report.out)
+      .filter((event) => event.type === "runtime.started_by_shell")
+      .map(({ type, aggregateType, payload }) => ({ type, aggregateType, payload }));
+  }
+
+  it("records runtime.started_by_shell once per start, with its pid and lease epoch", async () => {
+    addTask("Shell work");
+    expect(await startLive(["--started-by", "shell", "--idle-exit-sec", "0"])).toBe(0);
+    expect(stateOf("Shell work")).toBe("completed");
+    expect(startedByShell()).toEqual([
+      {
+        type: "runtime.started_by_shell",
+        aggregateType: "runtime",
+        payload: { pid: process.pid, epoch: 1 },
+      },
+    ]);
+
+    // A second start takes the next epoch and records its own event.
+    expect(await startLive(["--started-by", "shell", "--idle-exit-sec", "0"])).toBe(0);
+    expect(startedByShell().map((event) => event.payload.epoch)).toEqual([1, 2]);
+  });
+
+  it("records no such event without the flag", async () => {
+    addTask("Plain work");
+    expect(await startLive(["--idle-exit-sec", "0"])).toBe(0);
+    expect(startedByShell()).toEqual([]);
+  });
+
+  it("accepts only shell as the starter", async () => {
+    expect(await startLive(["--started-by", "cron", "--idle-exit-sec", "0"])).toBe(2);
+    expect(h.err.join("\n")).toContain("--started-by");
+    expect(startedByShell()).toEqual([]);
+  });
+});

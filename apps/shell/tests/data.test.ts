@@ -4,7 +4,14 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openShellData, type ShellPaths } from "../src/data.js";
-import { createTask, openSeedStore, proposeExamplePlan, SEED_TITLES, seedStore } from "./seed.js";
+import {
+  createTask,
+  openSeedStore,
+  proposeExamplePlan,
+  queueTask,
+  SEED_TITLES,
+  seedStore,
+} from "./seed.js";
 
 // Data access (TUI-D4): the shell opens the store like the CLI's openExisting (inspect first, never create it) and
 // reads through the Store facets only. Nothing here starts the runtime or writes task rows.
@@ -70,6 +77,31 @@ describe("openShellData with a seeded store", () => {
       expect(scoped.events.every((event) => event.projectId === seeded.otherId)).toBe(true);
     } finally {
       data.close();
+    }
+  });
+
+  it("counts the work that waits for a runtime and tells a live lease from a dead one (LD-T6)", () => {
+    const seeded = seedStore(dataDir);
+    const writer = openSeedStore(dataDir);
+    try {
+      // One queued command and one decided plan the runtime has not applied, beside the seeded ready task.
+      queueTask(writer, seeded.demoId, "Queued for later");
+      const approvalId = proposeExamplePlan(dataDir, seeded.demoId);
+      writer.approvals.decide({ approvalId, outcome: "granted", decidedBy: "tester" });
+    } finally {
+      writer.close();
+    }
+    const live = openShellData({ paths: paths(), env: {} });
+    const dead = openShellData({ paths: paths(), env: {}, isPidAlive: () => false });
+    try {
+      const snapshot = live.load(undefined);
+      expect(snapshot.waitingWork).toBe(3);
+      // The seeded lease belongs to this process: active, unexpired and alive.
+      expect(snapshot.runtimeAlive).toBe(true);
+      expect(dead.load(undefined).runtimeAlive).toBe(false);
+    } finally {
+      live.close();
+      dead.close();
     }
   });
 

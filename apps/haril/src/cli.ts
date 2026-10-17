@@ -71,7 +71,8 @@ const HELP_LINES = [
   "  haril status [--project <slug>] [--json]   projects, tasks, queued commands and runtime",
   "  haril metrics [--project <slug>] [--json]   runs, retries and success rate from the event log",
   "  haril events [--project <slug>] [--task <id>] [--limit <n>] [--json]   the newest events, oldest first",
-  "  haril shell [--data-dir <path>]   open the interactive terminal UI",
+  "  haril shell [--data-dir <path>] [--no-runtime]   open the interactive terminal UI; it starts haril start",
+  "    in the background when work waits and no runtime runs (output in logs/), never with --no-runtime",
   "  haril help                       print this help",
 ];
 
