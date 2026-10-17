@@ -10,11 +10,10 @@
 // missing or too old, or on a usage error.
 
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, posix, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isEntryPoint } from "./lib/scan.mjs";
 
 const NODE_REQUIREMENT = "^24.21.0 || >=26.8.0";
 const BOOTSTRAP = "apps/bootstrap/dist/haril-bootstrap.mjs";
@@ -105,11 +104,12 @@ export function nodeStatus(version) {
 }
 
 // The same order as haril-bootstrap (apps/bootstrap/src/root.ts): --root, HARIL_RUNTIME_DIR, the platform default.
+// A relative value is resolved here, against the user's cwd, because the children run from the repository root.
 export function resolveRoot({ flag, env, platform, homeDir, cwd }) {
   const ops = pathOps(platform);
   if (nonEmpty(flag) !== undefined) return ops.resolve(cwd, flag);
   const fromEnv = nonEmpty(env.HARIL_RUNTIME_DIR);
-  if (fromEnv !== undefined) return fromEnv;
+  if (fromEnv !== undefined) return ops.resolve(cwd, fromEnv);
   if (platform === "win32") {
     return win32.join(
       nonEmpty(env.LOCALAPPDATA) ?? win32.join(homeDir, "AppData", "Local"),
@@ -125,17 +125,11 @@ function launcherPath(platform, root) {
 
 // Steps 1 to 6. Windows runs corepack (a .cmd shim) and haril.cmd through the shell; every other command is
 // spawned directly. The runtime goes before the CLI so the launchers pin its Node from the first install.
-export function planSteps({
-  platform,
-  env,
-  repoRoot,
-  nodeExe,
-  root,
-  explicitRoot = false,
-  runtime,
-}) {
+// Every child gets the root resolved once: bootstrap through --root, doctor through HARIL_RUNTIME_DIR, which is
+// how haril finds its runtime.
+export function planSteps({ platform, env, repoRoot, nodeExe, root, runtime }) {
   const shell = platform === "win32";
-  const rootArgs = explicitRoot ? ["--root", root] : [];
+  const rootArgs = ["--root", root];
   const step = (id, title, command, args, extra = {}) => ({
     id,
     title,
@@ -167,10 +161,9 @@ export function planSteps({
       "--from",
       repoRoot,
     ]),
-    // haril finds its runtime through HARIL_RUNTIME_DIR, so doctor describes a --root only when it is set.
     step("doctor", "Check the install with doctor", launcherPath(platform, root), ["doctor"], {
       shell,
-      ...(explicitRoot ? { env: { ...env, HARIL_RUNTIME_DIR: root } } : {}),
+      env: { ...env, HARIL_RUNTIME_DIR: root },
     }),
   ];
 }
@@ -201,12 +194,19 @@ function onPath(dir, env, platform) {
     .some((entry) => entry !== "" && normalize(entry) === wanted);
 }
 
-// The line the user can run by hand; the installer only prints it.
+function psQuote(text) {
+  return `'${text.replaceAll("'", "''")}'`;
+}
+
+function shQuote(text) {
+  return /^[\w@%+=:,./-]+$/.test(text) ? text : `'${text.replaceAll("'", "'\\''")}'`;
+}
+
+// The line the user can run by hand; the installer only prints it. On Windows it lasts for the session: the
+// .NET user-environment setter would rewrite a REG_EXPAND_SZ user Path as an expanded REG_SZ, so the permanent
+// change goes through the Windows dialog instead.
 function pathLine(bin, platform, homeDir) {
-  if (platform === "win32") {
-    const quoted = bin.replaceAll("'", "''");
-    return `[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path', 'User') + ';${quoted}', 'User')`;
-  }
+  if (platform === "win32") return `$env:Path += ${psQuote(`;${bin}`)}`;
   const escapeShell = (text) => text.replace(/[\\"$`]/g, (char) => `\\${char}`);
   const home = homeDir.replace(/\/+$/, "");
   const shown =
@@ -229,11 +229,18 @@ function printSummary(deps, root, options) {
     out(`${bin} is already on PATH, so haril runs by name.`);
   } else {
     out(`PATH is not edited. To run haril by name, add ${bin} to PATH yourself:`);
-    out(
-      platform === "win32"
-        ? "  in PowerShell, for your user (new terminals pick it up):"
-        : "  add this line to your shell profile (~/.profile, ~/.bashrc or ~/.zshrc), then open a new terminal:",
-    );
+    if (platform === "win32") {
+      // The dialog command goes on its own line, so it copies without the sentence around it.
+      out(
+        "  for your user, run this, select Path, then New, paste the folder and open a new terminal:",
+      );
+      out("    rundll32 sysdm.cpl,EditEnvironmentVariables");
+      out("  for this PowerShell session only:");
+    } else {
+      out(
+        "  add this line to your shell profile (~/.profile, ~/.bashrc or ~/.zshrc), then open a new terminal:",
+      );
+    }
     out(`    ${pathLine(bin, platform, deps.homeDir)}`);
   }
   if (root !== resolveRoot({ ...deps, flag: undefined })) {
@@ -247,7 +254,8 @@ function printSummary(deps, root, options) {
     );
   }
   out("Next steps:");
-  out(`  ${named ? "haril" : launcher}`);
+  const call = platform === "win32" ? `& ${psQuote(launcher)}` : shQuote(launcher);
+  out(`  ${named ? "haril" : call}`);
   out("    opens the console");
   out("  set the HARIL_CLIPROXYAPI_KEY environment variable");
   out("    to run real agents through CLIProxyAPI (README, section M3)");
@@ -321,12 +329,7 @@ export async function runInstall(argv, deps) {
   }
 
   const root = resolveRoot({ ...deps, flag: options.root });
-  const steps = planSteps({
-    ...deps,
-    root,
-    explicitRoot: options.root !== undefined,
-    runtime: options.runtime,
-  });
+  const steps = planSteps({ ...deps, root, runtime: options.runtime });
   if (options.dryRun) return printDryRun(steps, deps, root);
 
   const exists = deps.exists ?? existsSync;
@@ -368,6 +371,9 @@ export async function runInstall(argv, deps) {
     } else {
       deps.err("install: fix the problem above and run the installer again; re-running is safe.");
     }
+    if (step.id === "runtime") {
+      deps.err("install: to install the CLI without the Pi runtime for now, add --no-runtime.");
+    }
     return EXIT_STEP_FAILED;
   }
 
@@ -377,7 +383,7 @@ export async function runInstall(argv, deps) {
 
 // Runs one step with inherited stdio. A shell step gets a single command line: Node deprecates passing
 // arguments together with shell: true (DEP0190).
-function spawnStep(step) {
+export function spawnStep(step) {
   return new Promise((done) => {
     let settled = false;
     const settle = (result) => {
@@ -402,7 +408,19 @@ function spawnStep(step) {
   });
 }
 
-if (isEntryPoint(import.meta.url)) {
+// Compared through realpath: Node resolves links in the main module's URL but keeps argv[1] as typed, so a plain
+// comparison would make a run through a symlink or junction (macOS /tmp, for one) a silent no-op.
+function isMain(metaUrl) {
+  const script = process.argv[1];
+  if (!script) return false;
+  try {
+    return realpathSync(script) === realpathSync(fileURLToPath(metaUrl));
+  } catch {
+    return false;
+  }
+}
+
+if (isMain(import.meta.url)) {
   process.exitCode = await runInstall(process.argv.slice(2), {
     platform: process.platform,
     env: process.env,

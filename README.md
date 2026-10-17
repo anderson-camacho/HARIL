@@ -109,7 +109,7 @@ El instalador ejecuta seis pasos. Si uno falla, se detiene y dice qué paso fall
 3. `corepack pnpm run build`.
 4. Instala el runtime de Pi: un Node fijado y Pi. Va antes que la CLI para que los lanzadores usen ese Node desde la primera instalación.
 5. Copia la CLI a `<raíz>\app\<versión>\` y crea los lanzadores en `<raíz>\bin\`.
-6. Ejecuta `doctor` con el lanzador instalado. Después muestra la ruta del lanzador, la línea para añadir `bin` al PATH y los siguientes pasos.
+6. Ejecuta `doctor` con el lanzador instalado. Después muestra la ruta del lanzador, cómo añadir `bin` al PATH y los siguientes pasos.
 
 La raíz es `%LOCALAPPDATA%\HARIL` en Windows y `XDG_DATA_HOME/haril` en macOS y Linux (por defecto, `~/.local/share/haril`). `HARIL_RUNTIME_DIR` o `--root` la cambian.
 
@@ -118,13 +118,13 @@ Opciones:
 | Opción | Efecto |
 |---|---|
 | `--no-runtime` | Omite el paso 4 |
-| `--root <dir>` | Instala en otra raíz |
+| `--root <dir>` | Instala en otra raíz; para usarla, define `HARIL_RUNTIME_DIR` con esa ruta al llamar a `haril` |
 | `--dry-run` | Muestra los comandos sin ejecutar nada |
 | `--help` | Muestra la ayuda |
 
 Volver a ejecutarlo actualiza la instalación.
 
-El instalador no edita el PATH, el registro ni los perfiles de shell. Imprime la línea, y la añades tú si quieres llamar a `haril` sin la ruta completa. Tampoco toca `~/.pi`, `~/.claude`, `~/.codex`, `~/.engram`, `~/.npmrc` ni `%APPDATA%\npm`. La integración con Engram llegará más adelante, en M4; por ahora el instalador no la configura.
+El instalador no edita el PATH, el registro ni los perfiles de shell. Si quieres llamar a `haril` sin la ruta completa, añades `bin` tú: en macOS y Linux, con la línea que imprime para tu perfil; en Windows, en la ventana de variables de entorno de tu usuario (`rundll32 sysdm.cpl,EditEnvironmentVariables`). En Windows también imprime una línea que vale solo para la sesión de PowerShell actual. Tampoco toca `~/.pi`, `~/.claude`, `~/.codex`, `~/.engram`, `~/.npmrc` ni `%APPDATA%\npm`. La integración con Engram llegará más adelante, en M4; por ahora el instalador no la configura.
 
 Alternativa manual, con los mismos pasos uno a uno:
 

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -11,6 +12,7 @@ import {
   planSteps,
   resolveRoot,
   runInstall,
+  spawnStep,
 } from "../install.mjs";
 
 // One-command installer (haril-installer). Every run goes through an injected command runner, so nothing here
@@ -93,6 +95,11 @@ test("root: --root resolved against the cwd, then HARIL_RUNTIME_DIR, then the pl
     resolveRoot({ ...LINUX, env: { ...LINUX.env, HARIL_RUNTIME_DIR: "/opt/h" } }),
     "/opt/h",
   );
+  // A relative HARIL_RUNTIME_DIR is resolved once, against the cwd, so every child gets the same root.
+  assert.equal(
+    resolveRoot({ ...LINUX, env: { ...LINUX.env, HARIL_RUNTIME_DIR: "hr" } }),
+    "/home/ana/haril/hr",
+  );
   assert.equal(resolveRoot(LINUX), "/home/ana/.local/share/haril");
   assert.equal(
     resolveRoot({ ...LINUX, env: { ...LINUX.env, XDG_DATA_HOME: "/data" } }),
@@ -101,8 +108,9 @@ test("root: --root resolved against the cwd, then HARIL_RUNTIME_DIR, then the pl
   assert.equal(resolveRoot(WINDOWS), "C:\\Users\\Ana\\AppData\\Local\\HARIL");
 });
 
-test("plan on POSIX: six steps in order, the runtime before the CLI, doctor through the sh launcher", () => {
-  const steps = planSteps({ ...LINUX, root: "/home/ana/.local/share/haril", runtime: true });
+test("plan on POSIX: six steps in order, the runtime before the CLI, one root for every child", () => {
+  const root = "/home/ana/.local/share/haril";
+  const steps = planSteps({ ...LINUX, root, runtime: true });
   assert.deepEqual(
     steps.map((step) => step.id),
     ["preflight", "deps", "build", "runtime", "app", "doctor"],
@@ -116,7 +124,7 @@ test("plan on POSIX: six steps in order, the runtime before the CLI, doctor thro
   assert.deepEqual([byId.build.command, ...byId.build.args], ["corepack", "pnpm", "run", "build"]);
   assert.deepEqual(
     [byId.runtime.command, ...byId.runtime.args],
-    ["/usr/bin/node", "apps/bootstrap/dist/haril-bootstrap.mjs", "install-runtime"],
+    ["/usr/bin/node", "apps/bootstrap/dist/haril-bootstrap.mjs", "install-runtime", "--root", root],
   );
   assert.deepEqual(
     [byId.app.command, ...byId.app.args],
@@ -124,6 +132,8 @@ test("plan on POSIX: six steps in order, the runtime before the CLI, doctor thro
       "/usr/bin/node",
       "apps/bootstrap/dist/haril-bootstrap.mjs",
       "install",
+      "--root",
+      root,
       "--from",
       LINUX.repoRoot,
     ],
@@ -132,6 +142,7 @@ test("plan on POSIX: six steps in order, the runtime before the CLI, doctor thro
     [byId.doctor.command, ...byId.doctor.args],
     ["/home/ana/.local/share/haril/bin/haril", "doctor"],
   );
+  assert.equal(byId.doctor.env.HARIL_RUNTIME_DIR, root);
   for (const step of steps) {
     assert.equal(step.shell, false, step.id);
     assert.equal(step.cwd, LINUX.repoRoot, step.id);
@@ -183,16 +194,24 @@ test("a full run executes every step once, in order, and prints the launcher and
   assert.match(run.out, /HARIL_CLIPROXYAPI_KEY/);
 });
 
-test("Windows prints the user PATH line for PowerShell instead of editing it", async () => {
+test("Windows points to the user environment dialog and prints a session-only PATH line", async () => {
   const run = await install([], WINDOWS);
   assert.equal(run.code, 0, run.err);
+  // [Environment]::SetEnvironmentVariable would rewrite a REG_EXPAND_SZ user Path as an expanded REG_SZ.
+  assert.doesNotMatch(run.out, /SetEnvironmentVariable/);
+  assert.match(run.out, /rundll32 sysdm\.cpl,EditEnvironmentVariables/);
   assert.ok(
-    run.out.includes(
-      "[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path', 'User') + ';C:\\Users\\Ana\\AppData\\Local\\HARIL\\bin', 'User')",
-    ),
+    run.out.includes("$env:Path += ';C:\\Users\\Ana\\AppData\\Local\\HARIL\\bin'"),
     run.out,
   );
-  assert.match(run.out, /HARIL\\bin\\haril\.cmd/);
+  assert.ok(run.out.includes("& 'C:\\Users\\Ana\\AppData\\Local\\HARIL\\bin\\haril.cmd'"), run.out);
+});
+
+test("POSIX quotes a launcher path with spaces in the next steps", async () => {
+  const run = await install(["--root", "/opt/my haril"]);
+  assert.equal(run.code, 0, run.err);
+  assert.ok(run.out.includes("'/opt/my haril/bin/haril'"), run.out);
+  assert.ok(run.out.includes('export PATH="/opt/my haril/bin:$PATH"'), run.out);
 });
 
 test("a bin directory already on PATH gets no PATH line", async () => {
@@ -288,6 +307,13 @@ test("a failing step stops the run and names the step and its exit code", async 
   assert.match(run.err, /step 3\/6 "Build" failed with exit code 3/);
 });
 
+test("a failing runtime step suggests --no-runtime to get the CLI alone", async () => {
+  const run = await install([], LINUX, { runtime: { code: 1, signal: null } });
+  assert.equal(run.code, 1);
+  assert.match(run.err, /step 4\/6 .* failed with exit code 1/);
+  assert.match(run.err, /--no-runtime/);
+});
+
 test("a step that cannot start or is stopped by a signal also stops the run", async () => {
   const notFound = await install([], LINUX, { deps: { code: null, signal: null, error: "boom" } });
   assert.equal(notFound.code, 1);
@@ -315,6 +341,18 @@ test("a missing launcher fails step 6 instead of reading as a doctor warning", a
   assert.match(run.err, /step 6\/6 .* found no launcher at .*haril\.cmd/);
 });
 
+test("no PATH edit: the installer has no write path at all", () => {
+  const source = readFileSync(join(REPO, "scripts", "install.mjs"), "utf8");
+  // The node:fs imports only read: nothing is written, appended or created.
+  assert.deepEqual(
+    [...source.matchAll(/import \{([^}]*)\} from "node:fs"/g)].map((match) => match[1].trim()),
+    ["existsSync, realpathSync"],
+  );
+  assert.doesNotMatch(source, /process\.env(\.\w+|\[[^\]]*\])?\s*\+?=(?!=)/);
+  assert.doesNotMatch(source, /Object\.assign\(\s*process\.env/);
+  assert.doesNotMatch(source, /\b(setx|reg add|SetEnvironmentVariable|New-ItemProperty|sudo)\b/i);
+});
+
 test("no PATH edit: no step touches PATH, the registry or a shell profile, and PATH reaches children unchanged", async () => {
   for (const host of [LINUX, WINDOWS]) {
     for (const argv of [[], ["--root", "x"]]) {
@@ -330,6 +368,41 @@ test("no PATH edit: no step touches PATH, the registry or a shell profile, and P
         assert.equal(step.env.PATH, host.env.PATH, step.id);
       }
     }
+  }
+});
+
+// The real runner: exit codes come back with and without the shell, and a missing command is an error.
+test("spawnStep reports exit codes, through the shell too, and start errors", async () => {
+  const exit3 = { command: process.execPath, args: ["-e", "process.exit(3)"], cwd: REPO };
+  const step = { ...exit3, env: process.env, shell: false };
+  assert.deepEqual(await spawnStep(step), { code: 3, signal: null });
+  assert.deepEqual(await spawnStep({ ...step, shell: true }), { code: 3, signal: null });
+  const missing = await spawnStep({ ...step, command: join(REPO, "no-such-command") });
+  assert.equal(missing.code, null);
+  assert.match(missing.error, /ENOENT/);
+});
+
+// Node resolves the main module through links but keeps argv[1] as typed, as on macOS where /tmp is a link.
+test("install.mjs still runs when reached through a symlink or junction", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "haril-install-link-"));
+  const link = join(dir, "scripts");
+  try {
+    symlinkSync(join(REPO, "scripts"), link, "junction");
+  } catch (error) {
+    rmSync(dir, { recursive: true, force: true });
+    t.skip(`cannot create a link here: ${error.message}`);
+    return;
+  }
+  try {
+    const help = spawnSync(process.execPath, [join(link, "install.mjs"), "--help"], {
+      encoding: "utf8",
+    });
+    assert.equal(help.status, 0, help.stderr);
+    assert.match(help.stdout, /usage: /);
+  } finally {
+    // Only the link is removed; the recursive removal runs once it is gone.
+    unlinkSync(link);
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 
