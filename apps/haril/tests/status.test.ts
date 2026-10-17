@@ -32,6 +32,14 @@ interface StatusJson {
   taskList: unknown[];
   queuedCommands: { commandId: string; type: string; projectId: string | null; args: unknown }[];
   runtime: { status: string };
+  memory: {
+    provider: string;
+    providerSource: string;
+    health: string;
+    degraded: boolean;
+    lastState: string | null;
+    outbox: { depth: number };
+  };
 }
 
 describe("haril status", () => {
@@ -61,6 +69,7 @@ describe("haril status", () => {
         "dataDir",
         "initialized",
         "projects",
+        "memory",
         "queuedCommands",
         "runtime",
         "taskList",
@@ -119,6 +128,48 @@ describe("haril status", () => {
     const status = parseJson<StatusJson>(json.out);
     expect(status.projects.map((project) => project.slug)).toEqual(["beta"]);
     expect(status.queuedCommands).toEqual([]);
+  });
+
+  it("[MC-T4 fix] shows the memory provider, its health and the outbox depth, as haril memory status reads them (MEMORY.md 12.3)", async () => {
+    const empty = harness();
+    expect(run(["status", "--json"], empty.io, sb.host)).toBe(0);
+    expect(parseJson<StatusJson>(empty.out).memory).toMatchObject({
+      provider: "null",
+      providerSource: "default",
+      health: "not_checked",
+      degraded: false,
+      outbox: { depth: 0 },
+    });
+
+    run(
+      ["project", "init", projectRoot(sb, "demo"), "--name", "Demo", "--yes"],
+      harness().io,
+      sb.host,
+    );
+    expect(await run(["run"], harness().io, sb.host)).toBe(0);
+    const json = harness();
+    expect(run(["status", "--json"], json.io, sb.host)).toBe(0);
+    const memory = harness();
+    expect(run(["memory", "status", "--json"], memory.io, sb.host)).toBe(0);
+    const {
+      initialized: _initialized,
+      dataDir: _dataDir,
+      runtime: _runtime,
+      ...expected
+    } = parseJson<Record<string, unknown>>(memory.out);
+    expect(parseJson<StatusJson>(json.out).memory).toEqual(expected);
+    expect(parseJson<StatusJson>(json.out).memory).toMatchObject({
+      provider: "null",
+      providerSource: "recorded",
+      lastState: "active",
+      health: "not_checked",
+    });
+
+    const text = harness();
+    expect(run(["status"], text.io, sb.host)).toBe(0);
+    expect(text.out.join("\n")).toMatch(
+      /memory +null · not checked \(last recorded active\) · degraded no · outbox 0 to deliver/,
+    );
   });
 
   it("exits 2 for an unknown --project", () => {

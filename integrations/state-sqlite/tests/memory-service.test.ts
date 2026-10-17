@@ -1,5 +1,7 @@
 import {
   createMemoryService,
+  MAX_DELIVERY_ATTEMPTS,
+  MEMORY_DRAIN_BUDGET_MS,
   type MemoryService,
   type MemoryWriteDraft,
   NullMemoryProvider,
@@ -248,6 +250,65 @@ describe("at-least-once delivery (MEM-04, MEM-16, AR-G14)", () => {
     });
     expect(service.state).toBe("active");
     expect(eventsOf("memory.degraded")).toHaveLength(0);
+  });
+});
+
+describe("a flapping provider and a slow one (MC-T4 fix)", () => {
+  it("health passes but every write fails: at the attempt cap the row waits for review, never dead", async () => {
+    const service = serviceFor(provider);
+    await service.start();
+    provider.makeUnavailable("store");
+    await service.enqueueWrite(draft());
+    await service.tick();
+    for (let turn = 0; turn < 3 * MAX_DELIVERY_ATTEMPTS; turn += 1) {
+      if (store.memory.get("fake-op-000001")?.status !== "pending") break;
+      clock.advance(120_000);
+      await service.tick();
+    }
+    expect(store.memory.get("fake-op-000001")).toMatchObject({
+      status: "needs_review",
+      attempts: MAX_DELIVERY_ATTEMPTS,
+      lastError: "Unavailable",
+    });
+    expect(eventsOf("memory.outbox.needs_review").map((event) => event.payload)).toEqual([
+      { operationId: "fake-op-000001", op: "store", code: "Unavailable" },
+    ]);
+    expect(eventsOf("memory.outbox.dead")).toEqual([]);
+  });
+
+  it("bounds a drain by time as well as rows, and renews the lease before each provider call", async () => {
+    // Each write takes 2 s of the runtime's clock.
+    class SlowProvider extends FakeMemoryProvider {
+      override async store(...args: Parameters<FakeMemoryProvider["store"]>) {
+        clock.advance(2_000);
+        return super.store(...args);
+      }
+    }
+    const beats: number[] = [];
+    const service = createMemoryService({
+      store,
+      provider: new SlowProvider(fakeMemoryDeps(), { persistent: true }),
+      clock,
+      ids: sequentialIds("fake-op"),
+      hasher: new Sha256Hasher(),
+      epoch,
+      heartbeat: () => beats.push(clock.now()),
+    });
+    await service.start();
+    for (let index = 1; index <= 5; index += 1) {
+      await service.enqueueWrite({ ...draft(`fake content ${index}`), title: `fake ${index}` });
+    }
+    beats.length = 0;
+    const started = clock.now();
+
+    await service.tick();
+    // Calls start at 0, 2 and 4 s; the fourth would start past the budget, so it waits for the next turn.
+    expect(MEMORY_DRAIN_BUDGET_MS).toBe(5_000);
+    expect(store.memory.status().outbox).toMatchObject({ delivered: 3, pending: 2 });
+    expect(beats).toEqual([started, started + 2_000, started + 4_000]);
+
+    await service.tick();
+    expect(store.memory.status().outbox).toMatchObject({ delivered: 5, pending: 0 });
   });
 });
 

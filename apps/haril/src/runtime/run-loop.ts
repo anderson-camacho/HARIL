@@ -32,7 +32,13 @@ import { modelProblemOf } from "../providers.js";
 import { projectFileReader, verificationPayload } from "./acceptance.js";
 import { applyDecidedApprovals, denyPlansOfFailedTask } from "./approvals.js";
 import { controlEventOf } from "./control-events.js";
-import { backoffJitter, defaultRuntimeMemory, type RuntimeMemory } from "./memory.js";
+import {
+  backoffJitter,
+  defaultRuntimeMemory,
+  type MemoryLeft,
+  memoryLeftOf,
+  type RuntimeMemory,
+} from "./memory.js";
 import type { PlanAttemptReport, PlanProposals } from "./plan-proposals.js";
 import type { RealAgentReadiness, RealAgents } from "./real-agent.js";
 import { createShutdown, RUNTIME_STOP, type Shutdown } from "./shutdown.js";
@@ -95,10 +101,12 @@ export interface RunLoopOptions {
   readonly pollMs?: number;
 }
 
+// memory: what a runtime that exits leaves for memory (MC-T4 fix): the tasks that wait for it and the queued writes,
+// which the next runtime resumes. memoryLeftLine says it.
 export type RunLoopResult =
   | { readonly kind: "busy"; readonly pid: number }
-  | { readonly kind: "idle"; readonly summary: RunSummary }
-  | { readonly kind: "stopped"; readonly summary: RunSummary };
+  | { readonly kind: "idle"; readonly summary: RunSummary; readonly memory: MemoryLeft }
+  | { readonly kind: "stopped"; readonly summary: RunSummary; readonly memory: MemoryLeft };
 
 export async function runUntilIdle(options: RunLoopOptions): Promise<RunLoopResult> {
   const { store } = options;
@@ -136,6 +144,9 @@ export async function runUntilIdle(options: RunLoopOptions): Promise<RunLoopResu
         denyPlansOfFailedTask(store, recovered.taskId, "infra_restarts_exhausted");
       }
     }
+    // The lease heartbeat runs before memory starts: memory calls it before each provider call (MC-T4 fix).
+    const beat = leaseHeartbeat(store, options.clock, epoch, ttlMs);
+    beat();
     // MC-T4, ARCH 7.5 and R-O7: the last step of the start is memory. The outbox rows a previous runtime left sending go
     // back to pending, the provider is checked and recorded for haril memory status, and the outbox drains if it is up.
     const runtimeMemory = options.memory ?? defaultRuntimeMemory(options.clock);
@@ -147,12 +158,12 @@ export async function runUntilIdle(options: RunLoopOptions): Promise<RunLoopResu
       clock: options.clock,
       epoch,
       jitter: backoffJitter,
+      heartbeat: beat,
     });
     emitMemoryTick(await memory.start(), emit);
     // serve() releases the lease itself, cleanly, on idle and on a stop.
-    const beat = leaseHeartbeat(store, options.clock, epoch, ttlMs);
     const kind = await serve(options, shutdown, { epoch, beat, emit, setup, memory });
-    return { kind, summary: summarizeRun(events) };
+    return { kind, summary: summarizeRun(events), memory: memoryLeftOf(store, memory.state) };
   } finally {
     stopNotice();
     // The channel closes before the lease is released (ARCH 4.3). Its files are removed only while they still belong to

@@ -83,7 +83,7 @@ El `analyst` solo lee: lee archivos del proyecto y responde en el texto de su re
    .\bin\haril.ps1 memory status
    ```
 
-   `memory status` muestra el proveedor de memoria, su salud, si la memoria está degradada y cuántas filas esperan en el outbox (`--json` da lo mismo en JSON). Solo lee `haril.db` y funciona sin runtime: sin uno vivo, la salud sale como `not checked` junto al último estado que registró el runtime. Mientras no llegue Engram, el proveedor es `null`, que no guarda nada, así que no se encola ninguna escritura; la caja Connect de `haril shell` muestra el mismo estado.
+   `memory status` muestra el proveedor de memoria, su salud, si la memoria está degradada y cuántas filas esperan en el outbox (`--json` da lo mismo en JSON). Solo lee `haril.db` y funciona sin runtime: sin uno vivo, la salud sale como `not checked` junto al último estado que registró el runtime. Mientras no llegue Engram, el proveedor es `null`, que no guarda nada, así que no se encola ninguna escritura; `haril status` y la caja Connect de `haril shell` muestran el mismo estado.
 
 8. Limpiar la variable de sesión: `Remove-Item Env:HARIL_HOME`.
 

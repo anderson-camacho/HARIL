@@ -6,14 +6,14 @@ import { withBusyRetry } from "./busy.js";
 import {
   configureConnection,
   DB_FILE_NAME,
-  HARIL_APPLICATION_ID,
+  isForeignApplication,
   probeSqliteVersion,
   readApplicationId,
   readUserVersion,
   SYNCHRONOUS_FULL,
   WAL_AUTOCHECKPOINT_PAGES,
 } from "./connection.js";
-import { StoreError } from "./errors.js";
+import { foreignApplicationError, StoreError } from "./errors.js";
 import { evaluateGates, hasErrorGate, type RuntimeVersions } from "./gates.js";
 import { checkDataLocation } from "./location.js";
 import { KNOWN_SCHEMA_VERSION, migrate } from "./migrate.js";
@@ -110,13 +110,7 @@ function openConnection(
       );
     }
     const applicationId = readApplicationId(db);
-    if (applicationId !== 0 && applicationId !== HARIL_APPLICATION_ID) {
-      throw new StoreError(
-        "store.gate_failed",
-        "haril.db belongs to another application (application_id differs). Remedy: point HARIL_HOME or --data-dir at a HARIL data directory.",
-        { gate: "application_id", applicationId },
-      );
-    }
+    if (isForeignApplication(applicationId)) throw foreignApplicationError(applicationId);
     const userVersion = readUserVersion(db);
     if (userVersion > KNOWN_SCHEMA_VERSION) {
       throw new StoreError(

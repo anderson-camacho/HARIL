@@ -4,18 +4,18 @@ import {
   UNRECORDED_MEMORY_STATUS,
   visibleText,
 } from "@haril/core";
-import type { RuntimeLeaseSummary } from "@haril/core/ports";
-import { readMemoryStatus } from "@haril/state-sqlite";
+import { readMemoryStatus, StoreError } from "@haril/state-sqlite";
 import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_ERROR, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
-import { clockFor, defaultPidAlive } from "../host.js";
 import { VERSION } from "../version.js";
-import { dataDirFor } from "./common.js";
+import { dataDirFor, leaseHolderAlive } from "./common.js";
 
 // `haril memory status [--json]` (MC-T4; BL-082, RF-132; MEMORY.md 12.3): read-only. It reads the meta keys memory.*
-// the runtime recorded and the outbox counts through a read-only connection, so it works with no runtime running, never
-// writes or migrates haril.db and never starts a provider. Without a live runtime the recorded health is "not checked".
-// The shell's Connect box reads the same status and describes it with the same Core rule.
+// the runtime recorded and the outbox counts without writing or migrating haril.db, leaves the data dir as it found it,
+// works with no runtime running and never starts a provider. Without a live runtime the recorded health is "not
+// checked". A haril.db without the HARIL schema reads as not initialized, and one of another application is refused
+// with the gate's message, as haril status does. haril status and the shell's Connect box read the same status and
+// describe it with the same Core rule.
 
 const USAGE = "usage: haril memory status [--json] [--data-dir <path>]";
 
@@ -48,14 +48,14 @@ function memoryStatus(args: readonly string[], io: CliIo, host: HostInfo): numbe
   try {
     reading = readMemoryStatus(dataDir);
   } catch (error) {
+    // The gate's refusal reaches the CLI's error report, the same exit and text as haril status (MC-T4 fix).
+    if (error instanceof StoreError) throw error;
     io.err(
       `haril: the store could not be read: ${error instanceof Error ? error.message : String(error)}`,
     );
     return EXIT_ERROR;
   }
-  const alive =
-    reading !== undefined &&
-    leaseAlive(reading.lease, clockFor(host).now(), host.isPidAlive ?? defaultPidAlive);
+  const alive = reading !== undefined && leaseHolderAlive(reading.lease, host);
   const report: MemoryReport = {
     initialized: reading !== undefined,
     dataDir,
@@ -65,15 +65,6 @@ function memoryStatus(args: readonly string[], io: CliIo, host: HostInfo): numbe
   if (parsed.flags.has("--json")) io.out(JSON.stringify(report));
   else printText(io, report);
   return EXIT_OK;
-}
-
-// A runtime holds the lease: active, unexpired and its process alive (as the shell tells it, LD-T6).
-function leaseAlive(
-  lease: RuntimeLeaseSummary,
-  now: number,
-  isPidAlive: (pid: number) => boolean,
-): boolean {
-  return lease.status === "active" && lease.expiresAt > now && isPidAlive(lease.pid);
 }
 
 function printText(io: CliIo, report: MemoryReport): void {
@@ -106,6 +97,18 @@ function persistenceText(persistent: boolean | null): string {
   return persistent
     ? "yes"
     : "no (not persistent: the knowledge and project memories are not kept, U-15)";
+}
+
+// One line for haril status (MEMORY.md 12.3): "null · not checked (last recorded active) · degraded no · outbox 0 to
+// deliver". The provider name comes from the store, so the caller shows it as the terminal draws it.
+export function memoryLine(view: MemoryStatusView): string {
+  const health =
+    view.health !== "not_checked"
+      ? view.health
+      : view.lastState === null
+        ? "not checked"
+        : `not checked (last recorded ${view.lastState})`;
+  return `${view.provider} · ${health} · degraded ${view.degraded ? "yes" : "no"} · outbox ${view.outbox.depth} to deliver`;
 }
 
 function healthText(report: MemoryReport): string {

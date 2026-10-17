@@ -1,4 +1,10 @@
-import { TASK_STATES, visibleText } from "@haril/core";
+import {
+  describeMemory,
+  type MemoryStatusView,
+  TASK_STATES,
+  UNRECORDED_MEMORY_STATUS,
+  visibleText,
+} from "@haril/core";
 import type {
   CommandRecord,
   ProjectRecord,
@@ -9,9 +15,11 @@ import type {
 import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
 import { VERSION } from "../version.js";
-import { dataDirFor, openExisting } from "./common.js";
+import { dataDirFor, leaseHolderAlive, openExisting } from "./common.js";
+import { memoryLine } from "./memory.js";
 
-// `haril status` (M1-T4): read-only. A missing database is reported as "not initialized" and never created.
+// `haril status` (M1-T4): read-only. A missing database is reported as "not initialized" and never created. It shows
+// memory as haril memory status does, from the same store status (MC-T4 fix; MEMORY.md 12.3).
 
 interface QueuedView {
   readonly commandId: string;
@@ -29,6 +37,7 @@ interface StatusReport {
   readonly taskList: readonly TaskRecord[];
   readonly queuedCommands: readonly QueuedView[];
   readonly runtime: RuntimeLeaseSummary;
+  readonly memory: MemoryStatusView;
 }
 
 const USAGE = "usage: haril status [--project <slug>] [--json] [--data-dir <path>]";
@@ -48,7 +57,7 @@ export function status(args: readonly string[], io: CliIo, host: HostInfo): numb
     const result =
       store === undefined
         ? { ok: true as const, report: emptyReport(dataDir) }
-        : readReport(store, dataDir, lastValue(parsed, "--project"));
+        : readReport(store, dataDir, lastValue(parsed, "--project"), host);
     if (!result.ok) {
       io.err(`haril: ${result.message}`);
       return EXIT_USAGE;
@@ -70,6 +79,7 @@ function emptyReport(dataDir: string): StatusReport {
     taskList: [],
     queuedCommands: [],
     runtime: { status: "none" },
+    memory: describeMemory(UNRECORDED_MEMORY_STATUS, false),
   };
 }
 
@@ -77,7 +87,12 @@ type ReadResult =
   | { readonly ok: true; readonly report: StatusReport }
   | { readonly ok: false; readonly message: string };
 
-function readReport(store: Store, dataDir: string, slug: string | undefined): ReadResult {
+function readReport(
+  store: Store,
+  dataDir: string,
+  slug: string | undefined,
+  host: HostInfo,
+): ReadResult {
   const allProjects = store.projects.list();
   const scope =
     slug === undefined ? undefined : allProjects.find((project) => project.slug === slug);
@@ -99,6 +114,7 @@ function readReport(store: Store, dataDir: string, slug: string | undefined): Re
       enqueuedAt: command.enqueuedAt,
     }));
 
+  const runtime = store.runtime.leaseSummary();
   return {
     ok: true,
     report: {
@@ -108,7 +124,8 @@ function readReport(store: Store, dataDir: string, slug: string | undefined): Re
       tasks: { total: taskList.length, byState: countByState(taskList) },
       taskList,
       queuedCommands,
-      runtime: store.runtime.leaseSummary(),
+      runtime,
+      memory: describeMemory(store.memory.status(), leaseHolderAlive(runtime, host)),
     },
   };
 }
@@ -138,6 +155,7 @@ function printText(io: CliIo, report: StatusReport): void {
   io.out(`  queued    ${report.queuedCommands.length}`);
   for (const command of report.queuedCommands) io.out(`    ${command.commandId}  ${command.type}`);
   io.out(`  runtime   ${runtimeText(report.runtime)}`);
+  io.out(visibleText(`  memory    ${memoryLine(report.memory)}`));
 }
 
 function runtimeText(runtime: RuntimeLeaseSummary): string {

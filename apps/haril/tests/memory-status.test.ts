@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import {
   canonicalJson,
   canTransition,
@@ -214,6 +215,48 @@ describe("haril memory status", () => {
     await cli(["memory", "status"]);
     await cli(["memory", "status", "--json"]);
     expect(readFileSync(join(sb.dataDir, "haril.db")).equals(before)).toBe(true);
+  });
+
+  it("[MC-T4 fix] leaves a closed data dir exactly as it found it, side files included", async () => {
+    await initProject();
+    expect((await cli(["run"])).code).toBe(0);
+    const before = readdirSync(sb.dataDir).sort();
+    expect(before).not.toContain("haril.db-wal");
+    await cli(["memory", "status"]);
+    await cli(["memory", "status", "--json"]);
+    expect(readdirSync(sb.dataDir).sort()).toEqual(before);
+  });
+
+  it("[MC-T4 fix] on a zero-byte haril.db exits 0 like haril status, says not initialized, and writes nothing", async () => {
+    mkdirSync(sb.dataDir, { recursive: true });
+    writeFileSync(join(sb.dataDir, "haril.db"), "");
+    const text = await cli(["memory", "status"]);
+    expect(text.code).toBe(0);
+    expect(text.out.join("\n")).toContain("not initialized");
+    expect(await statusJson()).toMatchObject({ initialized: false, provider: "null" });
+    expect(statSync(join(sb.dataDir, "haril.db")).size).toBe(0);
+    expect(readdirSync(sb.dataDir)).toEqual(["haril.db"]);
+    // haril status gives the same exit code on the same file.
+    expect((await cli(["status"])).code).toBe(0);
+  });
+
+  it("[MC-T4 fix] on the database of another application exits 2 with the same message as haril status", async () => {
+    mkdirSync(sb.dataDir, { recursive: true });
+    const foreign = new DatabaseSync(join(sb.dataDir, "haril.db"));
+    foreign.exec("PRAGMA application_id = 1234; CREATE TABLE fake_table (x INTEGER)");
+    foreign.close();
+    const status = await cli(["status"]);
+    expect(status.code).toBe(2);
+    expect(status.err.join("\n")).toContain("belongs to another application");
+    for (const args of [
+      ["memory", "status"],
+      ["memory", "status", "--json"],
+    ]) {
+      const result = await cli(args);
+      expect(result.code).toBe(status.code);
+      expect(result.err).toEqual(status.err);
+      expect(result.out).toEqual([]);
+    }
   });
 
   it("rejects an unknown subcommand and stray arguments with the usage, and the help lists it", async () => {

@@ -3,7 +3,7 @@ import type { StorePragmas } from "@haril/core/ports";
 
 // Connection setup shared by the store and the read-only inspection.
 export const DB_FILE_NAME = "haril.db";
-const BUSY_TIMEOUT_MS = 200;
+export const BUSY_TIMEOUT_MS = 200;
 export const SYNCHRONOUS_FULL = 2;
 // ARCH 8.4: the WAL is checkpointed automatically every 1000 pages (INV-14). Read back like the other PRAGMAs.
 export const WAL_AUTOCHECKPOINT_PAGES = 1000;
@@ -54,6 +54,12 @@ export function readPragmas(db: DatabaseSync): StorePragmas {
 export function readUserVersion(db: DatabaseSync): number {
   const row = db.prepare("PRAGMA user_version").get() as { user_version: number };
   return row.user_version;
+}
+
+// The application id of the file is neither HARIL's nor 0 (an empty or brand-new file): the gate refuses it, and
+// the read-only readers refuse it the same way (MC-T4 fix).
+export function isForeignApplication(applicationId: number): boolean {
+  return applicationId !== 0 && applicationId !== HARIL_APPLICATION_ID;
 }
 
 export function readApplicationId(db: DatabaseSync): number {

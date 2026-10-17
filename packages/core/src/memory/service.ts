@@ -38,10 +38,15 @@ import { checked, contractInvalid, memoryFailure, ok, utf8Length } from "./suppo
 const BACKOFF_BASE_MS = 1_000;
 const BACKOFF_CAP_MS = 60_000;
 // [S]: the contract proposes no cap on delivery attempts (memory.md 4.4). An outage costs one attempt at most, since a
-// degraded service does not drain until its health check passes.
+// degraded service does not drain until its health check passes; a provider that answers health but keeps failing
+// writes costs one per cycle, and at the cap the row waits for review instead of being lost (MC-T4 fix).
 export const MAX_DELIVERY_ATTEMPTS = 10;
 // [S] rows delivered per drain, so one turn of the runtime loop stays short; the rest go in the next turn.
 const DRAIN_BATCH = 50;
+// [S] the time one drain may take before it leaves the rest for the next turn: a third of the runtime's 30 s lease TTL
+// and half its 10 s heartbeat, so a slow provider cannot keep a turn away from the lease (MC-T4 fix). A call already
+// started runs to its end, so a provider call also needs its own deadline (the adapter's, MC-T5).
+export const MEMORY_DRAIN_BUDGET_MS = 5_000;
 
 export interface MemoryServiceOptions {
   readonly store: Pick<Store, "memory" | "events">;
@@ -53,6 +58,9 @@ export interface MemoryServiceOptions {
   readonly epoch: number;
   // A delay in [0, maxMs) taken off each backoff (R-O4 jitter). Absent: no jitter; the Core has no randomness (R7).
   readonly jitter?: (maxMs: number) => number;
+  // Called before each call to the provider, so a runtime renews its lease while memory works (MC-T4 fix). The runtime
+  // passes its lease heartbeat, which renews only when its interval has passed.
+  readonly heartbeat?: () => void;
 }
 
 // A write as core/memory receives it: the ScopeRef the runtime injected, with its kind, and content already redacted
@@ -97,16 +105,17 @@ export function deliveryBackoffMs(attempt: number): number {
 }
 
 // What a failed delivery does to its row (memory.md 4.4). An Unavailable the adapter could not resolve, an unknown
-// result, comes back non-retryable and goes to review: it is never resent blindly (R-O6). SessionEnded and
-// ScopeMismatch cannot be retargeted without changing the row's ScopeRef. Unsupported, NotFound and contract.invalid
-// mean the Core queued what it should not have: the row is dead.
+// result, comes back non-retryable and goes to review: it is never resent blindly (R-O6). A retryable Unavailable at
+// the attempt cap also goes to review, not dead: the write was valid, only its provider kept failing (MC-T4 fix).
+// SessionEnded and ScopeMismatch cannot be retargeted without changing the row's ScopeRef. Unsupported, NotFound and
+// contract.invalid mean the Core queued what it should not have: the row is dead.
 export function outboxTransitionOf(
   failure: MemoryFailure,
   attempts: number,
 ): "pending" | "needs_review" | "dead" {
   if (failure.code === "Unavailable") {
     if (!failure.retryable) return "needs_review";
-    return attempts >= MAX_DELIVERY_ATTEMPTS ? "dead" : "pending";
+    return attempts >= MAX_DELIVERY_ATTEMPTS ? "needs_review" : "pending";
   }
   if (failure.code === "SessionEnded" || failure.code === "ScopeMismatch") return "needs_review";
   return "dead";
@@ -161,6 +170,7 @@ export function createMemoryService(options: MemoryServiceOptions): MemoryServic
 
   // Called only while degraded and only when the backoff is due. True when the provider is back.
   const checkHealth = async (): Promise<boolean> => {
+    options.heartbeat?.();
     const health = await provider.health();
     if (isHealthy(health)) {
       recover();
@@ -234,6 +244,7 @@ export function createMemoryService(options: MemoryServiceOptions): MemoryServic
 
   // The provider call runs outside any transaction of haril.db: claim, call, close (R-O2). True when delivered.
   const deliver = async (row: OutboxRow): Promise<boolean> => {
+    options.heartbeat?.();
     const sent = await send(row);
     if (sent.ok) {
       store.memory.markDelivered(epoch, {
@@ -254,12 +265,14 @@ export function createMemoryService(options: MemoryServiceOptions): MemoryServic
     return false;
   };
 
-  // One consumer, sequential, in outbox order (R-O1, R-O3); it stops as soon as the provider falls.
+  // One consumer, sequential, in outbox order (R-O1, R-O3); it stops as soon as the provider falls, and leaves the
+  // rest for the next turn once it has delivered its batch or spent its time budget.
   const drain = async (): Promise<void> => {
     drainRequested = false;
+    const startedAt = clock.now();
     let delivered = 0;
     for (let count = 0; state === "active"; count += 1) {
-      if (count >= DRAIN_BATCH) {
+      if (count >= DRAIN_BATCH || clock.now() - startedAt >= MEMORY_DRAIN_BUDGET_MS) {
         drainRequested = true;
         break;
       }
@@ -308,6 +321,7 @@ export function createMemoryService(options: MemoryServiceOptions): MemoryServic
 
     async start() {
       store.memory.requeueStale(epoch);
+      options.heartbeat?.();
       const health = await provider.health();
       let released: readonly PromotedTask[] = [];
       if (isHealthy(health)) {

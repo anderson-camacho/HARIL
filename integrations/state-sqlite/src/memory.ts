@@ -16,8 +16,13 @@ import type {
   RuntimeLeaseSummary,
   StoreRules,
 } from "@haril/core/ports";
-import { DB_FILE_NAME } from "./connection.js";
-import { StoreError } from "./errors.js";
+import {
+  BUSY_TIMEOUT_MS,
+  DB_FILE_NAME,
+  isForeignApplication,
+  readApplicationId,
+} from "./connection.js";
+import { foreignApplicationError, StoreError } from "./errors.js";
 import { readLeaseSummary } from "./lease.js";
 
 // The memory module of the Store (MC-T4; task-store.md 4.10, memory.md 4.4): memory_outbox and its delivery protocol,
@@ -397,9 +402,10 @@ export function createMemoryFacet(options: MemoryFacetOptions): MemoryStorePort 
   };
 }
 
-// What the CLI reads without a runtime (haril memory status, RF-132): the status and the lease, through a read-only
-// connection and in one read transaction, so the command never writes haril.db and never migrates it. Undefined when
-// there is no database. A database from before migration 0006 has no outbox and nothing recorded.
+// What the CLI reads without a runtime (haril memory status, RF-132): the status and the lease, in one read
+// transaction, without writing or migrating haril.db. Undefined when there is no HARIL store: no file, or one without
+// the HARIL schema (an empty file). A database of another application is the gate's refusal. A database from before
+// migration 0006 has no outbox and nothing recorded.
 export interface MemoryStatusReading {
   readonly status: MemoryStatus;
   readonly lease: RuntimeLeaseSummary;
@@ -408,10 +414,20 @@ export interface MemoryStatusReading {
 export function readMemoryStatus(dataDir: string): MemoryStatusReading | undefined {
   const path = join(dataDir, DB_FILE_NAME);
   if (!existsSync(path)) return undefined;
-  const db = new DatabaseSync(path, { readOnly: true });
+  // The data dir is left as it was found (MC-T4 fix). While a runtime holds the store, or after one crashed, its -wal
+  // and -shm exist: a read-only connection reads through them and leaves them. Without them, a read-only connection
+  // would create both and leave them behind, so the read goes through a connection that cannot write (query_only);
+  // as the last one, its close removes the files its open created, like the close of the store haril status opens.
+  const sideFiles = existsSync(`${path}-wal`) || existsSync(`${path}-shm`);
+  const db = new DatabaseSync(path, sideFiles ? { readOnly: true } : {});
   try {
+    if (!sideFiles) db.exec("PRAGMA query_only = ON");
+    db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+    const applicationId = readApplicationId(db);
+    if (isForeignApplication(applicationId)) throw foreignApplicationError(applicationId);
     db.exec("BEGIN");
     try {
+      if (!hasTable(db, "meta")) return undefined;
       return { status: memoryStatusOf(db), lease: readLeaseSummary(db) };
     } finally {
       db.exec("COMMIT");
@@ -455,10 +471,7 @@ function outboxCounts(db: DatabaseSync): MemoryOutboxCounts {
     delivered: 0,
     oldestPendingAt: null,
   };
-  const table = db
-    .prepare("SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = 'memory_outbox'")
-    .get();
-  if (table === undefined) return empty;
+  if (!hasTable(db, "memory_outbox")) return empty;
   const rows = db
     .prepare(
       "SELECT status, COUNT(*) AS n, MIN(enqueued_at) AS oldest FROM memory_outbox GROUP BY status",
@@ -474,6 +487,14 @@ function outboxCounts(db: DatabaseSync): MemoryOutboxCounts {
     delivered: count("delivered"),
     oldestPendingAt: rows.find((row) => row.status === "pending")?.oldest ?? null,
   };
+}
+
+function hasTable(db: DatabaseSync, name: string): boolean {
+  return (
+    db
+      .prepare("SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get(name) !== undefined
+  );
 }
 
 function depthOf(outbox: MemoryOutboxCounts): number {

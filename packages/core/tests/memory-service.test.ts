@@ -35,10 +35,11 @@ describe("deliveryBackoffMs (R-O4)", () => {
 });
 
 describe("outboxTransitionOf (memory.md 4.4)", () => {
-  it("retries an unavailable provider until the attempt cap, then gives the row up", () => {
+  it("retries an unavailable provider until the attempt cap, then leaves the row for review, not dead", () => {
     expect(outboxTransitionOf(failure("Unavailable"), 1)).toBe("pending");
     expect(outboxTransitionOf(failure("Unavailable"), MAX_DELIVERY_ATTEMPTS - 1)).toBe("pending");
-    expect(outboxTransitionOf(failure("Unavailable"), MAX_DELIVERY_ATTEMPTS)).toBe("dead");
+    // MC-T4 fix: a flapping provider must not lose the write for good.
+    expect(outboxTransitionOf(failure("Unavailable"), MAX_DELIVERY_ATTEMPTS)).toBe("needs_review");
   });
 
   it("sends to review what a retry cannot settle, and kills what was a defect", () => {

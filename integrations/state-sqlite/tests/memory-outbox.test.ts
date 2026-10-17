@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { OutboxEnqueue, Store } from "@haril/core/ports";
@@ -542,10 +542,45 @@ describe("readMemoryStatus (haril memory status without a runtime)", () => {
     expect(readFileSync(join(dir, "haril.db")).equals(before)).toBe(true);
   });
 
+  it("[MC-T4 fix] leaves a closed data dir exactly as it found it: no -wal or -shm stays behind", () => {
+    const fileStore = openStore({ dataDir: dir, clock, ids: sequentialIds(), rules: testRules });
+    fileStore.memory.setState(acquire(fileStore), {
+      provider: "null",
+      state: "active",
+      persistent: false,
+    });
+    fileStore.close();
+    const before = readdirSync(dir).sort();
+    expect(before).toEqual(["haril.db"]);
+
+    expect(readMemoryStatus(dir)?.status.provider).toBe("null");
+    expect(readdirSync(dir).sort()).toEqual(before);
+  });
+
+  it("[MC-T4 fix] reads nothing from a zero-byte haril.db and leaves it empty", () => {
+    writeFileSync(join(dir, "haril.db"), "");
+    expect(readMemoryStatus(dir)).toBeUndefined();
+    expect(statSync(join(dir, "haril.db")).size).toBe(0);
+    expect(readdirSync(dir)).toEqual(["haril.db"]);
+  });
+
+  it("[MC-T4 fix] refuses the database of another application with the store's own gate error", () => {
+    const foreign = new DatabaseSync(join(dir, "haril.db"));
+    foreign.exec("PRAGMA application_id = 1234; CREATE TABLE fake_table (x INTEGER)");
+    foreign.close();
+    const error = caught(() => readMemoryStatus(dir));
+    expect(error.code).toBe("store.gate_failed");
+    expect(error.message).toContain("belongs to another application");
+    expect(readdirSync(dir)).toEqual(["haril.db"]);
+  });
+
   it("on a database before migration 0006 reports nothing recorded and leaves its schema alone", () => {
     const db = new DatabaseSync(join(dir, "haril.db"));
+    // WAL, as every HARIL store: reading it must not leave its side files either.
+    db.exec("PRAGMA journal_mode = WAL");
     migrate(db, clock, sequentialIds("old"), BEFORE_0006);
     db.close();
+    expect(readdirSync(dir)).toEqual(["haril.db"]);
 
     expect(readMemoryStatus(dir)).toEqual({
       status: {
@@ -570,6 +605,27 @@ describe("readMemoryStatus (haril memory status without a runtime)", () => {
       expect(check.prepare("PRAGMA user_version").get()).toEqual({ user_version: 5 });
     } finally {
       check.close();
+    }
+  });
+
+  it("with a live writer reads its committed state and leaves its side files to it", () => {
+    const fileStore = openStore({ dataDir: dir, clock, ids: sequentialIds(), rules: testRules });
+    try {
+      fileStore.memory.setState(acquire(fileStore), {
+        provider: "fake-provider",
+        state: "degraded",
+        persistent: true,
+        code: "Unavailable",
+      });
+      const before = readdirSync(dir).sort();
+      expect(before).toEqual(["haril.db", "haril.db-shm", "haril.db-wal"]);
+      expect(readMemoryStatus(dir)?.status).toMatchObject({
+        provider: "fake-provider",
+        lastState: "degraded",
+      });
+      expect(readdirSync(dir).sort()).toEqual(before);
+    } finally {
+      fileStore.close();
     }
   });
 });
