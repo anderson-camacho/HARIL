@@ -89,7 +89,7 @@ function mount(connectControl: ConnectControl): {
   const app = createShellApp({
     terminal,
     theme: THEME,
-    banner: { isolation: "N0", pendingApprovals: 0 },
+    banner: { isolation: "N0" },
     data,
     settings: {
       dataDir,

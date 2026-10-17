@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { canTransition, checkAcceptance, checkPlanSubmission } from "@haril/core";
+import { canonicalJson, canTransition, checkAcceptance, checkPlanSubmission } from "@haril/core";
 import { openStore } from "@haril/state-sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type CliIo, run } from "../src/cli.js";
@@ -66,7 +66,7 @@ describe("doctor with the real store inspection", () => {
       dataDir,
       clock: { now: () => 1, schedule: () => () => undefined },
       ids: { next: () => `id-${++n}` },
-      rules: { canTransition, checkPlan: checkPlanSubmission, checkAcceptance },
+      rules: { canTransition, checkPlan: checkPlanSubmission, checkAcceptance, canonicalJson },
     }).close();
 
     const { io, out } = harness();
@@ -75,7 +75,7 @@ describe("doctor with the real store inspection", () => {
       status: string;
       store: { initialized: boolean; schemaVersion: number; status: string };
     };
-    expect(report.store).toMatchObject({ initialized: true, schemaVersion: 3, status: "ok" });
+    expect(report.store).toMatchObject({ initialized: true, schemaVersion: 4, status: "ok" });
     expect(report.status).toBe("ok");
   });
 });

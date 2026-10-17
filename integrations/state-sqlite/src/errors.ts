@@ -3,6 +3,7 @@ export type StoreErrorCode =
   | "store.gate_failed"
   | "store.migration_failed"
   | "store.conflict"
+  | "store.not_found"
   | "store.fenced"
   | "store.stale"
   | "store.io";

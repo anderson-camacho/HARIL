@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { canTransition, checkAcceptance, checkPlanSubmission } from "@haril/core";
+import { canonicalJson, canTransition, checkAcceptance, checkPlanSubmission } from "@haril/core";
 import type { Clock, Store } from "@haril/core/ports";
 import { openStore } from "@haril/state-sqlite";
 
@@ -36,7 +36,7 @@ export function openSeedStore(dataDir: string): Store {
     dataDir,
     clock,
     ids: { next: () => randomUUID() },
-    rules: { canTransition, checkPlan: checkPlanSubmission, checkAcceptance },
+    rules: { canTransition, checkPlan: checkPlanSubmission, checkAcceptance, canonicalJson },
     isPidAlive: () => true,
   });
 }

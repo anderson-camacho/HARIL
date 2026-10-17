@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { validateHarilConfig } from "@haril/contracts";
-import { canTransition, checkAcceptance, checkPlanSubmission } from "@haril/core";
+import { canonicalJson, canTransition, checkAcceptance, checkPlanSubmission } from "@haril/core";
 import type {
   Clock,
   EventRecord,
@@ -68,6 +68,8 @@ export interface ShellSnapshot {
   // Newest events for the scope, oldest first.
   readonly events: readonly EventRecord[];
   readonly runtime: RuntimeLeaseSummary;
+  // Approvals waiting for a decision, across every project (LD-T3): the banner shows this count.
+  readonly pendingApprovals: number;
   readonly metrics: readonly ProjectMetrics[];
   readonly providers: ProviderSnapshot;
   readonly themes: { readonly user: readonly string[] };
@@ -124,7 +126,7 @@ export function openShellData(options: OpenShellDataOptions): ShellData {
           dataDir: paths.dataDir,
           clock,
           ids: { next: () => randomUUID() },
-          rules: { canTransition, checkPlan: checkPlanSubmission, checkAcceptance },
+          rules: { canTransition, checkPlan: checkPlanSubmission, checkAcceptance, canonicalJson },
           isPidAlive: defaultPidAlive,
         });
       }
@@ -154,6 +156,7 @@ export function openShellData(options: OpenShellDataOptions): ShellData {
         tasks: [],
         events: [],
         runtime: { status: "none" } as const,
+        pendingApprovals: 0,
         metrics: [],
         providers,
         themes: themes(),
@@ -172,6 +175,7 @@ export function openShellData(options: OpenShellDataOptions): ShellData {
           tasks,
           events: open.events.list({ projectId: scope, limit: EVENT_LIMIT }),
           runtime: open.runtime.leaseSummary(),
+          pendingApprovals: open.approvals.list({ status: "requested" }).length,
           metrics: projects.map((project) => ({
             projectId: project.projectId,
             slug: project.slug,

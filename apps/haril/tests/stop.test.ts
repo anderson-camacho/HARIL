@@ -2,7 +2,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { canTransition, checkAcceptance, checkPlanSubmission } from "@haril/core";
+import { canonicalJson, canTransition, checkAcceptance, checkPlanSubmission } from "@haril/core";
 import { openStore } from "@haril/state-sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { run } from "../src/cli.js";
@@ -124,7 +124,7 @@ describe("haril stop", () => {
       dataDir: sb.dataDir,
       clock: { now: () => Date.now(), schedule: () => () => undefined },
       ids: { next: () => randomUUID() },
-      rules: { canTransition, checkPlan: checkPlanSubmission, checkAcceptance },
+      rules: { canTransition, checkPlan: checkPlanSubmission, checkAcceptance, canonicalJson },
     });
     try {
       const task = store.tasks.list().find((candidate) => candidate.goal === "Slow");

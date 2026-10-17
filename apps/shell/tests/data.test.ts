@@ -1,9 +1,10 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openShellData, type ShellPaths } from "../src/data.js";
-import { SEED_TITLES, seedStore } from "./seed.js";
+import { openSeedStore, SEED_TITLES, seedStore } from "./seed.js";
 
 // Data access (TUI-D4): the shell opens the store like the CLI's openExisting (inspect first, never create it) and
 // reads through the Store facets only. Nothing here starts the runtime or writes task rows.
@@ -197,6 +198,29 @@ describe("providers and themes", () => {
     const data = openShellData({ paths: paths(), env: {} });
     try {
       expect(data.load(undefined).themes.user).toEqual(["ocean"]);
+    } finally {
+      data.close();
+    }
+  });
+});
+
+describe("pending approvals (LD-T3)", () => {
+  it("counts the approvals waiting for a decision, for the banner", () => {
+    const seeded = seedStore(dataDir);
+    const example = fileURLToPath(new URL("../../../examples/plan.valid.json", import.meta.url));
+    const store = openSeedStore(dataDir);
+    try {
+      store.approvals.proposePlan({
+        projectId: seeded.demoId,
+        plan: JSON.parse(readFileSync(example, "utf8")) as unknown,
+        requestedBy: "cli",
+      });
+    } finally {
+      store.close();
+    }
+    const data = openShellData({ paths: paths(), env: {} });
+    try {
+      expect(data.load(undefined).pendingApprovals).toBe(1);
     } finally {
       data.close();
     }

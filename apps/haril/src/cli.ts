@@ -1,5 +1,6 @@
-import { homedir } from "node:os";
+import { homedir, userInfo } from "node:os";
 import { StoreError } from "@haril/state-sqlite";
+import { approvals, approve, deny } from "./commands/approvals.js";
 import { doctor } from "./commands/doctor.js";
 import { events } from "./commands/events.js";
 import { methodology } from "./commands/methodology.js";
@@ -27,7 +28,17 @@ function currentHost(): HostInfo {
     env: process.env,
     homeDir: homedir(),
     cwd: process.cwd(),
+    user: operatorName(),
   };
+}
+
+// The OS user name the decisions of approve and deny are recorded under (LD-T3). Undefined when the OS has none.
+function operatorName(): string | undefined {
+  try {
+    return userInfo().username;
+  } catch {
+    return undefined;
+  }
 }
 
 const HELP_LINES = [
@@ -40,6 +51,10 @@ const HELP_LINES = [
   "  haril states                     print the task states and legal transitions",
   "  haril plan validate <file> [--json]   validate a plan file",
   "  haril plan import <file> [--project <slug>] [--json]   queue a plan (applied by start)",
+  "  haril plan propose <file> [--project <slug>] [--json]   propose a plan: a requested approval, nothing queued",
+  "  haril approvals [--project <slug>] [--all] [--json]   the pending approvals (--all: every status)",
+  "  haril approve <approvalId> [--reason <text>]   grant a proposed plan; the runtime queues it on its next turn",
+  "  haril deny <approvalId> [--reason <text>]   deny a proposed plan; nothing is queued",
   "  haril project init [path] --name <name> [--slug <slug>] [--methodology <name>] [--yes] [--json]",
   "  haril project list [--json]      list the registered projects",
   "  haril methodology list [--json]  list the native methodology blocks (id, version, sha256, summary)",
@@ -105,6 +120,12 @@ function dispatch(argv: readonly string[], io: CliIo, host: HostInfo): number | 
       return states(rest, io);
     case "plan":
       return plan(rest, io, host);
+    case "approvals":
+      return approvals(rest, io, host);
+    case "approve":
+      return approve(rest, io, host);
+    case "deny":
+      return deny(rest, io, host);
     case "project":
       return project(rest, io, host);
     case "methodology":

@@ -159,5 +159,9 @@ function formatEvent(event: RunEvent): string {
       return `stopping (${event.reason}): the in-flight run returns to ready`;
     case "task.returned":
       return `returned ${event.taskId} ${event.goal} to ready (stopped, no attempt charged)`;
+    case "approval.applied":
+      return event.alreadySubmitted
+        ? `approval ${event.approvalId} ${event.outcome}: applied (plan already submitted, nothing new queued)`
+        : `approval ${event.approvalId} ${event.outcome}: applied`;
   }
 }
