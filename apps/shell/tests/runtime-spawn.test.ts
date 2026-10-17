@@ -81,11 +81,11 @@ describe("spawnDetached with the real CLI (LD-T6)", () => {
     });
     expect(runtime.pid).toBeGreaterThan(0);
     expect(runtime.running).toBe(true);
-    const exited = new Promise<void>((resolve) => runtime.onExit(resolve));
+    const exited = new Promise<number | null>((resolve) => runtime.onExit(resolve));
     let timer: ReturnType<typeof setTimeout> | undefined;
-    await Promise.race([
+    const code = await Promise.race([
       exited,
-      new Promise((_resolve, reject) => {
+      new Promise<never>((_resolve, reject) => {
         timer = setTimeout(
           () => reject(new Error("the runtime did not exit idle")),
           EXIT_TIMEOUT_MS,
@@ -93,11 +93,15 @@ describe("spawnDetached with the real CLI (LD-T6)", () => {
       }),
     ]).finally(() => clearTimeout(timer));
     expect(runtime.running).toBe(false);
+    // The exit code reaches the listener: 0, idle with nothing failed.
+    expect(code).toBe(0);
 
     const log = readFileSync(logFile, "utf8");
-    expect(log).toContain("runtime up: waiting for work, exits after 1 s idle");
+    expect(log).toContain(
+      `runtime up (pid ${runtime.pid}): waiting for work, exits after 1 s idle`,
+    );
     expect(log).toMatch(/completed \S+ Work for the shell's runtime/);
-    expect(log).toContain("done: 1 completed, 0 failed, 0 blocked");
+    expect(log).toContain(`done: 1 completed, 0 failed, 0 blocked (pid ${runtime.pid})`);
     expect(log).not.toContain(FAKE_SECRET);
 
     const after = openSeedStore(dataDir);

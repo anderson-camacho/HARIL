@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 
 // The shell starts the runtime (LD-T6, ADR-0022): `haril start --started-by shell`, the same CLI on the same Node, as a
 // detached child that outlives the shell. Its output goes to logs/runtime-<date>.log under the runtime root, its
@@ -10,11 +10,12 @@ import { dirname, join } from "node:path";
 
 const LOGS_DIR = "logs";
 
-// A runtime the shell started. `running` turns false when the child exits; the exit listeners run then.
+// A runtime the shell started. `running` turns false when the child exits; the exit listeners run then, with its exit
+// code (null when it ended by a signal or could not run).
 export interface SpawnedRuntime {
   readonly pid: number;
   readonly running: boolean;
-  onExit(listener: () => void): void;
+  onExit(listener: (code: number | null) => void): void;
 }
 
 export interface RuntimeCommand {
@@ -32,8 +33,9 @@ export interface RuntimeCommand {
 // Starts the command as a detached child; throws when it cannot. Injected in tests, which never start a real one.
 export type SpawnRuntime = (command: RuntimeCommand) => SpawnedRuntime;
 
+// `log` is the child's log file relative to the runtime root, as the status line names it.
 type StartOutcome =
-  | { readonly ok: true; readonly runtime: SpawnedRuntime }
+  | { readonly ok: true; readonly runtime: SpawnedRuntime; readonly log: string }
   | { readonly ok: false; readonly message: string };
 
 export interface RuntimeStarter {
@@ -54,13 +56,14 @@ export function createRuntimeStarter(options: RuntimeStarterOptions): RuntimeSta
   return {
     start() {
       try {
+        const logFile = runtimeLogFile(options.runtimeRoot, now());
         const runtime = run({
           harilEntry: options.harilEntry,
           args: ["start", "--started-by", "shell", "--data-dir", options.dataDir],
-          logFile: runtimeLogFile(options.runtimeRoot, now()),
+          logFile,
           cwd: options.runtimeRoot,
         });
-        return { ok: true, runtime };
+        return { ok: true, runtime, log: relative(options.runtimeRoot, logFile) };
       } catch (error) {
         return { ok: false, message: error instanceof Error ? error.message : String(error) };
       }
@@ -99,14 +102,16 @@ export const spawnDetached: SpawnRuntime = (command) => {
       throw new Error("haril could not be started");
     }
     let running = true;
-    const listeners: (() => void)[] = [];
-    const exited = (): void => {
+    let exitCode: number | null = null;
+    const listeners: ((code: number | null) => void)[] = [];
+    const exited = (code: number | null): void => {
       if (!running) return;
       running = false;
-      for (const listener of listeners.splice(0)) listener();
+      exitCode = code;
+      for (const listener of listeners.splice(0)) listener(code);
     };
-    child.once("error", exited);
-    child.once("exit", exited);
+    child.once("error", () => exited(null));
+    child.once("exit", (code) => exited(code));
     child.unref();
     return {
       pid,
@@ -115,7 +120,7 @@ export const spawnDetached: SpawnRuntime = (command) => {
       },
       onExit(listener) {
         if (running) listeners.push(listener);
-        else listener();
+        else listener(exitCode);
       },
     };
   } finally {

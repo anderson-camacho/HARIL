@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import type { ControlClient } from "@haril/control";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createHarilActions } from "../src/actions.js";
@@ -31,6 +31,8 @@ const THEME = resolveTheme({ name: "haril-dark", runtimeRoot: "/nonexistent-hari
 const ENTER = "\r";
 // The pid the fake runtime gets. The shell's data treats it as alive, like this test process.
 const CHILD_PID = 4242;
+// The pid of a runtime that won the lease race against the shell's child.
+const WINNER_PID = 5151;
 const FAKE_SECRET = "fake-provider-value-not-a-key";
 
 let root: string;
@@ -54,35 +56,45 @@ afterEach(() => {
 interface FakeSpawn {
   readonly commands: RuntimeCommand[];
   spawn(command: RuntimeCommand): SpawnedRuntime;
-  // Ends the newest fake runtime, as an idle exit does.
-  exit(): void;
+  // Ends the newest fake runtime with this exit code, as an idle exit (0) or a refusal does.
+  exit(code?: number): void;
 }
 
-// `onSpawn` runs as the fake runtime starts, to play what the real one does (take the lease, for instance).
-function fakeSpawn(onSpawn: () => void = () => {}): FakeSpawn {
+interface FakeChild {
+  running: boolean;
+  readonly listeners: ((code: number | null) => void)[];
+}
+
+// `onSpawn` runs as the fake runtime starts, to play what the real one does (take the lease, for instance). With
+// `crashCode`, every child exits with it right after it starts, before it takes any lease (a crash, or a stale entry).
+function fakeSpawn(onSpawn: () => void = () => {}, crashCode?: number): FakeSpawn {
   const commands: RuntimeCommand[] = [];
-  let current: { running: boolean; listeners: (() => void)[] } | undefined;
+  let current: FakeChild | undefined;
+  const end = (child: FakeChild, code: number): void => {
+    if (!child.running) return;
+    child.running = false;
+    for (const listener of child.listeners) listener(code);
+  };
   return {
     commands,
     spawn(command) {
       commands.push(command);
-      const state = { running: true, listeners: [] as (() => void)[] };
-      current = state;
+      const child: FakeChild = { running: true, listeners: [] };
+      current = child;
       onSpawn();
+      if (crashCode !== undefined) setTimeout(() => end(child, crashCode), 10);
       return {
         pid: CHILD_PID,
         get running() {
-          return state.running;
+          return child.running;
         },
         onExit: (listener) => {
-          state.listeners.push(listener);
+          child.listeners.push(listener);
         },
       };
     },
-    exit() {
-      if (current === undefined) return;
-      current.running = false;
-      for (const listener of current.listeners) listener();
+    exit(code = 0) {
+      if (current !== undefined) end(current, code);
     },
   };
 }
@@ -128,11 +140,15 @@ function mount(options: {
   control?: FakeControl;
   harilEntry?: string;
   isPidAlive?: (pid: number) => boolean;
+  // False plays haril shell --no-runtime: the app gets no starter.
+  starter?: boolean;
 }): Mounted {
   const data = openShellData({
     paths: { dataDir, runtimeRoot, configPath: join(runtimeRoot, "config", "haril.json") },
     env: { HARIL_CLIPROXYAPI_KEY: FAKE_SECRET },
-    isPidAlive: options.isPidAlive ?? ((pid) => pid === CHILD_PID || pid === process.pid),
+    isPidAlive:
+      options.isPidAlive ??
+      ((pid) => pid === CHILD_PID || pid === WINNER_PID || pid === process.pid),
   });
   opened.push(data);
   const harilEntry = options.harilEntry ?? fakeHaril("unused");
@@ -151,12 +167,16 @@ function mount(options: {
     },
     actions: createHarilActions({ harilEntry }),
     connectControl: (options.control ?? fakeControl()).connect,
-    runtimeStarter: createRuntimeStarter({
-      harilEntry,
-      dataDir,
-      runtimeRoot,
-      spawn: (command) => options.spawn.spawn(command),
-    }),
+    ...(options.starter === false
+      ? {}
+      : {
+          runtimeStarter: createRuntimeStarter({
+            harilEntry,
+            dataDir,
+            runtimeRoot,
+            spawn: (command) => options.spawn.spawn(command),
+          }),
+        }),
   });
   return { terminal, app };
 }
@@ -197,11 +217,11 @@ function soloStore(queued: boolean): string {
 }
 
 // The fake runtime takes the lease with its own pid, as haril start does once it is up.
-function takeLease(): void {
+function takeLease(pid = CHILD_PID): void {
   const store = openSeedStore(dataDir);
   try {
     const grant = store.runtime.acquire({
-      pid: CHILD_PID,
+      pid,
       nodeVersion: process.version,
       sqliteVersion: store.info().sqliteVersion,
       ttlMs: 600_000,
@@ -393,6 +413,103 @@ describe("the shell starts the runtime after an action (LD-T6)", () => {
     spawn.exit();
     mounted.terminal.send("r");
     expect(spawn.commands).toHaveLength(2);
+    await quit(mounted);
+  });
+});
+
+describe("a runtime that fails or loses the lease race (LD-T6)", () => {
+  const log = (): string => relative(runtimeRoot, runtimeLogFile(runtimeRoot, Date.now()));
+
+  it("a child that exits before taking the lease is reported with its code and log, and the handshake stops", async () => {
+    soloStore(true);
+    const spawn = fakeSpawn(undefined, 1);
+    const control = fakeControl();
+    const mounted = mount({ spawn, control });
+    mounted.app.start();
+    await waitFor(mounted, `the runtime exited (code 1); see ${log()}`);
+    expect(screen(mounted)).not.toContain("starting the runtime");
+    expect(screen(mounted)).toContain("runtime idle");
+    // The attempt made at the start is the only one: the exit cancelled the waits that followed.
+    await sleep(1_000);
+    expect(control.calls()).toBe(1);
+    expect(screen(mounted)).not.toContain("press r");
+    expect(spawn.commands).toHaveLength(1);
+
+    // r tries once per press, and the line says when it failed again.
+    mounted.terminal.send("r");
+    expect(spawn.commands).toHaveLength(2);
+    await waitFor(mounted, `the runtime exited again (code 1); see ${log()}`);
+    await sleep(300);
+    expect(spawn.commands).toHaveLength(2);
+    mounted.terminal.send("r");
+    expect(spawn.commands).toHaveLength(3);
+    await quit(mounted);
+  });
+
+  it("a start that loses the race names the winner, and the loser's exit changes nothing", async () => {
+    soloStore(true);
+    let up = false;
+    const spawn = fakeSpawn(() => {
+      takeLease(WINNER_PID);
+      up = true;
+    });
+    const mounted = mount({ spawn, control: fakeControl(() => up) });
+    mounted.app.start();
+    await waitFor(mounted, "· live");
+    expect(screen(mounted)).toContain(`runtime running (pid ${WINNER_PID}) · live`);
+    expect(screen(mounted)).not.toContain(`runtime started (pid ${CHILD_PID})`);
+    // The status line names the winner too, under the banner.
+    expect(
+      mounted.app.frameText().some((line) => line.trim() === `runtime running (pid ${WINNER_PID})`),
+    ).toBe(true);
+    spawn.exit(2);
+    expect(screen(mounted)).toContain(`runtime running (pid ${WINNER_PID}) · live`);
+    expect(screen(mounted)).not.toContain("the runtime exited");
+    await quit(mounted);
+  });
+
+  it("a loser that exits before the handshake reaches the winner names the winner", async () => {
+    soloStore(true);
+    const spawn = fakeSpawn(() => takeLease(WINNER_PID), 2);
+    const mounted = mount({ spawn });
+    mounted.app.start();
+    await waitFor(mounted, `runtime running (pid ${WINNER_PID}) · project all`);
+    expect(
+      mounted.app.frameText().some((line) => line.trim() === `runtime running (pid ${WINNER_PID})`),
+    ).toBe(true);
+    expect(screen(mounted)).not.toContain("the runtime exited");
+    await quit(mounted);
+  });
+});
+
+describe("the shell under --no-runtime (LD-T6)", () => {
+  const NOTE = "no runtime is running: start it with haril start";
+
+  it("says on opening that waiting work needs haril start, and starts nothing", async () => {
+    soloStore(true);
+    const spawn = fakeSpawn();
+    const mounted = mount({ spawn, starter: false });
+    mounted.app.start();
+    expect(screen(mounted)).toContain(NOTE);
+    expect(spawn.commands).toEqual([]);
+    await quit(mounted);
+  });
+
+  it("says nothing without waiting work, and says it on r once work waits", async () => {
+    const projectId = soloStore(false);
+    const spawn = fakeSpawn();
+    const mounted = mount({ spawn, starter: false });
+    mounted.app.start();
+    expect(screen(mounted)).not.toContain(NOTE);
+    const writer = openSeedStore(dataDir);
+    try {
+      queueTask(writer, projectId, "Queued elsewhere");
+    } finally {
+      writer.close();
+    }
+    mounted.terminal.send("r");
+    expect(screen(mounted)).toContain(NOTE);
+    expect(spawn.commands).toEqual([]);
     await quit(mounted);
   });
 });

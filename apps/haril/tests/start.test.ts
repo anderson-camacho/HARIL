@@ -216,7 +216,7 @@ describe("haril start stays up for live work (LD-T1)", () => {
     const began = Date.now();
     expect(await startLive(["--idle-exit-sec", "1"])).toBe(0);
     expect(Date.now() - began).toBeGreaterThanOrEqual(900);
-    expect(h.out).toContain("done: 0 completed, 0 failed, 0 blocked");
+    expect(h.out).toContain(`done: 0 completed, 0 failed, 0 blocked (pid ${process.pid})`);
   });
 
   it("runs a task queued during the idle window, then exits after the window has passed", async () => {
@@ -283,6 +283,46 @@ describe("haril start --started-by shell (LD-T6)", () => {
   it("accepts only shell as the starter", async () => {
     expect(await startLive(["--started-by", "cron", "--idle-exit-sec", "0"])).toBe(2);
     expect(h.err.join("\n")).toContain("--started-by");
+    expect(startedByShell()).toEqual([]);
+  });
+
+  // Runtimes started by shells share the log of the day, so the start and the exit lines name their pid.
+  it("says it is up, with its pid, only once it holds the lease, and names its pid when done", async () => {
+    expect(await startLive(["--started-by", "shell", "--idle-exit-sec", "0"])).toBe(0);
+    expect(h.out[0]).toBe(
+      `runtime up (pid ${process.pid}): waiting for work, exits after 0 s idle (haril stop ends it)`,
+    );
+    expect(h.out.at(-1)).toBe(`done: 0 completed, 0 failed, 0 blocked (pid ${process.pid})`);
+  });
+
+  it("a start that loses the lease never says it is up and names itself in the refusal", async () => {
+    // A live holder (this process) keeps the lease, as the winner of a race between two starts does.
+    const store = openStore({
+      dataDir: sb.dataDir,
+      clock: systemClock,
+      ids: { next: () => `winner-${Math.random()}` },
+      rules: {
+        canTransition,
+        checkPlan: checkPlanSubmission,
+        checkAcceptance,
+        checkTaskKind,
+        canonicalJson,
+      },
+    });
+    const grant = store.runtime.acquire({
+      pid: process.pid,
+      nodeVersion: "v24.19.0",
+      sqliteVersion: "3.53.3",
+      ttlMs: 60_000,
+    });
+    expect(grant.ok).toBe(true);
+    store.close();
+
+    expect(await startLive(["--started-by", "shell", "--idle-exit-sec", "0"])).toBe(2);
+    expect(h.out.join("\n")).not.toContain("runtime up");
+    expect(h.err.join("\n")).toBe(
+      `haril (pid ${process.pid}): another runtime is active (pid ${process.pid})`,
+    );
     expect(startedByShell()).toEqual([]);
   });
 });

@@ -189,6 +189,22 @@ describe("live feed (LD-T2)", () => {
     expect(h.connections).toHaveLength(1);
   });
 
+  it("stopRetrying ends a waiting retry with false, and the next subscribe starts afresh (LD-T6)", async () => {
+    const control = fakeControl();
+    let answer = false;
+    const h = harnessWith(async () => (answer ? control.client : undefined));
+    const outcome = h.feed.subscribe([5_000]);
+    await wait(0);
+    h.feed.stopRetrying();
+    expect(await outcome).toBe(false);
+    expect(h.connections).toHaveLength(1);
+
+    answer = true;
+    expect(await h.feed.subscribe([5_000])).toBe(true);
+    expect(h.connections).toHaveLength(2);
+    h.feed.close();
+  });
+
   it("drops to unsubscribed and reports the change when the connection ends", async () => {
     const control = fakeControl();
     const h = harnessWith(async () => control.client);

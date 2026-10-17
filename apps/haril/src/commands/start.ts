@@ -1,4 +1,4 @@
-import { createControlServer } from "@haril/control";
+import { type ControlServer, createControlServer } from "@haril/control";
 import { type RunEvent, runExitCode } from "@haril/core";
 import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_ERROR, EXIT_USAGE, type HostInfo } from "../context.js";
@@ -96,21 +96,28 @@ async function serve(
       io.err(`haril: no project with slug "${slug}"`);
       return EXIT_USAGE;
     }
-    if (mode === "start" && !json) {
-      io.out(
-        `runtime up: waiting for work, exits after ${idleExitSec} s idle (haril stop ends it)`,
-      );
-    }
+    // LD-T6: runtimes started by shells share the log of the day, so the lines of start that open and close a run name
+    // its pid. "runtime up" is said only once the lease is held: the run loop opens the control channel right after it
+    // takes the lease (ARCH 4.3), and a start that loses the lease never says it.
+    const pid = process.pid;
+    const announce = mode === "start" && !json;
+    const channel = announce
+      ? announcingStart(control, () =>
+          io.out(
+            `runtime up (pid ${pid}): waiting for work, exits after ${idleExitSec} s idle (haril stop ends it)`,
+          ),
+        )
+      : control;
 
     const result = await runUntilIdle({
       store,
       agentRuntime: agentRuntimeFor(host, planProposals.propose),
       clock: clockFor(host),
-      pid: process.pid,
+      pid,
       nodeVersion: host.nodeVersion,
       realAgents,
       planProposals,
-      control,
+      control: channel,
       idleExitMs: idleExitSec * 1000,
       startedByShell: startedBy === STARTED_BY_SHELL,
       shutdown,
@@ -119,7 +126,8 @@ async function serve(
       },
     });
     if (result.kind === "busy") {
-      io.err(`haril: another runtime is active (pid ${result.pid})`);
+      const who = mode === "start" ? `haril (pid ${pid})` : "haril";
+      io.err(`${who}: another runtime is active (pid ${result.pid})`);
       return EXIT_ERROR;
     }
 
@@ -129,8 +137,9 @@ async function serve(
     } else {
       const skipped =
         result.summary.skipped.length === 0 ? "" : `, ${result.summary.skipped.length} skipped`;
+      const whose = mode === "start" ? ` (pid ${pid})` : "";
       io.out(
-        `done: ${result.summary.completed.length} completed, ${result.summary.failed.length} failed, ${result.summary.blocked.length} blocked${skipped}`,
+        `done: ${result.summary.completed.length} completed, ${result.summary.failed.length} failed, ${result.summary.blocked.length} blocked${skipped}${whose}`,
       );
     }
     return exitCode;
@@ -139,6 +148,21 @@ async function serve(
     await realAgents.close();
     store.close();
   }
+}
+
+// The control channel with `announce` called as it opens, which is once the lease is held.
+function announcingStart(control: ControlServer, announce: () => void): ControlServer {
+  return {
+    start: () => {
+      announce();
+      return control.start();
+    },
+    notify: (event) => control.notify(event),
+    wake: () => control.wake(),
+    subscriberCount: () => control.subscriberCount(),
+    onNudge: (listener) => control.onNudge(listener),
+    close: () => control.close(),
+  };
 }
 
 // Whole seconds from --idle-exit-sec (start only; run always exits as soon as it is idle). Undefined when malformed.

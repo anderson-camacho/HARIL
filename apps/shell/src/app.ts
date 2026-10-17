@@ -64,6 +64,16 @@ interface Segment {
 }
 type FrameLine = readonly Segment[];
 
+// One start of the runtime by this shell (LD-T6): the child, its log relative to the runtime root and when it was
+// started; `confirmed` once the handshake reached a runtime, `ended` once a failed start was reported.
+interface ShellStart {
+  readonly runtime: SpawnedRuntime;
+  readonly log: string;
+  readonly at: number;
+  confirmed: boolean;
+  ended: boolean;
+}
+
 // A cursor or scroll movement: a step of lines, or a jump to the first or last line.
 type Motion =
   | { readonly kind: "step"; readonly delta: number }
@@ -150,12 +160,31 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
   const subscribeIfRuntimeRunning = (): void => {
     if (feed !== undefined && snapshot.runtimeAlive) void feed.subscribe();
   };
-  // The runtime this shell started (LD-T6), kept after it exits: the banner names it by its pid.
-  let started: SpawnedRuntime | undefined;
+  // The runtime this shell started last (LD-T6), kept after it exits: the banner names it by its pid.
+  let started: ShellStart | undefined;
+  // Whether the start before the current one ended without a runtime: the next failure says "again".
+  let lastStartFailed = false;
   const startingNote = (pid: number): string => `starting the runtime (pid ${pid})…`;
   // Replaces the end of the status line when it still says `from`; a newer line is left as it is.
   const replaceNote = (from: string, to: string): void => {
     if (status?.endsWith(from) === true) status = `${status.slice(0, -from.length)}${to}`;
+  };
+  // The outcome of a start always reaches the status line: it replaces the note of that start, or the whole line when
+  // something newer took its place, so the line never keeps saying the runtime is starting.
+  const settleNote = (pid: number, note: string): void => {
+    const current = status;
+    const suffix = [startingNote(pid), HANDSHAKE_GAVE_UP].find((end) => current?.endsWith(end));
+    status =
+      current === undefined || suffix === undefined
+        ? note
+        : `${current.slice(0, -suffix.length)}${note}`;
+  };
+  // The runtime that answered a start: the shell's own child, or the one that won the lease before it.
+  const answeredNote = (pid: number): string => {
+    const lease = snapshot.runtime;
+    return snapshot.runtimeAlive && lease.status !== "none" && lease.pid !== pid
+      ? `runtime running (pid ${lease.pid})`
+      : `runtime started (pid ${pid})`;
   };
 
   const activeId = () => PANELS[panel]?.id ?? "projects";
@@ -174,11 +203,13 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
   const runtimeText = (): string => {
     const lease = snapshot.runtime;
     if (snapshot.runtimeAlive && lease.status !== "none") {
-      return started?.pid === lease.pid
+      return started?.runtime.pid === lease.pid
         ? `running (started by shell, pid ${lease.pid})`
         : `running (pid ${lease.pid})`;
     }
-    return started?.running === true ? `starting (started by shell, pid ${started.pid})` : "idle";
+    return started?.runtime.running === true
+      ? `starting (started by shell, pid ${started.runtime.pid})`
+      : "idle";
   };
   const bannerText = (): string =>
     // The pending-approval count is read from the store with the rest of the snapshot (LD-T3). "live" shows while
@@ -463,44 +494,80 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
     if (snapshot.runtimeAlive) return undefined;
     const starter = options.runtimeStarter;
     if (starter === undefined) return NO_RUNTIME_NOTE;
-    if (started?.running === true) return startingNote(started.pid);
+    if (started?.runtime.running === true) return startingNote(started.runtime.pid);
+    const at = Date.now();
     const outcome = starter.start();
     if (!outcome.ok) return `could not start the runtime: ${outcome.message}`;
-    const runtime = outcome.runtime;
-    started = runtime;
-    // An exit (idle, a stop or a failure) shows in the banner at once.
-    runtime.onExit(() => {
-      if (quitting) return;
-      reload();
-      tui.requestRender();
-    });
-    handshake(runtime.pid);
-    return startingNote(runtime.pid);
+    const start: ShellStart = {
+      runtime: outcome.runtime,
+      log: outcome.log,
+      at,
+      confirmed: false,
+      ended: false,
+    };
+    started = start;
+    start.runtime.onExit((code) => runtimeExited(start, code));
+    handshake(start);
+    return startingNote(start.runtime.pid);
   }
 
   // The bounded handshake after a start (LD-T6): a few subscribe attempts, then the outcome on the status line. Nothing
-  // keeps trying afterwards; r reads the store again.
-  function handshake(pid: number): void {
+  // keeps trying afterwards; r reads the store again. An exit of the child ends it sooner (runtimeExited).
+  function handshake(start: ShellStart): void {
+    const pid = start.runtime.pid;
     const subscribed =
       feed === undefined ? Promise.resolve(false) : feed.subscribe(HANDSHAKE_DELAYS_MS);
     void subscribed.then((ok) => {
-      if (quitting) return;
+      if (quitting || start.ended) return;
       reload();
-      replaceNote(startingNote(pid), ok ? `runtime started (pid ${pid})` : HANDSHAKE_GAVE_UP);
+      if (ok) {
+        start.confirmed = true;
+        lastStartFailed = false;
+      }
+      replaceNote(startingNote(pid), ok ? answeredNote(pid) : HANDSHAKE_GAVE_UP);
       tui.requestRender();
     });
   }
 
-  // On opening and on r: subscribes to a running runtime, or starts one when work waits and none runs (LD-T6).
+  // The child of a start exited. After it held the lease, or once the handshake reached a runtime, this is the normal
+  // end (idle, a stop) and only the banner changes. Before that, the start failed, unless another runtime won the
+  // lease: the handshake stops and the line says so, with the exit code and the log to read.
+  function runtimeExited(start: ShellStart, code: number | null): void {
+    if (quitting) return;
+    reload();
+    const lease = snapshot.runtime;
+    const heldLease =
+      lease.status !== "none" && lease.pid === start.runtime.pid && lease.startedAt >= start.at;
+    if (start.confirmed || heldLease) {
+      lastStartFailed = false;
+    } else if (!start.ended) {
+      start.ended = true;
+      if (snapshot.runtimeAlive) {
+        lastStartFailed = false;
+        settleNote(start.runtime.pid, answeredNote(start.runtime.pid));
+        subscribeIfRuntimeRunning();
+      } else {
+        feed?.stopRetrying();
+        const again = lastStartFailed ? " again" : "";
+        const exited = code === null ? "" : ` (code ${code})`;
+        settleNote(start.runtime.pid, `the runtime exited${again}${exited}; see ${start.log}`);
+        lastStartFailed = true;
+      }
+    }
+    tui.requestRender();
+  }
+
+  // On opening and on r: subscribes to a running runtime, or starts one when work waits and none runs (LD-T6). Under
+  // --no-runtime the line says that the waiting work needs haril start.
   function followRuntime(): void {
     if (snapshot.runtimeAlive) {
       subscribeIfRuntimeRunning();
       replaceNote(HANDSHAKE_GAVE_UP, "runtime running");
       return;
     }
-    if (options.runtimeStarter !== undefined && snapshot.waitingWork > 0) {
-      if (started?.running !== true) status = ensureRuntime();
-    }
+    if (snapshot.waitingWork === 0) return;
+    if (options.runtimeStarter === undefined) status = NO_RUNTIME_NOTE;
+    else if (started?.runtime.running !== true) status = ensureRuntime();
   }
 
   // Applies a theme now and writes ui.theme (TUI-D14). A theme that cannot be loaded is reported and not saved.

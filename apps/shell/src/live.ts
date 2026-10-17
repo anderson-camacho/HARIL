@@ -29,6 +29,9 @@ export interface LiveFeed {
   // it tries again after each of `retryDelaysMs`, then gives up (LD-T6: a runtime the shell just started opens its
   // channel only once it holds the lease). A call while an attempt runs joins that attempt.
   subscribe(retryDelaysMs?: readonly number[]): Promise<boolean>;
+  // Ends the retries of the attempt that runs, if any: it resolves false once its current try returns, and the next
+  // subscribe starts afresh (LD-T6: the runtime the shell started exited, so nothing is left to wait for).
+  stopRetrying(): void;
   // Ends the subscription and cancels a reload or a retry still waiting. The feed does not open again after this.
   close(): void;
 }
@@ -43,6 +46,13 @@ export function createLiveFeed(options: LiveFeedOptions): LiveFeed {
   let retry:
     | { readonly timer: ReturnType<typeof setTimeout>; readonly done: () => void }
     | undefined;
+  // Set by stopRetrying for the attempt that runs.
+  let stopping = false;
+  const endRetryWait = (): void => {
+    if (retry === undefined) return;
+    clearTimeout(retry.timer);
+    retry.done();
+  };
 
   const reloadNow = (): void => {
     lastReload = Date.now();
@@ -98,9 +108,9 @@ export function createLiveFeed(options: LiveFeedOptions): LiveFeed {
         return true;
       }
       const delay = retryDelaysMs[index];
-      if (delay === undefined) return false;
+      if (delay === undefined || stopping) return false;
       await waitForRetry(delay);
-      if (closed) return false;
+      if (closed || stopping) return false;
     }
   };
 
@@ -113,11 +123,18 @@ export function createLiveFeed(options: LiveFeedOptions): LiveFeed {
       if (closed) return Promise.resolve(false);
       if (client !== undefined) return Promise.resolve(true);
       if (attempt === undefined) {
+        stopping = false;
         attempt = connectWithRetries(retryDelaysMs).finally(() => {
           attempt = undefined;
         });
       }
       return attempt;
+    },
+
+    stopRetrying(): void {
+      if (attempt === undefined) return;
+      stopping = true;
+      endRetryWait();
     },
 
     close(): void {
@@ -127,10 +144,7 @@ export function createLiveFeed(options: LiveFeedOptions): LiveFeed {
         clearTimeout(pending);
         pending = undefined;
       }
-      if (retry !== undefined) {
-        clearTimeout(retry.timer);
-        retry.done();
-      }
+      endRetryWait();
       const current = client;
       client = undefined;
       current?.close();
