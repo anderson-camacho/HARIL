@@ -1,3 +1,4 @@
+import type { PlanTask } from "@haril/contracts";
 import type { PendingApproval } from "../data.js";
 import { pad } from "../format.js";
 import { type PanelContext, type PanelView, storeMessage } from "./types.js";
@@ -26,7 +27,10 @@ export function plansView(context: PanelContext): PanelView {
   };
 }
 
-// The plan as the user decides on it: each task with its local id, goal, agent and dependencies.
+// The plan as the user decides on it: each task with every field the runtime applies to the task it creates (LD-T6c).
+// The goal and the description are the agent's prompt; the agent, the dependencies, the files it may write and read,
+// the kind, the limits, the budget, the capabilities, the context and the checks decide what it may do and when it is
+// done. The app wraps each line and sends it through the render boundary like any other text.
 export function planDetailLines(approval: PendingApproval, context: PanelContext): string[] {
   const requested = age(context.snapshot.loadedAt - approval.requestedAt);
   return [
@@ -34,11 +38,50 @@ export function planDetailLines(approval: PendingApproval, context: PanelContext
     `project ${slugOf(context, approval)}, ${taskCount(approval)}, requested ${requested} ago by ${approval.requestedBy}`,
     ...(approval.error === undefined ? [] : [`the plan could not be read: ${approval.error}`]),
     "",
-    ...approval.tasks.flatMap((task, index) => [
-      `${index + 1}. ${task.localId}: ${task.goal}`,
-      `   agent ${task.agent}, depends on: ${task.dependsOn.length === 0 ? "none" : task.dependsOn.join(", ")}`,
-    ]),
+    ...approval.tasks.flatMap((task, index) => planTaskLines(task, index)),
   ];
+}
+
+function planTaskLines(task: PlanTask, index: number): string[] {
+  const { budget, surface } = task;
+  return [
+    `${index + 1}. ${task.localId}: ${task.goal}`,
+    `   agent ${task.agent}, depends on: ${listed(task.dependsOn)}`,
+    ...descriptionLines(task.description),
+    `   writes: ${listed(surface.write)}; reads: ${listed(surface.read)}`,
+    `   kind ${task.kind}, priority ${task.priority}, attempts ${task.maxAttempts}, timeout ${task.timeoutMs} ms`,
+    `   budget: ${budget.maxTokens} tokens, ${budget.maxWallMs} ms wall time, ${budget.maxCostMicros} cost micros`,
+    `   requires: ${listed(task.requires)}; context: ${listed(task.context)}`,
+    `   acceptance: ${task.acceptance.length === 0 ? "none" : task.acceptance.map(checkText).join(", ")}`,
+  ];
+}
+
+// The description line by line, the lines after the first indented under it; "none" when it is blank, as the agent
+// then gets the goal alone.
+function descriptionLines(description: string): string[] {
+  if (description.trim() === "") return ["   description: none"];
+  const [first, ...rest] = description.split(/\r?\n/);
+  return [`   description: ${first ?? ""}`, ...rest.map((line) => `     ${line}`)];
+}
+
+// A host check as it reads: its kind with its path and its text quoted, or a block verifier as block/check.
+function checkText(check: PlanTask["acceptance"][number]): string {
+  if (!("kind" in check)) {
+    const params = check.params === undefined ? "" : ` ${JSON.stringify(check.params)}`;
+    return `${check.blockId}/${check.checkId}${params}`;
+  }
+  switch (check.kind) {
+    case "file_exists":
+      return `file_exists ${check.path}`;
+    case "file_contains":
+      return `file_contains ${check.path} ${JSON.stringify(check.text)}`;
+    case "output_contains":
+      return `output_contains ${JSON.stringify(check.text)}`;
+  }
+}
+
+function listed(items: readonly string[]): string {
+  return items.length === 0 ? "none" : items.join(", ");
 }
 
 // A subject that is not a plan shows as such: it can only be denied (the app refuses y for it).

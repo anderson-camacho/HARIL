@@ -97,6 +97,14 @@ describe("the goal sent is the goal shown (LD-T6b-2)", () => {
     expect(built.ok && built.args[2]).toBe("do?it??[2J??");
   });
 
+  it("goalArgs sends the model as the form shows it (LD-T6c)", () => {
+    const built = goalArgs(
+      { goal: "Plan it", agent: "planner", model: " qwen\u{200B}-test\u{FE0F}\x1b " },
+      { slug: "demo", dataDir: undefined },
+    );
+    expect(built.ok && built.args.slice(-2)).toEqual(["--model", "qwen?-test??"]);
+  });
+
   it("the form shows the goal as it will be sent", () => {
     const form = new GoalForm({ projectSlug: "demo", defaultModel: undefined });
     form.handleInput("\x1b[200~do\u{200B}it\u{E0041}\x1b[201~");

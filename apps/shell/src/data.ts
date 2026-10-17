@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
-import { validateHarilConfig, validatePlanSchema } from "@haril/contracts";
+import { type PlanTask, validateHarilConfig, validatePlanSchema } from "@haril/contracts";
 import {
   canonicalJson,
   canTransition,
@@ -65,13 +65,10 @@ interface ProjectMetrics {
   readonly usage: UsageSummary | null;
 }
 
-// One task of a proposed plan, as the Plans panel shows it (LD-T5).
-interface PlanTaskRow {
-  readonly localId: string;
-  readonly goal: string;
-  readonly agent: string;
-  readonly dependsOn: readonly string[];
-}
+// One task of a proposed plan, as the Plans panel shows it (LD-T5): every field, since the runtime applies them all
+// to the task it creates (the goal and the description are its agent's prompt) and the approver sees them all
+// (LD-T6c).
+type PlanTaskRow = PlanTask;
 
 // An approval waiting for a decision with the tasks of its plan, read from the subject (haril approvals --json does
 // not include the plan).
@@ -294,14 +291,7 @@ function pendingApproval(record: ApprovalRecord): PendingApproval {
     projectId: record.projectId,
     requestedAt: record.requestedAt,
     requestedBy: record.requestedBy,
-    tasks: checked.ok
-      ? checked.plan.tasks.map((task) => ({
-          localId: task.localId,
-          goal: task.goal,
-          agent: task.agent,
-          dependsOn: task.dependsOn,
-        }))
-      : [],
+    tasks: checked.ok ? checked.plan.tasks : [],
     error: checked.ok ? undefined : checked.errors.join("; "),
   };
 }

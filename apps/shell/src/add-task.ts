@@ -29,11 +29,12 @@ export type AddTaskArgs =
   | { readonly ok: false; readonly message: string };
 
 // The argv of `haril task add`. Only analyst takes a model; the simulated agent never does. The title goes as the
-// form shows it (format.ts visibleText, LD-T6c): a control or format character a paste brought is sent as "?".
+// form shows it, and so does the model (format.ts visibleText, LD-T6c): a control or invisible character a paste
+// brought is sent as "?".
 export function addTaskArgs(values: AddTaskValues, target: AddTaskTarget): AddTaskArgs {
   const title = visibleText(values.title).trim();
   if (title === "") return { ok: false, message: "title is required" };
-  const model = values.model.trim();
+  const model = visibleText(values.model).trim();
   if (values.agent === ANALYST && model === "") {
     return { ok: false, message: "analyst needs a model: type one in the model field" };
   }
@@ -114,7 +115,7 @@ export class AddTaskForm {
       `Add task to project ${this.projectSlug}`,
       `${marker("title")}title   ${visibleText(this.titleInput.getValue())}${cursor("title")}`,
       `${marker("agent")}agent   ${agents}`,
-      `${marker("model")}model   ${this.modelInput.getValue()}${cursor("model")}${agent === ANALYST ? "" : "  (analyst only)"}`,
+      `${marker("model")}model   ${visibleText(this.modelInput.getValue())}${cursor("model")}${agent === ANALYST ? "" : "  (analyst only)"}`,
     ];
   }
 

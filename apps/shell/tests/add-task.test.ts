@@ -20,6 +20,14 @@ describe("the title sent is the title shown (LD-T6c)", () => {
     });
   });
 
+  it("addTaskArgs sends the model as the form shows it", () => {
+    const built = addTaskArgs(
+      { title: "Write docs", agent: "analyst", model: " qwen\u{200B}-test\u{E0100}\x1b " },
+      { slug: "demo", dataDir: undefined },
+    );
+    expect(built.ok && built.args.slice(-2)).toEqual(["--model", "qwen?-test??"]);
+  });
+
   it("a title of format characters alone is not empty: it is sent as the ? it shows", () => {
     const built = addTaskArgs(
       { title: "\u{200B}", agent: "fake:succeed", model: "" },
