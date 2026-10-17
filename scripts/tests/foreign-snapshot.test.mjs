@@ -234,3 +234,34 @@ test("live tool state (transcripts, log databases, global state) is ignored, whi
     cleanup();
   }
 });
+
+test("Claude Code's own top-level .last-cleanup is ignored, and only that file", () => {
+  const { dir, cleanup } = sandbox();
+  try {
+    const claude = join(dir, "claude");
+    writeAt(join(claude, "settings.json"), "{}");
+    writeAt(join(claude, ".last-cleanup"), "1");
+    writeAt(join(claude, "plugins", ".last-cleanup"), "1");
+    const roots = foreignRoots({ homeDir: dir, env: {}, platform: "linux" })
+      .filter((root) => root.name === "~/.claude")
+      .map((root) => ({ ...root, path: claude }));
+    const before = snapshotForeignInstalls({ roots, readUserPath: noPath });
+
+    writeAt(join(claude, ".last-cleanup"), "12");
+    assert.deepEqual(
+      diffForeignSnapshots(before, snapshotForeignInstalls({ roots, readUserPath: noPath })),
+      { added: [], removed: [], changed: [] },
+    );
+
+    writeAt(join(claude, "plugins", ".last-cleanup"), "12");
+    writeAt(join(claude, ".last-cleanup.bak"), "1");
+    const diff = diffForeignSnapshots(
+      before,
+      snapshotForeignInstalls({ roots, readUserPath: noPath }),
+    );
+    assert.deepEqual(diff.changed, ["~/.claude/plugins/.last-cleanup"]);
+    assert.deepEqual(diff.added, ["~/.claude/.last-cleanup.bak"]);
+  } finally {
+    cleanup();
+  }
+});

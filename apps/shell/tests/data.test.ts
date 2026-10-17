@@ -2,6 +2,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { envSecretRef, type SecretMaterial, type SecretRef } from "@haril/contracts";
+import { FakeSecretStore } from "@haril/core/testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openShellData, type ShellPaths } from "../src/data.js";
 import {
@@ -15,6 +17,8 @@ import {
 
 // Data access (TUI-D4): the shell opens the store like the CLI's openExisting (inspect first, never create it) and
 // reads through the Store facets only. Nothing here starts the runtime or writes task rows.
+
+const FAKE_SECRET = "fake-secret-fixture";
 
 let root: string;
 let dataDir: string;
@@ -179,6 +183,68 @@ describe("providers and themes", () => {
         },
       ]);
       expect(JSON.stringify(snapshot)).not.toContain(secret);
+    } finally {
+      data.close();
+    }
+  });
+
+  it("tells whether a key is set through the SecretStore it is given, never from the environment directly", () => {
+    writeFileSync(
+      join(runtimeRoot, "config", "haril.json"),
+      JSON.stringify({
+        providers: [
+          { id: "gateway", baseUrl: "http://127.0.0.1:8317/v1", keyEnv: "SHELL_TEST_KEY" },
+          { id: "local", baseUrl: "http://localhost:11434/v1", keyEnv: "SHELL_TEST_STORED" },
+        ],
+      }),
+    );
+    const data = openShellData({
+      paths: paths(),
+      env: { SHELL_TEST_KEY: FAKE_SECRET },
+      secrets: new FakeSecretStore({ [envSecretRef("SHELL_TEST_STORED")]: FAKE_SECRET }),
+    });
+    try {
+      const snapshot = data.load(undefined);
+      expect(snapshot.providers.rows.map((row) => [row.id, row.keySet])).toEqual([
+        ["gateway", false],
+        ["local", true],
+      ]);
+      expect(JSON.stringify(snapshot)).not.toContain(FAKE_SECRET);
+    } finally {
+      data.close();
+    }
+  });
+
+  it("never reveals a key to tell that it is set, for the default gateway too", () => {
+    let revealed = 0;
+    class CountingStore extends FakeSecretStore {
+      override get(ref: SecretRef) {
+        const got = super.get(ref);
+        if (!got.ok) return got;
+        const sealed = got.value;
+        const material: SecretMaterial = {
+          reveal: () => {
+            revealed += 1;
+            return sealed.reveal();
+          },
+          toString: () => sealed.toString(),
+          toJSON: () => sealed.toJSON(),
+        };
+        return { ok: true as const, value: material };
+      }
+    }
+    const data = openShellData({
+      paths: paths(),
+      env: {},
+      secrets: new CountingStore({
+        [envSecretRef("HARIL_CLIPROXYAPI_KEY")]: FAKE_SECRET,
+      }),
+    });
+    try {
+      const snapshot = data.load(undefined);
+      expect(snapshot.providers.source).toBe("defaults");
+      expect(snapshot.providers.rows[0]?.keySet).toBe(true);
+      expect(revealed).toBe(0);
     } finally {
       data.close();
     }

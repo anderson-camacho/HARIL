@@ -14,6 +14,7 @@
     "@haril/control": "workspace:*",
     "@haril/core": "workspace:*",
     "@haril/git": "workspace:*",
+    "@haril/os": "workspace:*",
     "@haril/state-sqlite": "workspace:*"
   },
   "devDependencies": {

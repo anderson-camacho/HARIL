@@ -1,4 +1,4 @@
-import type { ModelDescriptor, Usage } from "@haril/contracts";
+import type { ModelDescriptor, SecretMaterial, Usage } from "@haril/contracts";
 import type { UpstreamBody, UpstreamChunk } from "../broker/types.js";
 import { ProviderError } from "./errors.js";
 import { createSseParser, type SseEvent } from "./sse.js";
@@ -29,8 +29,9 @@ export type ChatEvent =
 
 export interface OpenAiCompatibleOptions {
   readonly baseUrl: string;
+  // The key, sealed (SecretStore): it is revealed only to set the Authorization header and to redact an echo of it.
   // Omitted means no Authorization header (used by the doctor probe to tell "key not set" apart).
-  readonly apiKey?: string | undefined;
+  readonly credential?: SecretMaterial | undefined;
   // Connect/first-byte timeout for a request; for a stream, the maximum silence between two reads.
   readonly timeoutMs: number;
   readonly fetch?: typeof fetch;
@@ -87,9 +88,30 @@ function count(value: unknown): number | null {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
 }
 
-// A key echoed back by the upstream must not reach an error message, a log or the output.
-function redact(text: string, key: string | undefined): string {
-  return key === undefined ? text : text.split(key).join("[redacted]");
+// A key echoed back by the upstream must not reach an error message, a log or the output: in clear, in base64 or
+// base64url (padded or not) or URL-encoded, the longest form first so a shorter one never splits a longer one.
+function redact(text: string, credential: SecretMaterial | undefined): string {
+  const key = revealed(credential);
+  if (key === undefined) return text;
+  let out = text;
+  for (const form of echoForms(key)) out = out.split(form).join("[redacted]");
+  return out;
+}
+
+function echoForms(key: string): string[] {
+  const bytes = Buffer.from(key, "utf8");
+  const forms = new Set([
+    key,
+    bytes.toString("base64").replace(/=+$/, ""),
+    bytes.toString("base64url"),
+    encodeURIComponent(key),
+  ]);
+  return [...forms].filter((form) => form.length > 0).sort((a, b) => b.length - a.length);
+}
+
+function revealed(credential: SecretMaterial | undefined): string | undefined {
+  const key = credential?.reveal();
+  return key !== undefined && key.length > 0 ? key : undefined;
 }
 
 function parseRetryAfter(value: string | null): number | undefined {
@@ -132,7 +154,10 @@ function outputBytesOf(part: Record<string, unknown>): number {
 }
 
 // The parsed view of one upstream object. An error object is reported as the chunk's error; the caller stops there.
-function toChunk(json: Record<string, unknown>, key: string | undefined): UpstreamChunk {
+function toChunk(
+  json: Record<string, unknown>,
+  credential: SecretMaterial | undefined,
+): UpstreamChunk {
   if (json.error !== undefined && json.error !== null) {
     const raw = isRecord(json.error) ? json.error.message : json.error;
     const detail = typeof raw === "string" ? raw : "gateway reported an error in the stream";
@@ -141,7 +166,7 @@ function toChunk(json: Record<string, unknown>, key: string | undefined): Upstre
       outputBytes: 0,
       usage: null,
       finishReason: null,
-      error: redact(`stream error: ${detail}`, key),
+      error: redact(`stream error: ${detail}`, credential),
     };
   }
   const choices: unknown[] = Array.isArray(json.choices) ? json.choices : [];
@@ -212,13 +237,14 @@ export function createOpenAiCompatibleClient(
 ): OpenAiCompatibleClient {
   const base = options.baseUrl.replace(/\/+$/, "");
   const origin = new URL(options.baseUrl).origin;
-  const key =
-    options.apiKey !== undefined && options.apiKey.length > 0 ? options.apiKey : undefined;
+  const credential = options.credential;
   const timeoutMs = options.timeoutMs;
   const fetchImpl = options.fetch ?? ((input: string, init: RequestInit) => fetch(input, init));
 
-  const headers = (extra: Record<string, string>): Record<string, string> =>
-    key === undefined ? extra : { ...extra, authorization: `Bearer ${key}` };
+  const headers = (extra: Record<string, string>): Record<string, string> => {
+    const key = revealed(credential);
+    return key === undefined ? extra : { ...extra, authorization: `Bearer ${key}` };
+  };
 
   function transportError(error: unknown, deadline: Deadline, phase: "connect" | "body"): unknown {
     if (deadline.callerAborted()) return error;
@@ -247,7 +273,7 @@ export function createOpenAiCompatibleClient(
       const error = isRecord(body) ? body.error : undefined;
       const message = isRecord(error) ? error.message : error;
       return typeof message === "string" && message.length > 0
-        ? redact(message, key).slice(0, DETAIL_LIMIT)
+        ? redact(message, credential).slice(0, DETAIL_LIMIT)
         : undefined;
     } catch {
       return undefined;
@@ -317,7 +343,7 @@ export function createOpenAiCompatibleClient(
         if (!isRecord(json)) {
           throw new ProviderError("upstream", "gateway returned an unexpected reply");
         }
-        yield toChunk(json, key);
+        yield toChunk(json, credential);
         return;
       }
       if (response.body === null) {
@@ -349,7 +375,7 @@ export function createOpenAiCompatibleClient(
             sawDone = true;
             break;
           }
-          const chunk = toChunk(parseEvent(event.data), key);
+          const chunk = toChunk(parseEvent(event.data), credential);
           yield chunk;
           // An error object ends the stream: nothing after it is trusted.
           if (chunk.error !== null) return;

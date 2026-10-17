@@ -29,6 +29,7 @@ import type {
   MemoryWriteOperation,
   Result,
 } from "../src/ports/index.js";
+import { type ContractTestApi, ContractViolation } from "./contract-api.js";
 import { cancelSignal } from "./fake-memory-deps.js";
 
 // Contract suite of the MemoryProvider port (docs/contracts/memory.md 8.1; ADR-0008 T1; BL-047). It is written once and
@@ -36,12 +37,6 @@ import { cancelSignal } from "./fake-memory-deps.js";
 // A case reads capabilities() and, when a capability is false, asserts the typed Unsupported instead of skipping
 // (MEM-15). The suite imports no test framework (the Core depends on no external package): the caller passes its
 // describe and it, and a failed check throws a ContractViolation.
-
-// The part of a test framework the suite needs (vitest's describe and it fit).
-export interface ContractTestApi {
-  readonly describe: (name: string, body: () => void) => void;
-  readonly it: (name: string, body: () => Promise<void>) => void;
-}
 
 // Fault injection the subject may offer (memory.md 9.3). Null and InMemory never fail by themselves, so the cases that
 // need a failing provider (MP-17, MP-18) run only when a subject brings these controls.
@@ -69,8 +64,6 @@ export interface MemoryProviderContractOptions {
   // empty reads instead of reading back what was stored. A provider that retains writes never answers discarded.
   readonly retainsWrites: boolean;
 }
-
-export class ContractViolation extends Error {}
 
 interface ContractCase {
   readonly id: string;

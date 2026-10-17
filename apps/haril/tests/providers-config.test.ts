@@ -1,12 +1,15 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { validateHarilConfig } from "@haril/contracts";
+import { envSecretRef, validateHarilConfig } from "@haril/contracts";
+import { FakeSecretStore } from "@haril/core/testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { HostInfo } from "../src/context.js";
 import { loadProviderConfig } from "../src/providers.js";
 
 // haril.json (M3-T7): defaults, the HARIL_CONFIG override, and the validation rules. No network here.
+const FAKE_ENV_VALUE = "fake-env-value";
+const FAKE_STORE_VALUE = "fake-store-value";
 let root: string;
 
 beforeEach(() => {
@@ -51,9 +54,21 @@ describe("provider defaults (no haril.json)", () => {
     ]);
   });
 
-  it("reads the cliproxy key from its environment variable", () => {
+  it("reads the cliproxy key from its environment variable, sealed", () => {
     const loaded = loadProviderConfig(hostWith({ HARIL_CLIPROXYAPI_KEY: "k-123" }));
-    expect(loaded.ok && loaded.providers.map((p) => p.apiKey)).toEqual(["k-123"]);
+    expect(loaded.ok && loaded.providers.map((p) => p.credential?.reveal())).toEqual(["k-123"]);
+    expect(JSON.stringify(loaded)).not.toContain("k-123");
+  });
+
+  it("reads the key by reference through the SecretStore it is given, never from the environment directly", () => {
+    const host = hostWith({ HARIL_CLIPROXYAPI_KEY: FAKE_ENV_VALUE });
+    const fromStore = loadProviderConfig(
+      host,
+      new FakeSecretStore({ [envSecretRef("HARIL_CLIPROXYAPI_KEY")]: FAKE_STORE_VALUE }),
+    );
+    expect(fromStore.ok && fromStore.providers[0]?.credential?.reveal()).toBe(FAKE_STORE_VALUE);
+    const empty = loadProviderConfig(host, new FakeSecretStore());
+    expect(empty.ok && empty.providers[0]?.credential).toBeUndefined();
   });
 });
 
@@ -73,7 +88,7 @@ describe("haril.json", () => {
     expect(loaded.ok).toBe(true);
     if (!loaded.ok) return;
     expect(loaded.source).toBe("file");
-    expect(loaded.providers.map((p) => [p.id, p.apiKey])).toEqual([
+    expect(loaded.providers.map((p) => [p.id, p.credential?.reveal()])).toEqual([
       ["lan", "lan-secret"],
       ["local", undefined],
     ]);
@@ -86,7 +101,7 @@ describe("haril.json", () => {
       }),
     );
     const loaded = loadProviderConfig(hostWith({ HARIL_CONFIG: path }));
-    expect(loaded.ok && loaded.providers[0]?.apiKey).toBeUndefined();
+    expect(loaded.ok && loaded.providers[0]?.credential).toBeUndefined();
   });
 
   it("refuses a literal apiKey field and names keyEnv as the way to give a key", () => {

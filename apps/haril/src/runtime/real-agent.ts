@@ -148,7 +148,7 @@ export function createRealAgents(options: RealAgentsOptions): RealAgents {
           error: { code: "agent.not_ready", message: "the provider is unknown" },
         };
       }
-      if (provider.keyEnv !== undefined && provider.apiKey === undefined) {
+      if (provider.keyEnv !== undefined && provider.credential === undefined) {
         return {
           ok: false,
           error: {
