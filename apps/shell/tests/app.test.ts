@@ -109,16 +109,15 @@ describe("shell app with a seeded store", () => {
     seeded = seedStore(dataDir);
   });
 
-  it("shows the header, the banner with runtime and project, and the quit keys in the footer", async () => {
+  it("shows the top bar with project and runtime, and the runtime's pid and the quit keys on the status line", async () => {
     const mounted = mount(open());
     await started(mounted);
-    const screen = frame(mounted);
-    expect(screen).toContain("HARIL shell");
-    // The seeded lease belongs to this process, so the banner names its pid (LD-T6); the banner wraps when it is long.
-    expect(screen.replace(/\s+/g, " ")).toContain(
-      `isolation N0 · 0 pending approvals · runtime running (pid ${process.pid}) · project all`,
-    );
-    expect(screen).toContain("q quit");
+    const lines = mounted.app.frameText();
+    expect(lines[0]).toMatch(/^◆ HARIL ◇ all ◇ no model .*runtime running$/);
+    // The seeded lease belongs to this process, so the status line names its pid (LD-T6).
+    const last = lines.at(-1) ?? "";
+    expect(last).toContain(`runtime running (pid ${process.pid})`);
+    expect(last).toContain("q quit");
     mounted.terminal.send("q");
     await mounted.app.done;
   });
@@ -156,6 +155,8 @@ describe("shell app with a seeded store", () => {
     const live = frame(mounted);
     expect(live).toContain("Newest tasks, oldest first");
     expect(live).toMatch(/completed\s+work\s+fake-agent\s+\d+\/1\s+40\/12\s+Summarize the logs/);
+    // The shell opened on Live with the cursor on the newest task (LD-T6b-1); Home goes to the oldest.
+    mounted.terminal.send(HOME);
     mounted.terminal.send(ENTER);
     expect(frame(mounted)).toContain("result: Logs summarized");
     mounted.terminal.send("p");
@@ -164,12 +165,15 @@ describe("shell app with a seeded store", () => {
     await mounted.app.done;
   });
 
-  it("Enter on a project makes it the filter: the banner and the task list follow it", async () => {
+  it("Enter on a project makes it the filter: the top bar and the task list follow it", async () => {
     const mounted = mount(open());
     await started(mounted);
+    // The seeded store has work, so the shell opens on Live (LD-T6b-1); 1 goes to Projects.
+    expect(frame(mounted)).toContain("Newest tasks, oldest first");
+    mounted.terminal.send("1");
     mounted.terminal.send(DOWN);
     mounted.terminal.send(ENTER);
-    expect(frame(mounted)).toContain("project demo");
+    expect(frame(mounted).split("\n")[0]).toMatch(/^◆ HARIL ◇ demo ◇ /);
     mounted.terminal.send("2");
     const screen = frame(mounted);
     expect(screen).toContain(SEED_TITLES.running);
@@ -365,9 +369,9 @@ describe("shell app with a seeded store", () => {
   });
 
   it("shows the warning line when one is given", async () => {
-    const mounted = mount(open(), { warning: "theme 'broken' not loaded; using haril-dark" });
+    const mounted = mount(open(), { warning: "theme 'broken' not loaded; using haril-crimson" });
     await started(mounted);
-    expect(frame(mounted)).toContain("using haril-dark");
+    expect(frame(mounted)).toContain("using haril-crimson");
     mounted.terminal.send("q");
     await mounted.app.done;
   });

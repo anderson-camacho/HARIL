@@ -1,4 +1,5 @@
-// The help overlay (TUI-D7): every key the shell answers to. It fits an 80x24 terminal without scrolling.
+// The help overlay (TUI-D7): every key the shell answers to and what the frame shows (LD-T6b-1). It fits the body of
+// an 80x24 terminal without scrolling: seventeen lines, none wider than 80 columns.
 export const HELP_LINES: readonly string[] = [
   "Keys",
   "  1-9          open panel 1 to 9; Plans and Live have p and l",
@@ -8,13 +9,13 @@ export const HELP_LINES: readonly string[] = [
   "  g            plan a goal: objective, planner and model; Enter asks for a plan",
   "  p            open the Plans panel: the plans waiting for approval",
   "  y, n         approve or deny the plan under the cursor or open on Plans",
-  "  l            open the Live panel: state, tokens and result of the newest tasks",
-  "  a            add a task: title, agent and model (Tab moves, Enter adds, Esc cancels)",
-  "  t            open the Themes panel; Enter there applies the theme and saves ui.theme",
+  "  l            open the Live panel: state, tokens and result of newest tasks",
+  "  a            add a task: title, agent and model; Tab moves, Esc cancels",
+  "  t            open Themes; Enter applies the theme and saves ui.theme",
   "  Esc          close a detail, a form or this help",
-  "  r            reload from the store; starts the runtime if work waits for one",
+  "  r            reload the store and git; starts the runtime if work waits",
   "  ?            show or hide this help",
   "  q, Ctrl+C    quit",
-  "",
-  "Banner: isolation, approvals, runtime and pid (live while subscribed), project.",
+  "Top bar: project, model, context of the running task, tokens and runtime.",
+  "Right column (100+ columns): status and git, runtime, approvals, taxis, tokens.",
 ];

@@ -5,12 +5,18 @@
     "text": "#e2e5ee",
     "muted": "#8d95a8",
     "violet": "#a78bfa",
-    "amber": "#f5c26b"
+    "amber": "#f5c26b",
+    "slate": "#4b5266",
+    "green": "#7fd18b",
+    "red": "#f2777a"
   },
   "colors": {
     "accent": "violet",
     "text": "text",
     "muted": "muted",
-    "warning": "amber"
+    "warning": "amber",
+    "border": "slate",
+    "ok": "green",
+    "danger": "red"
   }
 }

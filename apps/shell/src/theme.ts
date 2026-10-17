@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import blossomTheme from "../themes/haril-blossom.json" with { type: "json" };
+import crimsonTheme from "../themes/haril-crimson.json" with { type: "json" };
 import darkTheme from "../themes/haril-dark.json" with { type: "json" };
 import lightTheme from "../themes/haril-light.json" with { type: "json" };
 
@@ -10,11 +12,27 @@ import lightTheme from "../themes/haril-light.json" with { type: "json" };
 // Supported color values: "#RGB" or "#RRGGBB", a 0-255 integer (256-color index), "" (terminal default), or the name
 // of an entry in "vars" (resolved recursively). OKLCH, OKHSL and other Pi color syntaxes are rejected with a warning.
 
-export const DEFAULT_THEME_NAME = "haril-dark";
+// Red on black (LD-T6b-1). A saved ui.theme still wins.
+export const DEFAULT_THEME_NAME = "haril-crimson";
 
-// The tokens the shell draws with. Required: a theme without one of them is rejected.
-const SHELL_THEME_TOKENS = ["accent", "text", "muted", "warning"] as const;
-type ThemeToken = (typeof SHELL_THEME_TOKENS)[number];
+// The tokens the shell draws with. accent, text, muted and warning are required: a theme without one of them is
+// rejected. border, ok and danger came with the console frame (LD-T6b-1); a theme written before them still loads,
+// and each takes the color of the token in TOKEN_FALLBACK.
+export const SHELL_THEME_TOKENS = [
+  "accent",
+  "text",
+  "muted",
+  "warning",
+  "border",
+  "ok",
+  "danger",
+] as const;
+export type ThemeToken = (typeof SHELL_THEME_TOKENS)[number];
+const TOKEN_FALLBACK: Readonly<Partial<Record<ThemeToken, ThemeToken>>> = {
+  border: "muted",
+  ok: "accent",
+  danger: "warning",
+};
 
 export interface Theme {
   readonly name: string;
@@ -49,6 +67,8 @@ class ThemeError extends Error {}
 const NATIVE: Readonly<Record<string, unknown>> = {
   "haril-dark": darkTheme,
   "haril-light": lightTheme,
+  "haril-crimson": crimsonTheme,
+  "haril-blossom": blossomTheme,
 };
 
 // The themes built into the bundle, in the order the Themes panel lists them.
@@ -126,8 +146,14 @@ function themeFromDocument(label: string, document: unknown, source: "user" | "n
   const colors = asRecord(root.colors, `theme "${label}": colors must be an object`);
 
   const resolved = {} as Record<ThemeToken, Color>;
+  // The required tokens come first in SHELL_THEME_TOKENS, so a fallback is always resolved before it is used.
   for (const token of SHELL_THEME_TOKENS) {
     const value = colors[token];
+    const fallback = TOKEN_FALLBACK[token];
+    if (value === undefined && fallback !== undefined) {
+      resolved[token] = resolved[fallback];
+      continue;
+    }
     if (value === undefined) {
       throw new ThemeError(`theme "${label}": missing color "${token}"`);
     }

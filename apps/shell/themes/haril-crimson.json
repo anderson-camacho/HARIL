@@ -1,0 +1,22 @@
+{
+  "name": "haril-crimson",
+  "appearance": "dark",
+  "vars": {
+    "red": "#e5383b",
+    "dimRed": "#7a2228",
+    "light": "#f2e8e8",
+    "grey": "#8c8c8c",
+    "amber": "#f4a259",
+    "green": "#6fcf73",
+    "brightRed": "#ff4d4f"
+  },
+  "colors": {
+    "accent": "red",
+    "text": "light",
+    "muted": "grey",
+    "warning": "amber",
+    "border": "dimRed",
+    "ok": "green",
+    "danger": "brightRed"
+  }
+}

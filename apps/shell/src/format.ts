@@ -10,8 +10,9 @@ const SUMMARY_LIMIT = 160;
 // screen, move the cursor, set the title or the clipboard, or hide text, so both make it plain first.
 
 // Each control character (C0 with ESC and CR, DEL, C1) becomes "?", and a tab a space. One for one, so the lengths
-// the panels padded with stay the same.
-function plain(text: string): string {
+// the panels padded with stay the same. Exported for text that is measured before it is cut: the frame lays out the
+// defused text, so it measures what it will show (LD-T6b-1).
+export function plain(text: string): string {
   let out = "";
   for (const char of text) {
     const code = char.charCodeAt(0);
@@ -22,11 +23,15 @@ function plain(text: string): string {
   return out;
 }
 
-// Cuts text to `columns` cells, marking the cut with an ellipsis. A line break is a control character here.
+// Cuts text to `columns` cells, marking the cut with an ellipsis. A line break is a control character here. The cut
+// is strict: a wide character that would straddle it is left out and a space takes its cell, so the result is never
+// wider than `columns` (pi-tui fails on a line wider than the terminal).
 export function fit(text: string, columns: number): string {
+  if (columns <= 0) return "";
   const clean = plain(text);
   if (visibleWidth(clean) <= columns) return clean;
-  return `${sliceByColumn(clean, 0, Math.max(0, columns - 1))}…`;
+  const kept = sliceByColumn(clean, 0, columns - 1, true);
+  return `${kept}…${" ".repeat(Math.max(0, columns - 1 - visibleWidth(kept)))}`;
 }
 
 // Word-wraps text to `columns` cells; a line break (LF or CRLF) starts a new line and an empty text is one empty

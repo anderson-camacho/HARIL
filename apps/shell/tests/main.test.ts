@@ -17,6 +17,8 @@ function harness(overrides: Partial<ShellRunDeps> = {}) {
     stdoutIsTTY: true,
     stderr: (line) => err.push(line),
     readFile: () => undefined,
+    // No git runs in these tests; the git read has its own tests in integrations/git.
+    readGit: async () => undefined,
     createTerminal: () => {
       created.count++;
       return new VirtualTerminal(["q"]);

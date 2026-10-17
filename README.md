@@ -193,7 +193,16 @@ HARIL lee sus proveedores de `HARIL_CONFIG` o, si no está definida, de `config\
 
 `haril shell` abre una interfaz interactiva sobre los datos de HARIL. En una terminal basta con escribir `haril`, sin subcomando: abre la misma interfaz. Fuera de una terminal (un script o una tubería), `haril` solo imprime la ayuda. Necesita una terminal real (Windows Terminal o PowerShell); sin ella `haril shell` sale con 2. La interfaz no escribe en la base: cada acción ejecuta un comando `haril` corto. No consulta la base en bucle: los datos se cargan al abrir, con `r`, después de cada acción y cuando el runtime en marcha avisa de un cambio.
 
-La interfaz arranca el runtime cuando hay trabajo pendiente (comandos en cola, tareas listas o aprobaciones decididas sin aplicar) y no hay ninguno en marcha: al abrirse, y después de añadir una tarea, pedir un plan o aprobarlo. Es un `haril start` normal, en segundo plano y sin ventana, con su lease, su epoch y su salida por inactividad (120 s): al cerrar la interfaz termina su trabajo y sale solo; no queda ningún demonio. Su salida va a `logs\runtime-<fecha>.log` dentro de la raíz del runtime (`%LOCALAPPDATA%\HARIL\logs\` por defecto); las líneas con las que cada runtime arranca y termina llevan su pid. La barra superior muestra `runtime running (started by shell, pid N)` y el runtime registra el arranque como el evento `runtime.started_by_shell`. Si el runtime sale antes de tomar el lease, la línea de estado lo dice con su código de salida y el log que hay que leer; `r` lo intenta otra vez, una sola vez por pulsación. Hereda el entorno de la interfaz, así que las variables de las claves le llegan igual que a un `haril start` escrito a mano; ninguna clave va en la línea de comandos ni en el log. Con `haril shell --no-runtime` la interfaz nunca arranca uno: cuando hay trabajo pendiente (al abrirse, con `r` o después de una acción), la línea de estado recuerda que hace falta `haril start`.
+| Zona | Qué muestra |
+|---|---|
+| Barra superior | Proyecto, modelo, contexto de la tarea en curso (`ctx`), tokens y estado del runtime |
+| Centro | Las pestañas y el panel activo. En reposo (nada en marcha ni planes por aprobar), el banner HARIL con los datos principales; con trabajo, En vivo |
+| Columna derecha (100 columnas o más) | Cajas de estado: proyecto, rama y cambios de git, runtime, aprobaciones, taxis y tokens |
+| Abajo | Una caja con las teclas y la línea de estado: modelo, runtime con su pid, tokens, `? help` y `q quit` |
+
+Funciona desde 80x24: por debajo de 100 columnas se oculta la columna derecha, las aprobaciones pendientes pasan a la barra superior y la rama con sus cambios a la línea de estado. Git se lee al abrir, con `r`, al cambiar el filtro y después de cada acción; cuando el runtime avisa de un cambio, como mucho una vez cada 5 s; nunca con un temporizador. La interfaz solo lee git en las raíces de proyecto que registraste, con la misma confianza que tu editor da a ese repositorio: la configuración de un repositorio puede hacer que git ejecute programas (por ejemplo un filtro `clean`), y los agentes de HARIL no pueden escribir en `.git`.
+
+La interfaz arranca el runtime cuando hay trabajo pendiente (comandos en cola, tareas listas o aprobaciones decididas sin aplicar) y no hay ninguno en marcha: al abrirse, y después de añadir una tarea, pedir un plan o aprobarlo. Es un `haril start` normal, en segundo plano y sin ventana, con su lease, su epoch y su salida por inactividad (120 s): al cerrar la interfaz termina su trabajo y sale solo; no queda ningún demonio. Su salida va a `logs\runtime-<fecha>.log` dentro de la raíz del runtime (`%LOCALAPPDATA%\HARIL\logs\` por defecto); las líneas con las que cada runtime arranca y termina llevan su pid. La línea de estado muestra `runtime running (started by shell, pid N)` y el runtime registra el arranque como el evento `runtime.started_by_shell`. Si el runtime sale antes de tomar el lease, la línea de estado lo dice con su código de salida y el log que hay que leer; `r` lo intenta otra vez, una sola vez por pulsación. Hereda el entorno de la interfaz, así que las variables de las claves le llegan igual que a un `haril start` escrito a mano; ninguna clave va en la línea de comandos ni en el log. Con `haril shell --no-runtime` la interfaz nunca arranca uno: cuando hay trabajo pendiente (al abrirse, con `r` o después de una acción), la línea de estado recuerda que hace falta `haril start`.
 
 ```powershell
 cd D:\github\haril
@@ -213,13 +222,13 @@ npm run build
 | `l` | Ir a En vivo: las tareas más recientes con su estado, intento, tokens y resultado |
 | `a` | Añadir una tarea (título, agente y modelo); se encola con `haril task add` y la ejecuta el runtime |
 | `t` | Ir a Temas |
-| `r` | Recargar; si hay trabajo pendiente y ningún runtime, lo arranca |
+| `r` | Recargar la base y git; si hay trabajo pendiente y ningún runtime, lo arranca |
 | `?` | Ayuda |
 | `q`, `Ctrl+C` | Salir |
 
 Flujo de demostración, entero desde `haril` en una sola ventana: `g` pide un plan y la interfaz arranca el runtime, `p` lo muestra para aprobarlo con `y` o rechazarlo con `n`, y `l` sigue sus tareas hasta que terminan. No hace falta `haril start` en otra terminal.
 
-El tema elegido se guarda en `config\haril.json` como `ui.theme` y se mantiene al reabrir. Los temas propios van en `config\themes\<nombre>.json` dentro de la raíz del runtime, con el formato JSON de temas de Pi. Memoria, servicios y terminales todavía muestran «no disponible en esta versión».
+**Temas.** El predeterminado es `haril-crimson` (rojo sobre negro); vienen también `haril-blossom` (rosa sobre negro), `haril-dark` y `haril-light`. Para cambiarlo, `t` abre Temas: se elige con las flechas y `Enter` lo aplica al momento y lo guarda en `config\haril.json` como `ui.theme`, que se mantiene al reabrir. Los temas propios van en `config\themes\<nombre>.json` dentro de la raíz del runtime, con el formato JSON de temas de Pi; los colores `border`, `ok` y `danger` son opcionales (si faltan, se usan `muted`, `accent` y `warning`). Memoria, servicios y terminales todavía muestran «no disponible en esta versión».
 
 
 ## Qué es y qué no es

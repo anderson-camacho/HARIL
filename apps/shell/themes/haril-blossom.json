@@ -1,0 +1,22 @@
+{
+  "name": "haril-blossom",
+  "appearance": "dark",
+  "vars": {
+    "pink": "#ff79c6",
+    "dimPink": "#7d3a64",
+    "light": "#f6eef4",
+    "grey": "#9a9099",
+    "amber": "#f6c177",
+    "green": "#8bd5a0",
+    "rose": "#ff5c8a"
+  },
+  "colors": {
+    "accent": "pink",
+    "text": "light",
+    "muted": "grey",
+    "warning": "amber",
+    "border": "dimPink",
+    "ok": "green",
+    "danger": "rose"
+  }
+}

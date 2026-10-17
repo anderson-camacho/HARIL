@@ -299,9 +299,11 @@ describe("the shell starts the runtime on opening (LD-T6)", () => {
     const mounted = mount({ spawn, control });
     mounted.app.start();
     await waitFor(mounted, "· live");
-    expect(screen(mounted)).toContain(
-      `runtime running (started by shell, pid ${CHILD_PID}) · live · project all`,
+    // The status line names the runtime and the top bar the only project (LD-T6b-1).
+    expect(mounted.app.frameText().at(-1)).toContain(
+      `runtime running (started by shell, pid ${CHILD_PID}) · live`,
     );
+    expect(mounted.app.frameText()[0]).toMatch(/^◆ HARIL ◇ solo ◇ .*runtime running$/);
     expect(screen(mounted)).toContain(`runtime started (pid ${CHILD_PID})`);
     expect(control.calls()).toBe(1);
     await quit(mounted);
@@ -473,7 +475,9 @@ describe("a runtime that fails or loses the lease race (LD-T6)", () => {
     const spawn = fakeSpawn(() => takeLease(WINNER_PID), 2);
     const mounted = mount({ spawn });
     mounted.app.start();
-    await waitFor(mounted, `runtime running (pid ${WINNER_PID}) · project all`);
+    await waitFor(mounted, `· runtime running (pid ${WINNER_PID})`);
+    // The status line names the winner, and so does the line under the tabs.
+    expect(mounted.app.frameText().at(-1)).toContain(`runtime running (pid ${WINNER_PID})`);
     expect(
       mounted.app.frameText().some((line) => line.trim() === `runtime running (pid ${WINNER_PID})`),
     ).toBe(true);
