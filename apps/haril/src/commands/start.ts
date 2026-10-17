@@ -60,10 +60,17 @@ async function serve(
     io.err(`haril: ${NOT_INITIALIZED}`);
     return EXIT_USAGE;
   }
-  // The real lane (M2-T6): the analyst agent in Pi through one Broker, closed when the run ends.
-  const realAgents = createRealAgents({ host, store, clock: clockFor(host), dataDir });
-  // The host handler of haril_propose_plan (LD-T4): a plan task's proposal becomes a requested approval.
+  // The host handler of haril_propose_plan (LD-T4): a plan task's proposal becomes a requested approval. Both lanes get
+  // the same handler, so the run loop opens one attempt window whichever runtime serves the plan task.
   const planProposals = createPlanProposals(store);
+  // The real lane (M2-T6): the analyst and planner agents in Pi through one Broker, closed when the run ends.
+  const realAgents = createRealAgents({
+    host,
+    store,
+    clock: clockFor(host),
+    dataDir,
+    proposePlan: planProposals.propose,
+  });
   // The control channel (LD-T2): the runtime opens it after taking the lease, so subscribed shells and nudging CLIs
   // reach this runtime only while it holds the lease.
   const control = createControlServer({ dataDir });

@@ -14,6 +14,7 @@ import type {
   AgentSpec,
   Clock,
   HarilError,
+  PlanProposer,
   Result,
   Store,
 } from "@haril/core/ports";
@@ -72,6 +73,9 @@ export interface RealAgentsOptions {
   readonly store: Store;
   readonly clock: Clock;
   readonly dataDir: string;
+  // The host handler of haril_propose_plan (LD-T4), the one the hermetic lane gets, so both lanes share one attempt
+  // window. Without it, the bridge's plan.propose is unsupported and a planner task cannot propose.
+  readonly proposePlan?: PlanProposer;
 }
 
 export function createRealAgents(options: RealAgentsOptions): RealAgents {
@@ -202,6 +206,7 @@ export function createRealAgents(options: RealAgentsOptions): RealAgents {
         model: runModel,
         virtualKey,
         onBridgeOperation: (event) => recordBridgeOperation(store, spec, event),
+        ...(options.proposePlan === undefined ? {} : { proposePlan: options.proposePlan }),
       };
       const started = await createPiAgentRuntime(piOptions).start(runSpec);
       if (!started.ok) {
@@ -367,6 +372,7 @@ function recordEvent(
 }
 
 // A PathGuard denial is a permission event (criterion 12): the path is hashed, never recorded.
+// A plan proposal (LD-T4) is tool.plan.propose with the plan's hash and size and the approval it became, never the plan.
 // Every other bridge operation keeps its tool.<op> record.
 function recordBridgeOperation(store: Store, spec: AgentSpec, event: BridgeOperationEvent): void {
   if (event.outcome === "path_denied") {
@@ -374,6 +380,15 @@ function recordBridgeOperation(store: Store, spec: AgentSpec, event: BridgeOpera
       tool: event.op,
       reason: event.reason ?? "unknown",
       pathHash: event.pathSha256,
+    });
+    return;
+  }
+  if (event.planSha256 !== undefined) {
+    recordEvent(store, spec, `tool.${event.op}`, {
+      outcome: event.outcome,
+      planSha256: event.planSha256,
+      planBytes: event.planBytes ?? 0,
+      ...(event.approvalId === undefined ? {} : { approvalId: event.approvalId }),
     });
     return;
   }

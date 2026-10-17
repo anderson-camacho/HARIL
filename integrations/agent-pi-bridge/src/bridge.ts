@@ -1,6 +1,6 @@
 // HARIL bridge: a Pi extension loaded with `-e` (ADR-0004 decision 5, ARCHITECTURE 9.4). It sends the
-// handshake `hello` over the run's pipe, registers the `haril` provider and the `read` tool, and forwards
-// every tool operation to the Runtime, which decides. Self-contained: node:* imports and local types only
+// handshake `hello` over the run's pipe, registers the `haril` provider, the `read` tool and, for a plan task,
+// `haril_propose_plan` (LD-T4), and forwards every tool operation to the Runtime, which decides. Self-contained: node:* imports and local types only
 // (R6), so it bundles into one file. The shapes below follow Pi 1.2.0's ExtensionAPI types (ProviderConfig,
 // ProviderChatModelConfig, ToolDefinition, AgentToolResult), which are read-only under vendor/pi/1.2.0.
 
@@ -42,7 +42,8 @@ export interface BridgeToolDefinition {
   readonly label: string;
   readonly description: string;
   readonly parameters: Record<string, unknown>;
-  execute(toolCallId: string, params: { readonly path?: unknown }): Promise<BridgeToolResult>;
+  // The arguments the model sent, unchecked: the Runtime validates every operation.
+  execute(toolCallId: string, params: Readonly<Record<string, unknown>>): Promise<BridgeToolResult>;
 }
 
 export interface BridgePiApi {
@@ -60,6 +61,8 @@ const VKEY_ENV = "HARIL_VKEY";
 const CONTEXT_ENV = "HARIL_MODEL_CONTEXT";
 const MAX_TOKENS_ENV = "HARIL_MODEL_MAX_TOKENS";
 const LF = "\n";
+// The planning tool of a plan task (LD-T4): registered only when the run announces it in HARIL_TOOLS.
+const PROPOSE_PLAN_TOOL = "haril_propose_plan";
 
 interface Channel {
   send(message: Record<string, unknown>): void;
@@ -91,11 +94,10 @@ export default async function harilBridge(pi: BridgePiApi): Promise<void> {
   if (split <= 0) throw new Error("haril bridge: HARIL_BRIDGE has no token");
   const pipePath = bridgeValue.slice(0, split);
   const token = bridgeValue.slice(split + 1);
-  const tools = toolsValue.split(",").filter((name) => name !== "");
+  const announced = toolsValue.split(",").filter((name) => name !== "");
 
   // A failed connection throws, so Pi fails to load the extension (fail closed).
   const channel = await openChannel(pipePath);
-  channel.send({ type: "hello", runId, token, tools, bridgeVersion: BRIDGE_VERSION });
 
   pi.registerProvider("haril", {
     baseUrl: brokerUrl,
@@ -114,8 +116,24 @@ export default async function harilBridge(pi: BridgePiApi): Promise<void> {
     ],
   });
 
+  // The hello lists the tools registered here and nothing else: the Runtime compares it with the run's allowed tools,
+  // so a name the bridge does not serve fails the handshake instead of being announced.
   let sequence = 0;
-  pi.registerTool({
+  const nextId = (): string => `op-${++sequence}`;
+  const tools = [readTool(channel, nextId)];
+  if (announced.includes(PROPOSE_PLAN_TOOL)) tools.push(proposePlanTool(channel, nextId));
+  for (const tool of tools) pi.registerTool(tool);
+  channel.send({
+    type: "hello",
+    runId,
+    token,
+    tools: tools.map((tool) => tool.name),
+    bridgeVersion: BRIDGE_VERSION,
+  });
+}
+
+function readTool(channel: Channel, nextId: () => string): BridgeToolDefinition {
+  return {
     name: "read",
     label: "Read",
     description: "Read a UTF-8 text file inside the project. The runtime decides what may be read.",
@@ -126,7 +144,7 @@ export default async function harilBridge(pi: BridgePiApi): Promise<void> {
     },
     async execute(_toolCallId, params) {
       const path = typeof params.path === "string" ? params.path : "";
-      const reply = await channel.request({ id: `op-${++sequence}`, op: "read", path });
+      const reply = await channel.request({ id: nextId(), op: "read", path });
       if (reply.ok === true && typeof reply.content === "string") {
         return { content: [{ type: "text", text: reply.content }], details: {} };
       }
@@ -137,7 +155,38 @@ export default async function harilBridge(pi: BridgePiApi): Promise<void> {
         isError: true,
       };
     },
-  });
+  };
+}
+
+// haril_propose_plan (LD-T4, ARCH 9.4): the arguments are the plan itself, sent as they came. The schema only names the
+// two top-level fields; the Runtime checks the plan with the plan.submit rules, and a refusal comes back as an error
+// result with the reason, so the model can fix the plan and call again.
+function proposePlanTool(channel: Channel, nextId: () => string): BridgeToolDefinition {
+  return {
+    name: PROPOSE_PLAN_TOOL,
+    label: "Propose plan",
+    description:
+      'Propose the plan of this goal: {"schemaVersion": 1, "tasks": [...]}. The runtime checks it, and a person approves it before any of its tasks runs.',
+    parameters: {
+      type: "object",
+      properties: {
+        schemaVersion: { type: "integer" },
+        tasks: { type: "array", items: { type: "object" } },
+      },
+    },
+    async execute(_toolCallId, params) {
+      const reply = await channel.request({ id: nextId(), op: "plan.propose", plan: params });
+      if (reply.ok === true && typeof reply.content === "string") {
+        return { content: [{ type: "text", text: reply.content }], details: {} };
+      }
+      const error = typeof reply.error === "string" ? reply.error : "refused";
+      return {
+        content: [{ type: "text", text: `refused: ${error}` }],
+        details: {},
+        isError: true,
+      };
+    },
+  };
 }
 
 function positiveIntegerEnv(value: string | undefined, fallback: number): number {

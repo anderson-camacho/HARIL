@@ -12,6 +12,8 @@
 // RL-T4 scenarios: error_then_retry_ok (a failed reply, then a retry that succeeds), error_final, ended_aborted,
 // echo_prompt (the reply repeats the prompt text), prompt_handled (prompt answered "handled"), ui_notify (a notify
 // request that must not be answered; the reply says whether a stray answer arrived).
+// LD-T4 scenarios: propose_plan (one valid plan through the bridge's plan.propose, as haril_propose_plan would send
+// it), propose_plan_retry (an invalid plan first; after the refusal, the valid plan). The reply reports each answer.
 // Test-only: the real Pi is never replaced outside HARIL_PI_CLI_OVERRIDE.
 
 import { connect } from "node:net";
@@ -24,6 +26,7 @@ const expectedModel = argValue("--model");
 const LARGE_LINE_BYTES = 8 * 1024 * 1024 + 1;
 
 const pendingBridge = new Map();
+let bridgeSeq = 0;
 let bridgeSocket;
 let bridgeBuffer = "";
 let stdinBuffer = "";
@@ -92,15 +95,49 @@ function connectBridge() {
   bridgeSocket.on("error", () => {});
 }
 
-function bridgeRead(path) {
+function bridgeRequest(operation) {
   return new Promise((resolve) => {
-    const id = "op-1";
+    const id = `op-${++bridgeSeq}`;
     pendingBridge.set(id, (message) => {
       pendingBridge.delete(id);
       resolve(message);
     });
-    bridgeSocket.write(`${JSON.stringify({ id, op: "read", path })}\n`);
+    bridgeSocket.write(`${JSON.stringify({ id, ...operation })}\n`);
   });
+}
+
+function bridgeRead(path) {
+  return bridgeRequest({ op: "read", path });
+}
+
+// A valid two-step plan for the goal (the first line of the prompt). Its tasks are hermetic, so a granted plan runs
+// without a model; the description marks the plan body, which no event may carry.
+function fakePlan(goal) {
+  const step = (localId, dependsOn, n) => ({
+    localId,
+    dependsOn,
+    goal: `${goal} (step ${n} of 2)`,
+    description: "A step the fake Pi planner proposes.",
+    priority: 5,
+    kind: "work",
+    agent: "fake:succeed",
+    requires: [],
+    context: [],
+    surface: { write: [], read: [] },
+    budget: { maxCostMicros: 0, maxTokens: 0, maxWallMs: 60000 },
+    timeoutMs: 60000,
+    maxAttempts: 1,
+    acceptance: [],
+  });
+  return { schemaVersion: 1, tasks: [step("survey", [], 1), step("report", ["survey"], 2)] };
+}
+
+async function proposePlan(plan) {
+  const reply = await bridgeRequest({ op: "plan.propose", plan });
+  return {
+    ok: reply.ok === true,
+    text: reply.ok ? `plan ok: ${reply.content}` : `plan refused: ${reply.error}`,
+  };
 }
 
 function respond(command, id, data) {
@@ -237,6 +274,17 @@ async function runPrompt() {
       outcomes.push(reply.ok ? "allowed" : reply.error);
     }
     text = `read denials ${outcomes.length}: ${outcomes.join(", ")}`;
+  }
+  if (scenario === "propose_plan") {
+    text = (await proposePlan(fakePlan(promptText.split("\n")[0] ?? ""))).text;
+  }
+  // The model sends a wrong plan, reads the refusal and sends the fixed one, as the planner prompt asks.
+  if (scenario === "propose_plan_retry") {
+    const first = await proposePlan({ schemaVersion: 2, tasks: [] });
+    text = first.text;
+    if (!first.ok) {
+      text += ` | ${(await proposePlan(fakePlan(promptText.split("\n")[0] ?? ""))).text}`;
+    }
   }
   if (scenario === "ui_request") {
     const ui = await uiRequest("ui-1");

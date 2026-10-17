@@ -407,3 +407,97 @@ describe("haril start with an analyst task (M2-T6)", () => {
     TEST_TIMEOUT_MS,
   );
 });
+
+// LD-T4 on the Pi lane: a planner task runs in the fake Pi, which proposes through the bridge's plan.propose the way the
+// haril_propose_plan tool does. Both lanes share the host handler, so the proposal waits as a requested approval.
+describe("haril start with a planner task (LD-T4)", () => {
+  it(
+    "proposes the plan through the bridge, retries after a refusal, and runs the plan once it is approved",
+    async () => {
+      const add = harness();
+      expect(
+        run(
+          [
+            "task",
+            "add",
+            "Plan the docs",
+            "--kind",
+            "plan",
+            "--agent",
+            "planner",
+            "--model",
+            "fake-model",
+          ],
+          add.io,
+          sb.host,
+        ),
+      ).toBe(0);
+      const host = realHost("propose_plan_retry");
+
+      const first = await startRuntime(host);
+
+      expect(first.code).toBe(0);
+      const pending = harness();
+      expect(run(["approvals", "--json"], pending.io, sb.host)).toBe(0);
+      const approvals = parseJson<{ approvalId: string; status: string; tasks: number }[]>(
+        pending.out,
+      );
+      expect(approvals).toHaveLength(1);
+      const [approval] = approvals;
+      expect(approval).toMatchObject({ status: "requested", tasks: 2 });
+      if (approval === undefined) return;
+      expect(first.out.join("\n")).toContain(`approval ${approval.approvalId} requested`);
+      const view = taskView("Plan the docs");
+      expect(view.state).toBe("completed");
+      expect(view.result?.text).toContain(`plan ok: proposed plan ${approval.approvalId}`);
+      expect(view.result?.text).toContain("plan refused: invalid plan");
+
+      const db = ledgerDb();
+      try {
+        const rows = db
+          .prepare(
+            "SELECT type, payload FROM events WHERE type IN ('tool.plan.propose', 'run.handshake.ok') ORDER BY seq",
+          )
+          .all() as Array<{ type: string; payload: string }>;
+        const handshake = rows.find((row) => row.type === "run.handshake.ok");
+        expect(JSON.parse(handshake?.payload ?? "{}")).toEqual({
+          tools: ["read", "haril_propose_plan"],
+        });
+        const proposals = rows
+          .filter((row) => row.type === "tool.plan.propose")
+          .map((row) => JSON.parse(row.payload) as Record<string, unknown>);
+        expect(proposals).toEqual([
+          {
+            outcome: "plan_refused",
+            planSha256: expect.any(String),
+            planBytes: expect.any(Number),
+          },
+          {
+            outcome: "ok",
+            planSha256: expect.any(String),
+            planBytes: expect.any(Number),
+            approvalId: approval.approvalId,
+          },
+        ]);
+        // The plan body stays in the approval: no tool event carries it.
+        expect(JSON.stringify(proposals)).not.toContain("fake Pi planner");
+      } finally {
+        db.close();
+      }
+
+      const approve = harness();
+      expect(
+        await run(["approve", approval.approvalId], approve.io, { ...sb.host, user: "ana" }),
+      ).toBe(0);
+      const second = await startRuntime(host);
+
+      expect(second.code).toBe(0);
+      const status = harness();
+      run(["status", "--json"], status.io, sb.host);
+      const tasks = parseJson<{ taskList: { state: string }[] }>(status.out).taskList;
+      expect(tasks).toHaveLength(1 + approval.tasks);
+      expect(tasks.every((task) => task.state === "completed")).toBe(true);
+    },
+    TEST_TIMEOUT_MS,
+  );
+});

@@ -115,9 +115,9 @@ async function startFakePipe(): Promise<FakePipe> {
   };
 }
 
-function setEnv(bridgeValue: string): void {
+function setEnv(bridgeValue: string, tools = "read"): void {
   process.env.HARIL_BRIDGE = bridgeValue;
-  process.env.HARIL_TOOLS = "read";
+  process.env.HARIL_TOOLS = tools;
   process.env.HARIL_VKEY = VKEY;
   process.env.HARIL_RUN_ID = "run-1";
   process.env.HARIL_BROKER_URL = BROKER;
@@ -141,20 +141,27 @@ function fakePi(): RecordedPi {
   };
 }
 
-async function loadWithPipe(): Promise<{ pi: RecordedPi; fake: FakePipe }> {
+async function loadWithPipe(tools = "read"): Promise<{ pi: RecordedPi; fake: FakePipe }> {
   const fake = await startFakePipe();
   pipe = fake;
-  setEnv(`${fake.path}#${TOKEN}`);
+  setEnv(`${fake.path}#${TOKEN}`, tools);
   const pi = fakePi();
   await bridge(pi);
   return { pi, fake };
 }
 
 function readTool(pi: RecordedPi): BridgeToolDefinition {
-  const tool = pi.tools[0];
-  if (tool === undefined) throw new Error("no tool registered");
+  return toolNamed(pi, "read");
+}
+
+function toolNamed(pi: RecordedPi, name: string): BridgeToolDefinition {
+  const tool = pi.tools.find((candidate) => candidate.name === name);
+  if (tool === undefined) throw new Error(`no tool ${name} registered`);
   return tool;
 }
+
+const PLAN_TOOLS = "read,haril_propose_plan";
+const PLAN = { schemaVersion: 1, tasks: [{ localId: "survey", goal: "Survey the CLI" }] };
 
 describe("agent-pi-bridge extension", () => {
   it("deletes HARIL_BRIDGE, HARIL_TOOLS and HARIL_VKEY from the environment on load", async () => {
@@ -266,6 +273,49 @@ describe("agent-pi-bridge extension", () => {
     const result = await readTool(pi).execute("call-2", { path: "../secret" });
     expect(result.isError).toBe(true);
     expect(result.content[0]?.text).toContain("path_denied");
+    expect(result.details).toEqual({});
+  });
+
+  it("registers haril_propose_plan next to read when HARIL_TOOLS announces it, and the hello lists both", async () => {
+    const { pi, fake } = await loadWithPipe(PLAN_TOOLS);
+    expect(pi.tools.map((tool) => tool.name)).toEqual(["read", "haril_propose_plan"]);
+    expect(toolNamed(pi, "haril_propose_plan").label.length).toBeGreaterThan(0);
+    expect(toolNamed(pi, "haril_propose_plan").parameters).toMatchObject({ type: "object" });
+    await waitFor(() => fake.hellos.length === 1);
+    expect(fake.hellos[0]?.tools).toEqual(["read", "haril_propose_plan"]);
+  });
+
+  it("announces only the tools it registers: a name it does not serve stays out of the hello", async () => {
+    const { pi, fake } = await loadWithPipe("read,bash");
+    expect(pi.tools.map((tool) => tool.name)).toEqual(["read"]);
+    await waitFor(() => fake.hellos.length === 1);
+    expect(fake.hellos[0]?.tools).toEqual(["read"]);
+  });
+
+  it("haril_propose_plan sends the plan over the pipe as plan.propose and returns the host's text", async () => {
+    const { pi, fake } = await loadWithPipe(PLAN_TOOLS);
+    fake.respond((op) =>
+      op.op === "plan.propose"
+        ? { ok: true, content: "proposed plan appr-1; it waits for haril approve appr-1" }
+        : { ok: false, error: "unsupported" },
+    );
+    const result = await toolNamed(pi, "haril_propose_plan").execute("call-3", PLAN);
+    expect(fake.ops).toEqual([expect.objectContaining({ op: "plan.propose", plan: PLAN })]);
+    expect(result).toEqual({
+      content: [{ type: "text", text: "proposed plan appr-1; it waits for haril approve appr-1" }],
+      details: {},
+    });
+  });
+
+  it("haril_propose_plan maps a refusal to an error result with the reason, so the model can fix the plan", async () => {
+    const { pi, fake } = await loadWithPipe(PLAN_TOOLS);
+    fake.respond(() => ({ ok: false, error: "invalid plan: schemaVersion must be 1" }));
+    const result = await toolNamed(pi, "haril_propose_plan").execute("call-4", {
+      schemaVersion: 2,
+      tasks: [],
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain("invalid plan: schemaVersion must be 1");
     expect(result.details).toEqual({});
   });
 

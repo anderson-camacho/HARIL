@@ -69,6 +69,8 @@ El plan también se le puede pedir a un agente: `task add --kind plan` crea una 
 .\bin\haril.ps1 run --project demo
 ```
 
+Con un modelo real, el agente `planner` lee el proyecto en Pi y propone el plan con la misma herramienta del puente: `haril task add --kind plan --agent planner --model cliproxy/gemini-3-flash "<objetivo>"`. Si el runtime rechaza el plan, el modelo recibe el motivo y puede corregirlo; los eventos guardan solo el hash y el tamaño del plan, y el resto del flujo (`approvals`, `approve`, `run`) es el mismo.
+
 7. Consultar el resultado:
 
    ```powershell
@@ -119,7 +121,7 @@ Si falta el runtime, `run` no reclama la tarea: la muestra como `skipped` con lo
 
 Notas:
 
-- **Agentes simulados.** `fake:succeed` (por defecto), `fake:fail` y `fake:slow:<ms>` se comportan como su nombre indica; `fake:plan` solo atiende tareas `--kind plan`. Cualquier otro agente del plan (por ejemplo `developer-block`) se ejecuta como simulado con éxito y `start` lo indica. Solo `analyst` y `planner` son reales, y solo con la configuración de la sección anterior; `planner` aún no tiene su herramienta en el puente de Pi. Ningún agente real modifica el disco en M2.
+- **Agentes simulados.** `fake:succeed` (por defecto), `fake:fail` y `fake:slow:<ms>` se comportan como su nombre indica; `fake:plan` solo atiende tareas `--kind plan`. Cualquier otro agente del plan (por ejemplo `developer-block`) se ejecuta como simulado con éxito y `start` lo indica. Solo `analyst` y `planner` son reales, y solo con la configuración de la sección anterior; `planner` solo atiende tareas `--kind plan`. Ningún agente real modifica el disco en M2.
 - **Otras formas de invocar la CLI.** `bin\haril.cmd` (cmd) y `sh bin/haril` (POSIX) hacen lo mismo. No editan el `PATH`. Si falta `apps/haril/dist/haril.mjs`, avisan de que hay que ejecutar `npm run build`.
 - **Códigos de salida.** 0 correcto, 1 advertencias o tarea fallida, 2 error de uso o de entorno.
 
