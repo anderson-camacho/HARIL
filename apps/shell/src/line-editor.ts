@@ -1,10 +1,10 @@
 import { decodeKittyPrintable, matchesKey, visibleWidth } from "@earendil-works/pi-tui";
-import { visibleText } from "./format.js";
+import { visibleText } from "@haril/core";
 
 // The line editor of the input box (LD-T6b-2): one line of text and a cursor. pi-tui's Input draws its own line with
 // escape sequences (a reverse-video cursor and the hardware cursor marker) and keeps pasted control characters in its
 // value, so it cannot go through fit like every other text of the frame; this editor keeps only visible text instead.
-// Each control character, invisible code point or lone surrogate becomes "?" (format.ts visibleText) and a paste's
+// Each control character, invisible code point or lone surrogate becomes "?" (the Core visibleText) and a paste's
 // line breaks become spaces, so the box shows exactly what Enter sends. The app colors the view and draws the cursor.
 
 const PASTE_START = "\x1b[200~";

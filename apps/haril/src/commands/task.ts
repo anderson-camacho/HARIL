@@ -1,9 +1,9 @@
 import type { AcceptanceCheck } from "@haril/contracts";
-import { checkTaskKind, isRealAgent, type Verification } from "@haril/core";
+import { checkTaskKind, isRealAgent, type Verification, visibleText } from "@haril/core";
 import { allValues, argsProblem, lastValue, type ParsedArgs, parseArgs } from "../args.js";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
 import { storeAccess } from "../host.js";
-import { dataDirFor, openExisting, queueCommand, withProject } from "./common.js";
+import { dataDirFor, openExisting, queueCommand, visibleBlock, withProject } from "./common.js";
 
 // `haril task add` (M1-T4): validates the input and queues task.create. `haril start` applies the queue.
 // `haril task show` (M2-T6) prints one task with its result or error and its settled tokens.
@@ -189,11 +189,15 @@ function taskShow(args: readonly string[], io: CliIo, host: HostInfo): number {
       io.out(JSON.stringify(view));
       return EXIT_OK;
     }
-    io.out(`task ${view.taskId}: ${view.goal}`);
-    io.out(`state ${view.state}, agent ${view.agent}, model ${view.model ?? "none"}`);
+    // LD-T7c: the goal, the agent, the result and the error may be agent-written, so the text shows them as the terminal
+    // draws them; the result and the error keep their line breaks.
+    io.out(visibleText(`task ${view.taskId}: ${view.goal}`));
+    io.out(visibleText(`state ${view.state}, agent ${view.agent}, model ${view.model ?? "none"}`));
     io.out(`attempts ${view.attempts.used}/${view.attempts.max}, max tokens ${view.maxTokens}`);
-    io.out(`result: ${resultText(view.result)}`);
-    if (view.error !== null) io.out(`error: ${view.error.code}: ${view.error.message}`);
+    io.out(`result: ${visibleBlock(resultText(view.result))}`);
+    if (view.error !== null) {
+      io.out(visibleBlock(`error: ${view.error.code}: ${view.error.message}`));
+    }
     printVerification(io, view.verification);
     io.out(`permission denials: ${view.permissionDenials}`);
     io.out(
@@ -265,7 +269,7 @@ function printVerification(io: CliIo, verification: Verification | null): void {
       : "not verified";
   io.out(`verification: ${state}`);
   for (const check of verification.checks) {
-    io.out(`  ${check.ok ? "ok" : "failed"} ${check.kind}: ${check.detail}`);
+    io.out(visibleText(`  ${check.ok ? "ok" : "failed"} ${check.kind}: ${check.detail}`));
   }
 }
 

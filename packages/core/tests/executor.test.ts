@@ -85,6 +85,21 @@ describe("buildAgentSpec", () => {
     }
   });
 
+  // LD-T7c: the first real demo planned a task that drafted a file for an agent that cannot write. The planner is told
+  // what the analyst can do, where the content of a file goes, and what a description must add.
+  it("tells the planner what the analyst can and cannot do, and where the content of a file goes", () => {
+    const { prompt } = buildAgentSpec(
+      { ...task, kind: "plan", agentRef: "planner" },
+      { runId: "r", attempt: 1 },
+    );
+    expect(prompt).toMatch(
+      /"analyst" reads the files of its read surface and answers in its result text/,
+    );
+    expect(prompt).toMatch(/cannot write files or run commands/);
+    expect(prompt).toMatch(/last task .* in its result/);
+    expect(prompt).toMatch(/never a copy of the goal/);
+  });
+
   it("serves the planner archetype in the real lane, like the analyst", () => {
     expect(REAL_AGENT_REFS).toEqual(["analyst", "planner"]);
   });

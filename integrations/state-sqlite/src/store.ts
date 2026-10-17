@@ -1016,11 +1016,14 @@ export class SqliteStore implements Store {
 
       if (completion.outcome === "succeeded") {
         this.transition("running", "completed");
+        // A succeeded attempt is charged like a failed one (ARCH 7.2, 7.6), so a completed task reports the attempts it
+        // ran: the same number the run output gave its claim (LD-T7c). The claim allowed it, so it stays <= max.
+        const attemptsUsed = task.attemptsUsed + 1;
         this.db
           .prepare(
-            "UPDATE tasks SET result = ?, state = 'completed', phase = NULL, completed_at = ?, updated_at = ? WHERE task_id = ?",
+            "UPDATE tasks SET result = ?, state = 'completed', phase = NULL, attempts_used = ?, completed_at = ?, updated_at = ? WHERE task_id = ?",
           )
-          .run(JSON.stringify(completion.result), now, now, run.taskId);
+          .run(JSON.stringify(completion.result), attemptsUsed, now, now, run.taskId);
         this.db
           .prepare(
             "UPDATE runs SET status = 'completed', ended_at = ?, end_cause = 'exit' WHERE run_id = ?",
@@ -1031,7 +1034,7 @@ export class SqliteStore implements Store {
           type: "task.completed",
           payload: { attempt: run.attempt },
         });
-        return { ...base, taskState: "completed", retryReason: null };
+        return { ...base, attemptsUsed, taskState: "completed", retryReason: null };
       }
 
       const attemptsUsed = task.attemptsUsed + 1;

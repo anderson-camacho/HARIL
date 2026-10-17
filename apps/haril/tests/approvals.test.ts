@@ -1,3 +1,5 @@
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { run } from "../src/cli.js";
@@ -121,6 +123,115 @@ describe("haril approvals", () => {
 
   it("exits 2 for an unknown project slug", () => {
     expect(run(["approvals", "--project", "nope"], fresh().io, sb.host)).toBe(2);
+  });
+
+  it("ends the list with how to read a plan (LD-T7c)", () => {
+    propose();
+    const out = fresh();
+    expect(run(["approvals"], out.io, sb.host)).toBe(0);
+    expect(out.out.at(-1)).toBe("haril approvals show <id> to read a plan");
+  });
+});
+
+// LD-T7c: approving from the CLI was blind (a count and a model). `approvals show` prints the plan the way the shell's
+// plan review does, every field the runtime applies; --json prints the approval with its plan for machines.
+describe("haril approvals show", () => {
+  function shown(id: string, args: string[] = [], host = sb.host): Harness {
+    const out = fresh();
+    expect(run(["approvals", "show", id, ...args], out.io, host)).toBe(0);
+    return out;
+  }
+
+  it("prints the header and every field of every task of a requested plan", () => {
+    const id = propose();
+    const lines = shown(id).out;
+    expect(lines[0]).toBe(`approval ${id}`);
+    expect(lines[1]).toBe("project demo, kind plan, status requested, model none, 4 tasks");
+    expect(lines[2]).toMatch(/^requested by cli at \d{4}-\d\d-\d\dT[\d:.]+Z$/);
+    expect(lines.join("\n")).not.toContain("decided");
+    expect(lines).toEqual(
+      expect.arrayContaining([
+        "1. survey-readme: Survey the README structure",
+        "   agent developer-block, depends on: none",
+        "   description: List the headings of README.md and note where a new section fits.",
+        "   writes: none; reads: README.md",
+        "   kind work, priority 0, attempts 2, timeout 120000 ms",
+        "   budget: 20000 tokens, 120000 ms wall time, 0 cost micros",
+        "   requires: none; context: none",
+        "   acceptance: none",
+        "3. insert-section: Insert the section into README.md",
+        "   agent developer-block, depends on: draft-section",
+        "   writes: README.md; reads: README.md",
+      ]),
+    );
+  });
+
+  it("--json prints the approval with its plan", () => {
+    const id = propose();
+    const view = parseJson<Record<string, unknown>>(shown(id, ["--json"]).out);
+    expect(view).toMatchObject({
+      approvalId: id,
+      projectSlug: "demo",
+      kind: "plan",
+      status: "requested",
+      tasks: 4,
+      model: null,
+      requestedBy: "cli",
+      decidedBy: null,
+      reason: null,
+    });
+    expect(view.plan).toEqual(JSON.parse(readFileSync(EXAMPLE_VALID, "utf8")));
+  });
+
+  it("shows the decision of a decided plan, in text and in JSON", () => {
+    const id = propose();
+    expect(run(["deny", id, "--reason", "not now"], fresh().io, operator())).toBe(0);
+    const text = shown(id).out;
+    expect(text[1]).toBe("project demo, kind plan, status denied, model none, 4 tasks");
+    expect(text[3]).toMatch(/^decided by tester at \d{4}-\d\d-\d\dT[\d:.]+Z: not now$/);
+    expect(parseJson(shown(id, ["--json"]).out)).toMatchObject({
+      status: "denied",
+      decidedBy: "tester",
+      reason: "not now",
+    });
+  });
+
+  it("exits 2 for an unknown id, and with usage without one", () => {
+    propose();
+    const missing = fresh();
+    expect(run(["approvals", "show", "missing"], missing.io, sb.host)).toBe(2);
+    expect(missing.err.join("\n")).toContain('no approval with id "missing"');
+    const bare = fresh();
+    expect(run(["approvals", "show"], bare.io, sb.host)).toBe(2);
+    expect(bare.err.join("\n")).toContain("usage: haril approvals show <approvalId>");
+  });
+
+  // Control sequences (clear screen, OSC 52 clipboard), a right-to-left override and tag characters in a plan's goal
+  // and description show as "?" in text, so an approver reads what the screen draws; JSON keeps them for machines.
+  it("shows hostile text in a plan as ? in text and keeps it intact in JSON", () => {
+    const goal = "Survey\x1b]52;c;ZmFrZS1jbGlw\x07 the\u{202E}README\u{E0041}\u{E007F}";
+    const description = "Read it\x1b[2J.\nThen report\u{200B} back.";
+    const plan = JSON.parse(readFileSync(EXAMPLE_VALID, "utf8")) as {
+      tasks: { goal: string; description: string }[];
+    };
+    const [first] = plan.tasks;
+    if (first === undefined) throw new Error("the example plan has no task");
+    first.goal = goal;
+    first.description = description;
+    const file = join(sb.root, "hostile-plan.json");
+    writeFileSync(file, JSON.stringify(plan), "utf8");
+    const id = propose(file);
+
+    const text = shown(id).out.join("\n");
+    expect(text).toContain("1. survey-readme: Survey?]52;c;ZmFrZS1jbGlw? the?README??");
+    expect(text).toContain("   description: Read it?[2J.\n     Then report? back.");
+    for (const hidden of ["\x1b", "\x07", "\u{202E}", "\u{E0041}", "\u{E007F}", "\u{200B}"]) {
+      expect(text).not.toContain(hidden);
+    }
+    const json = parseJson<{ plan: { tasks: { goal: string; description: string }[] } }>(
+      shown(id, ["--json"]).out,
+    );
+    expect(json.plan.tasks[0]).toMatchObject({ goal, description });
   });
 });
 

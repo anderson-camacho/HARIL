@@ -225,12 +225,39 @@ describe("runs.complete", () => {
       outcome: "succeeded",
       result: { summary: "fake agent succeeded" },
     });
-    expect(result).toMatchObject({ taskState: "completed", attemptsUsed: 0 });
+    // LD-T7c: the succeeded attempt counts, as the run output "attempt 1/1" said (ARCH 7.2: the claim charges it).
+    expect(result).toMatchObject({ taskState: "completed", attemptsUsed: 1 });
     expect(store.tasks.get(taskId("A"))).toMatchObject({
       state: "completed",
+      attemptsUsed: 1,
       result: { summary: "fake agent succeeded" },
     });
     expect(store.events.list().map((event) => event.type)).toContain("task.completed");
+  });
+
+  it("counts the failed attempt and the succeeded retry of a task that completes on its second attempt", () => {
+    enqueueTask("A", [], 3);
+    const first = store.tasks.claimNext(epoch);
+    store.runs.complete({
+      runId: first?.runId ?? "",
+      outcome: "failed",
+      error: { code: "fake.failed", message: "boom" },
+      endCause: "exit",
+    });
+    const second = store.tasks.claimNext(epoch);
+    expect(second?.attemptsUsed).toBe(1);
+    const result = store.runs.complete({
+      runId: second?.runId ?? "",
+      outcome: "succeeded",
+      result: { summary: "fake agent succeeded" },
+    });
+    expect(result).toMatchObject({ taskState: "completed", attempt: 2, attemptsUsed: 2 });
+    expect(store.tasks.get(taskId("A"))).toMatchObject({
+      state: "completed",
+      attempt: 2,
+      attemptsUsed: 2,
+      maxAttempts: 3,
+    });
   });
 
   it("returns a failed attempt to ready as a transient retry while attempts remain", () => {

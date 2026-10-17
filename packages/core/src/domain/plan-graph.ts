@@ -4,12 +4,18 @@ import { isPlannerAgent } from "./task-kind.js";
 // Limits of one plan. A plan task may not plan itself: maxDelegationDepth 1 allows a single level.
 export const PLAN_LIMITS = { maxTasksPerPlan: 50, maxDelegationDepth: 1 } as const;
 
+// The real agents that only read (LD-T7c): the analyst reads the files of its read surface and answers in its result
+// text; it cannot write files or run commands. A plan task on one of them lists nothing to write. Simulated agents
+// (fake:*) and every other reference keep their write surface.
+export const READ_ONLY_AGENT_REFS: readonly string[] = ["analyst"];
+
 export type PlanGraphIssueCode =
   | "unknown_dependency"
   | "duplicate_task_id"
   | "cycle"
   | "too_many_tasks"
-  | "nested_plan_task";
+  | "nested_plan_task"
+  | "read_only_agent_writes";
 
 export interface PlanGraphIssue {
   readonly code: PlanGraphIssueCode;
@@ -20,8 +26,8 @@ export interface PlanGraphIssue {
   readonly path?: readonly string[];
 }
 
-// Structural rules over a plan's local-id graph. Pure: no I/O, no clock, no typebox.
-// Issues come out in a fixed order (limit, duplicates, nested plans, unknown deps, cycles).
+// Structural rules over a plan's local-id graph and its agents. Pure: no I/O, no clock, no typebox.
+// Issues come out in a fixed order (limit, duplicates, nested plans, read-only writes, unknown deps, cycles).
 export function validatePlanGraph(plan: Plan): PlanGraphIssue[] {
   const issues: PlanGraphIssue[] = [];
   const { tasks } = plan;
@@ -61,6 +67,17 @@ export function validatePlanGraph(plan: Plan): PlanGraphIssue[] {
         code: "nested_plan_task",
         taskId: task.localId,
         message: `task "${task.localId}" names the planner agent "${task.agent}"; a plan may not hold a planner (maxDelegationDepth ${PLAN_LIMITS.maxDelegationDepth})`,
+      });
+    }
+  }
+
+  // The reason reaches the planner through haril_propose_plan (LD-T7c), so it says what to change.
+  for (const task of tasks) {
+    if (READ_ONLY_AGENT_REFS.includes(task.agent) && task.surface.write.length > 0) {
+      issues.push({
+        code: "read_only_agent_writes",
+        taskId: task.localId,
+        message: `task "${task.localId}" uses the read-only agent "${task.agent}", which cannot write files, but its surface.write lists ${task.surface.write.join(", ")}; give it "write": [] and have it return the content in its result`,
       });
     }
   }

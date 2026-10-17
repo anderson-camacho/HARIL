@@ -1,3 +1,5 @@
+import type { AgentRuntime } from "@haril/core/ports";
+import { FakeAgentRuntime, FakeClock } from "@haril/core/testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { run } from "../src/cli.js";
 import { harness, makeSandbox, parseJson, projectRoot, type Sandbox } from "./helpers.js";
@@ -111,6 +113,69 @@ describe("haril task show", () => {
     const missing = harness();
     expect(run(["task", "show", "does-not-exist"], missing.io, sb.host)).toBe(2);
     expect(missing.err.join("\n")).toContain("no task");
+  });
+
+  // LD-T7c: the text an agent wrote reaches the terminal as the shell shows it: control sequences, a right-to-left
+  // override and tag characters become "?", line breaks stay. JSON keeps the text as stored.
+  it("shows a hostile result as ? in text, keeps its line breaks, and keeps it intact in JSON", async () => {
+    const reply = "Done\x1b]52;c;ZmFrZS1jbGlw\x07 here\u{202E}txt\u{E0041}\nline two\x1b[2J";
+    const title = "Hostile\x1b[2J\u{202E} title";
+    run(["task", "add", title, "--agent", `fake:say:${reply}`], harness().io, sb.host);
+    const id = await lastTaskId();
+
+    const show = harness();
+    expect(run(["task", "show", id], show.io, sb.host)).toBe(0);
+    const status = harness();
+    expect(run(["status"], status.io, sb.host)).toBe(0);
+    const text = show.out.join("\n");
+    expect(text).toContain(`task ${id}: Hostile?[2J? title`);
+    expect(text).toContain("result: Done?]52;c;ZmFrZS1jbGlw? here?txt?\nline two?[2J");
+    expect(status.out.join("\n")).toContain(`${id}  completed  Hostile?[2J? title`);
+    for (const hidden of ["\x1b", "\x07", "\u{202E}", "\u{E0041}"]) {
+      expect(text).not.toContain(hidden);
+      expect(status.out.join("\n")).not.toContain(hidden);
+    }
+    const json = harness();
+    run(["task", "show", id, "--json"], json.io, sb.host);
+    expect(parseJson<{ result: { summary: string } }>(json.out).result.summary).toBe(reply);
+  });
+
+  // LD-T7c: a completed task said attempts 0/1 while its run said attempt 1/1.
+  it("reports the attempt of a task completed on its first attempt", async () => {
+    run(["task", "add", "Once"], harness().io, sb.host);
+    const id = await lastTaskId();
+    const text = harness();
+    run(["task", "show", id], text.io, sb.host);
+    expect(text.out).toContain("attempts 1/1, max tokens 20000");
+    const json = harness();
+    run(["task", "show", id, "--json"], json.io, sb.host);
+    expect(parseJson(json.out)).toMatchObject({
+      state: "completed",
+      attempts: { used: 1, max: 1 },
+    });
+  });
+
+  it("reports both attempts of a task that failed once and completed on its retry", async () => {
+    run(["task", "add", "Flaky", "--max-attempts", "3"], harness().io, sb.host);
+    const fake = new FakeAgentRuntime({ clock: new FakeClock() });
+    let starts = 0;
+    const flaky: AgentRuntime = {
+      // The first attempt fails as fake:fail does; the retry runs the task's own agent.
+      start: (spec) => fake.start(starts++ === 0 ? { ...spec, agentRef: "fake:fail" } : spec),
+    };
+    const runOut = harness();
+    await run(["run", "--project", "demo"], runOut.io, { ...sb.host, agentRuntime: flaky });
+    expect(runOut.out.join("\n")).toContain("(attempt 2/3)");
+
+    const status = harness();
+    run(["status", "--json"], status.io, sb.host);
+    const id = parseJson<{ taskList: { taskId: string }[] }>(status.out).taskList.at(-1)?.taskId;
+    const json = harness();
+    run(["task", "show", id ?? "", "--json"], json.io, sb.host);
+    expect(parseJson(json.out)).toMatchObject({
+      state: "completed",
+      attempts: { used: 2, max: 3 },
+    });
   });
 });
 

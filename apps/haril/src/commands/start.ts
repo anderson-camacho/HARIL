@@ -1,5 +1,5 @@
 import { type ControlServer, createControlServer } from "@haril/control";
-import { type RunEvent, runExitCode } from "@haril/core";
+import { type RunEvent, runExitCode, visibleText } from "@haril/core";
 import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_ERROR, EXIT_USAGE, type HostInfo } from "../context.js";
 import { agentRuntimeFor, clockFor } from "../host.js";
@@ -121,8 +121,9 @@ async function serve(
       idleExitMs: idleExitSec * 1000,
       startedByShell: startedBy === STARTED_BY_SHELL,
       shutdown,
+      // LD-T7c: the goals of a plan's tasks are agent-written, so each line is shown as the terminal draws it.
       onEvent: (event) => {
-        if (!json) io.out(formatEvent(event));
+        if (!json) io.out(visibleText(formatEvent(event)));
       },
     });
     if (result.kind === "busy") {

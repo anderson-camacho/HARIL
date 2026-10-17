@@ -1,5 +1,5 @@
 import { Input, type SelectItem, SelectList, type SelectListTheme } from "@earendil-works/pi-tui";
-import { visibleText } from "./format.js";
+import { visibleText } from "@haril/core";
 
 // The add-task form of the shell (TUI-D13): title, agent and model. pi-tui's Input and SelectList keep the editing
 // and the selection; the app routes Tab, Enter and Esc itself and sends every other key to the focused field.
@@ -29,7 +29,7 @@ export type AddTaskArgs =
   | { readonly ok: false; readonly message: string };
 
 // The argv of `haril task add`. Only analyst takes a model; the simulated agent never does. The title goes as the
-// form shows it, and so does the model (format.ts visibleText, LD-T6c): a control or invisible character a paste
+// form shows it, and so does the model (the Core visibleText, LD-T6c): a control or invisible character a paste
 // brought is sent as "?".
 export function addTaskArgs(values: AddTaskValues, target: AddTaskTarget): AddTaskArgs {
   const title = visibleText(values.title).trim();
