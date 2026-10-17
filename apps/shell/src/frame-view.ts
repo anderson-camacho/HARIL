@@ -1,4 +1,5 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
+import type { MemoryHealthView } from "@haril/core";
 import { compactCount, fit } from "./format.js";
 import {
   box,
@@ -28,6 +29,15 @@ const GRID_LABEL_WIDTH = 11;
 const GRID_EXTRA_WIDTH = 16;
 const BOX_INNER_WIDTH = RIGHT_COLUMN_WIDTH - 4;
 const NOT_CONNECTED = "not connected (M4)";
+// The memory health in the Connect box (MC-T4), in the words of haril memory status.
+const MEMORY_HEALTH: Readonly<
+  Record<MemoryHealthView, { readonly text: string; readonly tone: Tone }>
+> = {
+  active: { text: "active", tone: "ok" },
+  degraded: { text: "degraded", tone: "warning" },
+  blocked_by_policy: { text: "blocked", tone: "danger" },
+  not_checked: { text: "not checked", tone: "muted" },
+};
 
 // Block letters, one string per pixel row: "#" is a lit pixel, drawn two cells wide so the letters look square.
 const LETTERS: Readonly<Record<string, readonly string[]>> = {
@@ -92,6 +102,12 @@ export interface FrameFacts {
   readonly version: string;
   readonly dataDir: string | undefined;
   readonly theme: string;
+  // The memory provider, its health and the outbox rows still to deliver, from the store (MC-T4).
+  readonly memory: {
+    readonly provider: string;
+    readonly health: MemoryHealthView;
+    readonly outboxDepth: number;
+  };
 }
 
 // The top bar: brand, project and model on the left; context, tokens and runtime on the right. Without the right
@@ -168,11 +184,7 @@ export function rightColumn(facts: FrameFacts, height: number): Line[] {
     box("Approvals", approvalRows(facts), width),
     box("Taxis", [taxiRow(facts)], width),
     box("Tokens", [[segment(tokens, "text")], [segment("cost n/a (not tracked)", "muted")]], width),
-    box(
-      "Connect",
-      ["memory", "mcp", "profile"].map((name) => row(name, NOT_CONNECTED, "muted")),
-      width,
-    ),
+    box("Connect", connectRows(facts), width),
     box(
       undefined,
       MASCOT.map((line) => [segment(`${mascotIndent}${line}`, "accent")]),
@@ -280,6 +292,19 @@ function runtimeRows(facts: FrameFacts): Line[] {
     row("started", started, "text"),
     row("live", runtime.live ? "subscribed" : "no", runtime.live ? "ok" : "muted"),
     row("isolation", facts.isolation, "text"),
+  ];
+}
+
+// The memory provider and its health; the outbox only while rows wait for delivery. mcp and profile come with M4.
+function connectRows(facts: FrameFacts): Line[] {
+  const { memory } = facts;
+  const health = MEMORY_HEALTH[memory.health];
+  return [
+    row("memory", `${memory.provider} · ${health.text}`, health.tone),
+    ...(memory.outboxDepth > 0
+      ? [row("outbox", `${memory.outboxDepth} to deliver`, "warning")]
+      : []),
+    ...["mcp", "profile"].map((name) => row(name, NOT_CONNECTED, "muted")),
   ];
 }
 

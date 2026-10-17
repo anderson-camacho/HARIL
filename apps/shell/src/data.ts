@@ -8,6 +8,9 @@ import {
   checkAcceptance,
   checkPlanSubmission,
   checkTaskKind,
+  describeMemory,
+  type MemoryStatusView,
+  UNRECORDED_MEMORY_STATUS,
 } from "@haril/core";
 import type {
   ApprovalRecord,
@@ -121,6 +124,9 @@ export interface ShellSnapshot {
   // The scope's newest tasks with their settled tokens, oldest first, at most LIVE_LIMIT (LD-T5).
   readonly live: readonly LiveTask[];
   readonly metrics: readonly ProjectMetrics[];
+  // The memory provider and its state (MC-T4), read and described as haril memory status does: what the runtime
+  // recorded, live only while a runtime holds the lease.
+  readonly memory: MemoryStatusView;
   readonly providers: ProviderSnapshot;
   readonly themes: { readonly user: readonly string[] };
 }
@@ -218,6 +224,7 @@ export function openShellData(options: OpenShellDataOptions): ShellData {
         approvals: [],
         live: [],
         metrics: [],
+        memory: describeMemory(UNRECORDED_MEMORY_STATUS, false),
         providers,
         themes: themes(),
       };
@@ -231,14 +238,15 @@ export function openShellData(options: OpenShellDataOptions): ShellData {
           .filter((task): task is TaskDetail => task !== undefined);
         const approvals = open.approvals.list({ status: "requested" }).map(pendingApproval);
         const runtime = open.runtime.leaseSummary();
+        const runtimeAlive =
+          runtime.status === "active" && runtime.expiresAt > loadedAt && isPidAlive(runtime.pid);
         return {
           ...base,
           projects,
           tasks,
           events: open.events.list({ projectId: scope, limit: EVENT_LIMIT }),
           runtime,
-          runtimeAlive:
-            runtime.status === "active" && runtime.expiresAt > loadedAt && isPidAlive(runtime.pid),
+          runtimeAlive,
           waitingWork:
             open.commands.listQueued().length +
             tasks.filter((task) => task.state === "ready").length +
@@ -256,6 +264,7 @@ export function openShellData(options: OpenShellDataOptions): ShellData {
             snapshot: open.metrics.snapshot(project.projectId),
             usage: open.budgets.usageSummary({ projectId: project.projectId }),
           })),
+          memory: describeMemory(open.memory.status(), runtimeAlive),
         };
       } catch (error) {
         return { ...base, storeError: messageOf(error) };

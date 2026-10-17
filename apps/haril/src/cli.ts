@@ -3,6 +3,7 @@ import { StoreError } from "@haril/state-sqlite";
 import { approvals, approve, deny } from "./commands/approvals.js";
 import { doctor } from "./commands/doctor.js";
 import { events } from "./commands/events.js";
+import { memory } from "./commands/memory.js";
 import { methodology } from "./commands/methodology.js";
 import { metrics } from "./commands/metrics.js";
 import { models } from "./commands/models.js";
@@ -74,6 +75,7 @@ const HELP_LINES = [
   "  haril status [--project <slug>] [--json]   projects, tasks, queued commands and runtime",
   "  haril metrics [--project <slug>] [--json]   runs, retries and success rate from the event log",
   "  haril events [--project <slug>] [--task <id>] [--limit <n>] [--json]   the newest events, oldest first",
+  "  haril memory status [--json]     the memory provider, its health, whether memory is degraded and the outbox depth",
   "  haril shell [--data-dir <path>] [--no-runtime]   open the interactive terminal UI; it starts haril start",
   "    in the background when work waits and no runtime runs (output in logs/), never with --no-runtime",
   "  haril help                       print this help",
@@ -147,6 +149,8 @@ function dispatch(argv: readonly string[], io: CliIo, host: HostInfo): number | 
       return metrics(rest, io, host);
     case "events":
       return events(rest, io, host);
+    case "memory":
+      return memory(rest, io, host);
     case "start":
       return start(rest, io, host);
     case "run":

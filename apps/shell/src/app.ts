@@ -357,6 +357,11 @@ export function createShellApp(options: ShellAppOptions): ShellApp {
       version: shellPackage.version,
       dataDir: settings.dataDir === undefined ? undefined : visibleText(settings.dataDir),
       theme: visibleText(settings.themeLabel),
+      memory: {
+        provider: visibleText(snapshot.memory.provider),
+        health: snapshot.memory.health,
+        outboxDepth: snapshot.memory.outbox.depth,
+      },
     };
   };
   const openApproval = (): PendingApproval | undefined =>

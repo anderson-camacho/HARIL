@@ -3,9 +3,12 @@ import {
   buildAgentSpec,
   checkHandshake,
   completionFor,
+  createMemoryService,
   evaluateAcceptance,
   isRealAgent,
   MAX_INFRA_RESTARTS,
+  type MemoryService,
+  type MemoryTick,
   planAttemptOutcome,
   REAL_AGENT_REFS,
   type RunEvent,
@@ -29,6 +32,7 @@ import { modelProblemOf } from "../providers.js";
 import { projectFileReader, verificationPayload } from "./acceptance.js";
 import { applyDecidedApprovals, denyPlansOfFailedTask } from "./approvals.js";
 import { controlEventOf } from "./control-events.js";
+import { backoffJitter, defaultRuntimeMemory, type RuntimeMemory } from "./memory.js";
 import type { PlanAttemptReport, PlanProposals } from "./plan-proposals.js";
 import type { RealAgentReadiness, RealAgents } from "./real-agent.js";
 import { createShutdown, RUNTIME_STOP, type Shutdown } from "./shutdown.js";
@@ -81,6 +85,8 @@ export interface RunLoopOptions {
   >;
   // The ordered-stop control (ARCH 4.2). Defaults to a control nobody requests.
   readonly shutdown?: Shutdown;
+  // The memory provider of this runtime (MC-T4). Defaults to the Null provider: no memory can be configured yet.
+  readonly memory?: RuntimeMemory;
   // haril shell started this runtime (LD-T6, ADR-0022): the start is recorded as runtime.started_by_shell, with the pid
   // and the epoch, once the lease is held.
   readonly startedByShell?: boolean;
@@ -130,9 +136,22 @@ export async function runUntilIdle(options: RunLoopOptions): Promise<RunLoopResu
         denyPlansOfFailedTask(store, recovered.taskId, "infra_restarts_exhausted");
       }
     }
+    // MC-T4, ARCH 7.5 and R-O7: the last step of the start is memory. The outbox rows a previous runtime left sending go
+    // back to pending, the provider is checked and recorded for haril memory status, and the outbox drains if it is up.
+    const runtimeMemory = options.memory ?? defaultRuntimeMemory(options.clock);
+    const memory = createMemoryService({
+      store,
+      provider: runtimeMemory.provider,
+      ids: runtimeMemory.ids,
+      hasher: runtimeMemory.hasher,
+      clock: options.clock,
+      epoch,
+      jitter: backoffJitter,
+    });
+    emitMemoryTick(await memory.start(), emit);
     // serve() releases the lease itself, cleanly, on idle and on a stop.
     const beat = leaseHeartbeat(store, options.clock, epoch, ttlMs);
-    const kind = await serve(options, shutdown, { epoch, beat, emit, setup });
+    const kind = await serve(options, shutdown, { epoch, beat, emit, setup, memory });
     return { kind, summary: summarizeRun(events) };
   } finally {
     stopNotice();
@@ -163,6 +182,7 @@ interface ServeContext {
   readonly beat: () => void;
   readonly emit: (event: RunEvent) => void;
   readonly setup: RealAgentReadiness | undefined;
+  readonly memory: MemoryService;
 }
 
 // The loop of one lease: drain the queue, claim and run, and wait while the runtime is not idle.
@@ -172,7 +192,7 @@ async function serve(
   context: ServeContext,
 ): Promise<"idle" | "stopped"> {
   const { store, clock } = options;
-  const { epoch, beat, emit, setup } = context;
+  const { epoch, beat, emit, setup, memory } = context;
   const idleExitMs = options.idleExitMs ?? 0;
   const pollMs = options.pollMs ?? POLL_MS;
   const control = options.control;
@@ -200,6 +220,9 @@ async function serve(
         reason: "dep_failed",
       });
     }
+    // Before the claim: while memory is down, a task that requires it waits as blocked(memory_unavailable) and the
+    // others run (MEM-08); the turn also checks the provider and drains the outbox when either is due.
+    emitMemoryTick(await memory.tick(), emit);
 
     // A real-agent task that cannot run yet is never claimed (M2-T6, restored by M3-T7): it stays ready and is
     // reported once as skipped, and the claim leaves it out.
@@ -220,6 +243,18 @@ async function serve(
       continue;
     }
     await sleepUnlessWoken(clock, pollMs, shutdown, onNudge);
+  }
+}
+
+// The tasks memory moved: a blocked one is reported like any blocked task; a released one is ready again.
+function emitMemoryTick(tick: MemoryTick, emit: (event: RunEvent) => void): void {
+  for (const blocked of tick.blocked) {
+    emit({
+      type: "task.blocked",
+      taskId: blocked.taskId,
+      goal: blocked.goal,
+      reason: "memory_unavailable",
+    });
   }
 }
 
