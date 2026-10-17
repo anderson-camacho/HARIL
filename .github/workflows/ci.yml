@@ -40,3 +40,5 @@ jobs:
         run: pnpm run smoke
       - name: E2E (M1 flow in temporary directories)
         run: pnpm run e2e
+      - name: E2E demo (goal → plan → approval → done)
+        run: pnpm run e2e:demo

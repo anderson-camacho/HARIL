@@ -132,6 +132,7 @@ Calidad del repositorio:
 | `corepack pnpm run check` | Biome, `tsc --noEmit` por workspace, `scripts/check-layers`, `check-purity`, `check-forbidden` y knip |
 | `corepack pnpm test` | Vitest (contratos, core, CLI) y `node:test` (scripts de control con violaciones sembradas) |
 | `npm run e2e` | Compila y recorre el flujo M1 completo con la CLI en directorios temporales, incluida una caída a mitad de run, y el flujo M2 hermético (Pi falso detrás del Broker y un servidor OpenAI falso) (`scripts/e2e.mjs`) |
+| `npm run e2e:demo` | Compila y recorre la demo en vivo de punta a punta, hermética y en menos de un minuto (`scripts/e2e-demo.mjs`): una meta, el plan que propone el planificador, la aprobación y las tareas completadas, en el carril simulado (`fake:plan`) y en el carril real con el Pi falso y un servidor OpenAI falso en loopback (las tareas `analyst` heredan el modelo del planificador); además, un plan denegado no crea tareas |
 | `npm run e2e:real` | Carril real opt-in de M2 (`scripts/e2e-real.mjs`): una tarea `analyst` contra el gateway real; sale con `SKIP real lane` si falta el runtime, la clave o el modelo |
 
 El CI (`.github/workflows/ci.yml`) ejecuta lo mismo en `windows-latest` y `ubuntu-latest`.
