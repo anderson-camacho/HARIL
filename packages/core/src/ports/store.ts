@@ -1,7 +1,14 @@
 // Store port for M1 (M1-D3): schema info, projects, the command queue, tasks, the runtime lease,
 // the run lifecycle and the event log. Operations are synchronous because node:sqlite is
 // synchronous. Errors carry a `store.*` code, except lease refusals, which are typed results.
-import type { Acceptance, BlockReason, Plan, RetryReason, TaskState } from "@haril/contracts";
+import type {
+  Acceptance,
+  BlockReason,
+  Plan,
+  RetryReason,
+  TaskKind,
+  TaskState,
+} from "@haril/contracts";
 import type { HarilError, Result } from "./result.js";
 
 export type GateStatus = "ok" | "warn" | "error";
@@ -39,6 +46,9 @@ export interface StoreRules {
   checkPlan(value: unknown): PlanCheck;
   // Acceptance checks of a task.create command (M3-D7); a reason names what is wrong.
   checkAcceptance(value: unknown): AcceptanceRuleResult;
+  // The kind of a task.create command against its agent (LD-T4): absent means work, a plan task needs a planner agent
+  // and a planner agent runs only plan tasks. A reason names what is wrong.
+  checkTaskKind(kind: unknown, agentRef: string): TaskKindRuleResult;
   // The canonical JSON of a value (sorted keys at every depth). Approvals hash the canonical text of their subject, and
   // the idempotency keys of plan.submit are computed from it, so the adapter and the CLI agree on one text.
   canonicalJson(value: unknown): string;
@@ -46,6 +56,13 @@ export interface StoreRules {
 
 export type AcceptanceRuleResult =
   | { readonly ok: true; readonly acceptance: Acceptance }
+  | { readonly ok: false; readonly reason: string };
+
+// The kinds a task.create may ask for (LD-T4). verify and summarize come only from a plan.
+export type CreatableTaskKind = Extract<TaskKind, "work" | "plan">;
+
+export type TaskKindRuleResult =
+  | { readonly ok: true; readonly kind: CreatableTaskKind }
   | { readonly ok: false; readonly reason: string };
 
 export type PlanCheck =
@@ -292,6 +309,8 @@ export interface ClaimedTask {
   readonly runId: string;
   readonly goal: string;
   readonly description: string;
+  // work, or plan for a task that asks its planner agent for a plan (LD-T4); a plan's tasks keep their own kind.
+  readonly kind: TaskKind;
   readonly agentRef: string;
   // Real agents (M2-T6): the requested model (null when none) and the task token ceiling (0 when none).
   readonly model: string | null;

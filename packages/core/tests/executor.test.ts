@@ -4,6 +4,10 @@ import {
   checkHandshake,
   completionFor,
   M1_ALLOWED_TOOLS,
+  PLAN_ALLOWED_TOOLS,
+  PROPOSE_PLAN_TOOL,
+  planAttemptOutcome,
+  REAL_AGENT_REFS,
 } from "../src/executor/index.js";
 
 // Pure executor rules (M1-T5): the AgentSpec built from a task, the handshake check and the
@@ -35,6 +39,77 @@ describe("buildAgentSpec", () => {
   it("omits the blank line when the description is empty", () => {
     const spec = buildAgentSpec({ ...task, description: "" }, { runId: "r", attempt: 1 });
     expect(spec.prompt).toBe("Survey the README");
+  });
+
+  // LD-T4: a plan task reads and proposes; every other kind keeps the single read tool and the plain prompt.
+  it("keeps the read tool and the task prompt for a work task, and carries the kind", () => {
+    const spec = buildAgentSpec({ ...task, kind: "work" }, { runId: "r", attempt: 1 });
+    expect(spec.kind).toBe("work");
+    expect(spec.allowedTools).toEqual(["read"]);
+    expect(spec.prompt).toBe("Survey the README\n\nList the headings.");
+  });
+
+  it("gives a plan task the proposal tool and a planner prompt that states the goal and the plan shape", () => {
+    const spec = buildAgentSpec(
+      { ...task, kind: "plan", agentRef: "fake:plan" },
+      { runId: "r", attempt: 1 },
+    );
+    expect(PROPOSE_PLAN_TOOL).toBe("haril_propose_plan");
+    expect(PLAN_ALLOWED_TOOLS).toEqual(["read", "haril_propose_plan"]);
+    expect(spec.kind).toBe("plan");
+    expect(spec.allowedTools).toEqual(["read", "haril_propose_plan"]);
+    // The goal comes first, as in every prompt, then the description and the instructions.
+    expect(spec.prompt.split("\n")[0]).toBe("Survey the README");
+    expect(spec.prompt).toContain("List the headings.");
+    expect(spec.prompt).toContain("haril_propose_plan");
+    expect(spec.prompt).toContain('"schemaVersion": 1');
+    expect(spec.prompt).toContain("2 to 5 tasks");
+    expect(spec.prompt).toContain("read-only");
+    for (const field of [
+      "localId",
+      "dependsOn",
+      "goal",
+      "description",
+      "priority",
+      "kind",
+      "agent",
+      "requires",
+      "context",
+      "surface",
+      "budget",
+      "timeoutMs",
+      "maxAttempts",
+      "acceptance",
+    ]) {
+      expect(spec.prompt).toContain(`"${field}"`);
+    }
+  });
+
+  it("serves the planner archetype in the real lane, like the analyst", () => {
+    expect(REAL_AGENT_REFS).toEqual(["analyst", "planner"]);
+  });
+});
+
+describe("planAttemptOutcome", () => {
+  const succeeded = { status: "succeeded", summary: "done" } as const;
+
+  it("fails a succeeded plan attempt that proposed nothing as plan.not_proposed", () => {
+    expect(planAttemptOutcome("plan", succeeded, false)).toEqual({
+      status: "failed",
+      code: "plan.not_proposed",
+      message: expect.stringContaining("haril_propose_plan"),
+    });
+  });
+
+  it("keeps a plan attempt that proposed, any other kind, and every unsuccessful outcome", () => {
+    expect(planAttemptOutcome("plan", succeeded, true)).toBe(succeeded);
+    expect(planAttemptOutcome("work", succeeded, false)).toBe(succeeded);
+    expect(planAttemptOutcome(undefined, succeeded, false)).toBe(succeeded);
+    const failed = { status: "failed", code: "fake.failed", message: "no" } as const;
+    expect(planAttemptOutcome("plan", failed, false)).toBe(failed);
+    expect(planAttemptOutcome("plan", { status: "timed_out" }, false)).toEqual({
+      status: "timed_out",
+    });
   });
 });
 

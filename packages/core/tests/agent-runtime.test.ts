@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { AgentHandle, AgentSpec } from "../src/ports/index.js";
+import { checkPlanSubmission } from "../src/domain/index.js";
+import type {
+  AgentHandle,
+  AgentSpec,
+  PlanProposalContext,
+  PlanProposer,
+} from "../src/ports/index.js";
 import { FakeAgentRuntime, FakeClock } from "../testing/index.js";
 
 // Contract suite for the AgentRuntime port, run against FakeAgentRuntime (M1-D7).
@@ -141,6 +147,138 @@ describe("AgentRuntime contract (FakeAgentRuntime)", () => {
     expect(await result.value.settled).toEqual({
       status: "succeeded",
       summary: "Hello from fake, with spaces",
+    });
+  });
+});
+
+// fake:plan (LD-T4): the hermetic planner. It proposes a fixed plan derived from the goal (the first line of the
+// prompt) through the injected host handler, and settles with the approval id; it never touches a store itself.
+describe("fake:plan", () => {
+  const PLAN_TOOLS = ["read", "haril_propose_plan"];
+
+  function planSpec(goal: string, allowedTools: readonly string[] = PLAN_TOOLS): AgentSpec {
+    return {
+      runId: "run-p",
+      taskId: "task-p",
+      attempt: 1,
+      agentRef: "fake:plan",
+      allowedTools,
+      prompt: `${goal}\n\nPropose a plan with haril_propose_plan.`,
+      timeoutMs: 1000,
+      projectId: "project-p",
+      kind: "plan",
+    };
+  }
+
+  interface Call {
+    readonly context: PlanProposalContext;
+    readonly plan: unknown;
+  }
+
+  function recording(result: ReturnType<PlanProposer>): { calls: Call[]; proposer: PlanProposer } {
+    const calls: Call[] = [];
+    return {
+      calls,
+      proposer: (context, plan) => {
+        calls.push({ context, plan });
+        return result;
+      },
+    };
+  }
+
+  async function settle(runtime: FakeAgentRuntime, agentSpec: AgentSpec) {
+    const handle = await startHandle(runtime, agentSpec);
+    expect((await handle.hello).tools).toEqual(agentSpec.allowedTools);
+    await handle.prompt(agentSpec.prompt);
+    return await handle.settled;
+  }
+
+  it("proposes a valid hermetic plan once, with its run as context, and names the approval", async () => {
+    const { calls, proposer } = recording({ ok: true, approvalId: "appr-1", created: true });
+    const runtime = new FakeAgentRuntime({ clock: new FakeClock(), proposePlan: proposer });
+    const outcome = await settle(runtime, planSpec("Document the CLI"));
+
+    expect(outcome).toMatchObject({ status: "succeeded" });
+    if (outcome.status === "succeeded") expect(outcome.summary).toContain("appr-1");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.context).toEqual({
+      projectId: "project-p",
+      taskId: "task-p",
+      runId: "run-p",
+    });
+    const check = checkPlanSubmission(calls[0]?.plan);
+    expect(check.ok).toBe(true);
+    if (!check.ok) return;
+    expect(check.plan.tasks.length).toBeGreaterThanOrEqual(2);
+    expect(check.plan.tasks.length).toBeLessThanOrEqual(4);
+    for (const planned of check.plan.tasks) {
+      expect(planned.agent).toMatch(/^fake:(succeed|slow:\d+)$/);
+      expect(planned.kind).toBe("work");
+      expect(planned.surface.write).toEqual([]);
+      expect(planned.goal).toContain("Document the CLI");
+    }
+  });
+
+  it("derives the plan from the goal: the same goal gives the same plan, and goals vary its size", async () => {
+    const proposedFor = async (goal: string) => {
+      const { calls, proposer } = recording({ ok: true, approvalId: "x", created: true });
+      await settle(
+        new FakeAgentRuntime({ clock: new FakeClock(), proposePlan: proposer }),
+        planSpec(goal),
+      );
+      return calls[0]?.plan as { tasks: unknown[] };
+    };
+    expect(await proposedFor("Document the CLI")).toEqual(await proposedFor("Document the CLI"));
+    const sizes: number[] = [];
+    for (const goal of ["a", "ab", "abc"]) sizes.push((await proposedFor(goal)).tasks.length);
+    expect(new Set(sizes).size).toBe(3);
+  });
+
+  it("says when the same plan was already waiting for a decision", async () => {
+    const { proposer } = recording({ ok: true, approvalId: "appr-1", created: false });
+    const runtime = new FakeAgentRuntime({ clock: new FakeClock(), proposePlan: proposer });
+    const outcome = await settle(runtime, planSpec("Document the CLI"));
+    expect(outcome).toMatchObject({ status: "succeeded" });
+    if (outcome.status === "succeeded") expect(outcome.summary).toContain("already");
+  });
+
+  it("fails with the reason when the host refuses the plan", async () => {
+    const { proposer } = recording({ ok: false, reason: "invalid plan: /tasks: too short" });
+    const runtime = new FakeAgentRuntime({ clock: new FakeClock(), proposePlan: proposer });
+    expect(await settle(runtime, planSpec("Document the CLI"))).toEqual({
+      status: "failed",
+      code: "plan.refused",
+      message: "invalid plan: /tasks: too short",
+    });
+  });
+
+  it("fails without a proposer, and when the proposal tool is not allowed, proposing nothing", async () => {
+    const bare = new FakeAgentRuntime({ clock: new FakeClock() });
+    expect(await settle(bare, planSpec("Document the CLI"))).toMatchObject({
+      status: "failed",
+      code: "fake.no_proposer",
+    });
+
+    const { calls, proposer } = recording({ ok: true, approvalId: "x", created: true });
+    const runtime = new FakeAgentRuntime({ clock: new FakeClock(), proposePlan: proposer });
+    expect(await settle(runtime, planSpec("Document the CLI", ["read"]))).toMatchObject({
+      status: "failed",
+      code: "fake.plan_tool_missing",
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it("fails, and does not throw, when the proposer throws", async () => {
+    const runtime = new FakeAgentRuntime({
+      clock: new FakeClock(),
+      proposePlan: () => {
+        throw new Error("store closed");
+      },
+    });
+    expect(await settle(runtime, planSpec("Document the CLI"))).toEqual({
+      status: "failed",
+      code: "plan.refused",
+      message: "store closed",
     });
   });
 });

@@ -1,6 +1,12 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { canonicalJson, canTransition, checkAcceptance, checkPlanSubmission } from "@haril/core";
+import {
+  canonicalJson,
+  canTransition,
+  checkAcceptance,
+  checkPlanSubmission,
+  checkTaskKind,
+} from "@haril/core";
 import type { AgentHandle, AgentRuntime, AgentSpec, Clock } from "@haril/core/ports";
 import { FakeAgentRuntime } from "@haril/core/testing";
 import { openStore } from "@haril/state-sqlite";
@@ -138,7 +144,13 @@ describe("haril start", async () => {
       dataDir: sb.dataDir,
       clock: systemClock,
       ids: { next: () => `holder-${++counter}` },
-      rules: { canTransition, checkPlan: checkPlanSubmission, checkAcceptance, canonicalJson },
+      rules: {
+        canTransition,
+        checkPlan: checkPlanSubmission,
+        checkAcceptance,
+        checkTaskKind,
+        canonicalJson,
+      },
     });
     // A live holder (this process) keeps the lease; a dead one would be taken over (M1 fix c).
     const grant = store.runtime.acquire({

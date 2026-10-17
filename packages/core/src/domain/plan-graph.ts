@@ -1,4 +1,5 @@
 import type { Plan } from "@haril/contracts";
+import { isPlannerAgent } from "./task-kind.js";
 
 // Limits of one plan. A plan task may not plan itself: maxDelegationDepth 1 allows a single level.
 export const PLAN_LIMITS = { maxTasksPerPlan: 50, maxDelegationDepth: 1 } as const;
@@ -47,12 +48,19 @@ export function validatePlanGraph(plan: Plan): PlanGraphIssue[] {
     }
   }
 
+  // A planner agent runs only plan tasks (LD-T4), so a task that names one is a nested plan whatever its kind says.
   for (const task of tasks) {
     if (task.kind === "plan") {
       issues.push({
         code: "nested_plan_task",
         taskId: task.localId,
         message: `task "${task.localId}" has kind "plan"; a plan task may not plan (maxDelegationDepth ${PLAN_LIMITS.maxDelegationDepth})`,
+      });
+    } else if (isPlannerAgent(task.agent)) {
+      issues.push({
+        code: "nested_plan_task",
+        taskId: task.localId,
+        message: `task "${task.localId}" names the planner agent "${task.agent}"; a plan may not hold a planner (maxDelegationDepth ${PLAN_LIMITS.maxDelegationDepth})`,
       });
     }
   }

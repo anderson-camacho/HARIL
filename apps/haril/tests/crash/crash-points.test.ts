@@ -10,6 +10,7 @@ import {
   canTransition,
   checkAcceptance,
   checkPlanSubmission,
+  checkTaskKind,
   MAX_INFRA_RESTARTS,
   type RunEvent,
 } from "@haril/core";
@@ -44,7 +45,13 @@ const REGISTER = pathToFileURL(
   ),
 ).href;
 const KEY_HASH = "crash-key";
-const rules = { canTransition, checkPlan: checkPlanSubmission, checkAcceptance, canonicalJson };
+const rules = {
+  canTransition,
+  checkPlan: checkPlanSubmission,
+  checkAcceptance,
+  checkTaskKind,
+  canonicalJson,
+};
 const clock: Clock = {
   now: () => Date.now(),
   schedule: (ms, fn) => {

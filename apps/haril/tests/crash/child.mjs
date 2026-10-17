@@ -7,11 +7,11 @@ import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { canTransition, checkAcceptance, checkPlanSubmission } from "@haril/core";
+import { canTransition, checkAcceptance, checkPlanSubmission, checkTaskKind } from "@haril/core";
 import { openStore } from "@haril/state-sqlite";
 
 const [dataDir, point] = process.argv.slice(2);
-const rules = { canTransition, checkPlan: checkPlanSubmission, checkAcceptance };
+const rules = { canTransition, checkPlan: checkPlanSubmission, checkAcceptance, checkTaskKind };
 const clock = { now: () => Date.now(), schedule: () => () => undefined };
 const ids = { next: () => randomUUID() };
 // Shared with the parent test, which asserts the key is revoked after recovery.

@@ -1,6 +1,12 @@
 import { randomBytes } from "node:crypto";
-import { canonicalJson, canTransition, checkAcceptance, checkPlanSubmission } from "@haril/core";
-import type { AgentRuntime, Clock, Ids, Store } from "@haril/core/ports";
+import {
+  canonicalJson,
+  canTransition,
+  checkAcceptance,
+  checkPlanSubmission,
+  checkTaskKind,
+} from "@haril/core";
+import type { AgentRuntime, Clock, Ids, PlanProposer, Store } from "@haril/core/ports";
 import { FakeAgentRuntime } from "@haril/core/testing";
 import { inspectStore, openStore, type StoreInspection } from "@haril/state-sqlite";
 import type { HostInfo } from "./context.js";
@@ -12,6 +18,7 @@ const STORE_RULES = {
   canTransition,
   checkPlan: checkPlanSubmission,
   checkAcceptance,
+  checkTaskKind,
   canonicalJson,
 };
 
@@ -62,9 +69,16 @@ export function clockFor(host: HostInfo): Clock {
   return host.clock ?? systemClock;
 }
 
-// The simulated agent (M1-D7) unless the host injects another runtime (tests).
-export function agentRuntimeFor(host: HostInfo): AgentRuntime {
-  return host.agentRuntime ?? new FakeAgentRuntime({ clock: clockFor(host) });
+// The simulated agent (M1-D7) unless the host injects another runtime (tests). fake:plan proposes through proposePlan
+// (LD-T4); an injected runtime keeps its own.
+export function agentRuntimeFor(host: HostInfo, proposePlan?: PlanProposer): AgentRuntime {
+  return (
+    host.agentRuntime ??
+    new FakeAgentRuntime({
+      clock: clockFor(host),
+      ...(proposePlan === undefined ? {} : { proposePlan }),
+    })
+  );
 }
 
 // Read-only inspection never creates files; open creates and migrates the store (M1-D8).
