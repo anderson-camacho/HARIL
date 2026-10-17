@@ -36,6 +36,7 @@ import type {
 // The task states as the Core defines them (the adapter imports types from @haril/core/ports only).
 type TaskState = TaskRecord["state"];
 
+import { createApprovalsFacet } from "./approvals.js";
 import { createBudgetFacets } from "./budgets.js";
 import { withBusyRetry } from "./busy.js";
 import { readPragmas, readUserVersion } from "./connection.js";
@@ -186,6 +187,7 @@ export class SqliteStore implements Store {
   readonly metrics: Store["metrics"];
   readonly budgets: Store["budgets"];
   readonly virtualKeys: Store["virtualKeys"];
+  readonly approvals: Store["approvals"];
   readonly maintenance: Store["maintenance"];
 
   constructor(options: StoreOptions) {
@@ -242,6 +244,15 @@ export class SqliteStore implements Store {
     });
     this.budgets = facets.budgets;
     this.virtualKeys = facets.virtualKeys;
+    this.approvals = createApprovalsFacet({
+      db: this.db,
+      clock: this.clock,
+      ids: this.ids,
+      rules: this.rules,
+      transaction: (work) => this.inTransaction(work),
+      appendEvent: (input) => this.appendEvent(input),
+      assertActiveEpoch: (epoch) => this.assertActiveEpoch(epoch),
+    });
     this.maintenance = createMaintenance({ db: this.db, walPath: options.walPath });
   }
 
@@ -438,6 +449,13 @@ export class SqliteStore implements Store {
         .prepare("SELECT COUNT(*) AS n FROM commands WHERE status = 'queued'")
         .get() as { n: number };
       if (queued.n > 0) return false;
+      // A decision not applied yet keeps the lease (ARCH 4.2): the next turn applies it (LD-T3).
+      const unapplied = this.db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM approvals WHERE status <> 'requested' AND applied_at IS NULL",
+        )
+        .get() as { n: number };
+      if (unapplied.n > 0) return false;
       this.db
         .prepare(
           "UPDATE runtime_leases SET status = 'released', clean_exit = 1, released_at = ? WHERE runtime_epoch = ?",

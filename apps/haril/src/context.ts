@@ -19,6 +19,8 @@ export interface HostInfo {
   // Environment and home directory used to resolve the data directory (M1-D8).
   readonly env?: Readonly<Record<string, string | undefined>>;
   readonly homeDir?: string;
+  // The operator: the OS user name that approve and deny record as the decider (a declaration, not authentication).
+  readonly user?: string;
   // Working directory for relative paths; defaults to the process cwd.
   readonly cwd?: string;
   // stdin and stdout are a terminal, so a bare `haril` opens the shell instead of printing help. Absent means no.

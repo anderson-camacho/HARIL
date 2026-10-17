@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { canTransition, checkAcceptance, checkPlanSubmission, type RunEvent } from "@haril/core";
+import {
+  canonicalJson,
+  canTransition,
+  checkAcceptance,
+  checkPlanSubmission,
+  type RunEvent,
+} from "@haril/core";
 import type { Clock, Store } from "@haril/core/ports";
 import { FakeAgentRuntime } from "@haril/core/testing";
 import { openStore } from "@haril/state-sqlite";
@@ -34,7 +40,7 @@ function open(): Store {
     dataDir: sb.dataDir,
     clock,
     ids: { next: () => randomUUID() },
-    rules: { canTransition, checkPlan: checkPlanSubmission, checkAcceptance },
+    rules: { canTransition, checkPlan: checkPlanSubmission, checkAcceptance, canonicalJson },
     // Every pid is alive: a lease can only be taken over once it expires.
     isPidAlive: () => true,
   });

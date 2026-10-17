@@ -62,7 +62,7 @@ function mount(data: ShellData, options: { warning?: string } = {}): Mounted {
   const app = createShellApp({
     terminal,
     theme: THEME,
-    banner: { isolation: "N0", pendingApprovals: 0 },
+    banner: { isolation: "N0" },
     warning: options.warning,
     data: wrapped,
     settings: {
