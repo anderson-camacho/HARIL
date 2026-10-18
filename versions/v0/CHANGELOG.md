@@ -4,6 +4,44 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.20.1
+
+- **Fecha:** 2026-10-18
+- **Estado:** **Parche de 0.20.0: tres arreglos de la escritura en paralelo que encontró el último verificador independiente, y tres fallos de la CI de la PR #38.** Un commit que un comando hacía durante un intento que fallaba o se manipulaba sobrevivía al reintento y llegaba a la rama de integración; un comando podía mover `main` sin que nada lo notara; y las entradas ` *` de la lista de `haril_run` se burlaban con abreviaturas de npm o flags de node. Probado con pruebas automáticas (repositorios git temporales, workflows herméticos que escriben y sondas de cada ataque) y, para la prueba del barrido de arranque, con una sonda en Linux (WSL) sobre el código real; todavía no en una terminal real ni en el carril real (fase F8 de la delegación).
+
+### Añadido
+
+- **Migración `0016`:** `worktrees.verified_sha`, el último commit verificado de la rama de un ejecutor: donde empezó el paso (el commit base con el trabajo de sus predecesores fusionado) y luego cada commit que comprobó el final de un turno con éxito. Vacío para el worktree de integración y para los registros anteriores, que usan su último commit registrado o, si no tienen, el HEAD que encuentran.
+- **Eventos `worktree.restored`** (una rama volvió a su commit verificado: la rama y el commit que tenía HEAD y el commit al que volvió) **y `base.moved`** (la rama base cambió durante un turno: su commit anterior y el nuevo, cuántos comandos corrió el turno y si se detuvo el workflow).
+
+### Cambiado
+
+- Una entrada tuya de `delegation.commands.allow` terminada en ` *` admite solo argumentos posicionales: ninguno que empiece por `-` (tampoco `--` solo), que lleve una ruta absoluta en cualquier parte (`/` o `\` al principio o tras `=`, una unidad con `:` y separador, `C:` relativo al principio, `\\`) ni un segmento `..`. Las entradas exactas de la lista por defecto no cambian.
+
+### Corregido
+
+- **Un commit de un comando sobrevivía a un intento fallido o manipulado** (verificador): solo el camino del éxito devolvía la rama del paso, y el reintento tomaba su punto de partida del HEAD que encontraba, así que un `outside.txt` confirmado por un comando acababa en la rama de integración. Ahora cada turno de un paso, también el de su auditor, empieza en el último commit verificado de la rama, y si un comando la movió en un turno cuyo final nunca corrió (una caída) vuelve allí antes; un turno que no tiene éxito, que se manipuló o cuyo commit falla deja la rama en ese commit (HEAD vuelve a nombrar la rama del paso antes de moverla, así que ninguna otra rama se mueve), y un éxito cuya rama ya no contiene el commit de inicio no confirma nada. El turno del auditor siempre termina en el commit verificado del paso, y un turno con el cerrojo de integración (el delegador, el auditor final) conserva solo las fusiones de HARIL: el commit de un comando se quita antes de `haril_merge` y al terminar el turno, y una fusión que espera sus conflictos se abandona si la rama se movió debajo de ella.
+- **Un comando podía mover la rama base sin que nada lo notara** (N0: apunta el archivo `.git` del worktree al repositorio principal, hace commit y lo deja como estaba, así que la comprobación de manipulación no ve nada). Ahora el turno lee el commit de `refs/heads/<base>` al empezar y lo compara al terminar: si cambió y el turno corrió algún comando, el turno falla, nada se confirma, queda `base.moved` con el commit anterior y el nuevo, y el workflow termina fallido con un motivo que dice cómo revisar los commits (`git log <anterior>..<nuevo>`) y cómo devolver la rama si no son tuyos (`git branch -f main <anterior>`, o `git reset --keep <anterior>` donde `main` está abierta). HARIL nunca la mueve: puede que el commit sea tuyo. Si el turno no corrió ningún comando, solo queda el evento.
+- **Las entradas ` *` se burlaban** (verificador): `--prefi=../b` (npm acepta la abreviatura de `--prefix`), `--root=C:/other` (la ruta absoluta solo se buscaba al principio del argumento) y `node *` con `-p`, `--print` o `-r./x`. Ver Cambiado.
+- **CI, Ubuntu:** la prueba del barrido de arranque registraba sus procesos sin los ticks y el id de arranque que un intento real registra en Linux (migración `0012`). Sin ellos solo se compara por reloj, así que matar al huérfano dependía de la ventana de 100 ms y el pid reutilizado quedaba como dudoso en vez de conservado. Ahora los registra como un intento real, y cada aserción explica un fallo (inicio registrado y observado, ticks de ambos lados, veredicto del plan y recuento del barrido). La protección contra matar un pid reutilizado no cambia.
+- **CI, Windows:** `addWorktree` fallaba con `is a missing but already registered worktree` al rehacer un worktree cuya carpeta se borró: la carpeta temporal del runner se nombra con un nombre corto 8.3 (`RUNNER~1`), git guarda la ruta real y, sin la carpeta, la comparación no los igualaba. Ahora una ruta que no existe se resuelve por su carpeta existente más profunda, y si git todavía guarda un registro de esa ruta sin carpeta se poda con `git worktree prune --expire now` y se intenta una vez más (nunca `add -f`).
+- **CI, Windows:** la prueba de `haril workflow demo` que corre cinco demos pasaba de los 15 s en el runner: su archivo tiene ahora un minuto por prueba, sin cambiar lo que comprueba.
+
+### Límites conocidos
+
+- Sin sandbox (N0): una entrada ` *` sigue pasando sus argumentos posicionales al programa; `node *` ejecuta cualquier script del worktree, que escribieron los agentes, y un ejecutor de pruebas puede leer un argumento como archivo o filtro. Usa ` *` solo con programas cuyos argumentos posicionales aceptes de un agente.
+- Si el usuario hace commit en `main` durante un turno que corrió un comando, el workflow se detiene igual: HARIL no puede saber quién lo hizo, y prefiere parar a seguir sobre una base que no conoce.
+- Negar una tilde seguida de un dígito (los nombres cortos 8.3, como `GIT~1`) también niega nombres legítimos como `src/a~1.ts`: falla cerrado, a propósito.
+- Un comando que en un turno caído dejó el worktree de un paso en otra rama hace que ese worktree no se pueda reutilizar (`addWorktree` lo rechaza) y el paso falla hasta escalar: falla cerrado, sin tocar otras ramas.
+
+### Verificación
+
+- `corepack pnpm run check`, `corepack pnpm test` (vitest: 220 archivos y 2 578 pruebas, 1 omitida; `test:stop`: 4 archivos y 17 pruebas, 1 omitida; `test:scripts`: 122), `npm run build` y `corepack pnpm run test:stop` en verde, en Windows.
+- Pruebas nuevas, cada una vista fallar antes de pasar: en un workflow hermético, un comando confirma `sneaked.txt` en el primer intento del ejecutor, que luego falla o tiene su `.git` reescrito (con el código de 0.20.0 el archivo llegaba a la rama de integración; ahora no, y el reintento parte del commit verificado); un comando del auditor y del delegador confirma en su rama (se deshace y las fusiones de HARIL se quedan); un comando confirma en `main` por un `.git` reapuntado (con 0.20.0 el workflow terminaba completado; ahora falla con el motivo `base_moved:` y `main` sigue donde la dejó el comando); con git real, el reintento y el auditor tras una caída empiezan en el commit verificado, el final de cada turno devuelve la rama, un commit del usuario en `main` sin comandos solo queda registrado; una sonda por cada forma de burlar ` *`; la migración `0016` en la base nueva y en el almacén.
+- CI: la prueba de `addWorktree` con un worktree nombrado por una unión y luego borrado falló aquí con el mismo error que el runner de Windows y ahora pasa, también con la resolución por carpeta desactivada (el reintento basta solo). La prueba del barrido de arranque no corre en Linux aquí: una sonda en WSL (Ubuntu 20.04, Node 22) sobre `process-control.ts` y el supervisor reales mostró que sin ticks el pid reutilizado quedaba dudoso, y con ticks se mata al huérfano y se conserva el reutilizado. El tiempo de la demo no se reproduce en local (2,6 s).
+
+---
+
 ## 0.20.0
 
 - **Fecha:** 2026-10-18
