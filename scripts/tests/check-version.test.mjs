@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { main as bump } from "../bump-version.mjs";
 import { main } from "../check-version.mjs";
-import { PLACEHOLDER } from "../lib/version-files.mjs";
+import { changelogVersions, PLACEHOLDER, topChangelogEntry } from "../lib/version-files.mjs";
 import {
   capture,
   changelog,
@@ -329,4 +329,45 @@ test("rejects an unknown HARIL_VERSION_CHECK mode", () => {
   } finally {
     repo.cleanup();
   }
+});
+
+test("a heading inside a code fence, or a dummy heading without the base's text, does not keep the base's entry", () => {
+  const repo = gitSandbox("0.10.0");
+  try {
+    // The 0.10.0 entry relabeled as 0.11.0, with "## 0.10.0" only inside a code fence of the new entry.
+    writeVersionTree(repo.root, "0.11.0");
+    const relabeled = readAt(repo.root, "versions/v0/CHANGELOG.md");
+    const fence = "```";
+    writeAt(
+      repo.root,
+      "versions/v0/CHANGELOG.md",
+      relabeled.replace(
+        "- Algo de 0.11.0.\n",
+        `- Algo de 0.11.0.\n\n${fence}\n## 0.10.0\n${fence}\n`,
+      ),
+    );
+    repo.commit("fenced heading");
+    const fenced = check(repo.root, { HARIL_VERSION_BASE: repo.base });
+    assert.equal(fenced.code, 1, fenced.text);
+    assert.match(fenced.err, /0\.10\.0 entry of the base .* is gone/);
+    // A real heading below the new entry, but not the base's entry text.
+    writeAt(
+      repo.root,
+      "versions/v0/CHANGELOG.md",
+      relabeled.replace("## 0.1.0", "## 0.10.0\n\n- Otra cosa.\n\n---\n\n## 0.1.0"),
+    );
+    repo.commit("dummy heading");
+    const dummy = check(repo.root, { HARIL_VERSION_BASE: repo.base });
+    assert.equal(dummy.code, 1, dummy.text);
+    assert.match(dummy.err, /0\.10\.0 entry of the base .* is gone/);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("headings inside code fences are not changelog entries", () => {
+  const fence = "~~~";
+  const text = `# Log\n\n${fence}md\n## 9.9.9\n${fence}\n\n## 0.2.0\n\n- Real.\n`;
+  assert.deepEqual(changelogVersions(text), ["0.2.0"]);
+  assert.equal(topChangelogEntry(text)?.version, "0.2.0");
 });

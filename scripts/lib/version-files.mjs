@@ -105,19 +105,43 @@ export function setVersionInVersionsReadme(text, version) {
   return next;
 }
 
-// The first entry of a changelog: its version and its text up to the next separator or heading.
+// Every entry of a changelog, newest first: its version and its text up to the next separator or heading. A heading or
+// a separator inside a fenced code block (``` or ~~~) is text, not structure, so a quoted "## x.y.z" is no entry.
+export function changelogEntries(text) {
+  const lines = text.split("\n");
+  const entries = [];
+  let fence = null;
+  let current = null;
+  for (const line of lines) {
+    const marker = /^\s*(`{3,}|~{3,})/.exec(line);
+    if (marker !== null) {
+      if (fence === null) fence = marker[1][0];
+      else if (marker[1][0] === fence) fence = null;
+    } else if (fence === null) {
+      const heading = /^## (\S+)\s*$/.exec(line);
+      if (heading !== null) {
+        current = { version: heading[1], lines: [] };
+        entries.push(current);
+        continue;
+      }
+      if (/^---\s*$/.test(line)) {
+        current = null;
+        continue;
+      }
+    }
+    current?.lines.push(line);
+  }
+  return entries.map((entry) => ({ version: entry.version, body: `\n${entry.lines.join("\n")}` }));
+}
+
+// The first entry of a changelog, or null when it has none.
 export function topChangelogEntry(text) {
-  const heading = /^## (\S+)\s*$/m.exec(text);
-  if (heading === null) return null;
-  const start = heading.index + heading[0].length;
-  const rest = text.slice(start);
-  const end = rest.search(/^(---\s*$|## )/m);
-  return { version: heading[1], body: end === -1 ? rest : rest.slice(0, end) };
+  return changelogEntries(text)[0] ?? null;
 }
 
 // Every entry heading of a changelog, newest first.
 export function changelogVersions(text) {
-  return [...text.matchAll(/^## (\S+)\s*$/gm)].map((match) => match[1]);
+  return changelogEntries(text).map((entry) => entry.version);
 }
 
 // A document as the text to store: its line endings and BOM as read (bump-version writes it to a temporary file first).

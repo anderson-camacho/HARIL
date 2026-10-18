@@ -21,8 +21,8 @@ import { execFileSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
+  changelogEntries,
   changelogPath,
-  changelogVersions,
   compareVersions,
   fileExists,
   hasUnfilledPlaceholder,
@@ -135,7 +135,7 @@ function baseTopEntry(git, sha, current) {
     if (!log.ok) continue;
     const top = topChangelogEntry(log.stdout.replace(/\r\n/g, "\n"));
     if (top !== null && parseVersion(top.version) !== null) {
-      return { version: top.version, path: changelogPath(major) };
+      return { version: top.version, body: top.body, path: changelogPath(major) };
     }
   }
   return null;
@@ -148,12 +148,29 @@ function keptEntryProblem(root, git, base, current) {
       ? null
       : `the ${top.version} entry of the base (top of ${top.path} at ${base.label}) is gone: it was relabeled as ${current}; add a new entry above it instead`;
   }
-  const kept =
-    fileExists(root, top.path) &&
-    changelogVersions(readDocument(root, top.path).text).includes(top.version);
+  // Kept means the base's real entry: below the new top entry and with the base's text, so a heading inside a code
+  // fence (never an entry) or a dummy heading with other text cannot stand in for it.
+  const entries = fileExists(root, top.path)
+    ? changelogEntries(readDocument(root, top.path).text)
+    : [];
+  const kept = entries
+    .slice(1)
+    .some((entry) => entry.version === top.version && sameText(entry.body, top.body));
   return kept
     ? null
     : `the ${top.version} entry of the base (top of ${top.path} at ${base.label}) is gone; keep it below the new ${current} entry`;
+}
+
+// Two entry texts are the same up to line endings and trailing spaces.
+function sameText(left, right) {
+  const clean = (text) =>
+    text
+      .replace(/\r\n/g, "\n")
+      .split("\n")
+      .map((line) => line.trimEnd())
+      .join("\n")
+      .trim();
+  return clean(left) === clean(right);
 }
 
 function isCi(env) {
