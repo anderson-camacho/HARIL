@@ -91,7 +91,7 @@ describe("migrations 0007 and 0008 on a fresh database", () => {
       rules: testRules,
     });
     try {
-      expect(store.info().schemaVersion).toBe(12);
+      expect(store.info().schemaVersion).toBe(13);
     } finally {
       store.close();
     }
@@ -124,6 +124,7 @@ describe("migrations 0007 and 0008 on a fresh database", () => {
         { version: 10, name: "delegation_runtime", kind: "additive" },
         { version: 11, name: "process_gone", kind: "additive" },
         { version: 12, name: "process_identity", kind: "additive" },
+        { version: 13, name: "quota_batches", kind: "additive" },
       ]);
     } finally {
       db.close();
@@ -178,7 +179,7 @@ describe("migrations 0007 and 0008 on a database at schema 6", () => {
       rules: testRules,
     });
     try {
-      expect(store.info().schemaVersion).toBe(12);
+      expect(store.info().schemaVersion).toBe(13);
       expect(store.tasks.get("t-b")).toMatchObject({
         goal: "B",
         state: "pending",

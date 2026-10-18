@@ -59,6 +59,8 @@ export interface WorkflowTaskRecord {
   readonly description: string;
   readonly state: TaskState;
   readonly blockReason: BlockReason | null;
+  // When a turn blocked by a cooldown (3.11) may run again; null otherwise.
+  readonly cooldownUntil: number | null;
   readonly agentRef: string;
   readonly model: string | null;
   readonly modelPinned: boolean;
@@ -194,6 +196,20 @@ export interface SetWorkflowStateInput {
   readonly reason?: string;
 }
 
+// A workflow turn that heard a provider error is retried once on the same task (3.11, phase F6): its run closes failed with
+// the code PROVIDER_RETRY_CODE, and the task is ready again on `model`, or waits blocked with a cooldown until
+// `cooldownUntil`. The thread gets no new turn, so the rework rules (3.8) never count the retry as an attempt.
+export const PROVIDER_RETRY_CODE = "provider.retried";
+
+export interface RetryTurnInput {
+  readonly runId: string;
+  readonly model: string;
+  readonly cooldownUntil: number | null;
+  // transient: the same model again; route_failover: another model or account.
+  readonly retryReason: "transient" | "route_failover";
+  readonly error: { readonly code: string; readonly message: string };
+}
+
 export interface WorkflowFilter {
   readonly projectId?: string;
   readonly state?: WorkflowState;
@@ -215,6 +231,17 @@ export interface WorkflowsPort {
   setState(epoch: number, input: SetWorkflowStateInput): WorkflowRecord;
   // The watchdog's next evaluation of a turn (3.16), kept across restarts; null clears it.
   scheduleCheck(epoch: number, taskId: string, at: number | null): void;
+  // Closes the run of a running turn and retries the turn on the same task (RetryTurnInput), in one transaction; the
+  // run's keys and open reservations end with it. store.stale when the run is no longer its task's claim.
+  retryTurn(epoch: number, input: RetryTurnInput): void;
+  // A ready turn that may not run before `until` (its model is cooling down): ready -> blocked(cooldown). The promotion
+  // makes it ready again once `until` passed. store.conflict for a turn that is not ready.
+  deferTurn(epoch: number, taskId: string, until: number): void;
+  // The model of a ready turn, replaced at its launch (3.11: the parent's model no longer passes the quota rules).
+  // store.conflict for a turn that is not ready.
+  setTurnModel(epoch: number, taskId: string, model: string): void;
+  // How many times a turn was retried after a provider error (its runs closed with PROVIDER_RETRY_CODE).
+  providerRetries(taskId: string): number;
   // The turns that could still run (pending, ready, running) in workflows that ended (completed, failed, stopped):
   // nothing will consume their result, so the watchdog cancels them as residual (3.16). A blocked turn can never run
   // and keeps its state as history. Oldest first.

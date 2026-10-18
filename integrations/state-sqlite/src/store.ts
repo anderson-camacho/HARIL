@@ -51,6 +51,7 @@ import { StoreError } from "./errors.js";
 import { readLeaseSummary } from "./lease.js";
 import { createMaintenance } from "./maintenance.js";
 import { createMemoryFacet } from "./memory.js";
+import { createQuotaFacet } from "./quota.js";
 import { createStopsFacet, type StopsFacet, stopModeOf } from "./stops.js";
 import { createUsageLogFacet } from "./usage-log.js";
 import { createWorkflowsFacet, type WorkflowCommandHandler } from "./workflows.js";
@@ -247,6 +248,7 @@ export class SqliteStore implements Store {
   readonly approvals: Store["approvals"];
   readonly memory: Store["memory"];
   readonly usageLog: Store["usageLog"];
+  readonly quota: Store["quota"];
   readonly workflows: Store["workflows"];
   private readonly applyWorkflowCommand: WorkflowCommandHandler;
   private readonly stops: StopsFacet;
@@ -371,6 +373,11 @@ export class SqliteStore implements Store {
       insertDependency: (taskId, dependsOn, kind) => this.insertDependency(taskId, dependsOn, kind),
       appendTaskCreated: (taskId, projectId, goal, state, extra) =>
         this.appendTaskCreated(taskId, projectId, goal, state, extra),
+      transition: (from, to) => this.transition(from, to),
+      endRunAuthority: (runId, reason) => {
+        this.virtualKeys.revoke(runId, reason);
+        this.budgets.settleOpenForRun(runId);
+      },
     });
     this.workflows = workflows.port;
     this.applyWorkflowCommand = workflows.applyCommand;
@@ -379,6 +386,12 @@ export class SqliteStore implements Store {
       clock: this.clock,
       ids: this.ids,
       rules: this.rules,
+      transaction: (work) => this.inTransaction(work),
+    });
+    this.quota = createQuotaFacet({
+      db: this.db,
+      clock: this.clock,
+      ids: this.ids,
       transaction: (work) => this.inTransaction(work),
     });
     this.maintenance = createMaintenance({ db: this.db, walPath: options.walPath });
@@ -1021,6 +1034,32 @@ export class SqliteStore implements Store {
       const ready: Array<{ taskId: string; goal: string }> = [];
       const blocked: Array<{ taskId: string; goal: string }> = [];
       const now = this.clock.now();
+      // A turn blocked by a cooldown (3.11) runs again once the cooldown ended; the runtime checks its model again at
+      // the claim.
+      const cooled = this.db
+        .prepare(
+          "SELECT task_id AS taskId, goal, project_id AS projectId FROM tasks WHERE state = 'blocked' AND block_reason = 'cooldown' AND cooldown_until IS NOT NULL AND cooldown_until <= ? ORDER BY created_seq",
+        )
+        .all(now) as unknown as Array<{ taskId: string; goal: string; projectId: string }>;
+      for (const task of cooled) {
+        this.transition("blocked", "ready");
+        this.db
+          .prepare(
+            "UPDATE tasks SET state = 'ready', block_reason = NULL, cooldown_until = NULL, updated_at = ? WHERE task_id = ?",
+          )
+          .run(now, task.taskId);
+        this.appendEvent({
+          aggregateType: "task",
+          aggregateId: task.taskId,
+          type: "task.ready",
+          actorKind: "system",
+          actorId: "runtime",
+          payload: { from: "cooldown" },
+          projectId: task.projectId,
+          taskId: task.taskId,
+        });
+        ready.push({ taskId: task.taskId, goal: task.goal });
+      }
       let changed = true;
       while (changed) {
         changed = false;

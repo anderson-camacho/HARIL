@@ -1,5 +1,5 @@
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
-import { isStop, type Stop } from "@haril/contracts";
+import { isStop, type Stop, type TaskState } from "@haril/contracts";
 import type {
   AppendEventInput,
   ApplyTurnsInput,
@@ -14,6 +14,7 @@ import type {
   Ids,
   JsonObject,
   RecordAuditInput,
+  RetryTurnInput,
   SetWorkflowStateInput,
   StrandedTurn,
   WorkflowAutonomy,
@@ -56,7 +57,14 @@ interface WorkflowsFacetOptions {
     state: string,
     extra: Readonly<Record<string, unknown>>,
   ) => void;
+  // The task state machine's guard (ARCH 7.2).
+  readonly transition: (from: TaskState, to: TaskState) => void;
+  // Ends a run's authority: its virtual keys, then its open budget reservations (ARCH 13.2 CP1, CP4).
+  readonly endRunAuthority: (runId: string, reason: string) => void;
 }
+
+// The code a provider retry closes a run with (ports PROVIDER_RETRY_CODE; a value import of core is not allowed here).
+const PROVIDER_RETRY_CODE = "provider.retried";
 
 // The archetype table of core (3.4) as far as the store checks it: the layer and the task kind of each role.
 const ROLE_SHAPE: Readonly<Record<DelegationRole, { layer: 1 | 2 | 3; kind: string }>> = {
@@ -76,7 +84,7 @@ const WORKFLOW_COLUMNS =
   "workflow_id AS workflowId, project_id AS projectId, root_task_id AS rootTaskId, goal, state, autonomy, limits, orchestrator_model AS orchestratorModel, agents_created AS agentsCreated, stop_reason AS stopReason, base_branch AS baseBranch, base_sha AS baseSha, simulated, order_id AS orderId, created_at AS createdAt, ended_at AS endedAt";
 
 const TASK_COLUMNS =
-  "task_id AS taskId, workflow_id AS workflowId, thread_id AS threadId, parent_task_id AS parentTaskId, role, layer, kind, local_id AS localId, delegation_id AS delegationId, goal, description, state, block_reason AS blockReason, agent_ref AS agentRef, model, model_pinned AS modelPinned, difficulty, difficulty_reason AS difficultyReason, priority, created_seq AS createdSeq, attempt, budget_max_tokens AS budgetTokens, timeout_ms AS timeoutMs, surface_write AS surfaceWrite, surface_read AS surfaceRead, result, next_check_at AS nextCheckAt, created_at AS createdAt, completed_at AS completedAt";
+  "task_id AS taskId, workflow_id AS workflowId, thread_id AS threadId, parent_task_id AS parentTaskId, role, layer, kind, local_id AS localId, delegation_id AS delegationId, goal, description, state, block_reason AS blockReason, cooldown_until AS cooldownUntil, agent_ref AS agentRef, model, model_pinned AS modelPinned, difficulty, difficulty_reason AS difficultyReason, priority, created_seq AS createdSeq, attempt, budget_max_tokens AS budgetTokens, timeout_ms AS timeoutMs, surface_write AS surfaceWrite, surface_read AS surfaceRead, result, next_check_at AS nextCheckAt, created_at AS createdAt, completed_at AS completedAt";
 
 const DELEGATION_COLUMNS =
   "delegation_id AS delegationId, workflow_id AS workflowId, thread_id AS threadId, parent_task_id AS parentTaskId, proposed_by_run_id AS proposedByRunId, tool, payload_hash AS payloadHash, memo, payload, created_at AS createdAt";
@@ -668,8 +676,146 @@ export function createWorkflowsFacet(options: WorkflowsFacetOptions): {
       return requireWorkflow(workflow.workflowId);
     });
 
+  const taskRow = (
+    taskId: string,
+  ):
+    | { state: string; workflowId: string | null; projectId: string; claimEpoch: number }
+    | undefined =>
+    db
+      .prepare(
+        "SELECT state, workflow_id AS workflowId, project_id AS projectId, claim_epoch AS claimEpoch FROM tasks WHERE task_id = ?",
+      )
+      .get(taskId) as
+      | { state: string; workflowId: string | null; projectId: string; claimEpoch: number }
+      | undefined;
+
+  const readyTurn = (taskId: string, what: string) => {
+    const task = taskRow(taskId);
+    if (task === undefined || task.workflowId === null) {
+      throw new StoreError("store.not_found", `no workflow turn with id "${taskId}"`, { taskId });
+    }
+    if (task.state !== "ready") {
+      throw conflict(`turn ${taskId} is ${task.state}; only a ready turn ${what}`, { taskId });
+    }
+    return task;
+  };
+
+  const retryTurn = (epoch: number, input: RetryTurnInput): void =>
+    transaction(() => {
+      assertActiveEpoch(epoch);
+      const run = db
+        .prepare(
+          "SELECT task_id AS taskId, status, claim_epoch AS claimEpoch, attempt FROM runs WHERE run_id = ?",
+        )
+        .get(input.runId) as
+        | { taskId: string; status: string; claimEpoch: number; attempt: number }
+        | undefined;
+      if (run === undefined) {
+        throw new StoreError("store.not_found", `no run with id "${input.runId}"`, {
+          runId: input.runId,
+        });
+      }
+      const task = taskRow(run.taskId);
+      if (
+        task === undefined ||
+        task.workflowId === null ||
+        task.state !== "running" ||
+        task.claimEpoch !== run.claimEpoch ||
+        !["prepared", "running", "settled"].includes(run.status)
+      ) {
+        throw new StoreError(
+          "store.stale",
+          `run ${input.runId} is no longer the claim of a running workflow turn`,
+          { runId: input.runId },
+        );
+      }
+      const now = clock.now();
+      db.prepare(
+        "UPDATE runs SET status = 'failed', ended_at = ?, end_cause = 'exit', error = ? WHERE run_id = ?",
+      ).run(
+        now,
+        JSON.stringify({
+          code: PROVIDER_RETRY_CODE,
+          message: input.error.message,
+          cause: input.error.code,
+        }),
+        input.runId,
+      );
+      options.endRunAuthority(input.runId, PROVIDER_RETRY_CODE);
+      if (input.cooldownUntil === null) {
+        options.transition("running", "ready");
+        db.prepare(
+          "UPDATE tasks SET state = 'ready', phase = NULL, retry_reason = ?, model = ?, claimed_runtime_epoch = NULL, updated_at = ? WHERE task_id = ?",
+        ).run(input.retryReason, input.model, now, run.taskId);
+      } else {
+        options.transition("running", "blocked");
+        db.prepare(
+          "UPDATE tasks SET state = 'blocked', phase = NULL, block_reason = 'cooldown', cooldown_until = ?, retry_reason = ?, model = ?, claimed_runtime_epoch = NULL, updated_at = ? WHERE task_id = ?",
+        ).run(input.cooldownUntil, input.retryReason, input.model, now, run.taskId);
+      }
+      appendEvent({
+        aggregateType: "task",
+        aggregateId: run.taskId,
+        type: "task.retried",
+        actorKind: "system",
+        actorId: `runtime:${epoch}`,
+        payload: {
+          workflowId: task.workflowId,
+          attempt: run.attempt,
+          code: PROVIDER_RETRY_CODE,
+          cause: input.error.code,
+          model: input.model,
+          cooldownUntil: input.cooldownUntil,
+        },
+        projectId: task.projectId,
+        taskId: run.taskId,
+        runId: input.runId,
+      });
+    });
+
   const port: WorkflowsPort = {
     get: findWorkflow,
+    retryTurn,
+    deferTurn(epoch, taskId, until) {
+      transaction(() => {
+        assertActiveEpoch(epoch);
+        const task = readyTurn(taskId, "waits for a cooldown");
+        options.transition("ready", "blocked");
+        const now = clock.now();
+        db.prepare(
+          "UPDATE tasks SET state = 'blocked', block_reason = 'cooldown', cooldown_until = ?, updated_at = ? WHERE task_id = ?",
+        ).run(until, now, taskId);
+        appendEvent({
+          aggregateType: "task",
+          aggregateId: taskId,
+          type: "task.blocked",
+          actorKind: "system",
+          actorId: `runtime:${epoch}`,
+          payload: { workflowId: task.workflowId, reason: "cooldown", until },
+          projectId: task.projectId,
+          taskId,
+        });
+      });
+    },
+    setTurnModel(epoch, taskId, model) {
+      transaction(() => {
+        assertActiveEpoch(epoch);
+        readyTurn(taskId, "changes its model");
+        db.prepare("UPDATE tasks SET model = ?, updated_at = ? WHERE task_id = ?").run(
+          model,
+          clock.now(),
+          taskId,
+        );
+      });
+    },
+    providerRetries(taskId) {
+      const row = db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM runs WHERE task_id = ? AND error IS NOT NULL AND json_extract(error, '$.code') = ?",
+        )
+        .get(taskId, PROVIDER_RETRY_CODE) as { n: number };
+      return Number(row.n);
+    },
     list(filter) {
       const rows = db
         .prepare(

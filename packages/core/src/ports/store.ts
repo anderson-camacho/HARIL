@@ -15,6 +15,7 @@ import type {
 import type { AgentProcess } from "./agent-runtime.js";
 import type { WorkflowsPort } from "./delegation.js";
 import type { BootStart } from "./process-control.js";
+import type { QuotaStorePort } from "./quota.js";
 import type { HarilError, Result } from "./result.js";
 import type { UsageLogPort } from "./usage-log.js";
 
@@ -825,7 +826,8 @@ export interface Store {
     list(filter?: TaskFilter): readonly TaskRecord[];
     get(taskId: string): TaskDetail | undefined;
     // pending -> ready when every dependency completed; pending -> blocked(dep_failed) when one dependency
-    // failed, was cancelled or is blocked(dep_failed). Propagates transitively within the call.
+    // failed, was cancelled or is blocked(dep_failed). Propagates transitively within the call. A turn blocked by a
+    // cooldown whose end passed is ready again (3.11).
     promote(): PromoteResult;
     // Highest priority, then oldest ready task: ready -> running, one run row, one claim epoch. Tasks whose
     // agentRef is in excludeAgentRefs are not claimed (M2-T6: a real agent without its prerequisites). Tasks whose
@@ -898,6 +900,8 @@ export interface Store {
   readonly workflows: WorkflowsPort;
   // The orders and usage logs (4.5): append-only, hash-chained, written without a lease (P14).
   readonly usageLog: UsageLogPort;
+  // Quota samples and model cooldowns (3.11): observations of the providers, written without a lease.
+  readonly quota: QuotaStorePort;
   // Runs `work` in one transaction: the store's own writes inside it join it, so they commit together or, when `work`
   // throws, none of them does. The runtime closes an attempt this way: its run, its verdict, the turns that follow it
   // and its usage row (3.8 rule 6: a restart never finds half of it).
