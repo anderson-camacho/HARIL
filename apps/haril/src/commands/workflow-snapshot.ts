@@ -11,7 +11,7 @@ import type {
 // A workflow as WorkflowSnapshot v1 (ADR-0021), built from the store, and its text tree. One node per thread (an agent
 // across its turns): its state is the state of its latest turn, read with its audits (an executor whose latest turn was
 // rejected and escalated waits for its delegator). Labels follow creation order: o1, d1.., e1.., aN for the auditor of
-// eN, fa for the final auditor. The haril workflow demo prints it; `haril workflow show` (phase F5b) will reuse it.
+// eN, fa for the final auditor. haril workflow demo prints it; haril workflow show and watch print it (phase F5b).
 
 export interface ThreadView {
   readonly threadId: string;
@@ -23,6 +23,8 @@ export interface ThreadView {
   // In creation order.
   readonly turns: readonly WorkflowTaskRecord[];
 }
+
+const LIVE_TURN = new Set<WorkflowTaskRecord["state"]>(["pending", "ready", "running"]);
 
 const ROLE_LABEL: Readonly<Record<WorkflowTaskRecord["role"], string>> = {
   orchestrator: "Orchestrator",
@@ -242,7 +244,8 @@ function nodeOf(thread: ThreadView, context: NodeContext): WorkflowNode {
     elapsedMs: rows.length === 0 ? null : sum(rows.map((row) => row.durationMs)),
     lastProgress:
       last === undefined ? null : { at: last.endedAt ?? last.ts, text: last.outcome ?? last.kind },
-    nextCheckAt: latest.nextCheckAt,
+    // Only a live turn is checked again by the watchdog; an ended one keeps its last schedule in the store.
+    nextCheckAt: LIVE_TURN.has(latest.state) ? latest.nextCheckAt : null,
     context: null,
     quota: options.quotaOf?.(model) ?? null,
     difficulty:
