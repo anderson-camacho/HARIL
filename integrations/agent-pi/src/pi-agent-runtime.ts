@@ -1,7 +1,9 @@
 // AgentRuntime adapter for Pi 1.2.0 in `--mode rpc` (ADR-0004). One Pi process per attempt. The adapter
 // owns the bridge channel (named pipe or unix socket with a 256-bit token), the RPC JSONL stream, the
 // handshake (fail closed), the bridge read operation through PathGuard, the plan.propose operation of a plan
-// task through the host's proposer (LD-T4), and the abort/kill escalation.
+// task through the host's proposer (LD-T4), the delegation.call operation of a workflow turn through the host's
+// delegation tools (phase F2b), and the abort/kill escalation. A workflow turn is read-only until writing arrives
+// (phase F8): it launches only with read and the delegation tools, whatever its spec asks.
 // It never sends new_session, switch_session, fork or clone, and it never logs the token or the key.
 
 import type { ChildProcess } from "node:child_process";
@@ -15,6 +17,8 @@ import type {
   AgentOutcome,
   AgentRuntime,
   AgentSpec,
+  DelegationToolHandler,
+  DelegationToolResult,
   HarilError,
   PlanProposalResult,
   PlanProposer,
@@ -40,12 +44,14 @@ export interface PiTimings {
 }
 
 // plan_refused: the host refused a plan.propose (an invalid plan, a closed attempt); the agent hears the reason.
+// delegation_refused: the host refused a delegation.call (a bad input, a limit, a second deciding call).
 export type BridgeOperationOutcome =
   | "ok"
   | "path_denied"
   | "too_large"
   | "read_failed"
   | "plan_refused"
+  | "delegation_refused"
   | "unsupported";
 
 // Event-friendly record of one bridge operation: the path is hashed and the content is never included.
@@ -54,6 +60,8 @@ export type BridgeOperationOutcome =
 // accepted plan became, never the plan. A refused one also carries the reason the host gave the agent (LD-T7c), cut to
 // MAX_REFUSAL_REASON_CHARS, so the refusal is audited outside the Pi session log. The reason is HARIL's own validation
 // message: it may name a task's local id, its agent or the paths it lists, never a goal or a description.
+// A delegation.call names its tool and carries its input's SHA-256 and UTF-8 size, and the refusal reason the agent
+// heard (capped the same way), never the input.
 export interface BridgeOperationEvent {
   readonly runId: string;
   readonly op: string;
@@ -63,11 +71,14 @@ export interface BridgeOperationEvent {
   readonly planSha256?: string;
   readonly planBytes?: number;
   readonly approvalId?: string;
+  readonly tool?: string;
+  readonly inputSha256?: string;
+  readonly inputBytes?: number;
 }
 
 type OperationDetail = Pick<
   BridgeOperationEvent,
-  "reason" | "planSha256" | "planBytes" | "approvalId"
+  "reason" | "planSha256" | "planBytes" | "approvalId" | "tool" | "inputSha256" | "inputBytes"
 >;
 
 export interface PiAgentRuntimeOptions {
@@ -90,6 +101,9 @@ export interface PiAgentRuntimeOptions {
   readonly onBridgeOperation?: (event: BridgeOperationEvent) => void;
   // The host side of haril_propose_plan (LD-T4). Without it, plan.propose is unsupported and a plan task cannot propose.
   readonly proposePlan?: PlanProposer;
+  // The host side of the delegation tools (phase F2b). Without it, delegation.call is unsupported and a workflow turn
+  // cannot make its deciding call.
+  readonly delegationTools?: DelegationToolHandler;
 }
 
 export interface PiDiagnostics {
@@ -106,6 +120,20 @@ const MAX_READ_BYTES = 1024 * 1024;
 // The bridge tool of a plan task and its operation (LD-T4). Core values stay out of this adapter, so the name is local.
 const PROPOSE_PLAN_TOOL = "haril_propose_plan";
 const PLAN_PROPOSE_OP = "plan.propose";
+// The delegation tools the bridge serves to a workflow turn and their one operation (phase F2b). Kept local like the
+// plan tool's name; the host's handler checks the tool against the turn's archetype again.
+const DELEGATION_CALL_OP = "delegation.call";
+const DELEGATION_TOOLS: ReadonlySet<string> = new Set([
+  "haril_delegate",
+  "haril_assign",
+  "haril_report",
+  "haril_verdict",
+  "haril_request_audit",
+  "haril_abort",
+]);
+// What a workflow turn may be offered until writing arrives (phase F8): read and the delegation tools. Nothing that
+// writes, edits or runs a command (Pi's write, edit or bash, HARIL's haril_run or haril_merge) launches.
+const WORKFLOW_TOOLS: ReadonlySet<string> = new Set(["read", ...DELEGATION_TOOLS]);
 // Pi waits for an answer only to these extension dialogs; every other extension_ui_request is fire-and-forget.
 const DIALOG_METHODS: ReadonlySet<unknown> = new Set(["select", "confirm", "input", "editor"]);
 const DEFAULT_HELLO_TIMEOUT_MS = 15_000;
@@ -185,6 +213,14 @@ function validate(spec: AgentSpec, options: PiAgentRuntimeOptions): HarilError |
   if (!spec.allowedTools.every((tool) => tool.length > 0 && !tool.includes(","))) {
     return invalid("allowedTools must be non-empty names without commas");
   }
+  if (spec.delegation !== undefined) {
+    const unsafe = spec.allowedTools.find((tool) => !WORKFLOW_TOOLS.has(tool));
+    if (unsafe !== undefined) {
+      return invalid(
+        `a workflow agent is read-only until writing arrives: ${unsafe} is not one of read and the delegation tools`,
+      );
+    }
+  }
   if (!(spec.timeoutMs > 0) || !Number.isFinite(spec.timeoutMs)) {
     return invalid("timeoutMs must be a positive number");
   }
@@ -206,6 +242,13 @@ function proposalText(approvalId: string, created: boolean): string {
   return created
     ? `proposed plan ${approvalId}; it waits for a person (haril approve ${approvalId})`
     : `plan ${approvalId} was already proposed; it waits for a person (haril approve ${approvalId})`;
+}
+
+// What the agent reads after an accepted delegation call: the host's typed reply, its fields as JSON, then the rule that
+// a turn decides once.
+function delegationText(result: Extract<DelegationToolResult, { ok: true }>): string {
+  const { ok: _ok, ...fields } = result;
+  return `accepted: ${JSON.stringify(fields)}. This call decides your turn: end it now with a short final message.`;
 }
 
 // The longest refusal reason a plan.propose record keeps, in code points (LD-T7c).
@@ -570,6 +613,10 @@ class PiRun implements PiAgentHandle {
       this.onProposePlan(id, message.plan);
       return;
     }
+    if (message.op === DELEGATION_CALL_OP) {
+      this.onDelegationCall(id, message.tool, message.input);
+      return;
+    }
     if (message.op !== "read") {
       this.recordOperation(String(message.op), sha256(""), "unsupported");
       this.replyBridge(id, { ok: false, error: "unsupported" });
@@ -641,6 +688,47 @@ class PiRun implements PiAgentHandle {
       approvalId: result.approvalId,
     });
     this.replyBridge(id, { ok: true, content: proposalText(result.approvalId, result.created) });
+  }
+
+  // A delegation tool (phase F2b): the call goes to the host's handler untouched, with the run's own context, only for a
+  // tool this run was offered; the handler checks it and its typed reply goes back, a refusal with its reason, so the
+  // agent can fix the call in the same turn. A host failure is a fixed reason, never the host's error.
+  private onDelegationCall(id: string | number, tool: unknown, input: unknown): void {
+    const name = typeof tool === "string" ? tool : "";
+    const body = JSON.stringify(input) ?? "";
+    const fingerprint = {
+      tool: name,
+      inputSha256: sha256(body),
+      inputBytes: Buffer.byteLength(body, "utf8"),
+    };
+    const handler = this.options.delegationTools;
+    const projectId = this.spec.projectId;
+    if (
+      handler === undefined ||
+      projectId === undefined ||
+      !DELEGATION_TOOLS.has(name) ||
+      !this.spec.allowedTools.includes(name)
+    ) {
+      this.recordOperation(DELEGATION_CALL_OP, sha256(""), "unsupported", fingerprint);
+      this.replyBridge(id, { ok: false, error: "unsupported" });
+      return;
+    }
+    let result: DelegationToolResult;
+    try {
+      result = handler({ projectId, taskId: this.spec.taskId, runId: this.runId }, name, input);
+    } catch {
+      result = { ok: false, reason: "the call could not be recorded" };
+    }
+    if (!result.ok) {
+      this.recordOperation(DELEGATION_CALL_OP, sha256(""), "delegation_refused", {
+        ...fingerprint,
+        reason: cappedReason(result.reason),
+      });
+      this.replyBridge(id, { ok: false, error: result.reason, reply: result });
+      return;
+    }
+    this.recordOperation(DELEGATION_CALL_OP, sha256(""), "ok", fingerprint);
+    this.replyBridge(id, { ok: true, content: delegationText(result), reply: result });
   }
 
   private recordOperation(

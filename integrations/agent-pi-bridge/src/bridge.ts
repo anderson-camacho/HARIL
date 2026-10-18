@@ -1,8 +1,12 @@
 // HARIL bridge: a Pi extension loaded with `-e` (ADR-0004 decision 5, ARCHITECTURE 9.4). It sends the
 // handshake `hello` over the run's pipe, registers the `haril` provider, the `read` tool and, for a plan task,
-// `haril_propose_plan` (LD-T4), and forwards every tool operation to the Runtime, which decides. Self-contained: node:* imports and local types only
-// (R6), so it bundles into one file. The shapes below follow Pi 1.2.0's ExtensionAPI types (ProviderConfig,
-// ProviderChatModelConfig, ToolDefinition, AgentToolResult), which are read-only under vendor/pi/1.2.0.
+// `haril_propose_plan` (LD-T4), and for a workflow turn the delegation tools its role is announced (phase F2b:
+// haril_delegate, haril_assign, haril_report, haril_verdict, haril_request_audit, haril_abort). It forwards every tool
+// operation to the Runtime, which decides. It serves nothing that writes, edits or runs a command: a name it does not
+// serve is never registered, so the hello leaves it out and the Runtime's handshake refuses the run. Self-contained:
+// node:* imports and local types only (R6), so it bundles into one file. The shapes below follow Pi 1.2.0's
+// ExtensionAPI types (ProviderConfig, ProviderChatModelConfig, ToolDefinition, AgentToolResult), which are read-only
+// under vendor/pi/1.2.0.
 
 import { connect, type Socket } from "node:net";
 
@@ -63,6 +67,8 @@ const MAX_TOKENS_ENV = "HARIL_MODEL_MAX_TOKENS";
 const LF = "\n";
 // The planning tool of a plan task (LD-T4): registered only when the run announces it in HARIL_TOOLS.
 const PROPOSE_PLAN_TOOL = "haril_propose_plan";
+// The operation every delegation tool sends; the Runtime answers with its typed reply (DelegationToolResult).
+const DELEGATION_CALL_OP = "delegation.call";
 
 interface Channel {
   send(message: Record<string, unknown>): void;
@@ -122,6 +128,10 @@ export default async function harilBridge(pi: BridgePiApi): Promise<void> {
   const nextId = (): string => `op-${++sequence}`;
   const tools = [readTool(channel, nextId)];
   if (announced.includes(PROPOSE_PLAN_TOOL)) tools.push(proposePlanTool(channel, nextId));
+  for (const name of new Set(announced)) {
+    const spec = DELEGATION_TOOLS[name];
+    if (spec !== undefined) tools.push(delegationTool(channel, nextId, name, spec));
+  }
   for (const tool of tools) pi.registerTool(tool);
   channel.send({
     type: "hello",
@@ -187,6 +197,241 @@ function proposePlanTool(channel: Channel, nextId: () => string): BridgeToolDefi
       };
     },
   };
+}
+
+// The delegation tools a workflow turn may be announced (docs/modos-y-delegacion.md 3.5). Their schemas mirror the
+// tool contracts of @haril/contracts with the plainest JSON Schema (type, properties, required, items, enum on strings),
+// which Pi validates before the call and every provider accepts. They leave out the optional fields agents do not use
+// yet (a child's model until the model catalog arrives, checkpoints), so a model is not invited to send them. The
+// Runtime checks every call again with the contracts and the Core rules, and its reply carries the reason of a refusal.
+interface DelegationToolSpec {
+  readonly label: string;
+  readonly description: string;
+  readonly parameters: Record<string, unknown>;
+}
+
+const text = (description: string) => ({ type: "string", description });
+const texts = (description: string) => ({ type: "array", items: { type: "string" }, description });
+const DIFFICULTY = {
+  type: "string",
+  enum: ["trivial", "easy", "medium", "hard", "expert"],
+  description: "How hard the work is, from trivial to expert.",
+};
+const BUDGET = {
+  type: "object",
+  description: "The child's token budget for one turn.",
+  properties: {
+    maxTokens: {
+      type: "integer",
+      description: "Tokens the child may spend in one turn, its instructions included.",
+    },
+  },
+  required: ["maxTokens"],
+};
+const LOCAL_ID = text('A short id of letters, digits, "-" or "_", unique among your children.');
+const SCHEMA_VERSION = { type: "integer", description: "Always 1." };
+const MEMO = text(
+  "A note to your future self, at most 2000 characters: it comes back in your next turn.",
+);
+
+const DELEGATION_TOOLS: Readonly<Record<string, DelegationToolSpec>> = {
+  haril_delegate: {
+    label: "Delegate",
+    description:
+      "Orchestrator only: propose the parts of the goal, one delegator each. The runtime checks the proposal against the workflow's limits; once it accepts, end your turn: the delegators run, and you run again with their reports.",
+    parameters: {
+      type: "object",
+      properties: {
+        schemaVersion: SCHEMA_VERSION,
+        memo: MEMO,
+        delegations: {
+          type: "array",
+          description: "One entry per delegator.",
+          items: {
+            type: "object",
+            properties: {
+              localId: LOCAL_ID,
+              goal: text("The part's goal, in one sentence."),
+              description: text("The detail the goal lacks: what to read, what to report."),
+              difficulty: DIFFICULTY,
+              difficultyReason: text("Why it is that difficult."),
+              dependsOn: texts("localIds of parts it waits for; [] lets it run in parallel."),
+              priority: { type: "integer", description: "0 (lowest) to 9 (highest)." },
+              acceptanceCriteria: texts("What must be true when the part is done, in words."),
+              budget: BUDGET,
+            },
+            required: [
+              "localId",
+              "goal",
+              "description",
+              "difficulty",
+              "difficultyReason",
+              "dependsOn",
+              "priority",
+              "acceptanceCriteria",
+              "budget",
+            ],
+          },
+        },
+      },
+      required: ["schemaVersion", "memo", "delegations"],
+    },
+  },
+  haril_assign: {
+    label: "Assign",
+    description:
+      "Delegator only: assign the steps of your part, one executor each; every executor gets its own auditor. Once the runtime accepts, end your turn: you run again with the executors' outcomes and verdicts.",
+    parameters: {
+      type: "object",
+      properties: {
+        schemaVersion: SCHEMA_VERSION,
+        memo: MEMO,
+        assignments: {
+          type: "array",
+          description: "One entry per executor.",
+          items: {
+            type: "object",
+            properties: {
+              localId: LOCAL_ID,
+              goal: text("The step's goal, in one sentence."),
+              instructions: text("The exact method: what to read and what to answer."),
+              files: {
+                type: "object",
+                description: "The step's surface, as paths or globs relative to the project root.",
+                properties: {
+                  write: texts("Always [] for now: executors cannot write yet."),
+                  read: texts("The files the step reads."),
+                },
+                required: ["write", "read"],
+              },
+              tests: text("What to check and how; an empty text when nothing runs."),
+              acceptanceCriteria: texts("What the auditor checks the result against."),
+              difficulty: DIFFICULTY,
+              difficultyReason: text("Why it is that difficult."),
+              dependsOn: texts("localIds of steps it waits for (their approval); [] for none."),
+              budget: BUDGET,
+            },
+            required: [
+              "localId",
+              "goal",
+              "instructions",
+              "files",
+              "tests",
+              "acceptanceCriteria",
+              "difficulty",
+              "difficultyReason",
+              "dependsOn",
+              "budget",
+            ],
+          },
+        },
+      },
+      required: ["schemaVersion", "memo", "assignments"],
+    },
+  },
+  haril_report: {
+    label: "Report",
+    description:
+      "Delegator only, after your executors finished: close your part with its status, a short summary of what was found and the open issues. Your orchestrator reads it.",
+    parameters: {
+      type: "object",
+      properties: {
+        status: {
+          type: "string",
+          enum: ["done", "partial", "failed"],
+          description: "How the part ended.",
+        },
+        summary: text("What the part found or did, short: the orchestrator reads it."),
+        issues: texts("What is still wrong or open; [] for none."),
+      },
+      required: ["status", "summary", "issues"],
+    },
+  },
+  haril_verdict: {
+    label: "Verdict",
+    description:
+      "Auditor only: approve or reject the work against each acceptance criterion, one reason per criterion. A rejection needs at least one reason that is not met.",
+    parameters: {
+      type: "object",
+      properties: {
+        approved: { type: "boolean", description: "true when every criterion is met." },
+        reasons: {
+          type: "array",
+          description: "One reason per criterion.",
+          items: {
+            type: "object",
+            properties: {
+              criterion: text("The criterion, as written."),
+              ok: { type: "boolean", description: "Whether it is met." },
+              evidence: text("What shows it: a quote, a file, a fact."),
+            },
+            required: ["criterion", "ok", "evidence"],
+          },
+        },
+      },
+      required: ["approved", "reasons"],
+    },
+  },
+  haril_request_audit: {
+    label: "Request audit",
+    description:
+      "Orchestrator only, when nothing is pending: ask for the final audit of the whole workflow, with a summary of the result and what is still open.",
+    parameters: {
+      type: "object",
+      properties: {
+        summary: text("The workflow's result, short: the final auditor reads it."),
+        outstanding: texts("What is still open; [] for none."),
+      },
+      required: ["summary", "outstanding"],
+    },
+  },
+  haril_abort: {
+    label: "Abort",
+    description: "Orchestrator only: end the workflow as failed, with the reason.",
+    parameters: {
+      type: "object",
+      properties: { reason: text("Why the workflow cannot reach its goal.") },
+      required: ["reason"],
+    },
+  },
+};
+
+// A delegation tool sends its arguments as they came; the Runtime validates them, answers with its typed reply and,
+// for a refusal, the reason, so the model can fix the call and make it again in the same turn.
+function delegationTool(
+  channel: Channel,
+  nextId: () => string,
+  name: string,
+  spec: DelegationToolSpec,
+): BridgeToolDefinition {
+  return {
+    name,
+    label: spec.label,
+    description: spec.description,
+    parameters: spec.parameters,
+    async execute(_toolCallId, params) {
+      const reply = await channel.request({
+        id: nextId(),
+        op: DELEGATION_CALL_OP,
+        tool: name,
+        input: params,
+      });
+      const typed = isRecord(reply.reply) ? reply.reply : {};
+      if (reply.ok === true && typeof reply.content === "string") {
+        return { content: [{ type: "text", text: reply.content }], details: { reply: typed } };
+      }
+      const error = typeof reply.error === "string" ? reply.error : "refused";
+      return {
+        content: [{ type: "text", text: `refused: ${error}` }],
+        details: { reply: typed },
+        isError: true,
+      };
+    },
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function positiveIntegerEnv(value: string | undefined, fallback: number): number {

@@ -695,3 +695,250 @@ describe("createPiAgentRuntime plan.propose (LD-T4)", () => {
     ]);
   });
 });
+
+// The delegation tools on the Pi lane (phase F2b): a fake Pi sends delegation.call the way the bridge's tools do, one
+// call per entry of FAKE_PI_CALLS, and settles with the replies it heard. The handler stands in for the host's
+// delegation tools: it records each call and answers with a typed reply.
+const DELEGATION_FAKE_PI = `
+import { connect } from "node:net";
+const tools = (process.env.HARIL_TOOLS ?? "").split(",").filter((name) => name !== "");
+const raw = process.env.HARIL_BRIDGE ?? "";
+const cut = raw.lastIndexOf("#");
+const calls = JSON.parse(process.env.FAKE_PI_CALLS ?? "[]");
+const model = process.argv[process.argv.indexOf("--model") + 1];
+const pending = new Map();
+let seq = 0;
+let buffer = "";
+let input = "";
+const emit = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+const socket = connect(raw.slice(0, cut));
+socket.on("connect", () => {
+  const hello = { type: "hello", runId: process.env.HARIL_RUN_ID, token: raw.slice(cut + 1), tools, bridgeVersion: "fake" };
+  socket.write(JSON.stringify(hello) + "\\n");
+});
+socket.on("data", (chunk) => {
+  buffer += chunk.toString("utf8");
+  let lf = buffer.indexOf("\\n");
+  while (lf !== -1) {
+    const reply = JSON.parse(buffer.slice(0, lf));
+    buffer = buffer.slice(lf + 1);
+    lf = buffer.indexOf("\\n");
+    pending.get(reply.id)?.(reply);
+  }
+});
+socket.on("error", () => {});
+const request = (operation) => new Promise((resolve) => {
+  const id = "op-" + ++seq;
+  pending.set(id, resolve);
+  socket.write(JSON.stringify({ id, ...operation }) + "\\n");
+});
+async function run() {
+  const heard = [];
+  for (const call of calls) {
+    const reply = await request({ op: "delegation.call", tool: call.tool, input: call.input });
+    heard.push(reply.ok ? "ok: " + reply.content : "refused: " + reply.error);
+  }
+  const text = heard.join(" | ");
+  emit({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text }] } });
+  emit({ type: "agent_settled", aborted: false });
+}
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  input += chunk;
+  let lf = input.indexOf("\\n");
+  while (lf !== -1) {
+    const message = JSON.parse(input.slice(0, lf));
+    input = input.slice(lf + 1);
+    lf = input.indexOf("\\n");
+    if (message.type === "get_state") {
+      emit({ type: "response", id: message.id, command: "get_state", success: true, data: { model: { id: model } } });
+    }
+    if (message.type === "prompt") {
+      emit({ type: "response", id: message.id, command: "prompt", success: true, data: { disposition: "started" } });
+      void run();
+    }
+  }
+});
+process.stdin.on("end", () => process.stdout.write("", () => process.exit(0)));
+`;
+
+describe("createPiAgentRuntime delegation.call (F2b)", () => {
+  type ToolCall = {
+    readonly context: { projectId: string; taskId: string; runId: string };
+    readonly tool: string;
+    readonly input: unknown;
+  };
+  type Scripted = readonly { readonly tool: string; readonly input: unknown }[];
+  const ORCHESTRATOR_TOOLS = ["read", "haril_delegate", "haril_request_audit", "haril_abort"];
+
+  // A workflow turn as the run loop builds it; the adapter only reads that it is one.
+  function workflowSpec(allowedTools: readonly string[], runId = "run-turn"): AgentSpec {
+    return {
+      ...spec(runId),
+      projectId: "project-1",
+      allowedTools,
+      kind: "plan",
+      delegation: { role: "orchestrator" } as unknown as NonNullable<AgentSpec["delegation"]>,
+    };
+  }
+
+  function summaryOf(outcome: Awaited<AgentHandle["settled"]>): string {
+    if (outcome.status !== "succeeded") throw new Error(`run ${outcome.status}`);
+    return outcome.summary;
+  }
+
+  // The fake Pi above, run with the host Node; the scripted calls reach it through FAKE_PI_CALLS.
+  function runtimeWith(
+    h: Harness,
+    calls: Scripted,
+    overrides: Partial<PiAgentRuntimeOptions> = {},
+  ) {
+    const piCliPath = join(tmp, "fake-pi-delegation.mjs");
+    writeFileSync(piCliPath, DELEGATION_FAKE_PI, "utf8");
+    const scripted = JSON.stringify(calls);
+    return createPiAgentRuntime({
+      nodePath: process.execPath,
+      piCliPath,
+      bridgePath: join(tmp, "bridge-not-loaded.mjs"),
+      brokerUrl: "http://127.0.0.1:9/v1",
+      projectRoot: h.root,
+      runsDir: h.runsDir,
+      model: MODEL,
+      virtualKey: VKEY,
+      timings: { helloTimeoutMs: 3000, startupTimeoutMs: 3000, graceMs: 200 },
+      onBridgeOperation: (event) => h.events.push(event),
+      ...overrides,
+      spawn: (command, args, options) => {
+        h.spawnCalls.push({ command, args, options: { ...options } });
+        return nodeSpawn(command, args, {
+          ...options,
+          env: { ...options.env, FAKE_PI_CALLS: scripted },
+        });
+      },
+    });
+  }
+
+  it("serves delegation.call through the host's handler with the run's context and answers with its typed reply", async () => {
+    const h = harness();
+    const seen: ToolCall[] = [];
+    const handle = await startHandle(
+      runtimeWith(
+        h,
+        [
+          { tool: "haril_abort", input: { reason: "" } },
+          { tool: "haril_abort", input: { reason: "stop" } },
+        ],
+        {
+          delegationTools: (context, tool, input) => {
+            seen.push({ context, tool, input });
+            return (input as { reason?: unknown }).reason === "stop"
+              ? { ok: true, note: "the workflow ends when your turn ends" }
+              : { ok: false, reason: "haril_abort input: /reason: must be a non-empty text" };
+          },
+        },
+      ),
+      workflowSpec(ORCHESTRATOR_TOOLS),
+    );
+    expect((await handle.hello).tools).toEqual(ORCHESTRATOR_TOOLS);
+    await handle.prompt("Report the facts");
+
+    const summary = summaryOf(await handle.settled);
+    expect(summary).toContain("refused: haril_abort input: /reason: must be a non-empty text");
+    expect(summary).toContain('ok: accepted: {"note":"the workflow ends when your turn ends"}');
+    const context = { projectId: "project-1", taskId: "task-1", runId: "run-turn" };
+    expect(seen).toEqual([
+      { context, tool: "haril_abort", input: { reason: "" } },
+      { context, tool: "haril_abort", input: { reason: "stop" } },
+    ]);
+    const stop = JSON.stringify({ reason: "stop" });
+    expect(h.events).toEqual([
+      expect.objectContaining({
+        op: "delegation.call",
+        tool: "haril_abort",
+        outcome: "delegation_refused",
+        reason: "haril_abort input: /reason: must be a non-empty text",
+      }),
+      {
+        runId: "run-turn",
+        op: "delegation.call",
+        tool: "haril_abort",
+        pathSha256: expect.any(String),
+        outcome: "ok",
+        inputSha256: createHash("sha256").update(stop, "utf8").digest("hex"),
+        inputBytes: Buffer.byteLength(stop, "utf8"),
+      },
+    ]);
+    // A record keeps the input's hash and size, never the input.
+    expect(JSON.stringify(h.events)).not.toContain('"stop"');
+  });
+
+  it("answers delegation.call as unsupported for a tool the run was not offered, or without a handler", async () => {
+    const h = harness();
+    const seen: string[] = [];
+    const offered = await startHandle(
+      runtimeWith(h, [{ tool: "haril_verdict", input: { approved: true, reasons: [] } }], {
+        delegationTools: (_context, tool) => {
+          seen.push(tool);
+          return { ok: true };
+        },
+      }),
+      workflowSpec(ORCHESTRATOR_TOOLS),
+    );
+    await offered.prompt("Report the facts");
+    expect(summaryOf(await offered.settled)).toBe("refused: unsupported");
+    expect(seen).toEqual([]);
+
+    const bare = await startHandle(
+      runtimeWith(h, [{ tool: "haril_abort", input: { reason: "stop" } }]),
+      workflowSpec(ORCHESTRATOR_TOOLS, "run-bare"),
+    );
+    await bare.prompt("Report the facts");
+    expect(summaryOf(await bare.settled)).toBe("refused: unsupported");
+    expect(h.events).toEqual([
+      expect.objectContaining({
+        op: "delegation.call",
+        tool: "haril_verdict",
+        outcome: "unsupported",
+      }),
+      expect.objectContaining({
+        op: "delegation.call",
+        tool: "haril_abort",
+        outcome: "unsupported",
+      }),
+    ]);
+  });
+
+  it("answers a fixed reason when the host's handler throws, never the host's error", async () => {
+    const h = harness();
+    const handle = await startHandle(
+      runtimeWith(h, [{ tool: "haril_abort", input: { reason: "stop" } }], {
+        delegationTools: () => {
+          throw new Error("store is closed at D:/private/path");
+        },
+      }),
+      workflowSpec(ORCHESTRATOR_TOOLS),
+    );
+    await handle.prompt("Report the facts");
+    expect(summaryOf(await handle.settled)).toBe("refused: the call could not be recorded");
+    expect(JSON.stringify(h.events)).not.toContain("private");
+  });
+
+  it("refuses to launch a workflow agent offered a tool that writes, edits or runs a command", async () => {
+    const h = harness();
+    for (const tool of ["write", "edit", "bash", "haril_run", "haril_merge", "grep"]) {
+      const started = await h.runtime("ok").start(workflowSpec(["read", tool], `run-${tool}`));
+      expect(started.ok, tool).toBe(false);
+      if (!started.ok) {
+        expect(started.error.code).toBe("agent.invalid_spec");
+        expect(started.error.message).toContain(tool);
+      }
+    }
+    expect(h.spawnCalls).toEqual([]);
+    // read and the delegation tools of a role launch.
+    const ok = await startHandle(
+      h.runtime("ok"),
+      workflowSpec(["read", "haril_verdict"], "run-ok"),
+    );
+    expect((await ok.hello).tools).toEqual(["read", "haril_verdict"]);
+  });
+});

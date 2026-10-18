@@ -161,6 +161,14 @@ function toolNamed(pi: RecordedPi, name: string): BridgeToolDefinition {
 }
 
 const PLAN_TOOLS = "read,haril_propose_plan";
+const DELEGATION_TOOLS = [
+  "haril_delegate",
+  "haril_assign",
+  "haril_report",
+  "haril_verdict",
+  "haril_request_audit",
+  "haril_abort",
+] as const;
 const PLAN = { schemaVersion: 1, tasks: [{ localId: "survey", goal: "Survey the CLI" }] };
 
 describe("agent-pi-bridge extension", () => {
@@ -317,6 +325,101 @@ describe("agent-pi-bridge extension", () => {
     expect(result.isError).toBe(true);
     expect(result.content[0]?.text).toContain("invalid plan: schemaVersion must be 1");
     expect(result.details).toEqual({});
+  });
+
+  it("registers exactly the tools the host announces for each workflow role, and the hello lists them", async () => {
+    const roles: [string, string[]][] = [
+      ["orchestrator", ["read", "haril_delegate", "haril_request_audit", "haril_abort"]],
+      ["delegator", ["read", "haril_assign", "haril_report"]],
+      ["executor", ["read"]],
+      ["auditor", ["read", "haril_verdict"]],
+    ];
+    for (const [role, tools] of roles) {
+      const { pi, fake } = await loadWithPipe(tools.join(","));
+      expect(
+        pi.tools.map((tool) => tool.name),
+        role,
+      ).toEqual(tools);
+      await waitFor(() => fake.hellos.length === 1);
+      expect(fake.hellos[0]?.tools, role).toEqual(tools);
+      await fake.close();
+      pipe = undefined;
+    }
+  });
+
+  it("never registers a tool that writes, edits or runs a command, even when HARIL_TOOLS names it", async () => {
+    const { pi, fake } = await loadWithPipe(
+      "read,write,edit,bash,powershell,grep,haril_run,haril_merge,haril_verdict",
+    );
+    expect(pi.tools.map((tool) => tool.name)).toEqual(["read", "haril_verdict"]);
+    await waitFor(() => fake.hellos.length === 1);
+    // The hello lists only what is served, so the host's handshake refuses the run (fail closed).
+    expect(fake.hellos[0]?.tools).toEqual(["read", "haril_verdict"]);
+  });
+
+  it("describes every delegation tool with a label and an object schema of named, required fields", async () => {
+    const { pi } = await loadWithPipe(DELEGATION_TOOLS.join(","));
+    for (const name of DELEGATION_TOOLS) {
+      const tool = toolNamed(pi, name);
+      expect(tool.label.length, name).toBeGreaterThan(0);
+      expect(tool.description.length, name).toBeGreaterThan(20);
+      expect(tool.parameters, name).toMatchObject({
+        type: "object",
+        properties: expect.any(Object),
+        required: expect.any(Array),
+      });
+      const properties = Object.keys(tool.parameters.properties as object);
+      for (const field of tool.parameters.required as string[]) expect(properties).toContain(field);
+    }
+    expect(Object.keys(toolNamed(pi, "haril_verdict").parameters.properties as object)).toEqual([
+      "approved",
+      "reasons",
+    ]);
+  });
+
+  it("sends each delegation tool's arguments to the host as delegation.call and returns the typed reply", async () => {
+    const inputs: Record<string, Record<string, unknown>> = {
+      haril_delegate: { schemaVersion: 1, memo: "m", delegations: [{ localId: "part-1" }] },
+      haril_assign: { schemaVersion: 1, memo: "m", assignments: [{ localId: "step-1" }] },
+      haril_report: { status: "done", summary: "read both notes", issues: [] },
+      haril_verdict: { approved: true, reasons: [{ criterion: "c", ok: true, evidence: "e" }] },
+      haril_request_audit: { summary: "all done", outstanding: [] },
+      haril_abort: { reason: "nothing to do" },
+    };
+    const { pi, fake } = await loadWithPipe(DELEGATION_TOOLS.join(","));
+    fake.respond((op) => ({
+      ok: true,
+      content: `accepted ${String(op.tool)}`,
+      reply: { ok: true, tool: op.tool },
+    }));
+    for (const name of DELEGATION_TOOLS) {
+      const result = await toolNamed(pi, name).execute(`call-${name}`, inputs[name] ?? {});
+      expect(result, name).toEqual({
+        content: [{ type: "text", text: `accepted ${name}` }],
+        details: { reply: { ok: true, tool: name } },
+      });
+    }
+    expect(fake.ops.map((op) => [op.op, op.tool])).toEqual(
+      DELEGATION_TOOLS.map((name) => ["delegation.call", name]),
+    );
+    expect(fake.ops.map((op) => op.input)).toEqual(DELEGATION_TOOLS.map((name) => inputs[name]));
+  });
+
+  it("maps a refused delegation call to an error result with the host's reason, so the model can fix it", async () => {
+    const { pi, fake } = await loadWithPipe("read,haril_report");
+    fake.respond(() => ({
+      ok: false,
+      error: "haril_report input: /status: must be done, partial or failed",
+      reply: { ok: false, reason: "haril_report input: /status: must be done, partial or failed" },
+    }));
+    const result = await toolNamed(pi, "haril_report").execute("call-r", { status: "finished" });
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toBe(
+      "refused: haril_report input: /status: must be done, partial or failed",
+    );
+    expect(result.details).toEqual({
+      reply: { ok: false, reason: "haril_report input: /status: must be done, partial or failed" },
+    });
   });
 
   it("throws when the pipe cannot be reached, so Pi fails to load the extension", async () => {
