@@ -9,10 +9,8 @@ import { delimiter, isAbsolute, join, win32 } from "node:path";
 //     pnpm, yarn, corepack) and a node package's command shim run as `node <its script>` instead, and any other batch
 //     file is refused;
 //   - the allow list decides: an entry ("npm test") allows exactly that argv, and an entry ending in " *" ("npm test *")
-//     allows further arguments after it, except an argument that loads code or moves where the command runs
-//     (--import, --require, -r, --loader, --config, -c, --prefix, -C, --dir, --cwd, --script-shell, --userconfig,
-//     --globalconfig, --node-options, --eval, -e, --inspect...), an absolute path or one with "..". The default list has
-//     exact entries only;
+//     allows further positional arguments after it: never one that starts with "-" (a flag, a bare "--"), holds an
+//     absolute path anywhere or a ".." segment (refusedExtra). The default list has exact entries only;
 //   - a clean environment: only the variables a program needs to start (PATH, the system and profile folders, the
 //     temporary folders, the locale), plus CI=true and the switches that keep tools quiet. No key, token or other
 //     variable of the runtime reaches the command;
@@ -24,7 +22,10 @@ import { delimiter, isAbsolute, join, win32 } from "node:path";
 //   - the result comes back as data: the exit code, whether it timed out, the duration and the end of its output.
 // N0 (3.10.6): there is no sandbox. An allowed command such as `npm test` runs the project's own code with the user's
 // rights, and that code is what the agents wrote: a test script can do anything the user can. The allow list is the
-// boundary, and the user owns it; the refused arguments only keep a "*" entry from naming other code or another folder.
+// boundary, and the user owns it; the refused arguments only keep a "*" entry from passing flags or naming another
+// folder. A "*" entry still hands its positional arguments to the program: "node *" runs any script of the worktree
+// (which the agents wrote), and a test runner may read a positional argument as a file or a filter. Allow a "*" entry
+// only for a program whose positional arguments you accept from an agent.
 
 export interface HostCommandSettings {
   // The allow list, as its entries are spelled ("npm test", "pnpm run build", "npm test *").
@@ -39,35 +40,23 @@ export interface HostCommandSettings {
 
 const WILDCARD = "*";
 
-// Arguments a "*" entry never lets through: each loads code or moves where the command runs. A "--name=value" form is
-// refused like "--name", and every "--inspect" variant with it.
-const REFUSED_FLAGS = new Set([
-  "--import",
-  "--require",
-  "-r",
-  "--loader",
-  "--experimental-loader",
-  "--config",
-  "-c",
-  "--prefix",
-  "-C",
-  "--dir",
-  "--cwd",
-  "--script-shell",
-  "--userconfig",
-  "--globalconfig",
-  "--node-options",
-  "--eval",
-  "-e",
-]);
-
-// Whether an argument after a "*" entry's fixed part is refused: a flag of REFUSED_FLAGS (or any --inspect form), an
-// absolute path (POSIX, a drive or a share) or a path that climbs with "..".
+// Whether an argument after a "*" entry's fixed part is refused (0.20.1). The extra arguments are positional only:
+//   - no flag at all, whatever its spelling: anything that starts with "-", a bare "--" included. A list of refused flags
+//     loses to the tools' own parsing (npm takes the abbreviation "--prefi=../b" for --prefix, node takes "-p", "--print"
+//     and "-r./x"), so no flag is let through;
+//   - no absolute path anywhere in it: a leading "/" or "\" (POSIX root, a drive's root), one right after "=", a drive
+//     letter with its colon and a separator anywhere ("--root=C:/other", "x=D:\other"), a drive-relative "C:" at the
+//     start, or a share's "\\" anywhere;
+//   - no ".." path segment anywhere (between separators, "=", ":", ";" or ",", or the whole argument).
+// What stays possible (N0): a positional argument still reaches the program, which reads it as it wants, inside the
+// worktree; an allowed command runs the project's code with the user's rights. The allow list is the boundary.
 function refusedExtra(argument: string): boolean {
-  const flag = argument.split("=")[0] as string;
-  if (REFUSED_FLAGS.has(flag) || flag.startsWith("--inspect")) return true;
-  if (/^([\\/]|[A-Za-z]:)/.test(argument) || isAbsolute(argument)) return true;
-  return argument.split(/[\\/]/).includes("..");
+  if (argument.startsWith("-")) return true;
+  if (/^[\\/]/.test(argument) || /=[\\/]/.test(argument) || argument.includes("\\\\")) return true;
+  if (/[A-Za-z]:[\\/]/.test(argument) || /^[A-Za-z]:/.test(argument) || isAbsolute(argument)) {
+    return true;
+  }
+  return /(^|[\\/=:;,])\.\.($|[\\/=:;,])/.test(argument);
 }
 
 function isProgramName(command: string): boolean {

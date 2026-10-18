@@ -61,7 +61,7 @@ describe("allowedCommand", () => {
   it("matches an entry exactly, or as a prefix when it ends with *", () => {
     expect(allowedCommand(["npm test"], "npm", ["test"])).toBe(true);
     expect(allowedCommand(["npm test"], "npm", ["test", "--watch"])).toBe(false);
-    expect(allowedCommand(["npm test *"], "npm", ["test", "--", "-t", "button"])).toBe(true);
+    expect(allowedCommand(["npm test *"], "npm", ["test", "button", "src/a.test.ts"])).toBe(true);
     expect(allowedCommand(["npm test"], "npm", ["run", "evil"])).toBe(false);
     expect(allowedCommand(["npm run build"], "npm", ["run"])).toBe(false);
     expect(allowedCommand([], "npm", ["test"])).toBe(false);
@@ -103,10 +103,71 @@ describe("allowedCommand", () => {
     expect(allowedCommand(["npm test *"], "npm", ["test", "--", "C:\\Windows\\x"])).toBe(false);
     expect(allowedCommand(["npm test *"], "npm", ["test", "--", "../outside.test.js"])).toBe(false);
     expect(allowedCommand(["npm test *"], "npm", ["test", "--", "src/../../x"])).toBe(false);
-    // Plain extra arguments still pass.
-    expect(
-      allowedCommand(["npm test *"], "npm", ["test", "--", "-t", "button", "src/a.test.ts"]),
-    ).toBe(true);
+    // Plain positional arguments still pass.
+    expect(allowedCommand(["npm test *"], "npm", ["test", "button", "src/a.test.ts"])).toBe(true);
+  });
+
+  describe("after an entry's *, positional arguments only (the probes that got past the flag list)", () => {
+    const allowed = (entry: string, args: readonly string[]): boolean => {
+      const [command, ...fixed] = entry.replace(/ \*$/, "").split(" ");
+      return allowedCommand([entry], command as string, [...fixed, ...args]);
+    };
+
+    it("refuses an abbreviated flag npm still takes: --prefi=../b", () => {
+      expect(allowed("npm test *", ["--prefi=../b"])).toBe(false);
+      expect(allowed("npm test *", ["--pre", "elsewhere"])).toBe(false);
+    });
+
+    it("refuses an absolute path after the start of an argument: --root=C:/other", () => {
+      expect(allowed("npm test *", ["--root=C:/other"])).toBe(false);
+      expect(allowed("npm test *", ["root=C:/other"])).toBe(false);
+      expect(allowed("npm test *", ["root=D:\\other"])).toBe(false);
+      expect(allowed("npm test *", ["root=/etc"])).toBe(false);
+      expect(allowed("npm test *", ["C:relative"])).toBe(false);
+    });
+
+    it("refuses node's own flags after node *: -p, --print, -r./x", () => {
+      for (const flag of ["-p", "--print", "-r./x", "-pe", "--require=./x"]) {
+        expect([flag, allowed("node *", [flag, "1"])]).toEqual([flag, false]);
+      }
+      expect(allowed("node *", ["scripts/check.js", "fast"])).toBe(true);
+    });
+
+    it("refuses any argument that starts with -, a bare -- included", () => {
+      expect(allowed("npm test *", ["--"])).toBe(false);
+      expect(allowed("npm test *", ["-t", "button"])).toBe(false);
+      expect(allowed("npm test *", ["button", "--watch"])).toBe(false);
+    });
+
+    it("refuses a leading slash or backslash, and a share's \\\\ anywhere", () => {
+      expect(allowed("npm test *", ["/etc/passwd"])).toBe(false);
+      expect(allowed("npm test *", ["\\Windows\\x"])).toBe(false);
+      expect(allowed("npm test *", ["x\\\\server\\share"])).toBe(false);
+    });
+
+    it("refuses a .. path segment anywhere", () => {
+      expect(allowed("npm test *", [".."])).toBe(false);
+      expect(allowed("npm test *", ["src/../../x"])).toBe(false);
+      expect(allowed("npm test *", ["src\\..\\x"])).toBe(false);
+      expect(allowed("npm test *", ["out=../b"])).toBe(false);
+      // Two dots inside a name are not a segment.
+      expect(allowed("npm test *", ["a..b.test.ts"])).toBe(true);
+    });
+
+    it("keeps the exact entries of the default list as they are", () => {
+      for (const entry of [
+        "npm test",
+        "pnpm install --frozen-lockfile",
+        "go test ./...",
+        "node --test",
+      ]) {
+        const [command, ...args] = entry.split(" ");
+        expect([entry, allowedCommand(DEFAULT_COMMAND_ALLOW, command as string, args)]).toEqual([
+          entry,
+          true,
+        ]);
+      }
+    });
   });
 
   it("has only exact entries in the default list", () => {

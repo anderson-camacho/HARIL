@@ -94,8 +94,8 @@ const int = (
 // haril_run's allow list when haril.json does not set commands.allow (docs/modos-y-delegacion.md 3.10.5; phase F8): the
 // test, build and check commands of the usual toolchains, and the installs a fresh worktree needs (it starts without
 // dependencies). Never a shell, never an evaluator such as `node -e`, and exact entries only: an entry allows exactly
-// that argv. A list in the file may hold entries ending in " *", which allow further arguments except those that load
-// code or move where the command runs. An empty list in the file allows no command at all.
+// that argv. A list in the file may hold entries ending in " *", which allow further positional arguments only: never one
+// that starts with "-", holds an absolute path or a ".." segment. An empty list in the file allows no command at all.
 export const DEFAULT_COMMAND_ALLOW: readonly string[] = Object.freeze([
   "npm test",
   "npm run test",
