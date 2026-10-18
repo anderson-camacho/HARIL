@@ -15,6 +15,7 @@ import type {
   AgentHandle,
   AgentHello,
   AgentOutcome,
+  AgentProcess,
   AgentRuntime,
   AgentSpec,
   DelegationToolHandler,
@@ -321,6 +322,7 @@ class PiRun implements PiAgentHandle {
   private server: Server | undefined;
   private bridgeSocket: Socket | undefined;
   private child: ChildProcess | undefined;
+  private spawnedAt: number | undefined;
   private stderrLog: WriteStream | undefined;
   private stdoutReader: JsonlReader | undefined;
   private stdinOpen = false;
@@ -416,6 +418,9 @@ class PiRun implements PiAgentHandle {
       stdio: ["pipe", "pipe", "pipe"],
       detached: process.platform !== "win32",
     });
+    // Read right after the spawn returned: the OS created the process during the call, so its own start time is within
+    // milliseconds of this one, which the startup sweep compares before it kills a recorded pid (3.14.5).
+    this.spawnedAt = Date.now();
     this.child = child;
     this.stdinOpen = child.stdin !== null;
     this.wireChild(child);
@@ -446,6 +451,30 @@ class PiRun implements PiAgentHandle {
 
   async dispose(): Promise<void> {
     this.stop("abort");
+    await this.exitedD.promise;
+  }
+
+  // The process serving the run (3.14): its pid and the time taken right after the spawn returned it.
+  get process(): AgentProcess | undefined {
+    const pid = this.child?.pid;
+    return pid === undefined || this.spawnedAt === undefined
+      ? undefined
+      : { pid, startedAt: this.spawnedAt };
+  }
+
+  // The emergency stop and the watchdog's close (3.14, 3.16): no abort request and no grace period, the tree is killed
+  // now. An unsettled run settles as aborted once Pi is gone.
+  async kill(): Promise<void> {
+    if (!this.finished && this.stopRequest === undefined) {
+      this.stopRequest = "abort";
+      clearTimeout(this.deadlineTimer);
+    }
+    if (this.stdinOpen) {
+      this.stdinOpen = false;
+      this.child?.stdin?.end();
+    }
+    clearTimeout(this.graceTimer);
+    this.killNow();
     await this.exitedD.promise;
   }
 

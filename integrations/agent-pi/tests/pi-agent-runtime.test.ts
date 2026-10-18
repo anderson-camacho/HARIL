@@ -498,6 +498,39 @@ describe("createPiAgentRuntime lifecycle", () => {
     await until(() => !alive(tool), "the tool command killed with Pi");
   });
 
+  it("reports the process it started: its pid and the time taken right after the spawn (3.14)", async () => {
+    const h = harness();
+    const before = Date.now();
+    const handle = await startHandle(h.runtime("hang"));
+    const after = Date.now();
+    const process = handle.process;
+    expect(Number.isSafeInteger(process?.pid) && (process?.pid as number) > 0).toBe(true);
+    expect(alive(process?.pid as number)).toBe(true);
+    expect(process?.startedAt).toBeGreaterThanOrEqual(before);
+    expect(process?.startedAt).toBeLessThanOrEqual(after);
+  });
+
+  it("kill ends a hung Pi at once, without the grace period, and its tree with it (3.14)", async () => {
+    const h = harness();
+    const handle = await startHandle(h.runtime("hang_with_tool", { timings: { graceMs: 30_000 } }));
+    await handle.prompt("go");
+    const pidFile = join(h.runsDir, "run-1", "fake-tool.pid");
+    await until(() => existsSync(pidFile), "the tool command started");
+    const tool = Number(readFileSync(pidFile, "utf8"));
+    strays.push(tool);
+    const pi = handle.process?.pid as number;
+    const started = Date.now();
+    await handle.kill?.();
+    expect(await handle.settled).toEqual({ status: "aborted" });
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(alive(pi)).toBe(false);
+    await until(() => !alive(tool), "the tool command killed with Pi", 2000);
+    // A second kill, and a dispose after it, change nothing.
+    await handle.kill?.();
+    await handle.dispose();
+    expect(await handle.settled).toEqual({ status: "aborted" });
+  });
+
   it("aborts cooperatively when Pi answers abort with agent_settled", async () => {
     const h = harness();
     const handle = await startHandle(h.runtime("hang_abortable"));
