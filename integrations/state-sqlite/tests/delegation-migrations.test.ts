@@ -318,3 +318,56 @@ describe("tasks.promote with settled dependencies (3.7)", () => {
     expect(store.tasks.promote().ready.map((task) => task.goal)).toEqual(["continuation"]);
   });
 });
+
+describe("the 0008 copy keeps the declaration order", () => {
+  it("copies task_dependencies in rowid order, and still opens a database 0008 migrated with its first text", () => {
+    const db = raw();
+    migrate(db, manualClock(), sequentialIds("old"), BEFORE_0007);
+    db.exec(`
+      INSERT INTO projects (project_id, slug, name, root_path, created_at) VALUES ('p-old', 'old', 'Old', 'D:/old', 1);
+      INSERT INTO tasks (task_id, project_id, goal, description, kind, agent_ref, budget_max_cost_micros, budget_max_tokens, budget_max_wall_ms, timeout_ms, max_attempts, state, created_seq, created_at, updated_at)
+        VALUES ('t-z', 'p-old', 'Z', '', 'work', 'fake:succeed', 0, 0, 0, 1000, 1, 'ready', 1, 1, 1),
+               ('t-a', 'p-old', 'A', '', 'work', 'fake:succeed', 0, 0, 0, 1000, 1, 'ready', 2, 1, 1),
+               ('t-m', 'p-old', 'M', '', 'work', 'fake:succeed', 0, 0, 0, 1000, 1, 'pending', 3, 1, 1);
+      INSERT INTO task_dependencies (task_id, depends_on_task_id) VALUES ('t-m', 't-z');
+      INSERT INTO task_dependencies (task_id, depends_on_task_id) VALUES ('t-m', 't-a');
+    `);
+    db.close();
+    const store = openStore({
+      dataDir: dir,
+      clock: fixedClock(),
+      ids: sequentialIds(),
+      rules: testRules,
+    });
+    store.close();
+    const after = raw();
+    try {
+      expect(
+        after
+          .prepare("SELECT depends_on_task_id AS dep FROM task_dependencies ORDER BY rowid")
+          .all(),
+      ).toEqual([{ dep: "t-z" }, { dep: "t-a" }]);
+      // A database 0.12.0 migrated recorded the checksum of 0008's first text, which built the same schema.
+      after
+        .prepare("UPDATE schema_migrations SET checksum = ? WHERE version = 8")
+        .run("1e317b000746f60b688ffa61ed8e83f5de6081e8488be97bb81a9411f0fe2b6c");
+    } finally {
+      after.close();
+    }
+    const reopened = openStore({
+      dataDir: dir,
+      clock: fixedClock(),
+      ids: sequentialIds(),
+      rules: testRules,
+    });
+    reopened.close();
+    const tampered = raw();
+    tampered
+      .prepare("UPDATE schema_migrations SET checksum = ? WHERE version = 8")
+      .run("f".repeat(64));
+    tampered.close();
+    expect(() =>
+      openStore({ dataDir: dir, clock: fixedClock(), ids: sequentialIds(), rules: testRules }),
+    ).toThrow(/different checksum/);
+  });
+});

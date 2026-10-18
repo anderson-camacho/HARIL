@@ -55,8 +55,14 @@ function isAppliedUnchanged(db: DatabaseSync, migration: Migration): boolean {
   const applied = appliedChecksum(db, migration.version);
   if (applied === undefined) return false;
   const checksum = checksumOf(migration.sql);
-  if (applied !== checksum) throw checksumMismatch(migration, checksum, applied);
+  if (!knownChecksum(migration, applied)) throw checksumMismatch(migration, checksum, applied);
   return true;
+}
+
+function knownChecksum(migration: Migration, applied: string): boolean {
+  return (
+    applied === checksumOf(migration.sql) || (migration.previousChecksums ?? []).includes(applied)
+  );
 }
 
 function checksumMismatch(migration: Migration, expected: string, found: string): StoreError {
@@ -74,7 +80,7 @@ function applyOne(db: DatabaseSync, migration: Migration, clock: Clock, ids: Ids
     const applied = appliedChecksum(db, migration.version);
     if (applied !== undefined) {
       db.exec("ROLLBACK");
-      if (applied !== checksum) throw checksumMismatch(migration, checksum, applied);
+      if (!knownChecksum(migration, applied)) throw checksumMismatch(migration, checksum, applied);
       return;
     }
     if (migration.version === 1) {

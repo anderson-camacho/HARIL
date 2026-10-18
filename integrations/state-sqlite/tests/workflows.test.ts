@@ -347,6 +347,29 @@ describe("store.workflows.applyTurns (delegation.apply)", () => {
     expect(store.workflows.get(workflowId)?.agentsCreated).toBe(7);
   });
 
+  it("keeps a moved settled link settled when the dependent already waits on the new turn", () => {
+    const { workflowId, rootTaskId } = start();
+    const top = delegateTwo(workflowId, rootTaskId);
+    const d1 = top.taskIds.d1 as string;
+    const d2 = top.taskIds.d2 as string;
+    const made = store.workflows.applyTurns(epoch, {
+      workflowId,
+      turns: [
+        turn({
+          key: "x",
+          parentTaskId: rootTaskId,
+          dependsOn: [
+            { on: d1, kind: "settled" },
+            { on: d2, kind: "completed" },
+          ],
+        }),
+      ],
+    });
+    store.workflows.applyTurns(epoch, { workflowId, turns: [], inherit: [{ from: d1, to: d2 }] });
+    const x = store.workflows.tasks(workflowId).find((task) => task.taskId === made.taskIds.x);
+    expect(x?.dependsOn).toEqual([{ taskId: d2, kind: "settled" }]);
+  });
+
   it("leaves the excepted dependents on the earlier turn, so a failed turn is not hidden from them", () => {
     const { workflowId, rootTaskId } = start();
     const top = delegateTwo(workflowId, rootTaskId);

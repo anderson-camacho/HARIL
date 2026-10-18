@@ -482,8 +482,10 @@ export function createWorkflowsFacet(options: WorkflowsFacetOptions): {
         const dependents = db.prepare(
           "SELECT d.task_id AS taskId, d.kind AS kind FROM task_dependencies d JOIN tasks t ON t.task_id = d.task_id WHERE d.depends_on_task_id = ? AND t.state = 'pending' ORDER BY d.rowid",
         );
+        // A dependent that already waits on the new turn keeps one link: settled when either link is settled, so a moved
+        // continuation link never turns into one a failure would block.
         const addDependency = db.prepare(
-          "INSERT OR IGNORE INTO task_dependencies (task_id, depends_on_task_id, kind) VALUES (?, ?, ?)",
+          "INSERT INTO task_dependencies (task_id, depends_on_task_id, kind) VALUES (?, ?, ?) ON CONFLICT (task_id, depends_on_task_id) DO UPDATE SET kind = CASE WHEN excluded.kind = 'settled' OR task_dependencies.kind = 'settled' THEN 'settled' ELSE 'completed' END",
         );
         const dropDependency = db.prepare(
           "DELETE FROM task_dependencies WHERE task_id = ? AND depends_on_task_id = ?",

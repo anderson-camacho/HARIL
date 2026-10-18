@@ -1,8 +1,8 @@
 import type { Migration } from "./types.js";
 
 // Schema 0007 (docs/modos-y-delegacion.md 4.1, 4.2 and 4.5; ADR-0021): the three-layer delegation and the orders and
-// usage logs. Additive: new tables, one view and nullable task columns, so the release before it keeps opening the
-// database.
+// usage logs. Additive: new tables, one view and nullable task columns; no existing row changes. A release before it
+// still refuses the migrated database, as every release refuses a schema newer than it knows (open.ts).
 //   - workflows: one run of the Delegation mode, with the autonomy and the limits it started with (a snapshot).
 //   - delegations: every applied proposal (haril_delegate, haril_assign, haril_request_audit); payload_hash deduplicates
 //     a replay after a restart (3.8 rule 6). Immutable.
