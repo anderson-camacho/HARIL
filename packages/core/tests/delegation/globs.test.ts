@@ -49,9 +49,14 @@ const EXTRA_CASES: readonly [string, string, boolean][] = [
   ["src/lib", "src/library/x.ts", false],
   ["src/lib", "src/*/x.ts", true],
   ["src/a.ts", "src/b.ts", false],
-  // Both sides are compared in NFC: a precomposed and a decomposed accent are the same name.
+  // Non-ASCII text cannot be compared safely (normalization forms, case folding that changes length): overlap.
   ["src/café.ts", "src/café.ts", true],
-  ["src/café/", "src/café/x.ts", true],
+  ["src/é.ts", "src/??.ts", true],
+  ["İ.ts", "?.ts", true],
+  ["src/é.ts", "lib/x.ts", true],
+  // ASCII letters compare without case (Windows paths).
+  ["Docs/README.MD", "docs/readme.md", true],
+  ["Docs/README.MD", "docs/readme.txt", false],
 ];
 
 describe("globsMayOverlap with oversized input", () => {
@@ -97,6 +102,17 @@ describe("globsMayOverlap", () => {
 });
 
 describe("surfacesMayOverlap", () => {
+  it("answers overlap at once when a pair of surfaces is too large to compare within its work budget", () => {
+    const glob = (prefix: string, index: number) => `${prefix}${index}/${"*a".repeat(250)}`;
+    const left = Array.from({ length: 64 }, (_, index) => glob("left", index));
+    const right = Array.from({ length: 64 }, (_, index) => glob("right", index));
+    const started = Date.now();
+    expect(surfacesMayOverlap(left, right)).toBe(true);
+    expect(Date.now() - started).toBeLessThan(1_000);
+    // Small surfaces are still decided exactly.
+    expect(surfacesMayOverlap([glob("left", 1)], [glob("right", 1)])).toBe(false);
+  });
+
   it("is true when any pattern of one surface may overlap any pattern of the other", () => {
     expect(surfacesMayOverlap(["docs/**", "src/a.ts"], ["lib/**", "src/*.ts"])).toBe(true);
   });

@@ -9,17 +9,26 @@ import { GLOB_MAX_LENGTH } from "@haril/contracts";
 // a leading "!", backslashes (separator or escape), ".." segments and "**" inside a segment such as "a**b".
 // A pattern ending in "/" names the folder's subtree; "." and "./" name the whole tree. S5 also treats an existing
 // folder as "folder/**"; without the filesystem, a literal path (no wildcard) may be such a folder, so it also names
-// its subtree: "src" overlaps "src/a.ts". Both sides are compared in NFC and lowercased (Windows paths are
-// case-insensitive), which only widens the overlap. A pattern longer than GLOB_MAX_LENGTH (the contract's bound)
-// answers "overlap" without being parsed, and the check never throws: any failure also answers "overlap".
+// its subtree: "src" overlaps "src/a.ts". ASCII letters compare without case (Windows paths are case-insensitive),
+// which only widens the overlap. A pattern with any non-ASCII character answers "overlap": normalization forms and case
+// folding can change a name's length ("é" against "e" plus a combining accent, "İ" lowercased), so no character
+// rule can prove two such names apart. A pattern longer than GLOB_MAX_LENGTH (the contract's bound) answers "overlap"
+// without being parsed, a pair of surfaces whose comparison would pass SURFACE_WORK_BUDGET answers "overlap" without
+// comparing, and the check never throws: any failure also answers "overlap".
 
 const UNSUPPORTED = /[[\]{}!\\]/;
+// Anything outside printable ASCII (non-ASCII letters, and control characters too, which no real path holds).
+const NON_ASCII = /[^ -~]/;
 const WILDCARD = /[*?]/;
+// The most work one surface pair may cost: the sum, over its pattern pairs, of the product of their lengths. The
+// character comparison of two patterns is bounded by that product, so two contract-valid surfaces of 64 patterns of
+// 512 characters answer at once instead of after seconds; everyday surfaces stay far below it.
+const SURFACE_WORK_BUDGET = 2_000_000;
 
 // Segments of a supported pattern, or null when it cannot be reasoned about.
 function segmentsOf(glob: string): string[] | null {
-  const text = glob.trim().normalize("NFC");
-  if (UNSUPPORTED.test(text)) return null;
+  const text = glob.trim();
+  if (UNSUPPORTED.test(text) || NON_ASCII.test(text)) return null;
   let path = text.replace(/^(\.\/)+/, "").replace(/\/{2,}/g, "/");
   if (path.endsWith("/")) path += "**";
   const segments = path.split("/").filter((segment) => segment !== "" && segment !== ".");
@@ -92,5 +101,9 @@ export function globsMayOverlap(left: string, right: string): boolean {
 // Two write surfaces overlap when any pattern of one may overlap any pattern of the other. An empty surface (a
 // read-only task) locks nothing.
 export function surfacesMayOverlap(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length === 0 || right.length === 0) return false;
+  let work = 0;
+  for (const a of left) for (const b of right) work += a.length * b.length;
+  if (work > SURFACE_WORK_BUDGET) return true;
   return left.some((a) => right.some((b) => globsMayOverlap(a, b)));
 }
