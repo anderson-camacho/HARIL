@@ -201,9 +201,10 @@ function proposePlanTool(channel: Channel, nextId: () => string): BridgeToolDefi
 
 // The delegation tools a workflow turn may be announced (docs/modos-y-delegacion.md 3.5). Their schemas mirror the
 // tool contracts of @haril/contracts with the plainest JSON Schema (type, properties, required, items, enum on strings),
-// which Pi validates before the call and every provider accepts. They leave out the optional fields agents do not use
-// yet (a child's model until the model catalog arrives, checkpoints), so a model is not invited to send them. The
-// Runtime checks every call again with the contracts and the Core rules, and its reply carries the reason of a refusal.
+// which Pi validates before the call and every provider accepts. A child's model is optional (phase F6: the parent
+// proposes one from the models its prompt lists, or leaves it out for the difficulty table); checkpoints are left out,
+// so a model is not invited to send them. The Runtime checks every call again with the contracts and the Core rules,
+// and its reply carries the reason of a refusal.
 interface DelegationToolSpec {
   readonly label: string;
   readonly description: string;
@@ -229,6 +230,9 @@ const BUDGET = {
   required: ["maxTokens"],
 };
 const LOCAL_ID = text('A short id of letters, digits, "-" or "_", unique among your children.');
+const CHILD_MODEL = text(
+  "Optional: the model for this child, one your prompt lists under Models for your children. Leave it out to let the difficulty table choose.",
+);
 const SCHEMA_VERSION = { type: "integer", description: "Always 1." };
 const MEMO = text(
   "A note to your future self, at most 2000 characters: it comes back in your next turn.",
@@ -258,6 +262,7 @@ const DELEGATION_TOOLS: Readonly<Record<string, DelegationToolSpec>> = {
               dependsOn: texts("localIds of parts it waits for; [] lets it run in parallel."),
               priority: { type: "integer", description: "0 (lowest) to 9 (highest)." },
               acceptanceCriteria: texts("What must be true when the part is done, in words."),
+              model: CHILD_MODEL,
               budget: BUDGET,
             },
             required: [
@@ -309,6 +314,7 @@ const DELEGATION_TOOLS: Readonly<Record<string, DelegationToolSpec>> = {
               difficulty: DIFFICULTY,
               difficultyReason: text("Why it is that difficult."),
               dependsOn: texts("localIds of steps it waits for (their approval); [] for none."),
+              model: CHILD_MODEL,
               budget: BUDGET,
             },
             required: [

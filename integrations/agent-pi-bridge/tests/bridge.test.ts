@@ -377,6 +377,23 @@ describe("agent-pi-bridge extension", () => {
     ]);
   });
 
+  it("offers each child's model as an optional field a parent may propose (3.11)", async () => {
+    const { pi } = await loadWithPipe(DELEGATION_TOOLS.join(","));
+    for (const [tool, list] of [
+      ["haril_delegate", "delegations"],
+      ["haril_assign", "assignments"],
+    ] as const) {
+      const items = (
+        toolNamed(pi, tool).parameters.properties as Record<
+          string,
+          { items: { properties: Record<string, { type: string }>; required: string[] } }
+        >
+      )[list]?.items;
+      expect(items?.properties.model?.type, tool).toBe("string");
+      expect(items?.required, tool).not.toContain("model");
+    }
+  });
+
   it("sends each delegation tool's arguments to the host as delegation.call and returns the typed reply", async () => {
     const inputs: Record<string, Record<string, unknown>> = {
       haril_delegate: { schemaVersion: 1, memo: "m", delegations: [{ localId: "part-1" }] },
