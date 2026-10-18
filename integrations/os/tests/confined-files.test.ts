@@ -1,5 +1,6 @@
 import {
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -7,7 +8,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { EOL, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readConfinedFile, writeConfinedFile } from "../src/index.js";
@@ -103,6 +104,49 @@ describe("writeConfinedFile", () => {
       ok: false,
       reason: "unreadable",
     });
+  });
+});
+
+// Whether this volume gives 8.3 short names: .git then answers to GIT~1 (NTFS with short names on).
+function shortNameOf(folder: string, long: string): string | undefined {
+  const alias = join(folder, "GIT~1");
+  return long === ".git" && existsSync(alias) ? "GIT~1" : undefined;
+}
+
+describe("a short-name alias", () => {
+  const original = `gitdir: elsewhere${EOL}`;
+  it("is refused for writing and reading when the volume has one, and the real file stays as it was", async () => {
+    const tree = join(base, "alias-tree");
+    mkdirSync(tree, { recursive: true });
+    writeFileSync(join(tree, ".git"), original, "utf8");
+    const alias = shortNameOf(tree, ".git");
+    if (alias === undefined) {
+      console.warn("skipped the short-name probe: this volume gives no 8.3 alias");
+      return;
+    }
+    expect(await writeConfinedFile(tree, alias, "gitdir: hijacked")).toEqual({
+      ok: false,
+      reason: "alias",
+    });
+    expect(await readConfinedFile(tree, alias, 1_000)).toEqual({ ok: false, reason: "alias" });
+    expect(readFileSync(join(tree, ".git"), "utf8")).toBe(original);
+    mkdirSync(join(tree, "sub", ".git"), { recursive: true });
+    expect(await writeConfinedFile(tree, "sub/GIT~1/config", "x")).toEqual({
+      ok: false,
+      reason: "alias",
+    });
+  });
+
+  it("refuses to write a file that has another hard link", async () => {
+    const tree = join(base, "hardlink-tree");
+    mkdirSync(tree, { recursive: true });
+    writeFileSync(join(outside, "linked.txt"), "outside", "utf8");
+    linkSync(join(outside, "linked.txt"), join(tree, "linked.txt"));
+    expect(await writeConfinedFile(tree, "linked.txt", "changed")).toEqual({
+      ok: false,
+      reason: "hard_link",
+    });
+    expect(readFileSync(join(outside, "linked.txt"), "utf8")).toBe("outside");
   });
 });
 

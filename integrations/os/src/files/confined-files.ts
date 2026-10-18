@@ -1,15 +1,17 @@
 import type { BigIntStats } from "node:fs";
 import { lstat, mkdir, open, realpath } from "node:fs/promises";
-import { isAbsolute, join, relative, sep } from "node:path";
+import { basename, isAbsolute, join, relative, sep } from "node:path";
 
 // The filesystem half of the workspace PathGuard (docs/modos-y-delegacion.md 3.10.5 and section 8; phase F8). The host
 // writes an agent's file only after the Core's lexical check (checkWorkspacePath) accepted its path; this module then
 // proves, on the filesystem, that the write lands inside the worktree:
 //   1. every existing component below the root is lstat-ed: a symbolic link or a junction is refused, never followed,
-//      and a component that is not a folder is refused;
+//      a component that is not a folder is refused, and its real name must be the name asked for (a Windows short name
+//      such as GIT~1, or any other alias, opens a component whose real name differs);
 //   2. a missing folder is created one level at a time and lstat-ed again after its creation;
 //   3. the real location of the file's folder must sit inside the canonical root;
-//   4. an existing file must be a plain file: it is opened without truncation, the handle's identity (dev and ino) must
+//   4. an existing file must be a plain file with its own name and no other hard link (a hard link to a file outside the
+//      worktree would change that file too): it is opened without truncation, the handle's identity (dev and ino) must
 //      be the one the lstat saw (a file swapped for a link in between fails here), and only then is it truncated and
 //      written through the handle; a new file is created exclusively, so nothing that appeared meanwhile is followed.
 // N0 (3.10.6): there is no sandbox. A program the allow list runs could still swap a folder for a link between these
@@ -23,6 +25,8 @@ export type ConfinedFileDenial =
   | "identity_changed"
   | "missing"
   | "too_large"
+  | "alias"
+  | "hard_link"
   | "unreadable";
 
 export type ConfinedWrite =
@@ -46,6 +50,22 @@ function isInside(base: string, target: string): boolean {
   const fold = (path: string) => (process.platform === "win32" ? path.toLowerCase() : path);
   const rel = relative(fold(base), fold(target));
   return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+// Two names of one component: the same text, without regard to case or Unicode normalization.
+function sameName(real: string, asked: string): boolean {
+  const fold = (name: string) => name.normalize("NFC").toLowerCase();
+  return fold(real) === fold(asked);
+}
+
+// Whether the component at `path` keeps the name that was asked for. On Windows a short name ("GIT~1") or another alias
+// opens a component whose real name differs (realpath answers the final path, as the handle sees it); that is refused.
+async function keepsName(path: string, asked: string): Promise<boolean | "error"> {
+  try {
+    return sameName(basename(await realpath(path)), asked);
+  } catch {
+    return "error";
+  }
 }
 
 function segmentsOf(relativePath: string): string[] | null {
@@ -85,6 +105,9 @@ async function walk(root: string, relativePath: string, create: boolean): Promis
     }
     if (stats.isSymbolicLink()) return { ok: false, reason: "link" };
     if (!stats.isDirectory()) return { ok: false, reason: "not_a_directory" };
+    const named = await keepsName(current, segment);
+    if (named === "error") return { ok: false, reason: "unreadable" };
+    if (!named) return { ok: false, reason: "alias" };
   }
   let canonicalFolder: string;
   try {
@@ -141,6 +164,11 @@ export async function writeConfinedFile(
   }
   if (existing.isSymbolicLink()) return { ok: false, reason: "link" };
   if (!existing.isFile()) return { ok: false, reason: "not_a_file" };
+  // A file with another hard link may be a file outside the worktree: writing it would change that file too.
+  if (existing.nlink > 1n) return { ok: false, reason: "hard_link" };
+  const named = await keepsName(target, place.name);
+  if (named === "error") return { ok: false, reason: "unreadable" };
+  if (!named) return { ok: false, reason: "alias" };
   let handle: Awaited<ReturnType<typeof open>>;
   try {
     handle = await open(target, "r+");
@@ -176,6 +204,9 @@ export async function readConfinedFile(
   if (linked === "error") return { ok: false, reason: "unreadable" };
   if (linked.isSymbolicLink()) return { ok: false, reason: "link" };
   if (!linked.isFile()) return { ok: false, reason: "not_a_file" };
+  const named = await keepsName(target, place.name);
+  if (named === "error") return { ok: false, reason: "unreadable" };
+  if (!named) return { ok: false, reason: "alias" };
   if (linked.size > BigInt(maxBytes)) return { ok: false, reason: "too_large" };
   let handle: Awaited<ReturnType<typeof open>>;
   try {

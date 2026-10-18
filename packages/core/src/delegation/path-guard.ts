@@ -3,7 +3,8 @@ import { pathMatchesSurface } from "./globs.js";
 // The lexical half of the workspace PathGuard (docs/modos-y-delegacion.md 3.10.5 and section 8; phase F8). An agent that
 // writes names a path relative to its git worktree; this pure rule decides whether the path may be written before the
 // host touches the filesystem: never absolute, never a drive, a share or an alternate stream, never climbing out with
-// "..", never .git, .haril or .pi, never a file that looks like a secret, never a name Windows reserves, and always inside
+// "..", never .git, .haril or .pi, never a file that looks like a secret, never a name Windows reserves or a Windows short
+// name (a tilde and a digit, which NTFS may resolve to .git), and always inside
 // the task's declared write surface (its files.write globs). The host then checks the filesystem itself: every existing
 // component is a plain directory (no symbolic link, no junction) and the real location stays inside the worktree.
 // Backslashes count as separators, so "src\a.ts" and "src/a.ts" are the same path. Never throws.
@@ -20,6 +21,7 @@ export type WorkspacePathDenial =
   | "secret_path"
   | "reserved_name"
   | "trailing_dot_or_space"
+  | "short_name"
   | "outside_surface";
 
 export type WorkspacePathCheck =
@@ -34,6 +36,9 @@ const CONTROL = /[\u0000-\u001f\u007f]/;
 // Characters Windows forbids in a name; "*" and "?" would also read as wildcards in a surface.
 const INVALID = /[<>"|?*]/;
 const RESERVED_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+// A Windows 8.3 short name ("GIT~1", "ENV~1"): NTFS may answer to it for any long name, .git included, so a tilde
+// followed by a digit is refused in every segment on every platform.
+const SHORT_NAME = /~\d/;
 // Folders HARIL never lets an agent touch: the repository's own data, HARIL's and Pi's.
 const DENIED_SEGMENTS = new Set([".git", ".haril", ".pi"]);
 // Folders and names that hold credentials by convention.
@@ -59,6 +64,7 @@ function deny(reason: WorkspacePathDenial): WorkspacePathCheck {
 
 function segmentProblem(segment: string): WorkspacePathDenial | null {
   const lower = segment.toLowerCase();
+  if (SHORT_NAME.test(segment)) return "short_name";
   if (DENIED_SEGMENTS.has(lower)) return "denied_path";
   if (SECRET_SEGMENTS.has(lower) || SECRET_NAMES.has(lower)) return "secret_path";
   if (ENV_FILE.test(segment) || SECRET_EXTENSION.test(segment)) return "secret_path";

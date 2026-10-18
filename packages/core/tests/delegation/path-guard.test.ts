@@ -118,6 +118,22 @@ describe("checkWorkspacePath", () => {
     }
   });
 
+  it("refuses a Windows short name (a tilde and a digit) in any segment, on every platform", () => {
+    // NTFS gives .git the alias GIT~1: a write to GIT~1 would replace the worktree's .git pointer.
+    for (const path of [
+      "GIT~1",
+      "GIT~1/config",
+      "src/HARIL~1/x.ts",
+      "ENV~1",
+      "a/PI~2/b",
+      "x~9.ts",
+    ]) {
+      expect(checkWorkspacePath(path, ["**"]), path).toEqual({ ok: false, reason: "short_name" });
+    }
+    expect(checkWorkspacePath("src/a~b.ts", ["**"])).toEqual({ ok: true, path: "src/a~b.ts" });
+    expect(checkWorkspacePath("src/backup~", ["**"])).toEqual({ ok: true, path: "src/backup~" });
+  });
+
   it("refuses files that look like secrets", () => {
     for (const path of [
       ".env",
