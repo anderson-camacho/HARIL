@@ -64,11 +64,12 @@ export interface AppUninstallResult {
   readonly refusal?: "runtime_active" | "runtime_unknown";
 }
 
-// Build output the payload needs. `npm run build` produces all of it (apps/haril, bridge, bootstrap and shell).
+// Build output the payload needs. `npm run build` produces all of it (apps/haril, bridge, console, bootstrap and shell).
 const BUILD_OUTPUTS: readonly (readonly string[])[] = [
   ["apps", "haril", "dist", "haril.mjs"],
   ["apps", "haril", "dist", "blocks", "methodologies"],
   ["integrations", "agent-pi-bridge", "dist", "bridge.mjs"],
+  ["integrations", "pi-console", "dist", "console.mjs"],
   ["apps", "bootstrap", "dist", "haril-bootstrap.mjs"],
   ["apps", "shell", "dist", "shell.mjs"],
 ];
@@ -316,6 +317,12 @@ async function readPayload(
   sources.push({
     segments: ["integrations", "agent-pi-bridge", "dist", "bridge.mjs"],
     source: ops.join(deps.sourceRoot, "integrations", "agent-pi-bridge", "dist", "bridge.mjs"),
+  });
+  // The console extension keeps its repository path under app/<version>, like the bridge, so `haril console` finds it
+  // the same way from haril.mjs (PS-T5).
+  sources.push({
+    segments: ["integrations", "pi-console", "dist", "console.mjs"],
+    source: ops.join(deps.sourceRoot, "integrations", "pi-console", "dist", "console.mjs"),
   });
   sources.push({
     segments: ["haril-bootstrap.mjs"],

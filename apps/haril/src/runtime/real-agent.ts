@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -28,7 +27,7 @@ import {
   type ProviderEntry,
   resolveModelRef,
 } from "../providers.js";
-import { readRuntime, runtimeRootFor } from "../runtime.js";
+import { findPayloadFile, readRuntime, runtimeRootFor } from "../runtime.js";
 
 // The real lane of `haril start` (M2-T6, M2-D1..D7): the analyst agent runs in Pi 1.2.0 on the isolated Node,
 // talks to the model only through one Broker, and holds one virtual key per run. This module is composition:
@@ -43,7 +42,6 @@ const KEY_GRACE_MS = 30_000;
 const UPSTREAM_TIMEOUT_MS = 120_000;
 const RUNS_DIR = "runs";
 const BRIDGE_FILE = join("integrations", "agent-pi-bridge", "dist", "bridge.mjs");
-const BRIDGE_SEARCH_DEPTH = 6;
 
 interface RealAgentPaths {
   readonly nodePath: string;
@@ -311,15 +309,7 @@ function satisfiesPiNodeRange(version: string): boolean {
 }
 
 function findBridge(): string | undefined {
-  let dir = dirname(fileURLToPath(import.meta.url));
-  for (let depth = 0; depth <= BRIDGE_SEARCH_DEPTH; depth++) {
-    const candidate = join(dir, BRIDGE_FILE);
-    if (existsSync(candidate)) return candidate;
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return undefined;
+  return findPayloadFile(BRIDGE_FILE, dirname(fileURLToPath(import.meta.url)));
 }
 
 function nonEmpty(value: string | undefined): string | undefined {

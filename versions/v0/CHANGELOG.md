@@ -4,6 +4,68 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.8.0
+
+- **Fecha:** 2026-10-17
+- **Estado:** **`haril` abre Pi.** Al escribir `haril` en una terminal (o `haril console`) se abre Pi, con el Node 24.22.0 y el Pi 1.2.0 fijados que instala HARIL, en la carpeta actual y con una extensión de HARIL, igual que Gentle Shell es Pi más su extensión. Quedan todos los comandos de Pi (`/login`, `/model`, el nivel de razonamiento, `/settings`, las sesiones) y se suman una barra amarilla de HARIL y los comandos para pedir un plan, aprobarlo y seguir sus tareas. La interfaz anterior sigue en `haril shell`. La versión recoge también lo integrado de M4 desde la 0.7.0: resultados de dependencias, motivo del reintento, puerto y outbox de memoria con su adaptador de Engram, SecretStore y el orden de cierre de Pi en Windows.
+
+### Añadido
+
+- **Consola de HARIL sobre Pi:**
+  - `haril` sin subcomando en una terminal y `haril console [--data-dir <ruta>]` lanzan Pi como proceso externo, sin fork, con el Node y el Pi de `runtime\manifest.json`, en la carpeta actual y con la extensión `integrations/pi-console` (`-e`); no usan `--no-extensions` ni `--offline`, así que `/login`, `/model`, `/thinking` (también `shift+tab`), `/settings` y el resto de Pi funcionan;
+  - Pi guarda sus ajustes, accesos y sesiones de HARIL en `<raíz>\agent` (`%LOCALAPPDATA%\HARIL\agent` en Windows), separado de `~\.pi` y de `~\.gentle-shell`. Salvo que `PI_SKIP_VERSION_CHECK` o `PI_TELEMETRY` ya estén definidas, Pi arranca sin consultar su última versión y sin telemetría de instalación;
+  - necesita una terminal real y el runtime instalado: sin terminal sale con 2; sin runtime imprime una línea que remite a `npm run runtime:install` o al instalador y sale con 2; sin la extensión compilada pide `npm run build` y sale con 1. Su código de salida es el de Pi;
+  - la extensión es un solo `.mjs` autocontenido (`npm run build:console`, parte de `npm run build`) y solo llama a la CLI `haril`, sin shell: el estado sigue en `haril.db` y lo escribe el runtime. El instalador la copia junto a la CLI.
+- **Barra amarilla y cabecera de HARIL:** el pie de Pi muestra `◆ HARIL ◇ <proyecto o carpeta> ◇ <modelo> · <nivel>` y, a la derecha, `ctx <medidor> <pct>% ◇ $<coste> ◇ <N pending> ◇ runtime <estado>`; debajo, la carpeta, su rama de git y los estados de otras extensiones. El nivel solo sale con un modelo que razona; el coste es la suma de lo que Pi registró en la sesión; `N pending` solo con planes por aprobar; el runtime es `running`, `starting`, `idle` o `unknown`. En una terminal estrecha la barra suelta primero el coste y al final el medidor de contexto. Cambiar de modelo o de nivel la actualiza, y se vuelve a leer cada 5 s solo mientras hay un runtime en marcha o un plan por aprobar. La cabecera de arranque lleva la versión y `/haril for commands`.
+- **Comandos de HARIL dentro de Pi:** ninguno choca con los nativos de Pi, y cada uno ejecuta la CLI sobre el proyecto de la carpeta actual (el registrado cuya raíz es esa carpeta o su antecesora más cercana; sin proyecto, la barra muestra la carpeta).
+
+  | Comando | Acción |
+  |---|---|
+  | `/haril` | Lista los comandos de HARIL |
+  | `/init [nombre]` | Registra la carpeta actual como proyecto de HARIL |
+  | `/goal <texto>` | Encola una tarea de plan para `planner`: con el modelo actual si lo sirve un proveedor de HARIL; si no, con `HARIL_DEFAULT_MODEL`; si no, con `fake:plan` y lo avisa |
+  | `/plans`, `/plan <id>` | Los planes por aprobar; un plan entero con cada tarea |
+  | `/approve [id]`, `/deny [id]` | Aprueba o rechaza un plan; sin id, el único pendiente |
+  | `/tasks`, `/task <id>`, `/events` | Estado del proyecto y su cola; una tarea con su resultado, error y tokens; los últimos 20 eventos |
+
+  Tras `/goal` y `/approve`, si ningún runtime está en marcha, la consola arranca `haril start --started-by shell` en segundo plano, con su salida en `logs\runtime-<fecha>.log`, como `haril shell`.
+- **Los modelos de HARIL en `/model` de Pi:** cada proveedor de `haril.json` (por defecto `cliproxy`) que responde con modelos se registra en Pi como proveedor compatible con OpenAI llamado `haril-<id>`. La clave nunca pasa por la extensión, la línea de comandos ni el disco: Pi lee por sí mismo la variable que nombra `keyEnv` (por ejemplo `HARIL_CLIPROXYAPI_KEY`). Un proveedor sin esa variable o sin respuesta no se registra y la consola lo dice al abrir. Al arrancar se restaura el último modelo de HARIL elegido en Pi; sin modelo, se usa el de `HARIL_DEFAULT_MODEL` o el primero de HARIL.
+- **Resultados de dependencias (PR #30):** una tarea recibe en su prompt los resultados de las tareas de su `dependsOn`, en el orden en que se crearon, marcados como escritos por otros agentes (datos, no instrucciones) y con cada línea precedida por `| `, así que un resultado no puede imitar el final de la sección, una cabecera ni una instrucción. Cada resultado se corta a 8000 caracteres y el objetivo de su cabecera a 200; la sección entera cuesta como mucho un octavo de los tokens de la tarea por llamada, y lo que no cabe se deja fuera con una nota.
+- **Motivo del reintento (PR #31):** la salida que no pasa la verificación ahora se guarda. Los intentos siguientes de un agente real reciben, tras los resultados de sus dependencias, el último intento rechazado por sus comprobaciones: su número, las comprobaciones que falló y la salida que rechazaron, dentro de la mitad del presupuesto de las secciones de datos (el encabezado y la primera comprobación fallida salen siempre). `task show` muestra `rejected output: …` (en `--json`, `error.output`); en una tarea completada, un fallo anterior es solo historia (`earlier attempt <n> failed: …`, `earlierFailure`). `verification_exhausted` se registra también en el último intento, y `haril task add --help` describe cada opción.
+- **Memoria (PR #32, #33 y #34):**
+  - los contratos y el puerto `MemoryProvider` (con `ScopeRef` obligatorio y fallos tipados), los proveedores `Null` e `InMemory` y una suite de contrato compartida;
+  - la migración 0006 (aditiva) con `memory_outbox` y `memory_refs`, y el servicio de memoria de Core: entrega al menos una vez sin duplicados, `memory.degraded` y `memory.recovered` una vez por transición, lecturas vacías mientras el proveedor no está disponible, y solo se bloquean las tareas cuyo `requires[]` incluye memoria;
+  - `haril memory status [--json]` (solo lee `haril.db`, sin runtime) y el estado de la memoria en `haril status` y en la caja Connect de `haril shell`; el runtime avanza el outbox antes de cada reclamo y, al quedar ocioso o parar, dice las tareas y las escrituras que espera la memoria;
+  - el adaptador de Engram (`@haril/memory-engram`, por HTTP y probado contra un Engram falso con inyección de fallos) y la supervisión de `engram serve`: guardas de directorio de datos y de puerto, entorno cerrado, comprobación de que el serve es propio y cierre del árbol de procesos. **Aún no está conectado al runtime**, que arranca con el proveedor `Null`.
+- **SecretStore (PR #36):** el puerto `SecretStore` con secretos sellados (`SecretRef` `env:NOMBRE`; el valor no sale en JSON, `String()` ni errores), su doble y una suite de contrato, y `EnvSecretStore`. La clave de CLIProxyAPI se lee por referencia (`env:HARIL_CLIPROXYAPI_KEY`) y llega sellada al adaptador compatible con OpenAI, que solo la revela para la cabecera `Authorization`; `HARIL_CLIPROXYAPI_KEY` funciona como antes. Una clave canario no aparece en la salida de la CLI, en `haril.db`, en los archivos de la raíz de datos ni en el entorno o los argumentos del hijo Pi.
+
+### Cambiado
+
+- `haril` sin subcomando en una terminal abre la consola sobre Pi y no la interfaz de la 0.7.0; fuera de una terminal sigue imprimiendo la ayuda y saliendo con 2. `haril shell` abre la interfaz anterior, sin cambios de uso.
+- La columna derecha de `haril shell` ya no tiene la caja Taxis: quedan proyecto, git, runtime, aprobaciones y tokens.
+- El esquema del almacén pasa de 5 a 6 con la migración 0006, aditiva; una versión anterior no abre una base ya migrada, que nunca se degrada.
+
+### Corregido
+
+- En Windows, `agent-pi` cerraba Pi justo después de lanzar `taskkill /F /T`, que no encontraba el proceso y no recorría el árbol: un proceso que una shell bajo Pi había arrancado sobrevivía al run. Ahora espera a que `taskkill` acabe antes de matar a Pi, y lo mata también si `taskkill` no puede arrancar (PR #35).
+- La guarda de instalaciones ajenas de e2e ignora el `.last-cleanup` de Claude Code, que se reescribía durante la ejecución; solo se ignora ese archivo en la raíz de `~/.claude`.
+- El adaptador compatible con OpenAI también redacta los ecos de la clave en base64, base64url y codificados como URL, en los cuerpos de error HTTP y en los errores a mitad de flujo (PR #36).
+
+### Desvíos y aplazamientos
+
+- **La memoria aún no usa Engram.** El adaptador y su supervisión existen y pasan la suite de contrato, pero el runtime arranca con el proveedor `Null`: no se guarda nada y no se encola ninguna escritura.
+- **Sin keyring.** `EnvSecretStore` lee solo el entorno; el almacén de claves del sistema sigue pendiente.
+- **La consola no tiene los paneles de `haril shell`.** El avance de las tareas se sigue con `/tasks`, `/task <id>` y `/events`; la vista En vivo, los paneles y los temas de HARIL no están en Pi.
+- **El coste de HARIL sigue sin registrarse.** El `$` de la barra es el que Pi anota en la sesión; con un proveedor de HARIL es cero, porque HARIL no sabe cuánto cobra el proveedor.
+- **Consola sin verificar todavía en una terminal real:** la barra, `/model` y los comandos no se han ejecutado aún en Windows Terminal.
+
+### Verificación
+
+- Local: `pnpm run check` 0; `pnpm test` con 1579 pruebas de Vitest (1 omitida, solo POSIX) y 89 de `node:test`; `npm run e2e` y `npm run e2e:demo` pasan; `npm run build` compila la extensión de la consola junto a la CLI y `haril --version` imprime `haril 0.8.0`.
+- La consola no tiene suite propia: la extensión solo se comprueba con los tipos, las reglas de capas (solo importa `node:*` y sus propios archivos) y la compilación a un solo `.mjs`; solo tienen pruebas el despacho de `haril` sin subcomando a la consola y la copia de la extensión por el instalador. Falta ejecutarla en una terminal real (ver Desvíos).
+
+---
+
 ## 0.7.0
 
 - **Fecha:** 2026-10-17

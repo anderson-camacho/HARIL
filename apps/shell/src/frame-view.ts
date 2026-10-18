@@ -94,7 +94,6 @@ export interface FrameFacts {
   readonly runtimeText: string;
   readonly isolation: string;
   readonly approvals: number;
-  readonly taxis: { readonly busy: number; readonly slots: number };
   // For the home grid: the project slugs, a summary of the tasks, the agents in use and the settings.
   readonly projects: readonly string[];
   readonly tasks: string;
@@ -182,7 +181,6 @@ export function rightColumn(facts: FrameFacts, height: number): Line[] {
     box("Status", statusRows(facts), width),
     box("Runtime", runtimeRows(facts), width),
     box("Approvals", approvalRows(facts), width),
-    box("Taxis", [taxiRow(facts)], width),
     box("Tokens", [[segment(tokens, "text")], [segment("cost n/a (not tracked)", "muted")]], width),
     box("Connect", connectRows(facts), width),
     box(
@@ -322,14 +320,6 @@ function gitPart(facts: FrameFacts): Segment[] | undefined {
     segment(`git ${git.branch}`, "text"),
     DOT,
     git.changes === 0 ? segment("clean", "ok") : segment(`${git.changes} changed`, "warning"),
-  ];
-}
-
-function taxiRow(facts: FrameFacts): Line {
-  const { busy, slots } = facts.taxis;
-  return [
-    segment(`${busy} busy`, busy > 0 ? "ok" : "muted"),
-    segment(` · ${Math.max(0, slots - busy)} free (of ${slots})`, "text"),
   ];
 }
 

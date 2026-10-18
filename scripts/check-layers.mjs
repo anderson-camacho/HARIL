@@ -18,6 +18,9 @@ import {
 const CONTRACTS = "packages/contracts";
 const CORE = "packages/core";
 const BRIDGE = "integrations/agent-pi-bridge";
+// The HARIL console is a Pi extension bundled into one file like the bridge: node:* builtins and its own files only.
+// Unlike the bridge it runs the haril CLI, so child_process is allowed; it never imports another workspace.
+const CONSOLE = "integrations/pi-console";
 const OS = "integrations/os";
 const GATEWAY = "integrations/gateway";
 const PI_WORKSPACES = new Set(["integrations/agent-pi", BRIDGE]);
@@ -139,6 +142,11 @@ function checkEdge(ctx, ws, fileAbs, edge) {
     return out;
   }
 
+  if (ws.rel === CONSOLE && target.kind !== "internal") {
+    report("R6", `pi-console may only import node:* builtins, not "${spec}"`);
+    return out;
+  }
+
   if (target.kind === "external") {
     if (ws.kind === "core") {
       report("MATRIX", `core may not depend on external package "${spec}"`);
@@ -173,7 +181,9 @@ function checkEdge(ctx, ws, fileAbs, edge) {
   }
 
   if (tws !== ws) {
-    if (ws.rel === BRIDGE && tws.rel === CORE) {
+    if (ws.rel === CONSOLE) {
+      report("R6", `pi-console must not import another workspace (${tws.rel})`);
+    } else if (ws.rel === BRIDGE && tws.rel === CORE) {
       report("R6", "agent-pi-bridge must not import @haril/core");
     } else {
       const message = matrixMessage(ws, tws, edge.typeOnly, spec);

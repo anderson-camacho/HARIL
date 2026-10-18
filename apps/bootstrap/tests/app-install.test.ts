@@ -34,6 +34,7 @@ function sourceTree(fs: MemoryFs): void {
     `${SRC}\\integrations\\agent-pi-bridge\\dist\\bridge.mjs`,
     encoder.encode("// bridge"),
   );
+  fs.files.set(`${SRC}\\integrations\\pi-console\\dist\\console.mjs`, encoder.encode("// console"));
   fs.files.set(
     `${SRC}\\apps\\bootstrap\\dist\\haril-bootstrap.mjs`,
     encoder.encode("// bootstrap"),
@@ -84,6 +85,7 @@ describe("installApp", () => {
     expect(fs.files.has(`${APP}\\haril.mjs`)).toBe(true);
     expect(fs.files.has(`${APP}\\blocks\\methodologies\\odd\\block.md`)).toBe(true);
     expect(fs.files.has(`${APP}\\integrations\\agent-pi-bridge\\dist\\bridge.mjs`)).toBe(true);
+    expect(fs.files.has(`${APP}\\integrations\\pi-console\\dist\\console.mjs`)).toBe(true);
     expect(fs.files.has(`${APP}\\haril-bootstrap.mjs`)).toBe(true);
     expect(fs.files.has(`${APP}\\shell.mjs`)).toBe(true);
     for (const shim of ["haril.cmd", "haril.ps1", "haril"]) {
