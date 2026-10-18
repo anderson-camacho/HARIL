@@ -13,6 +13,7 @@ import type {
   TaskState,
 } from "@haril/contracts";
 import type { HarilError, Result } from "./result.js";
+import type { UsageLogPort } from "./usage-log.js";
 
 export type GateStatus = "ok" | "warn" | "error";
 
@@ -773,5 +774,7 @@ export interface Store {
   readonly virtualKeys: VirtualKeysPort;
   readonly approvals: ApprovalsPort;
   readonly memory: MemoryStorePort;
+  // The orders and usage logs (4.5): append-only, hash-chained, written without a lease (P14).
+  readonly usageLog: UsageLogPort;
   close(): void;
 }

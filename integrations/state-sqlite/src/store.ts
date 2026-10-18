@@ -49,6 +49,7 @@ import { StoreError } from "./errors.js";
 import { readLeaseSummary } from "./lease.js";
 import { createMaintenance } from "./maintenance.js";
 import { createMemoryFacet } from "./memory.js";
+import { createUsageLogFacet } from "./usage-log.js";
 
 // Implementation of the Store port over one node:sqlite connection. Writes run in BEGIN IMMEDIATE.
 // Core rules (transition table, plan checks) arrive through `rules`; this file never imports Core values.
@@ -214,6 +215,7 @@ export class SqliteStore implements Store {
   readonly virtualKeys: Store["virtualKeys"];
   readonly approvals: Store["approvals"];
   readonly memory: Store["memory"];
+  readonly usageLog: Store["usageLog"];
   readonly maintenance: Store["maintenance"];
 
   constructor(options: StoreOptions) {
@@ -287,6 +289,13 @@ export class SqliteStore implements Store {
       transaction: (work) => this.inTransaction(work),
       appendEvent: (input) => this.appendEvent(input),
       assertActiveEpoch: (epoch) => this.assertActiveEpoch(epoch),
+    });
+    this.usageLog = createUsageLogFacet({
+      db: this.db,
+      clock: this.clock,
+      ids: this.ids,
+      rules: this.rules,
+      transaction: (work) => this.inTransaction(work),
     });
     this.maintenance = createMaintenance({ db: this.db, walPath: options.walPath });
   }

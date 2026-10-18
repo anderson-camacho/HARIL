@@ -7,5 +7,6 @@ export * from "./choose-model.js";
 export * from "./globs.js";
 export * from "./limits.js";
 export * from "./liveness.js";
+export * from "./order-preview.js";
 export * from "./rework.js";
 export * from "./select-claims.js";
