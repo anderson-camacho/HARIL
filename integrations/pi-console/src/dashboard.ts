@@ -92,7 +92,7 @@ export function renderHeader(
   selected: DashboardArea | undefined,
   theme: ConsoleTheme,
 ): string[] {
-  if (width <= 0) return [];
+  if (width < 2) return [];
   const title = `${version === undefined ? "◆ HARIL" : `◆ HARIL ${version}`} · MANY MINDS. ONE FLOW.`;
   const summary = `${facts.project}  │  ${facts.model} · ${facts.thinking}  │  runtime ${facts.runtime}`;
   const stats = `TOOLS ${facts.activeTools.length}/${facts.tools.length}  ·  MCP ${facts.mcpServers.length}  ·  ${facts.pending === undefined ? "approvals unavailable" : `${facts.pending} pending`}`;
@@ -153,7 +153,7 @@ export function renderDashboard(
   width: number,
   theme: ConsoleTheme,
 ): string[] {
-  if (width <= 0) return [];
+  if (width < 2) return [];
   const heading = `${AREAS[area]}  ·  ${area === "tools" ? `${facts.tools.length} configured` : "live session view"}`;
   const body = values(area, facts).flatMap((line) => wrap(plainText(line), Math.max(1, width - 4)));
   const lines = [color(theme, borderLine(width), "dim"), row(heading, width, theme, YELLOW)];

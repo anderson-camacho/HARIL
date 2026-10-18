@@ -358,9 +358,23 @@ export function registerCommands(pi: ConsolePi, host: () => CommandHost | undefi
       },
     });
   }
-  const nativeCommands = new Set(pi.getCommands().map((command) => command.name));
+  let dashboardCommandsRegistered = false;
+  pi.on("session_start", () => {
+    if (dashboardCommandsRegistered) return;
+    registerDashboardCommands(pi, host);
+    dashboardCommandsRegistered = true;
+  });
+}
+
+// Pi binds runtime actions after extension factories have registered their listeners. Read its command list only
+// from session_start, when getCommands is initialized, before adding aliases that could shadow other extensions.
+export function registerDashboardCommands(
+  pi: ConsolePi,
+  host: () => CommandHost | undefined,
+): void {
+  const registeredCommands = new Set(pi.getCommands().map((command) => command.name));
   for (const area of DASHBOARD_AREAS) {
-    if (nativeCommands.has(area)) continue;
+    if (registeredCommands.has(area)) continue;
     pi.registerCommand(area, {
       description: `HARIL: open the ${area.toUpperCase()} dashboard`,
       handler(_args, ctx) {
