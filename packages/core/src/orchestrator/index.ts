@@ -84,6 +84,17 @@ export type RunEvent =
       readonly type: "runtime.halted";
     }
   | {
+      // A verdict of the watchdog on one node of a workflow (3.16): asked by code, never a model. text starts with the
+      // node's id (o1, d2, e3, a3, fa), as the console's watchdog line reads it.
+      readonly type: "watchdog.checked";
+      readonly workflowId: string;
+      readonly taskId: string;
+      readonly node: string;
+      readonly verdict: "active" | "idle" | "residual" | "waiting_human" | "cooling_down";
+      readonly action: "continue" | "close" | "cancel";
+      readonly text: string;
+    }
+  | {
       // The startup sweep (3.14.5): agent processes a dead runtime left were killed, and recorded pids that now name
       // another process were kept.
       readonly type: "runtime.swept";

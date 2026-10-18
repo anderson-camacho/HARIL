@@ -215,4 +215,14 @@ export interface WorkflowsPort {
   setState(epoch: number, input: SetWorkflowStateInput): WorkflowRecord;
   // The watchdog's next evaluation of a turn (3.16), kept across restarts; null clears it.
   scheduleCheck(epoch: number, taskId: string, at: number | null): void;
+  // The turns that could still run (pending, ready, running) in workflows that ended (completed, failed, stopped):
+  // nothing will consume their result, so the watchdog cancels them as residual (3.16). A blocked turn can never run
+  // and keeps its state as history. Oldest first.
+  strandedTurns(): readonly StrandedTurn[];
+}
+
+export interface StrandedTurn {
+  readonly taskId: string;
+  readonly workflowId: string;
+  readonly state: TaskState;
 }

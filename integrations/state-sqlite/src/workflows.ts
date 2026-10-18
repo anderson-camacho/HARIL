@@ -15,6 +15,7 @@ import type {
   JsonObject,
   RecordAuditInput,
   SetWorkflowStateInput,
+  StrandedTurn,
   WorkflowAutonomy,
   WorkflowRecord,
   WorkflowsPort,
@@ -716,6 +717,13 @@ export function createWorkflowsFacet(options: WorkflowsFacetOptions): {
     applyTurns,
     recordAudit,
     setState,
+    strandedTurns() {
+      return db
+        .prepare(
+          "SELECT t.task_id AS taskId, t.workflow_id AS workflowId, t.state AS state FROM tasks t JOIN workflows w ON w.workflow_id = t.workflow_id WHERE w.state IN ('completed','failed','stopped') AND t.state IN ('pending','ready','running') ORDER BY t.created_seq",
+        )
+        .all() as unknown as StrandedTurn[];
+    },
     scheduleCheck(epoch, taskId, at) {
       transaction(() => {
         assertActiveEpoch(epoch);

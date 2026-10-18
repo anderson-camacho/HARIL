@@ -240,6 +240,8 @@ function formatEvent(event: RunEvent): string {
       return "halted by an emergency stop: nothing is claimed until haril resume";
     case "runtime.swept":
       return `startup sweep: killed ${event.killed} agent ${event.killed === 1 ? "process" : "processes"} a stopped runtime left${event.kept === 0 ? "" : `; kept ${event.kept} whose pid now names another process`}`;
+    case "watchdog.checked":
+      return `watchdog: ${event.text}`;
     case "task.cancelled":
       return event.reason === "user_stop"
         ? `cancelled ${event.taskId} ${event.goal} (stopped by you; not retried)`

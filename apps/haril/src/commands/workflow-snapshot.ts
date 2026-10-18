@@ -264,7 +264,10 @@ function nodeOf(thread: ThreadView, context: NodeContext): WorkflowNode {
   };
 }
 
+// An event that carries its own line (a watchdog verdict, 3.16: "e1 active, continues") is shown as that line, which
+// starts with the node's id as the console's detail view reads it; any other event lists its fields.
 function eventText(payload: Readonly<Record<string, unknown>>): string {
+  if (typeof payload.text === "string") return payload.text;
   return Object.entries(payload)
     .filter(([key]) => key !== "workflowId")
     .map(([key, value]) => `${key}=${typeof value === "string" ? value : JSON.stringify(value)}`)

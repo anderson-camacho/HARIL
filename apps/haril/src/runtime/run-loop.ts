@@ -49,6 +49,14 @@ import type { PlanAttemptReport, PlanProposals } from "./plan-proposals.js";
 import { killRecordedProcesses, recordSweep } from "./processes.js";
 import type { RealAgentReadiness, RealAgents } from "./real-agent.js";
 import { createShutdown, type KillSwitch, RUNTIME_STOP, type Shutdown } from "./shutdown.js";
+import {
+  cancelStrandedTurns,
+  checkLiveNodes,
+  type WatchdogDeps,
+  type WatchdogPass,
+  type WatchdogSettings,
+  watchdogPolicy,
+} from "./watchdog.js";
 import { claimWorkflowTurns, settleWorkflows } from "./workflow-scheduler.js";
 import { summarizeWorkflows, type WorkflowTally } from "./workflow-summary.js";
 import { buildTurnInput, commitWorkflowAttempt, recordCancelledTurn } from "./workflow-turns.js";
@@ -123,6 +131,9 @@ export interface RunLoopOptions {
   readonly killSwitch?: KillSwitch;
   // The OS process control of the startup sweep (3.14.5). Defaults to @haril/os.
   readonly processControl?: ProcessControl;
+  // The residual-task watchdog (3.16): its cadence (default 15 minutes) and how many checks without progress close an
+  // attempt (default 1). Tests use virtual time or a short interval.
+  readonly watchdog?: WatchdogSettings;
   // Test seams: the lease TTL and the poll interval default to the production values.
   readonly leaseTtlMs?: number;
   readonly pollMs?: number;
@@ -327,6 +338,35 @@ async function serve(
   };
   let idleSince = clock.now();
   let haltTold = false;
+  // The watchdog (3.16): residual turns are cancelled every turn of the loop, the live nodes judged when their check
+  // comes. What it ends is killed here: a residual attempt's run is already cancelled, an idle one commits as failed.
+  const policy = watchdogPolicy(options.watchdog);
+  const watchdog: WatchdogDeps = {
+    store,
+    epoch,
+    clock,
+    policy,
+    emit,
+    attemptOf: (taskId) => {
+      const attempt = [...live.values()].find((item) => item.claimed.taskId === taskId);
+      return attempt?.workflow === null || attempt === undefined
+        ? undefined
+        : { runId: attempt.runId, startedAt: attempt.workflow.startedAt };
+    },
+    strikes: new Map(),
+  };
+  const endAttempts = (pass: WatchdogPass): void => {
+    const ended = new Map<string, LiveAttempt["endedBy"]>([
+      ...pass.cancelled.map((task) => [task.taskId, "residual"] as const),
+      ...pass.idle.map((taskId) => [taskId, "watchdog_idle"] as const),
+    ]);
+    for (const attempt of live.values()) {
+      const reason = ended.get(attempt.claimed.taskId);
+      if (reason === undefined || attempt.endedBy !== null) continue;
+      attempt.endedBy = reason;
+      attempt.kill();
+    }
+  };
   for (;;) {
     beat();
     // The attempts that settled since the last turn close first, oldest first, so what they free or create is seen below.
@@ -371,6 +411,9 @@ async function serve(
     for (const ended of settleWorkflows(store, epoch, clock, options.delegation)) {
       emit({ type: "workflow.state", ...ended });
     }
+    // A workflow that just ended (its wall time among the reasons) leaves residual turns: they end now.
+    endAttempts(cancelStrandedTurns(watchdog));
+    endAttempts(checkLiveNodes(watchdog));
 
     // 3.14: an emergency stop left the runtime halted. It still applies commands (haril resume among them) and closes
     // what was in flight, but it claims nothing; the store refuses the claims as well.
@@ -399,6 +442,8 @@ async function serve(
       ? []
       : claimWorkflowTurns(store, epoch, options.delegation, new Set(notRunnable));
     for (const turn of turns) {
+      // The attempt's first watchdog window starts at its claim (3.16).
+      store.workflows.scheduleCheck(epoch, turn.claimed.taskId, clock.now() + policy.intervalMs);
       const window = startWorkflowWindow(options, turn.claimed, turn.workflowId);
       launch(newAttempt(turn.claimed, window), (attempt) =>
         startWorkflowTurn(options, shutdown, context, attempt, turn.workflowId),
@@ -615,10 +660,19 @@ function closeWorkflowTurn(
 ): void {
   const { store, clock } = options;
   const { emit, epoch } = context;
-  const outcome = attempt.settled as AgentOutcome;
+  // 3.16: an attempt the watchdog closed as idle (and that did not succeed meanwhile) is a failed attempt: the rework
+  // rules decide what follows, and its usage row says closed_idle.
+  const closedIdle = attempt.endedBy === "watchdog_idle" && attempt.settled?.status !== "succeeded";
+  const outcome: AgentOutcome = closedIdle
+    ? {
+        status: "failed",
+        code: "watchdog.idle",
+        message: "no progress in the watchdog's window: the attempt was closed",
+      }
+    : (attempt.settled as AgentOutcome);
   const report = turn.close();
   const claimed = attempt.claimed;
-  if (shutdown.requested && outcome.status !== "succeeded") {
+  if (shutdown.requested && outcome.status !== "succeeded" && !closedIdle) {
     const returned = store.runs.cancel(claimed.runId, "shutdown");
     emit({ type: "task.returned", taskId: returned.taskId, goal: returned.goal });
     return;
@@ -635,7 +689,12 @@ function closeWorkflowTurn(
         clock,
         ...(options.delegation === undefined ? {} : { options: options.delegation }),
       },
-      { claimed, workflowId: turn.workflowId, startedAt: turn.startedAt },
+      {
+        claimed,
+        workflowId: turn.workflowId,
+        startedAt: turn.startedAt,
+        ...(closedIdle ? { usageOutcome: "closed_idle" } : {}),
+      },
       outcome,
       report,
     );

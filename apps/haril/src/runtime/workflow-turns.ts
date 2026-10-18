@@ -238,6 +238,9 @@ export interface WorkflowAttempt {
   readonly claimed: ClaimedTask;
   readonly workflowId: string;
   readonly startedAt: number;
+  // What the usage row and the turn's event say it did, when the runtime ended it (closed_idle, 3.16); by default what
+  // the commit plan says.
+  readonly usageOutcome?: string;
 }
 
 export interface CommitDeps {
@@ -325,7 +328,7 @@ export function commitWorkflowAttempt(
       durationMs: Math.max(0, now - attempt.startedAt),
       difficultyEst: task.difficulty,
       difficultyReason: task.difficultyReason,
-      outcome: plan.outcome,
+      outcome: attempt.usageOutcome ?? plan.outcome,
       auditVerdict: plan.verdict,
       // An executor's relaunch counts once, so a sum of the column counts relaunches.
       retries: task.role === "executor" ? (task.delegationId === null ? 1 : 0) : null,
@@ -339,7 +342,7 @@ export function commitWorkflowAttempt(
   return {
     taskState: plan.completion.outcome === "succeeded" ? "completed" : "failed",
     code: plan.completion.outcome === "failed" ? plan.completion.error.code : "",
-    outcome: plan.outcome,
+    outcome: attempt.usageOutcome ?? plan.outcome,
     workflowState: workflow?.state ?? view.workflow.state,
     workflowReason: workflow?.stopReason ?? null,
   };
