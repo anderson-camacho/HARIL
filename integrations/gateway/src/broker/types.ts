@@ -52,8 +52,24 @@ export interface IssueKeyInput {
   readonly ttlMs: number;
 }
 
+// An upstream call that failed (3.11, phase F6): the run, the route "<provider>/<model>", the adapter's error code
+// (quota for an HTTP 402, rate_limited for a 429, upstream, unreachable, upstream_stream_error...), the HTTP status and
+// the Retry-After wait when the upstream sent them. The Broker's own refusals (its token budget, a model not granted)
+// are never reported: they are not the provider's.
+export interface UpstreamFailure {
+  readonly runId: string;
+  readonly taskId: string;
+  readonly providerId: string;
+  readonly model: string;
+  readonly code: string;
+  readonly httpStatus: number | null;
+  readonly retryAfterMs: number | null;
+}
+
 export interface BrokerOptions {
   readonly resolveUpstream: UpstreamResolver;
+  // Hears each failed upstream call; the runtime turns a 402 or 429 into a cooldown of the model. Never throws back.
+  readonly onUpstreamFailure?: (failure: UpstreamFailure) => void;
   readonly ledger: BrokerLedger;
   readonly clock: Clock;
   // Loopback only (GWY-01): the literal type keeps any other address out of the signature.

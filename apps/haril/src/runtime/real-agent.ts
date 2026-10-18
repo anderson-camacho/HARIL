@@ -18,7 +18,7 @@ import type {
   Result,
   Store,
 } from "@haril/core/ports";
-import type { Broker } from "@haril/gateway";
+import type { Broker, UpstreamFailure } from "@haril/gateway";
 import { createProcessControl } from "@haril/os";
 import { startHarilBroker } from "../broker.js";
 import type { HostInfo, RuntimeInspection } from "../context.js";
@@ -31,6 +31,7 @@ import {
 } from "../providers.js";
 import { findPayloadFile, readRuntime, runtimeRootFor } from "../runtime.js";
 import { killTrees } from "./processes.js";
+import { outcomeWithProvider } from "./provider-failure.js";
 
 // The real lane of `haril start` (M2-T6, M2-D1..D7): the analyst agent runs in Pi 1.2.0 on the isolated Node,
 // talks to the model only through one Broker, and holds one virtual key per run. This module is composition:
@@ -89,12 +90,21 @@ export function createRealAgents(options: RealAgentsOptions): RealAgents {
   let brokerStart: Promise<Broker> | undefined;
   // The OS side of 3.14: each agent's boot ticks are read right after its spawn (Linux), so a clock step never hides it.
   const processControl = host.processControl ?? createProcessControl();
+  // The last upstream failure the Broker heard for each run in flight (3.11): it reaches the run's failed outcome, so the
+  // runtime can cool the model down and retry the turn.
+  const upstreamFailures = new Map<string, UpstreamFailure>();
 
   // One Broker per `haril start`, on the first real task (M2-T6): the upstream is the OpenAI-compatible gateway.
   // One upstream per configured provider (M3-T7); the providers are read once per run.
   function ensureBroker(providers: readonly ProviderEntry[]): Promise<Broker> {
     if (brokerStart === undefined) {
-      brokerStart = startHarilBroker({ store, clock, providers, timeoutMs: UPSTREAM_TIMEOUT_MS });
+      brokerStart = startHarilBroker({
+        store,
+        clock,
+        providers,
+        timeoutMs: UPSTREAM_TIMEOUT_MS,
+        onUpstreamFailure: (failure) => upstreamFailures.set(failure.runId, failure),
+      });
     }
     return brokerStart;
   }
@@ -233,7 +243,10 @@ export function createRealAgents(options: RealAgentsOptions): RealAgents {
         return started;
       }
       recordEvent(store, runSpec, "run.started", { agentRuntime: "pi" });
-      return { ok: true, value: wrapHandle(started.value, runSpec, activeBroker, store) };
+      return {
+        ok: true,
+        value: wrapHandle(started.value, runSpec, activeBroker, store, upstreamFailures),
+      };
     },
   };
 
@@ -343,6 +356,7 @@ function wrapHandle(
   spec: AgentSpec,
   broker: Broker,
   store: Store,
+  upstreamFailures: Map<string, UpstreamFailure>,
 ): AgentHandle {
   const diagnostics = (handle as Partial<PiAgentHandle>).diagnostics;
   return {
@@ -355,7 +369,8 @@ function wrapHandle(
       const final: AgentOutcome =
         outcome.status === "succeeded"
           ? { ...outcome, model: spec.model, warnings: [...(diagnostics?.warnings ?? [])] }
-          : outcome;
+          : outcomeWithProvider(outcome, upstreamFailures.get(spec.runId));
+      upstreamFailures.delete(spec.runId);
       recordEvent(store, spec, "run.settled", {
         status: final.status,
         ...(final.status === "failed" ? { code: final.code } : {}),

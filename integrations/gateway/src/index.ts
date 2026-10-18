@@ -9,6 +9,7 @@ export type {
   UpstreamBody,
   UpstreamChunk,
   UpstreamClient,
+  UpstreamFailure,
   UpstreamResolver,
 } from "./broker/types.js";
 
