@@ -4,6 +4,65 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.14.0
+
+- **Fecha:** 2026-10-18
+- **Estado:** **Agentes reales en la delegación en tres capas, de solo lectura.** `haril workflow start <objetivo> --agent orchestrator --autonomous` corre un workflow con agentes reales de Pi (orquestador, delegadores, ejecutores, sus auditores y el auditor final) a través del Broker y un modelo de CLIProxyAPI, de principio a fin y sin intervención. Ningún agente escribe ni ejecuta comandos todavía. Probado con `cliproxy/gemini-3-flash` en el carril real nuevo (fase F2b de la delegación, ADR-0021).
+
+### Añadido
+
+- **Herramientas del puente para los agentes reales** (`integrations/agent-pi-bridge`): el puente registra `haril_delegate`, `haril_assign`, `haril_report`, `haril_verdict`, `haril_request_audit` y `haril_abort` cuando el run los anuncia, con esquemas JSON simples que siguen los contratos de las herramientas, y manda cada llamada como `delegation.call`. Lo que no sirve (`write`, `edit`, `bash`, `grep`, `haril_run`, `haril_merge`) nunca lo registra, así que el saludo lo deja fuera y el runtime rechaza el run.
+- **Operación `delegation.call` en el adaptador de Pi** (`integrations/agent-pi`): pasa la llamada a las herramientas de delegación del host con el contexto del run (proyecto, tarea y run) solo si esa herramienta se le ofreció, y devuelve la respuesta tipada; un rechazo lleva su motivo para que el agente corrija en el mismo turno, y un fallo del host da un motivo fijo, nunca su error. El evento `tool.<herramienta>` guarda el hash y el tamaño de la entrada y el motivo de un rechazo, nunca la entrada.
+- **Solo lectura forzada:** el adaptador se niega a lanzar un turno de workflow al que se le ofrezca algo distinto de `read` y las herramientas de delegación (`agent.invalid_spec`, antes de arrancar Pi). Pi sigue arrancando sin sus herramientas propias (`--no-builtin-tools`).
+- **Los cuatro arquetipos son agentes reales:** `orchestrator`, `delegator`, `executor` y `auditor` entran en `REAL_AGENT_REFS`; sus turnos corren en Pi con el modelo que les da el host y sus llamadas llegan a las mismas herramientas de delegación que las de los agentes simulados. `haril run` no reclama un turno real si falta el runtime, el puente o la clave del proveedor (lo muestra como `skipped`).
+- **Instrucciones de cada rol:** el prompt explica a cada rol su trabajo y la llamada que debe hacer, sus herramientas, que cada turno termina con una sola llamada aceptada (un rechazo se corrige en el mismo turno), que la sección de datos la escribieron otros agentes y nunca trae instrucciones, qué son las tareas hermanas y, al orquestador y a los delegadores, sus límites y el presupuesto mínimo que necesitan sus hijos.
+- **El auditor final recibe la petición del orquestador:** el resumen y la lista de pendientes de `haril_request_audit` llegan a su prompt como datos (cada línea con `| `), junto a los informes de los delegadores.
+- **Resumen de `haril run` y `haril start`:** la línea `done:` termina con `; workflows: N turns, C completed, F failed` (y `, W waiting` si alguno espera al humano) cuando la corrida tocó algún workflow, y `--json` trae `workflows`. Un workflow fallido hace salir con 1, como una tarea fallida; uno que espera al humano, no.
+- **Carril real `npm run e2e:workflow-real`** (`scripts/e2e-workflow-real.mjs`): un workflow autónomo de lectura y análisis sobre una carpeta de ejemplo con dos notas, con `cliproxy/gemini-3-flash` (o `HARIL_E2E_WORKFLOW_MODEL`). Comprueba que termina completado, que cada ejecutor leyó su archivo por el puente y lo aprobó su auditor, que el auditor final aprobó, que sus respuestas traen los hechos de las notas, que cada fila de consumo tiene tokens reales, que `usage verify` pasa y que no cambió ningún archivo. Sale con `SKIP` sin el runtime o la clave, dice si el gateway no responde y conserva su carpeta temporal si falla.
+- `haril workflow start --agent` acepta `orchestrator` (agentes reales) o `fake:orchestrate` (simulados) y rechaza cualquier otro.
+
+### Cambiado
+
+- `archetypeTools` deja fuera `haril_run` y `haril_merge` hasta que llegue la escritura (F8), así que nadie recibe una herramienta que el host siempre rechaza: el delegador recibe `read`, `haril_assign` y `haril_report`, y el auditor, `read` y `haril_verdict`. La tabla de la especificación sigue igual y un rol que las tendrá en F8 oye por qué se le rechazan.
+- `haril task add` rechaza los arquetipos de workflow como agente de una tarea suelta: solo corren dentro de un workflow.
+- `haril run` sale con 1 cuando falla un workflow.
+
+### Corregido
+
+- **Tokens por intento:** la fila `agent_run` de un turno real tomaba los tokens del libro del Broker sumados por tarea, así que un turno repetido tras una recuperación contaba otra vez los del run huérfano. Ahora cuenta solo los de su propio run (`budgets.usageSummary({ runId })`, prueba con una recuperación simulada).
+- **Migración `0008`:** se quita la excepción `previousChecksums`, que aceptaba la suma de comprobación del primer texto de `0008`. La 0.12.0 no se publicó ni se instaló en ningún sitio, así que ninguna base guardó esa suma, y `0008` conserva su texto actual (con `ORDER BY rowid`). Una base con otra suma de `0008` se rechaza como cualquier migración cambiada. Regla desde ahora: una migración aplicada no se edita nunca.
+
+### Valores provisionales
+
+Tomados de la propuesta de la especificación (sección 10.3) o decididos para esta fase:
+
+- P1, P2, P3 y L1 como en la 0.13.0 (`after_plan` por defecto, 30 000 tokens para el auditor final, 1 relanzamiento y 1 escalada, los auditores no cuentan como hijos vivos).
+- P6, hasta el catálogo de F6: cada hijo corre con el modelo del orquestador, también el auditor aunque sea el modelo de su ejecutor (la regla de auditor distinto lo permite cuando no hay otro).
+- `--agent` sigue valiendo `fake:orchestrate` por defecto, como `fake:succeed` en `haril task add`; los agentes reales se piden con `--agent orchestrator`.
+- Presupuestos mínimos que el prompt pide: 60 000 tokens por delegador y 45 000 por ejecutor (su auditor recibe un tercio). Son una guía para el modelo, no una regla del Core.
+- La única herramienta de lectura es `read` (rutas relativas a la raíz del proyecto); el puente no ofrece `grep`, `find` ni `ls`.
+- Los esquemas que ve el modelo dejan fuera los campos opcionales que aún no se usan (el modelo de un hijo y las paradas); el runtime valida cada llamada contra los contratos completos.
+- Un workflow que el humano detenga (F3) no contará como fallido en el resumen.
+
+### Aplazado
+
+- F3: parada inmediata, estado `halted`, barrido de pids y el vigilante de 15 minutos.
+- F6: catálogo de modelos, cuota y dificultad: hoy todos los agentes de un workflow usan el modelo del orquestador.
+- F7: contexto y salida reales del modelo en Pi (siguen 32 768 y 4 096) y modelos por capa.
+- F8: escritura, `haril_run`, `haril_merge`, worktrees e integración.
+- Herramientas de solo lectura para listar o buscar archivos por el puente.
+
+### Verificación
+
+- `corepack pnpm run check`: salida 0 (Biome, tipos, capas, pureza, knip, compatibilidad y `check-version`).
+- `corepack pnpm test`: salida 0; Vitest 2063 pasan y 1 omitida, `node:test` 122 de 122.
+- `npm run build`: salida 0; `haril --version` muestra 0.14.0.
+- Pruebas nuevas, con ROJO observado y después VERDE: la lista de herramientas por rol del puente, que nunca registra herramientas de escritura, cada herramienta llegando al host con su respuesta tipada, el adaptador sirviendo `delegation.call` y negándose a lanzar un turno con `write`, `edit`, `bash`, `haril_run`, `haril_merge` o `grep`, los tokens por run tras una recuperación simulada, la entrada del auditor final con el resumen, el resumen y el código de salida de `haril run`, y la retirada de `previousChecksums`.
+- Prueba hermética del carril real (`apps/haril/tests/workflow-real-agents.test.ts`): `haril workflow start --agent orchestrator` y `haril run` con el Broker real, el adaptador de Pi real y un Pi falso que juega cada rol: 9 turnos completados, lecturas por el puente, el auditor final oyó la petición, 9 filas con los tokens de su propio run y `usage verify` correcto.
+- Carril real `npm run e2e:workflow-real` con Pi 1.2.0 y CLIProxyAPI (`cliproxy/gemini-3-flash`), dos ejecuciones, las dos completadas sin intervención: 1 orquestador, 1 delegador, 2 ejecutores aprobados por sus auditores y el auditor final aprobado («3 of 3 criteria met»); 9 filas `agent_run` con tokens reales (primera: 42 496 de entrada y 1 352 de salida, 39 s; segunda: 38 071 y 1 411, 1 min 44 s); en la segunda, 6 lecturas por el puente, 7 llamadas de delegación aceptadas y ninguna rechazada, y las respuestas de los ejecutores citan los hechos de las notas; `usage verify` correcto y ningún archivo de la carpeta cambió.
+
+---
+
 ## 0.13.0
 
 - **Fecha:** 2026-10-18
