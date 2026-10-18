@@ -1,22 +1,37 @@
 // The supervisor's rule for agent processes (docs/modos-y-delegacion.md 3.14.5): a recorded pid is killed only while it
 // still names the process that was recorded. The runtime records each attempt's pid with the wall-clock time taken right
-// after the spawn; the OS reports the process's own start time. The two agree within a small window for the same
-// process, while a pid the OS reused belongs to a process that started after the recorded one ended, so its start time
-// falls outside the window. A process whose start time cannot be read is never killed. Pure: the OS is read by the
-// ProcessControl port.
+// after the spawn returned, so the process itself started a little before that time. A pid the OS reused belongs to a
+// process that started after the recorded one ended, so it always starts after the recorded time. The window is
+// therefore asymmetric: wide before the recorded time, narrow after it. A process whose start time cannot be read is
+// never killed. Pure: the OS is read by the ProcessControl port.
 
-// The window covers the time between the spawn and the clock reading (milliseconds), the OS's resolution (Linux reads
-// ticks of 10 ms, macOS whole seconds) and clock adjustments in the meantime.
-export const PROCESS_START_TOLERANCE_MS = 2_000;
+// How far the OS's start time may fall before and after the recorded one for the same process (milliseconds).
+export interface ProcessStartWindow {
+  readonly beforeMs: number;
+  readonly afterMs: number;
+}
+
+// Windows (FILETIME, 100 ns) and Linux (/proc ticks of 10 ms): the spawn returns, then the clock is read, so the OS's
+// start is before the recorded time; 100 ms after it absorbs the resolution and clock adjustments in the meantime, and
+// 2 s before it covers a slow spawn.
+export const PROCESS_START_WINDOW: ProcessStartWindow = { beforeMs: 2_000, afterMs: 100 };
+// macOS reads the start as now minus ps's elapsed time, which ps truncates to whole seconds: up to 1 s late.
+const MACOS_START_WINDOW: ProcessStartWindow = { beforeMs: 2_000, afterMs: 1_000 };
+
+// The window of the OS a process runs on (a value of process.platform).
+export function processStartWindow(platform: string): ProcessStartWindow {
+  return platform === "darwin" ? MACOS_START_WINDOW : PROCESS_START_WINDOW;
+}
 
 export function sameProcess(
   recordedStartedAt: number,
   observedStartedAt: number | undefined,
-  toleranceMs: number = PROCESS_START_TOLERANCE_MS,
+  window: ProcessStartWindow = PROCESS_START_WINDOW,
 ): boolean {
   if (observedStartedAt === undefined) return false;
   if (!Number.isFinite(recordedStartedAt) || !Number.isFinite(observedStartedAt)) return false;
-  return Math.abs(observedStartedAt - recordedStartedAt) <= toleranceMs;
+  const delta = observedStartedAt - recordedStartedAt;
+  return delta >= -window.beforeMs && delta <= window.afterMs;
 }
 
 export interface ProcessKillPlan<T> {
@@ -32,7 +47,7 @@ export interface ProcessKillPlan<T> {
 export function planProcessKills<T extends { readonly pid: number; readonly startedAt: number }>(
   records: readonly T[],
   startTimes: ReadonlyMap<number, number>,
-  toleranceMs: number = PROCESS_START_TOLERANCE_MS,
+  window: ProcessStartWindow = PROCESS_START_WINDOW,
 ): ProcessKillPlan<T> {
   const kill: T[] = [];
   const reused: T[] = [];
@@ -43,7 +58,7 @@ export function planProcessKills<T extends { readonly pid: number; readonly star
       Number.isSafeInteger(record.pid) && record.pid > 0 ? startTimes.get(record.pid) : undefined;
     if (observed === undefined) {
       gone.push(record);
-    } else if (!sameProcess(record.startedAt, observed, toleranceMs)) {
+    } else if (!sameProcess(record.startedAt, observed, window)) {
       reused.push(record);
     } else if (!killed.has(record.pid)) {
       killed.add(record.pid);

@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { planProcessKills } from "@haril/core";
+import { planProcessKills, processStartWindow } from "@haril/core";
 import { createProcessControl } from "@haril/os";
 
 // Process helpers of the tests that run real agent processes (3.14). A test kills only processes it started, and only
@@ -41,7 +41,7 @@ export function toolProcesses(runsDir: string): NotedProcess[] {
 export async function killNoted(noted: readonly NotedProcess[]): Promise<void> {
   if (noted.length === 0) return;
   const times = await processControl.startTimes(noted.map((item) => item.pid));
-  const plan = planProcessKills(noted, times);
+  const plan = planProcessKills(noted, times, processStartWindow(process.platform));
   await Promise.all(plan.kill.map((item) => processControl.killTree(item.pid)));
 }
 

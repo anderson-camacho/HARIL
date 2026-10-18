@@ -1,34 +1,51 @@
 import { describe, expect, it } from "vitest";
 import {
-  PROCESS_START_TOLERANCE_MS,
+  PROCESS_START_WINDOW,
   planProcessKills,
+  processStartWindow,
   sameProcess,
 } from "../src/supervisor/index.js";
 
 // Which recorded agent processes may be killed (docs/modos-y-delegacion.md 3.14.5): only a pid that is still running
-// and whose start time, as the OS reports it, agrees with the one recorded when it was spawned. A pid the OS reused
-// for another process started later, so it is kept; a pid that is not running is simply gone.
+// and whose start time, as the OS reports it, agrees with the one recorded when it was spawned. The recorded time is
+// taken right after the spawn returned, so the same process started a little before it; a pid the OS reused belongs to
+// a process that started after it. The window is therefore wide before the recorded time and narrow after it.
 
 const SPAWNED = 1_800_000_000_000;
 
 describe("sameProcess", () => {
-  it("accepts an observed start within the tolerance on either side, and nothing beyond it", () => {
+  it("accepts a start up to 2 s before the recorded time, and nothing earlier", () => {
     expect(sameProcess(SPAWNED, SPAWNED)).toBe(true);
-    expect(sameProcess(SPAWNED, SPAWNED - PROCESS_START_TOLERANCE_MS)).toBe(true);
-    expect(sameProcess(SPAWNED, SPAWNED + PROCESS_START_TOLERANCE_MS)).toBe(true);
-    expect(sameProcess(SPAWNED, SPAWNED + PROCESS_START_TOLERANCE_MS + 1)).toBe(false);
-    expect(sameProcess(SPAWNED, SPAWNED - PROCESS_START_TOLERANCE_MS - 1)).toBe(false);
+    expect(sameProcess(SPAWNED, SPAWNED - 1500)).toBe(true);
+    expect(sameProcess(SPAWNED, SPAWNED - PROCESS_START_WINDOW.beforeMs)).toBe(true);
+    expect(sameProcess(SPAWNED, SPAWNED - PROCESS_START_WINDOW.beforeMs - 1)).toBe(false);
+  });
+
+  it("refuses a start more than 100 ms after the recorded time on Windows and Linux: a reused pid starts later", () => {
+    for (const platform of ["win32", "linux"]) {
+      const window = processStartWindow(platform);
+      expect(sameProcess(SPAWNED, SPAWNED + 50, window)).toBe(true);
+      expect(sameProcess(SPAWNED, SPAWNED + 100, window)).toBe(true);
+      expect(sameProcess(SPAWNED, SPAWNED + 101, window)).toBe(false);
+      expect(sameProcess(SPAWNED, SPAWNED + 150, window)).toBe(false);
+      expect(sameProcess(SPAWNED, SPAWNED - 1500, window)).toBe(true);
+    }
+    expect(sameProcess(SPAWNED, SPAWNED + 150)).toBe(false);
+  });
+
+  it("allows up to 1 s after the recorded time on macOS, whose ps truncates the elapsed time to whole seconds", () => {
+    const window = processStartWindow("darwin");
+    expect(sameProcess(SPAWNED, SPAWNED + 900, window)).toBe(true);
+    expect(sameProcess(SPAWNED, SPAWNED + 1000, window)).toBe(true);
+    expect(sameProcess(SPAWNED, SPAWNED + 1001, window)).toBe(false);
+    expect(sameProcess(SPAWNED, SPAWNED - 2000, window)).toBe(true);
+    expect(sameProcess(SPAWNED, SPAWNED - 2001, window)).toBe(false);
   });
 
   it("never matches a process whose start time is unknown or not a number", () => {
     expect(sameProcess(SPAWNED, undefined)).toBe(false);
     expect(sameProcess(SPAWNED, Number.NaN)).toBe(false);
     expect(sameProcess(Number.NaN, SPAWNED)).toBe(false);
-  });
-
-  it("takes a narrower tolerance when asked", () => {
-    expect(sameProcess(SPAWNED, SPAWNED + 500, 100)).toBe(false);
-    expect(sameProcess(SPAWNED, SPAWNED + 50, 100)).toBe(true);
   });
 });
 
@@ -38,7 +55,7 @@ describe("planProcessKills", () => {
     const reused = { runId: "r2", pid: 200, startedAt: SPAWNED - 3_600_000 };
     const gone = { runId: "r3", pid: 300, startedAt: SPAWNED };
     const observed = new Map([
-      [100, SPAWNED + 15],
+      [100, SPAWNED - 15],
       [200, SPAWNED],
     ]);
 
@@ -47,6 +64,19 @@ describe("planProcessKills", () => {
       reused: [reused],
       gone: [gone],
     });
+  });
+
+  it("keeps a pid whose process started just after the recorded time: the OS reused it", () => {
+    const record = { runId: "r1", pid: 100, startedAt: SPAWNED };
+    expect(planProcessKills([record], new Map([[100, SPAWNED + 500]]))).toEqual({
+      kill: [],
+      reused: [record],
+      gone: [],
+    });
+    expect(
+      planProcessKills([record], new Map([[100, SPAWNED + 500]]), processStartWindow("darwin"))
+        .kill,
+    ).toEqual([record]);
   });
 
   it("kills a pid only for the record that matches when an older run recorded the same pid", () => {

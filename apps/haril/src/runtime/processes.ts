@@ -1,4 +1,4 @@
-import { planProcessKills } from "@haril/core";
+import { planProcessKills, processStartWindow } from "@haril/core";
 import type {
   ProcessControl,
   RecordedProcess,
@@ -29,7 +29,7 @@ export async function killRecordedProcesses(
   const records = store.runs.processes(filter).filter(select);
   if (records.length === 0) return { checked: 0, killed: [], kept: [] };
   const startTimes = await control.startTimes(records.map((record) => record.pid));
-  const plan = planProcessKills(records, startTimes);
+  const plan = planProcessKills(records, startTimes, processStartWindow(process.platform));
   await Promise.all(plan.kill.map((record) => control.killTree(record.pid)));
   return { checked: records.length, killed: plan.kill, kept: plan.reused };
 }
@@ -41,7 +41,7 @@ export async function stillRunning(
 ): Promise<RecordedProcess[]> {
   if (records.length === 0) return [];
   const startTimes = await control.startTimes(records.map((record) => record.pid));
-  return [...planProcessKills(records, startTimes).kill];
+  return [...planProcessKills(records, startTimes, processStartWindow(process.platform)).kill];
 }
 
 // Each kill and each kept pid of a sweep is an audit event of its run: the pid and why, never more.
