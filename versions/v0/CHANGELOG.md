@@ -4,6 +4,60 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.11.0
+
+- **Fecha:** 2026-10-18
+- **Estado:** **El núcleo puro de la delegación en tres capas.** El Core ya sabe validar lo que propone un agente, decidir qué tareas pueden arrancar sin pasar ningún límite, elegir el modelo de cada agente según quién lo fijó, la tabla de dificultad y la cuota, acotar los reprocesos y dar el veredicto del vigilante de 15 minutos. Son funciones puras, sin base de datos ni procesos: todavía no hay runtime que las use ni comando nuevo (fase F1a de la delegación, ADR-0021). Además, cada cambio entregado queda obligado a subir la versión: `npm run check` y la CI fallan si no.
+
+### Añadido
+
+- **Núcleo de la delegación** (`packages/core/src/delegation/`):
+  - **arquetipos** `orchestrator`, `delegator`, `executor` y `auditor`, sobre los tipos de tarea existentes (`plan`, `plan`, `work` y `verify`), con sus herramientas del puente antes y después de la escritura (F8) y los hijos que cada uno puede proponer;
+  - **límites** con los valores iniciales de la configuración: 5 delegadores por orquestador y 4 ejecutores por delegador vivos a la vez por hilo, 5 ejecutores y 5 auditores simultáneos por workflow como límites independientes, 1 escritor, 100 agentes por workflow, 3 propuestas y 100 tareas en cola por hilo. Ninguna regla lleva un número fijo: todas leen el objeto de límites;
+  - `checkDelegation`: cada regla de validación con su código cerrado (`workflow_not_running`, `tool_not_allowed`, `too_deep`, `too_many_proposals`, `too_many_queued`, `workflow_agent_cap`, `workflow_token_cap`, `duplicate_task_id`, `unknown_dependency`, `cycle`, `model_not_allowed`, `model_unavailable`, `quota_blocked`, `checkpoint_removes_stop`) y un motivo legible para que el agente corrija. Los hermanos con superficies de escritura solapadas no se rechazan: se ordenan en secuencia siguiendo sus dependencias;
+  - `selectClaims`: qué tareas listas arrancan ahora, por prioridad y orden de creación, sin pasar nunca un límite por rol, por hilo, de escritores o del workflow, sin dos turnos del mismo hilo a la vez y sin dos tareas con superficies de escritura que puedan solaparse;
+  - `globsMayOverlap`: el algoritmo conservador de la verificación S5; ante sintaxis que no puede analizar, responde que se solapan;
+  - `chooseModel`: el modelo que fija el usuario se usa siempre y nunca se sustituye (con la cuota bloqueada espera el reinicio o detiene el workflow); el del padre se valida y, si al lanzar ya no cumple, se cambia por el siguiente elegible indicando cuál reemplazó; si no, la tabla de dificultad (el más barato con tasa de éxito suficiente, desempate por más cuota restante). Reglas de cuota: desde el 80 % de la ventana de 5 h se cambia de modelo, desde el 80 % semanal se deja de usar, con 20 % o menos restante no va una tarea grande, y sin dato la regla se omite para ese proveedor;
+  - **máquina de reproceso**: como mucho 1 relanzamiento y 1 escalada por tarea; un intento fallido cuenta como un rechazo y una reformulación no reinicia la cuenta. `checkVerdict` rechaza un veredicto negativo sin ningún criterio incumplido (`verdict_without_reason`);
+  - `evaluateLiveness`: el vigilante de 15 minutos hecho en código con datos objetivos: lo residual se cancela sin reintento, lo inactivo se cierra, lo que avanza sigue y se vuelve a evaluar, y las esperas humanas y los enfriamientos no se cierran;
+  - **paradas**: el agente solo puede añadirlas; quitarlas es cosa del humano. `stopFor` dice qué parada alcanza cada evento.
+- **Contratos** (`packages/contracts`): los esquemas de `haril_delegate`, `haril_assign`, `haril_report`, `haril_verdict`, `haril_request_audit`, `haril_abort`, `haril_run` y `haril_merge`, el vocabulario cerrado de paradas y `WorkflowSnapshot v1`, cada uno con su validador.
+- **Versión obligatoria:**
+  - `node scripts/bump-version.mjs <patch|minor|major|x.y.z>` (o `npm run version:bump -- minor`) sube todas las cadenas de versión juntas, añade arriba del CHANGELOG una entrada fechada con marcas `TODO(bump-version)` para completar y actualiza `versions/README.md`, conservando los finales de línea de cada archivo. Esta versión se subió con él;
+  - `npm run check:version`, dentro de `npm run check`: falla si hay archivos públicos cambiados respecto de la base sin subir la versión, si las cadenas de versión no coinciden, si la entrada de arriba del CHANGELOG no es la versión actual o le quedan marcas, o si `versions/README.md` nombra otra versión. La base es `HARIL_VERSION_BASE` o el merge-base con `origin/main`; sin base (un clon sin remoto) solo comprueba la coherencia y lo dice.
+
+### Cambiado
+
+- La CI descarga el historial completo (`fetch-depth: 0`) para que `check:version` encuentre el merge-base.
+- `scripts/check-layers.mjs` asigna la carpeta `core/delegation` a la capa 2, para que el ejecutor y el orquestador (capa 3) puedan leer la tabla de arquetipos.
+
+### Valores provisionales
+
+Tomados de la propuesta de la especificación mientras el usuario no decida (ADR-0021):
+
+- P1: parada por defecto `after_plan`. P3: 1 relanzamiento y 1 escalada. P4: la cuota de un proveedor con varias cuentas es la de su peor cuenta. P16: vigilante cada 15 minutos, cierra tras 1 evaluación sin progreso y cierra los residuales de inmediato.
+- Lectura L1: los auditores no cuentan entre los hijos vivos de su delegador; solo los limita su tope simultáneo.
+- Una petición al modelo en curso cuenta como progreso para el vigilante: un modelo que razona sin emitir no se cierra (el Broker ya corta un flujo tras 120 s de silencio).
+- La forma de `haril_run` (`command` y `args`) no estaba fijada en la especificación.
+- Añadidos a la especificación: la clave `maxDepth` (3) en los límites, para que la regla de profundidad también lea un límite, y el código `workflow_token_cap` para el tope de tokens del workflow.
+- En el borde exacto, el 80 % ya bloquea: la fórmula de la especificación dice «usado < 80 %».
+
+### Desvíos y aplazamientos
+
+- **Sin runtime ni comandos:** las funciones existen, pero nada las llama todavía. Las migraciones `0007` y `0008`, el registro de consumo y de órdenes, `haril usage`, los agentes simulados `fake:*` y la demostración de tres capas son la fase F1b.
+- `checkDelegation` no reutiliza `plan-graph.ts`: sus funciones de grafo son internas y trabajan sobre un plan, así que la delegación tiene las suyas con los mismos códigos.
+- `selectClaims` cuenta agentes, no tokens: la configuración define topes por número.
+- Una carpeta existente como superficie se trata como `carpeta/**` solo si quien llama la escribe con `/` final: el Core es puro y no mira el disco.
+- La consola conserva su copia local de `WorkflowSnapshot` (regla de capas R6); no se tocó.
+
+### Verificación
+
+- Pruebas primero: para cada función pura se escribieron las pruebas, se vio el rojo (con el módulo ausente o con funciones de relleno) y después el verde. Pruebas de propiedades con semilla fija: 3000 instantáneas generadas para `selectClaims` (nunca pasa un límite, nunca solapa superficies y nunca deja una tarea esperando si cabía) y 4000 secuencias de eventos para el reproceso. Dos mutaciones a mano en `selectClaims` (el tope de escritores y el cerrojo de superficie) hicieron fallar las pruebas.
+- 198 pruebas nuevas: 31 de contratos, 144 del núcleo de la delegación y 23 de los scripts de versión, que crean repositorios git temporales y los borran al terminar.
+- Local: `pnpm run check` 0; `pnpm test` con 1865 pruebas de Vitest (1 omitida, solo POSIX) y 112 de `node:test`; `npm run build` 0 y `haril --version` imprime `haril 0.11.0`. `check:version` sobre esta rama: 0.8.0 → 0.11.0 desde el merge-base con `origin/main`.
+
+---
+
 ## 0.10.0
 
 - **Fecha:** 2026-10-18
