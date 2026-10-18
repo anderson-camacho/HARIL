@@ -4,9 +4,11 @@ import type {
   AgentMetrics,
   AppendEventInput,
   AppliedCommand,
+  CancelReason,
   ClaimedTask,
   Clock,
   CommandRecord,
+  CommandStatus,
   CompletedRun,
   CreatableTaskKind,
   DependencyResult,
@@ -49,6 +51,7 @@ import { StoreError } from "./errors.js";
 import { readLeaseSummary } from "./lease.js";
 import { createMaintenance } from "./maintenance.js";
 import { createMemoryFacet } from "./memory.js";
+import { createStopsFacet, type StopsFacet, stopModeOf } from "./stops.js";
 import { createUsageLogFacet } from "./usage-log.js";
 import { createWorkflowsFacet, type WorkflowCommandHandler } from "./workflows.js";
 
@@ -176,6 +179,8 @@ export type ApplyVerdict =
       readonly taskIds: readonly string[];
       readonly planId?: string;
       readonly workflowId?: string;
+      // The workflows a stop ended (3.14).
+      readonly workflowIds?: readonly string[];
     }
   | { readonly ok: false; readonly reason: string };
 
@@ -244,6 +249,7 @@ export class SqliteStore implements Store {
   readonly usageLog: Store["usageLog"];
   readonly workflows: Store["workflows"];
   private readonly applyWorkflowCommand: WorkflowCommandHandler;
+  private readonly stops: StopsFacet;
   readonly maintenance: Store["maintenance"];
 
   constructor(options: StoreOptions) {
@@ -265,6 +271,7 @@ export class SqliteStore implements Store {
       enqueue: (input) => this.enqueueCommand(input),
       listQueued: () => this.listQueuedCommands(),
       applyNext: (epoch) => this.applyNextCommand(epoch),
+      get: (commandId) => this.commandStatus(commandId),
     };
     this.tasks = {
       list: (filter) => this.listTasks(filter),
@@ -278,6 +285,11 @@ export class SqliteStore implements Store {
           options?.standaloneOnly === true,
         ),
       claimTask: (epoch, taskId) => this.claimNamedTask(epoch, taskId),
+      cancel: (epoch, taskId, reason) =>
+        this.inTransaction(() => {
+          this.assertActiveEpoch(epoch);
+          return this.stops.cancelTask(taskId, reason, this.clock.now());
+        }),
     };
     this.runtime = {
       leaseSummary: () => this.leaseSummary(),
@@ -286,10 +298,21 @@ export class SqliteStore implements Store {
       release: (epoch, cleanExit) => this.releaseLease(epoch, cleanExit),
       releaseIfIdle: (epoch) => this.releaseLeaseIfIdle(epoch),
       reconcile: (epoch, maxInfraRestarts) => this.reconcileOrphans(epoch, maxInfraRestarts),
+      haltState: () => this.stops.haltState(),
     };
     this.runs = {
       complete: (completion) => this.completeRun(completion),
-      cancel: (runId, reason) => this.cancelRun(runId, reason),
+      cancel: (runId, reason) =>
+        reason === "shutdown"
+          ? this.cancelRun(runId, reason)
+          : this.cancelRunAndTask(runId, reason),
+      recordProcess: (epoch, runId, process) =>
+        this.inTransaction(() => {
+          this.assertActiveEpoch(epoch);
+          this.stops.recordProcess(epoch, runId, process);
+        }),
+      processes: (filter) => this.stops.processes(filter),
+      activity: (runId, since) => this.stops.activity(runId, since),
     };
     this.events = {
       append: (input) => this.appendEvent(input),
@@ -306,6 +329,17 @@ export class SqliteStore implements Store {
     });
     this.budgets = facets.budgets;
     this.virtualKeys = facets.virtualKeys;
+    this.stops = createStopsFacet({
+      db: this.db,
+      appendEvent: (input) => this.appendEvent(input),
+      transition: (from, to) => this.transition(from, to),
+      revokeKeys: (runId, reason) => {
+        this.virtualKeys.revoke(runId, reason);
+      },
+      settleOpenReservations: (runId) => {
+        this.budgets.settleOpenForRun(runId);
+      },
+    });
     this.approvals = createApprovalsFacet({
       db: this.db,
       clock: this.clock,
@@ -644,6 +678,7 @@ export class SqliteStore implements Store {
               taskIds: verdict.taskIds,
               planId: verdict.planId ?? null,
               workflowId: verdict.workflowId ?? null,
+              ...(verdict.workflowIds === undefined ? {} : { workflowIds: verdict.workflowIds }),
             }),
             command.commandId,
           );
@@ -658,10 +693,12 @@ export class SqliteStore implements Store {
         return {
           commandId: command.commandId,
           type: command.type,
+          args: command.args,
           outcome: "applied",
           taskIds: verdict.taskIds,
           planId: verdict.planId,
           workflowId: verdict.workflowId,
+          ...(verdict.workflowIds === undefined ? {} : { workflowIds: verdict.workflowIds }),
         };
       }
       this.db
@@ -680,6 +717,7 @@ export class SqliteStore implements Store {
       return {
         commandId: command.commandId,
         type: command.type,
+        args: command.args,
         outcome: "rejected",
         reason: verdict.reason,
         taskIds: [],
@@ -687,16 +725,56 @@ export class SqliteStore implements Store {
     });
   }
 
+  // A queued command and what became of it (haril stop --now reads its own back).
+  private commandStatus(commandId: string): CommandStatus | undefined {
+    const row = this.db
+      .prepare(
+        "SELECT command_id AS commandId, type, status, result, reject_reason AS reason, applied_at AS appliedAt FROM commands WHERE command_id = ?",
+      )
+      .get(commandId) as
+      | {
+          commandId: string;
+          type: string;
+          status: CommandStatus["status"];
+          result: string | null;
+          reason: string | null;
+          appliedAt: number | null;
+        }
+      | undefined;
+    if (row === undefined) return undefined;
+    const result =
+      row.result === null
+        ? {}
+        : (JSON.parse(row.result) as { taskIds?: unknown; workflowIds?: unknown });
+    const ids = (value: unknown): string[] =>
+      Array.isArray(value) ? value.filter((id): id is string => typeof id === "string") : [];
+    return {
+      commandId: row.commandId,
+      type: row.type,
+      status: row.status,
+      taskIds: ids(result.taskIds),
+      workflowIds: ids(result.workflowIds),
+      reason: row.reason,
+      appliedAt: row.appliedAt,
+    };
+  }
+
   private applyCommandBody(command: CommandRecord, now: number): ApplyVerdict {
     // runtime.stop belongs to the runtime, not to a project: the runtime itself acts on it after this commit (ARCH 4.2).
+    // With {mode: "now"} it is the emergency stop (3.14): the store halts, stops and cancels in this transaction, and the
+    // runtime kills the processes after it.
     if (command.type === "runtime.stop") {
-      return Object.keys(command.args).length === 0
-        ? { ok: true, taskIds: [] }
-        : { ok: false, reason: "runtime.stop takes no arguments" };
+      const mode = stopModeOf(command.args);
+      if (mode === null) {
+        return { ok: false, reason: 'runtime.stop takes no arguments, or {mode: "now"}' };
+      }
+      return mode === "now" ? this.stops.emergencyStop(command, now) : { ok: true, taskIds: [] };
     }
+    if (command.type === "runtime.resume") return this.stops.resume(command);
     if (command.projectId === null) return { ok: false, reason: "command has no project" };
     if (command.type === "task.create") return this.applyTaskCreate(command, now);
     if (command.type === "plan.submit") return this.applyPlanSubmit(command, now);
+    if (command.type === "workflow.stop") return this.stops.workflowStop(command, now);
     const workflowVerdict = this.applyWorkflowCommand(command, now);
     if (workflowVerdict !== undefined) return workflowVerdict;
     return { ok: false, reason: `unsupported command type "${command.type}"` };
@@ -1012,6 +1090,8 @@ export class SqliteStore implements Store {
   ): ClaimedTask | undefined {
     return this.inTransaction(() => {
       this.assertActiveEpoch(epoch);
+      // A halted runtime claims nothing until haril resume (3.14).
+      if (this.stops.haltState().halted) return undefined;
       // Excluded agents and tasks are skipped in SQL, so the claim never touches a task that cannot run (M2-T6, M3-T7).
       const excludedAgents = [...new Set(excludeAgentRefs)];
       const excludedTasks = [...new Set(excludeTaskIds)];
@@ -1039,6 +1119,7 @@ export class SqliteStore implements Store {
   private claimNamedTask(epoch: number, taskId: string): ClaimedTask | undefined {
     return this.inTransaction(() => {
       this.assertActiveEpoch(epoch);
+      if (this.stops.haltState().halted) return undefined;
       const row = this.db
         .prepare(
           `SELECT ${READY_COLUMNS} FROM tasks WHERE state = 'ready' AND task_id = ?${RUNNING_WORKFLOW_ONLY}`,
@@ -1451,6 +1532,53 @@ export class SqliteStore implements Store {
         attemptsUsed: task.attemptsUsed,
         maxAttempts: task.maxAttempts,
         retryReason: "orphaned",
+        failureReason: null,
+        verifyRetries: task.verifyRetries,
+      };
+    });
+  }
+
+  // 3.14 and 3.16: a run in flight ends as cancelled together with its task, which is never retried (user_stop or
+  // residual). Nothing is charged; the run's keys and open reservations end with it.
+  private cancelRunAndTask(runId: string, reason: CancelReason): CompletedRun {
+    return this.inTransaction(() => {
+      const run = this.db
+        .prepare(
+          "SELECT task_id AS taskId, status, claim_epoch AS claimEpoch, attempt FROM runs WHERE run_id = ?",
+        )
+        .get(runId) as
+        | { taskId: string; status: string; claimEpoch: number; attempt: number }
+        | undefined;
+      if (run === undefined || run.status !== "running") {
+        throw new StoreError("store.stale", `run ${runId} is not running`, { runId });
+      }
+      const task = this.db
+        .prepare(
+          "SELECT state, claim_epoch AS claimEpoch, attempts_used AS attemptsUsed, max_attempts AS maxAttempts, verify_retries AS verifyRetries FROM tasks WHERE task_id = ?",
+        )
+        .get(run.taskId) as
+        | {
+            state: string;
+            claimEpoch: number;
+            attemptsUsed: number;
+            maxAttempts: number;
+            verifyRetries: number;
+          }
+        | undefined;
+      if (task === undefined || task.state !== "running" || task.claimEpoch !== run.claimEpoch) {
+        throw new StoreError("store.stale", `task of run ${runId} is no longer claimed by it`, {
+          runId,
+        });
+      }
+      const cancelled = this.stops.cancelTask(run.taskId, reason, this.clock.now());
+      return {
+        taskId: run.taskId,
+        goal: cancelled?.goal ?? "",
+        attempt: run.attempt,
+        taskState: "cancelled",
+        attemptsUsed: task.attemptsUsed,
+        maxAttempts: task.maxAttempts,
+        retryReason: null,
         failureReason: null,
         verifyRetries: task.verifyRetries,
       };

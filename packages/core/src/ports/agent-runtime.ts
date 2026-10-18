@@ -59,13 +59,26 @@ export type AgentOutcome =
   | { readonly status: "timed_out" }
   | { readonly status: "aborted" };
 
+// The operating-system process that serves an attempt (docs/modos-y-delegacion.md 3.14): its pid and the wall-clock
+// time it was started, taken right after the spawn. The runtime records both on the run, so the startup sweep and the
+// emergency stop kill a process only while its pid still names the same process (a reused pid has a later start).
+export interface AgentProcess {
+  readonly pid: number;
+  readonly startedAt: number;
+}
+
 export interface AgentHandle {
   readonly runId: string;
   // Handshake: the tool list the agent announces. A prompt is accepted only if it equals allowedTools.
   readonly hello: Promise<AgentHello>;
   readonly settled: Promise<AgentOutcome>;
+  // The process serving the run once it started; absent for an agent with no process of its own (the simulated ones).
+  readonly process?: AgentProcess;
   prompt(text: string): Promise<Result<void, HarilError>>;
   abort(): Promise<void>;
+  // Ends the run at once (3.14): the process tree is killed without the abort's grace period, and the run settles as
+  // aborted. Resolves once the process is gone. An agent without it is ended with abort().
+  kill?(): Promise<void>;
   // Idempotent. Settles the run as aborted if it has not settled yet.
   dispose(): Promise<void>;
 }
