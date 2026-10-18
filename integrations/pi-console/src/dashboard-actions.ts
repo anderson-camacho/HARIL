@@ -21,6 +21,8 @@ import { plainText, textWidth, truncate, wrap } from "./text.js";
 
 const HARIL_COMMANDS = [
   "/mode",
+  "/delegate",
+  "/continue",
   "/goal",
   "/plans",
   "/plan",

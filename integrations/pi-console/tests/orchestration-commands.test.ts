@@ -45,6 +45,7 @@ function fakeHost(): CommandHost {
     area: undefined,
     started: undefined,
     harilModelRef: () => undefined,
+    harilModels: () => [],
     showOutput: () => undefined,
     clearOutput: () => undefined,
     openArea(area: DashboardArea) {

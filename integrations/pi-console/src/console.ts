@@ -4,8 +4,8 @@
 // CLI on the project of the folder Pi opened in. Self-contained: node:* imports and local types only, so it bundles
 // into one file next to the bridge.
 
-import { cliAvailable, runHaril } from "./cli.js";
-import { type CommandHost, chooseMode, registerCommands } from "./commands.js";
+import { cliAvailable, NOT_LAUNCHED, runHaril } from "./cli.js";
+import { type CommandHost, chooseMode, delegationHost, registerCommands } from "./commands.js";
 import {
   DASHBOARD_AREAS,
   type DashboardArea,
@@ -17,6 +17,7 @@ import {
 import { openDashboardActionMenu, runDashboardAction } from "./dashboard-actions.js";
 import type { DashboardAction } from "./dashboard-controls.js";
 import { type DashboardData, emptyDashboardData, loadDashboardData } from "./dashboard-data.js";
+import { delegateFromChat } from "./delegation.js";
 import { stopAll } from "./emergency.js";
 import { installModes } from "./mode-controller.js";
 import { levelLabel } from "./model-levels.js";
@@ -384,6 +385,15 @@ export default function harilConsole(pi: ConsolePi): void {
       },
       lastPlan: () => modes.lastPlan(),
       harilModelRef: () => harilRef(current.model, current.registration),
+      harilModels: () => {
+        const registration = current.registration;
+        if (registration === undefined) return [];
+        const refs = safely(() => ctx.modelRegistry.getAvailable(), []).flatMap((model) => {
+          const harilId = registration.harilIdOf.get(model.provider);
+          return harilId === undefined ? [] : [`${harilId}/${model.id}`];
+        });
+        return [...new Set(refs)].sort();
+      },
       modelRef: () => harilRef(current.model, current.registration),
       runtime: () => runtimeState(current),
       runtimeAvailable: () =>
@@ -819,8 +829,18 @@ export default function harilConsole(pi: ConsolePi): void {
     void session.refresh();
   });
 
-  // A new prompt replaces the answer of the last HARIL command.
-  pi.on("input", () => {
-    session?.clearOutput();
+  // A new prompt replaces the answer of the last HARIL command. In DELEGATION mode the text never reaches the model:
+  // it opens the /delegate card as the goal (or a hint while a workflow runs, P5). Pi stops at a handled input, so
+  // everything the console does with an input happens here.
+  pi.on("input", (event, ctx) => {
+    const current = session;
+    current?.clearOutput();
+    if (current === undefined || modes.mode() !== "delegation" || event.source === "extension")
+      return undefined;
+    const text = event.text.trim();
+    if (text === "") return undefined;
+    if (!cliAvailable()) ctx.ui.notify(NOT_LAUNCHED, "error");
+    else void delegateFromChat(text, ctx, delegationHost(current));
+    return { action: "handled" };
   });
 }

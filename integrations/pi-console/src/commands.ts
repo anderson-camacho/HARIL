@@ -1,6 +1,12 @@
 import { cliAvailable, NOT_LAUNCHED, runHaril, type StartedRuntime, startRuntime } from "./cli.js";
 import { DASHBOARD_AREAS, type DashboardArea } from "./dashboard.js";
 import {
+  continueWorkflow,
+  type DelegationHost,
+  lastUserText,
+  startDelegation,
+} from "./delegation.js";
+import {
   CONSOLE_MODES,
   type ConsoleMode,
   commandRefusal,
@@ -9,7 +15,7 @@ import {
   parseMode,
 } from "./modes.js";
 import { demoNotice } from "./orchestration-state.js";
-import type { AutocompleteItem, ConsoleContext, ConsolePi } from "./pi-types.js";
+import type { AutocompleteItem, ConsoleContext, ConsolePi, SessionEntry } from "./pi-types.js";
 import { type BoundProject, folderName } from "./project.js";
 import { type PendingApproval, readPending, readRuntimeAlive } from "./status.js";
 import { plainText } from "./text.js";
@@ -37,6 +43,8 @@ export interface CommandHost {
   started: StartedRuntime | undefined;
   // The current Pi model as a HARIL reference (<provider>/<model>) when a HARIL provider serves it.
   harilModelRef(): string | undefined;
+  // Every model a HARIL provider serves, as <provider>/<model> (the /delegate card's model choice).
+  harilModels(): readonly string[];
   showOutput(title: string, lines: readonly string[]): void;
   clearOutput(): void;
   openArea(area: DashboardArea): void;
@@ -226,6 +234,18 @@ export async function chooseMode(host: CommandHost, ctx: ConsoleContext): Promis
   if (picked !== undefined) host.switchMode(picked, ctx);
 }
 
+// What /delegate, /continue and DELEGATION mode need from the console.
+export function delegationHost(host: CommandHost): DelegationHost {
+  return {
+    cwd: host.cwd,
+    project: host.project,
+    harilModelRef: () => host.harilModelRef(),
+    harilModels: () => host.harilModels(),
+    ensureRuntime: () => ensureRuntime(host),
+    openArea: (area) => host.openArea(area),
+  };
+}
+
 const MODE_COMPLETIONS: readonly AutocompleteItem[] = CONSOLE_MODES.map((mode) => ({
   value: mode,
   label: mode,
@@ -312,6 +332,36 @@ const COMMANDS: readonly CommandSpec[] = [
       const parts = [firstLine(result.stdout) || "goal queued", planner.note, runtime];
       ctx.ui.notify(parts.filter((part) => part !== undefined).join(" · "), "info");
     },
+  },
+  {
+    name: "delegate",
+    usage: "/delegate [goal]",
+    description:
+      "Open the card that starts a three-layer workflow with real agents (without a goal: your last message)",
+    async run(args, host, ctx) {
+      let goal = plainText(args).trim();
+      if (goal === "") {
+        let branch: readonly SessionEntry[] = [];
+        try {
+          branch = ctx.sessionManager.getBranch();
+        } catch {
+          branch = [];
+        }
+        goal = lastUserText(branch) ?? "";
+      }
+      if (goal === "") {
+        ctx.ui.notify("usage: /delegate <what the workflow must reach>", "warning");
+        return;
+      }
+      await startDelegation(goal, ctx, delegationHost(host));
+    },
+  },
+  {
+    name: "continue",
+    usage: "/continue [workflowId] [stop…]",
+    description:
+      "Lift the stop a workflow waits at; name stops to remove them (only you remove stops)",
+    run: (args, host, ctx) => continueWorkflow(args, ctx, delegationHost(host)),
   },
   {
     name: "plans",

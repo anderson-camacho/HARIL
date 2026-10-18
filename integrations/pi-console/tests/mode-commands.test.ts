@@ -28,6 +28,7 @@ function host(): CommandHost {
     area: undefined,
     started: undefined,
     harilModelRef: () => "fake-gw/fake-model",
+    harilModels: () => ["fake-gw/fake-model", "fake-gw/fake-high-model"],
     showOutput: () => undefined,
     clearOutput: () => undefined,
     openArea: () => undefined,

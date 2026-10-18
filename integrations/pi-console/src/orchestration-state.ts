@@ -371,7 +371,7 @@ export function reduceOrchestration(
 
 // The key a raw terminal input stands for, as a name ("escape", "tab", "up", …) or a lower-case letter: legacy
 // sequences and the Kitty keyboard protocol forms Pi enables (CSI-u for Escape, Tab and Enter, modifier-tagged
-// arrows; release events never reach a component). Undefined for anything else.
+// arrows; release events never reach a component). Undefined for anything else. The /delegate card reads keys the same way.
 const ESC = "\u001b";
 const ARROWS: Readonly<Record<string, string>> = { A: "up", B: "down", C: "right", D: "left" };
 // Kitty CSI-u modifier bits (the field minus one): Shift 1; Alt 2, Ctrl 4, Super 8, Hyper 16 and Meta 32 make a
@@ -379,7 +379,7 @@ const ARROWS: Readonly<Record<string, string>> = { A: "up", B: "down", C: "right
 const SHIFT = 1;
 const CHORD_MODIFIERS = 2 | 4 | 8 | 16 | 32;
 
-function keyOf(data: string): string | undefined {
+export function keyOf(data: string): string | undefined {
   if (data === ESC) return "escape";
   if (data === "\t") return "tab";
   if (data === "\r" || data === "\n") return "enter";
