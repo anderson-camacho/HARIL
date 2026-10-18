@@ -25,8 +25,14 @@ const WILDCARD = /[*?]/;
 // 512 characters answer at once instead of after seconds; everyday surfaces stay far below it.
 const SURFACE_WORK_BUDGET = 2_000_000;
 
-// Segments of a supported pattern, or null when it cannot be reasoned about.
-function segmentsOf(glob: string): string[] | null {
+// How a surface is matched against a path: with `caseSensitive`, letter case must agree, as on a case-sensitive file
+// system (the host passes it everywhere but Windows); without it, ASCII letters compare without case.
+export interface SurfaceMatchOptions {
+  readonly caseSensitive?: boolean;
+}
+
+// Segments of a supported pattern, or null when it cannot be reasoned about. ASCII letters are lowercased unless `keepCase`.
+function segmentsOf(glob: string, keepCase = false): string[] | null {
   const text = glob.trim();
   if (UNSUPPORTED.test(text) || NON_ASCII.test(text)) return null;
   let path = text.replace(/^(\.\/)+/, "").replace(/\/{2,}/g, "/");
@@ -37,7 +43,9 @@ function segmentsOf(glob: string): string[] | null {
   if (segments.length === 0) return ["**"];
   const out: string[] = [];
   for (const segment of segments) {
-    if (!(segment === "**" && out[out.length - 1] === "**")) out.push(segment.toLowerCase());
+    if (!(segment === "**" && out[out.length - 1] === "**")) {
+      out.push(keepCase ? segment : segment.toLowerCase());
+    }
   }
   // A literal path may name an existing folder: it covers its subtree too.
   if (!out.some((segment) => WILDCARD.test(segment))) out.push("**");
@@ -113,15 +121,20 @@ export function surfacesMayOverlap(left: readonly string[], right: readonly stri
 // proved inside the surface is refused. A pattern with unsupported syntax or a non-ASCII character, or longer than
 // GLOB_MAX_LENGTH, matches nothing. `path` is a normalized relative path ("/" separators, no "." or ".." segment), as
 // checkWorkspacePath returns it.
-export function globMatches(glob: string, path: string): boolean {
+export function globMatches(
+  glob: string,
+  path: string,
+  options: SurfaceMatchOptions = {},
+): boolean {
   if (glob.length > GLOB_MAX_LENGTH) return false;
+  const keepCase = options.caseSensitive === true;
   try {
-    const pattern = segmentsOf(glob);
+    const pattern = segmentsOf(glob, keepCase);
     if (pattern === null) return false;
     const segments = path
       .split("/")
       .filter((segment) => segment !== "")
-      .map((segment) => (NON_ASCII.test(segment) ? segment : segment.toLowerCase()));
+      .map((segment) => (keepCase || NON_ASCII.test(segment) ? segment : segment.toLowerCase()));
     if (segments.length === 0) return false;
     return sequencesMeet(pattern, segments, "**", (a, b) => segmentMatches(a, b));
   } catch {
@@ -140,6 +153,10 @@ function segmentMatches(pattern: string, segment: string): boolean {
 }
 
 // A path falls inside a surface when any of its patterns matches it; an empty surface (a read-only task) holds nothing.
-export function pathMatchesSurface(path: string, surface: readonly string[]): boolean {
-  return surface.some((glob) => globMatches(glob, path));
+export function pathMatchesSurface(
+  path: string,
+  surface: readonly string[],
+  options: SurfaceMatchOptions = {},
+): boolean {
+  return surface.some((glob) => globMatches(glob, path, options));
 }

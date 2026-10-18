@@ -51,6 +51,19 @@ describe("globMatches", () => {
     expect(pathMatchesSurface("tests/a.test.ts", ["src/**", "docs/*.md"])).toBe(false);
     expect(pathMatchesSurface("src/a.ts", [])).toBe(false);
   });
+
+  it("compares letter case only when asked, as a case-sensitive file system does", () => {
+    expect(globMatches("src/Button.ts", "src/button.ts")).toBe(true);
+    expect(globMatches("src/Button.ts", "src/button.ts", { caseSensitive: true })).toBe(false);
+    expect(globMatches("src/*.ts", "SRC/a.ts", { caseSensitive: true })).toBe(false);
+    expect(globMatches("src/**", "src/A.ts", { caseSensitive: true })).toBe(true);
+    expect(pathMatchesSurface("SRC/a.ts", ["src/**"], { caseSensitive: true })).toBe(false);
+    expect(checkWorkspacePath("SRC/a.ts", ["src/**"], { caseSensitive: true })).toEqual({
+      ok: false,
+      reason: "outside_surface",
+    });
+    expect(checkWorkspacePath("SRC/a.ts", ["src/**"])).toEqual({ ok: true, path: "SRC/a.ts" });
+  });
 });
 
 describe("checkWorkspacePath", () => {

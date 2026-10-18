@@ -1,4 +1,4 @@
-import { pathMatchesSurface } from "./globs.js";
+import { pathMatchesSurface, type SurfaceMatchOptions } from "./globs.js";
 
 // The lexical half of the workspace PathGuard (docs/modos-y-delegacion.md 3.10.5 and section 8; phase F8). An agent that
 // writes names a path relative to its git worktree; this pure rule decides whether the path may be written before the
@@ -80,10 +80,11 @@ function segmentProblem(segment: string, allowSecret: boolean): WorkspacePathDen
 export function checkWorkspacePath(
   requested: string,
   surface: readonly string[],
+  options: SurfaceMatchOptions = {},
 ): WorkspacePathCheck {
   const checked = normalizeWorkspacePath(requested);
   if (!checked.ok) return checked;
-  return pathMatchesSurface(checked.path, surface) ? checked : deny("outside_surface");
+  return pathMatchesSurface(checked.path, surface, options) ? checked : deny("outside_surface");
 }
 
 // Every rule of checkWorkspacePath but the surface: the normalized path, or why it may not be written. `allowSecret`

@@ -21,6 +21,7 @@ import {
   type GitOptions,
   headBranch,
   headCommit,
+  isAncestor,
   isTracked,
   mergeBranch,
   mergeInProgress,
@@ -42,8 +43,11 @@ import type { Task, WorkflowView } from "./workflow-view.js";
 // started with a base branch and its commit (base_branch, base_sha): its project root is the top level of a git
 // repository. Then:
 //   - each executor thread works in its own worktree, on its own branch, created from the base commit (P13: never from
-//     another branch). A step that depends on another (or that the Core serialized after it) starts with that step's
-//     branch merged in, so it sees its predecessor's work; its base is still the base commit;
+//     another branch). A step whose dependencies wait on another step's audit (its own dependsOn, or the order the
+//     Core adds between overlapping steps of one assignment) starts with that step's approved commit merged in, so it
+//     sees its predecessor's work; its base is still the base commit. A step that only waited for a surface lock (an
+//     overlapping step of another part or another workflow) starts from the base commit alone: the delegators' merges
+//     into the integration branch bring that work together;
 //   - an executor's turn writes only inside its declared surface (the Core's lexical PathGuard, then the filesystem
 //     check of @haril/os). When the turn ends, only the changed paths inside its surface are committed, and anything else
 //     a command left is discarded: the branch holds exactly what the step wrote;
@@ -118,6 +122,9 @@ export interface CommandHooks {
 export type WorkspaceReply =
   | ({ readonly ok: true } & Readonly<Record<string, unknown>>)
   | { readonly ok: false; readonly reason: string };
+
+// Letter case counts in a surface wherever the file system tells names apart by it (everywhere but Windows).
+const SURFACE_MATCH = { caseSensitive: process.platform !== "win32" } as const;
 
 // The longest file an edit reads back.
 const EDIT_MAX_BYTES = 4 * 1024 * 1024;
@@ -352,14 +359,18 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
       if (!result.ok) return result;
       const found = await identify(repo, path);
       identity = found;
-      if (result.reused || known !== undefined) return result;
+      // A recorded worktree got its predecessors' work before it was recorded. One made but never recorded (a crash
+      // between the add and the record) gets it now: each predecessor commit its HEAD does not hold yet is merged.
+      if (known !== undefined) return result;
       const own: GitOptions = { ...git, gitDir: found.gitDir, workTree: path };
+      if (result.reused) await runAbort(path, own);
       // P13: a new step that waits for others starts with their approved work merged into its own branch.
       for (const thread of predecessors(view, task)) {
         const record = store.worktrees
           .list({ workflowId, kind: "executor" })
           .find((item) => item.threadId === thread);
         if (record === undefined || record.headSha === null) continue;
+        if ((await isAncestor(path, record.headSha, "HEAD", own)) === true) continue;
         // The predecessor's commit, not its branch: a merged step's branch may already be gone.
         const merged = await mergeBranch(
           path,
@@ -468,7 +479,9 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
     }
     const changed = await changedPaths(workspace.root, own);
     if (changed === undefined) throw new Error("git status failed in the step's worktree");
-    const inside = changed.filter((path) => pathMatchesSurface(path, workspace.writeSurface));
+    const inside = changed.filter((path) =>
+      pathMatchesSurface(path, workspace.writeSurface, SURFACE_MATCH),
+    );
     const message = `haril: ${label(view.label(task.threadId))} attempt ${task.attempt}\n\n${label(task.goal)}`;
     const committed = await commitPaths(workspace.root, inside, message, own);
     if (!committed.ok)
@@ -478,7 +491,7 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
     const outside =
       gained === undefined
         ? ["(git could not list the changes)"]
-        : gained.filter((path) => !pathMatchesSurface(path, workspace.writeSurface));
+        : gained.filter((path) => !pathMatchesSurface(path, workspace.writeSurface, SURFACE_MATCH));
     if (outside.length > 0) {
       await resetBranchTo(workspace.root, workspace.startHead, own);
       await discardChanges(workspace.root, own);
@@ -566,7 +579,7 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
     surface: readonly string[],
     path: string,
   ): { ok: true; path: string } | { ok: false; reason: string } => {
-    const check = checkWorkspacePath(path, surface);
+    const check = checkWorkspacePath(path, surface, SURFACE_MATCH);
     if (check.ok) return check;
     const where =
       check.reason === "outside_surface"
