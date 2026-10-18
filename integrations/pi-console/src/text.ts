@@ -42,8 +42,22 @@ function isFinalByte(code: number): boolean {
   return code >= 0x40 && code <= 0x7e;
 }
 
-// A command's output or a typed argument as the terminal may show it: escape sequences removed, tabs as two spaces
-// and any other control character as "?".
+// The invisible code points of the Core's visibleText (packages/core/src/domain/visible-text.ts), copied because the
+// console may not import the Core (R6); tests/text-safety.test.ts checks that the two rules agree. An emoji presentation
+// selector after no emoji; every other format or default-ignorable code point (bidi overrides and isolates, the marks
+// U+200E and U+200F, zero-width spaces, the word joiner, the byte order mark, tag characters...) and a lone surrogate;
+// and a zero-width joiner that joins nothing.
+const LOOSE_SELECTOR = /(?<!\p{Emoji})[\u{FE0E}\u{FE0F}]/gu;
+const INVISIBLE =
+  /(?![\u{200D}\u{FE0E}\u{FE0F}])[\p{Cf}\p{Default_Ignorable_Code_Point}]|[\u{D800}-\u{DFFF}]/gu;
+const LOOSE_JOINER =
+  /(?<!\p{Extended_Pictographic}|\u{FE0F}|[\u{1F3FB}-\u{1F3FF}]|\p{Mn})\u{200D}/gu;
+const LINE_SEPARATORS = /[\u{2028}\u{2029}]/gu;
+
+// A command's output, a typed argument or an agent's text as the terminal may show it: escape sequences removed, tabs
+// as two spaces, the line and paragraph separators as one space, and any other control character and every invisible
+// code point as "?", as the Core's visibleText shows them. Such a code point draws nothing or reorders the text around
+// it (a bidi override can hide a word or turn a line around), so it never reaches the terminal.
 export function plainText(text: string): string {
   let out = "";
   for (const char of stripAnsi(text)) {
@@ -52,7 +66,18 @@ export function plainText(text: string): string {
     else if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) out += "?";
     else out += char;
   }
-  return out;
+  // The joiners are judged last, on the text with every other invisible code point already shown as "?".
+  return out
+    .replace(LINE_SEPARATORS, " ")
+    .replace(LOOSE_SELECTOR, "?")
+    .replace(INVISIBLE, "?")
+    .replace(LOOSE_JOINER, "?");
+}
+
+// The first `max` code points of a text, so a surrogate pair is never cut in half.
+export function clipText(text: string, max: number): string {
+  const chars = Array.from(text);
+  return chars.length <= max ? text : chars.slice(0, max).join("");
 }
 
 // Marks, zero-width spaces and joiners, the word joiner and the variation selectors take no cell.

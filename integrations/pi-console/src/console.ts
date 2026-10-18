@@ -54,7 +54,7 @@ import type {
 } from "./pi-types.js";
 import { type BoundProject, findProject, folderName } from "./project.js";
 import { type PendingApproval, readStatus } from "./status.js";
-import { plainText } from "./text.js";
+import { clipText, plainText } from "./text.js";
 import {
   type BarFacts,
   type BarLayout,
@@ -452,7 +452,7 @@ export default function harilConsole(pi: ConsolePi): void {
         }
         const labels = rows.map(
           (row) =>
-            `${row.id} · ${row.state}${row.stopReason === null ? "" : ` (${row.stopReason})`} · ${plainText(row.goal).slice(0, 60)}`,
+            `${plainText(row.id)} · ${plainText(row.state)}${row.stopReason === null ? "" : ` (${clipText(plainText(row.stopReason), 60)})`} · ${clipText(plainText(row.goal), 60)}`,
         );
         const choice = await pickCtx.ui.select("Follow which workflow?", labels);
         const row = rows[labels.indexOf(choice ?? "")];
