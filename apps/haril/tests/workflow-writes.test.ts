@@ -27,6 +27,7 @@ import { createDelegationTools } from "../src/runtime/delegation-tools.js";
 import { runUntilIdle } from "../src/runtime/run-loop.js";
 import { createShutdown, type Shutdown } from "../src/runtime/shutdown.js";
 import { createWorkspaces, integrationBranchOf } from "../src/runtime/worktrees.js";
+import { COMMIT_MAIN_SCRIPT, SNEAK_SCRIPT } from "./command-scripts.js";
 import { makeSandbox, type Sandbox } from "./helpers.js";
 
 // Real git and real processes: under the load of the full suite one test can take several seconds, so this file gives
@@ -226,26 +227,10 @@ function roleOf(store: Store, taskId: string): string | undefined {
     .find((task) => task.taskId === taskId)?.role;
 }
 
-// What a command run through haril_run can do in its worktree (N0: it runs with the user's rights): commit a file onto
-// whatever branch HEAD names there, and, with "tamper", rewrite the worktree's .git file afterwards.
-const SNEAK_SCRIPT = `import { execFileSync } from "node:child_process";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
-const git = (...args) =>
-  execFileSync("git", ["-c", "user.name=cmd", "-c", "user.email=cmd@haril.invalid", "-c", "commit.gpgsign=false",
-    "-c", "core.hooksPath=" + (process.platform === "win32" ? "NUL" : "/dev/null"), ...args], { stdio: "ignore" });
-writeFileSync("sneaked.txt", "sneaked " + process.pid + " " + Date.now() + "\\n");
-git("add", "sneaked.txt");
-git("commit", "--quiet", "--no-verify", "-m", "sneaked in by a command");
-if (process.argv[2] === "tamper") {
-  const pointer = readFileSync(".git", "utf8");
-  rmSync(".git");
-  writeFileSync(".git", pointer + "\\n");
-}
-`;
-
 // The scripts commands run, committed on main so every worktree holds them.
 function commitScripts(): void {
   writeFileSync(join(repo, "sneak.mjs"), SNEAK_SCRIPT);
+  writeFileSync(join(repo, "commit-main.mjs"), COMMIT_MAIN_SCRIPT);
   git("add", ".");
   git("commit", "--quiet", "-m", "the scripts a command runs");
 }
@@ -518,5 +503,43 @@ describe.skipIf(!HAS_GIT)("a workflow that writes in parallel", () => {
     const restored = store.events.list().filter((event) => event.type === "worktree.restored");
     expect(restored.length).toBeGreaterThanOrEqual(3);
     expect(git("rev-parse", "main")).toBe(workflow.baseSha);
+  }, 120_000);
+
+  it("stops the workflow when a command moves main through a repointed .git file, and never moves it back", async () => {
+    commitScripts();
+    const store = open();
+    startWorkflow(store, "Write the part [fake:parts=1] [fake:steps=1]");
+    const before = git("rev-parse", "main");
+    let ran = false;
+    // The executor's first write comes after a command that committed onto main behind HARIL's back.
+    const wrap =
+      (call: DelegationToolHandler): DelegationToolHandler =>
+      (context, tool, input) => {
+        if (tool !== "write" || ran || roleOf(store, context.taskId) !== "executor") {
+          return call(context, tool, input);
+        }
+        ran = true;
+        return (async () => {
+          await runCommand(call, context, ["commit-main.mjs"]);
+          return await call(context, tool, input);
+        })();
+      };
+    await run(store, { allow: ["node commit-main.mjs"], wrap });
+    const workflow = onlyWorkflow(store);
+    const after = git("rev-parse", "main");
+    expect(ran).toBe(true);
+    expect(after).not.toBe(before);
+    expect(git("log", "-1", "--format=%s", "main")).toBe("committed onto main by a command");
+    expect(workflow.state).toBe("failed");
+    expect(workflow.stopReason).toContain("base_moved:");
+    expect(workflow.stopReason).toContain(`git log ${before}..${after}`);
+    expect(workflow.stopReason).toContain(`git branch -f main ${before}`);
+    const moved = store.events.list().filter((event) => event.type === "base.moved");
+    expect(moved.map((event) => event.payload)).toEqual([
+      expect.objectContaining({ fromSha: before, toSha: after, commands: 1, stopped: true }),
+    ]);
+    // Nothing of the step was merged, and HARIL never moved main back.
+    expect(store.events.list().filter((event) => event.type === "worktree.merged")).toEqual([]);
+    expect(git("rev-parse", "main")).toBe(after);
   }, 120_000);
 });

@@ -70,7 +70,7 @@ import {
   retryWorkflowTurn,
 } from "./workflow-turns.js";
 import { type DelegationOptions, WorkflowView, workflowSettings } from "./workflow-view.js";
-import type { TurnWorkspace, Workspaces } from "./worktrees.js";
+import { BASE_MOVED_CODE, type TurnWorkspace, type Workspaces } from "./worktrees.js";
 
 // Runtime loop (M1-D6, LD-T1, phase F2): take the lease, apply the queue, run the ready tasks, and wait for new work for
 // `idleExitMs` before the lease is released. `idleExitMs` 0 is `haril run`: it stops as soon as nothing is claimable.
@@ -852,7 +852,17 @@ function closeWorkflowTurn(
     : (attempt.settled as AgentOutcome);
   const report = turn.close();
   const claimed = attempt.claimed;
-  if (shutdown.requested && outcome.status !== "succeeded" && !closedIdle) {
+  // Phase F8: the base branch moved while the turn ran a command (worktrees.ts). The turn fails and the workflow stops
+  // with what to inspect and how to restore the branch; HARIL never moves it back. A shutdown does not return this turn.
+  const settled = attempt.settled;
+  const baseMoved =
+    settled?.status === "failed" && settled.code === BASE_MOVED_CODE ? settled.message : undefined;
+  if (
+    shutdown.requested &&
+    outcome.status !== "succeeded" &&
+    !closedIdle &&
+    baseMoved === undefined
+  ) {
     const returned = store.runs.cancel(claimed.runId, "shutdown");
     emit({ type: "task.returned", taskId: returned.taskId, goal: returned.goal });
     return;
@@ -930,14 +940,16 @@ function closeWorkflowTurn(
     taskState = "failed";
     outcomeText = `commit_failed: ${message}`;
   }
-  // No model can run the turn again within the wait allowed: the workflow ends (it never asks).
-  if (noCapacity !== undefined) {
+  // No model can run the turn again within the wait allowed, or a command moved the base branch: the workflow ends (it
+  // never asks). Its running turns are then residual and killed.
+  const ending = noCapacity ?? (baseMoved === undefined ? undefined : `base_moved: ${baseMoved}`);
+  if (ending !== undefined) {
     const current = store.workflows.get(turn.workflowId);
     if (current?.state === "running" || current?.state === "awaiting_human") {
       store.workflows.setState(epoch, {
         workflowId: turn.workflowId,
         state: "failed",
-        reason: noCapacity,
+        reason: ending,
       });
     }
   }

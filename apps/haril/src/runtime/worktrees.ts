@@ -71,6 +71,8 @@ import type { Task, WorkflowView } from "./workflow-view.js";
 // never survives into a retry; an auditor's turn always does. A turn that holds the integration lock keeps its own
 // verified commit of the integration branch, where it started and then each merge HARIL made in it: a command's commit
 // on that branch is dropped before a merge and at the turn's end. Each putting back is the event worktree.restored.
+// HARIL never moves the base branch, but a command can (N0). Its commit is read when a turn starts and compared at the
+// turn's end: a move is the event base.moved, and when the turn ran a command it fails the turn and stops the workflow.
 
 export interface WorkspaceSettings {
   // The folder that holds every worktree (the data directory's worktrees folder).
@@ -106,13 +108,41 @@ export interface TurnWorkspace {
   // the integration branch's commit as the turn found it otherwise): what the turn added is checked against it, and a
   // turn that does not succeed puts the branch back on it.
   readonly startHead: string;
+  // The base branch's commit (refs/heads/<base>) when the turn started; null when it could not be read. The turn's end
+  // compares it: HARIL's own git never moves the base branch, but under N0 a command can (it may point the worktree's
+  // .git file at the main repository and commit itself).
+  readonly baseTip: string | null;
+}
+
+// The failure of a turn during which the base branch moved while it ran a command: the run loop then stops the workflow.
+export const BASE_MOVED_CODE = "workspace.base_moved";
+
+// What the user is told when the base branch moved during a turn that ran commands. HARIL never moves it back: the user
+// may have committed on it.
+function baseMovedMessage(
+  base: string,
+  from: string,
+  to: string | undefined,
+  commands: number,
+): string {
+  const ran = `while a turn ran ${commands} ${commands === 1 ? "command" : "commands"} (haril_run)`;
+  if (to === undefined) {
+    return `the base branch ${base} (at ${from}) was deleted or cannot be read ${ran}; HARIL never touches it and stopped the workflow. If you did not delete it, restore it with "git branch ${base} ${from}"`;
+  }
+  return `the base branch ${base} moved from ${from} to ${to} ${ran}; HARIL never moves it back and stopped the workflow. Inspect the new commits with "git log ${from}..${to}"; if they are not yours, put ${base} back with "git branch -f ${base} ${from}" (where ${base} is checked out, run "git reset --keep ${from}" on it instead)`;
 }
 
 // A turn's commits reached outside its write surface (a command staged or committed other files).
 class OutsideSurface extends Error {}
 
+// A turn's worktree before the base branch's commit is added to it.
+type PreparedWorkspace = Omit<TurnWorkspace, "baseTip">;
+
 // How git runs on a turn's worktree: its own git folder and work tree, named on every run.
-export function worktreeGit(git: GitOptions, workspace: TurnWorkspace): GitOptions {
+export function worktreeGit(
+  git: GitOptions,
+  workspace: Pick<TurnWorkspace, "gitDir" | "root">,
+): GitOptions {
   return { ...git, gitDir: workspace.gitDir, workTree: workspace.root };
 }
 
@@ -297,6 +327,49 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
   const turnHeads = new WeakMap<TurnWorkspace, string>();
   const verifiedOf = (workspace: TurnWorkspace): string =>
     turnHeads.get(workspace) ?? workspace.startHead;
+  // How many commands each turn started through haril_run (a process spawned): the base branch's move is the turn's
+  // failure only when one ran.
+  const commandsRan = new WeakMap<TurnWorkspace, number>();
+
+  // Compares the base branch with its commit when the turn started. A move is recorded as base.moved; when the turn ran a
+  // command it is also the turn's failure (BASE_MOVED_CODE), and the run loop stops the workflow. A move during a turn
+  // that ran none was the user's own work: only recorded. HARIL never moves the base branch back.
+  const checkBase = async (
+    store: Store,
+    epoch: number,
+    view: WorkflowView,
+    task: Task,
+    workspace: TurnWorkspace,
+  ): Promise<AgentOutcome | null> => {
+    if (workspace.baseTip === null) return null;
+    const now = await branchCommit(workspace.repo, workspace.baseBranch, git);
+    if (now === workspace.baseTip) return null;
+    const commands = commandsRan.get(workspace) ?? 0;
+    store.events.append({
+      aggregateType: "workflow",
+      aggregateId: view.workflow.workflowId,
+      type: "base.moved",
+      actorKind: "system",
+      actorId: `runtime:${epoch}`,
+      payload: {
+        workflowId: view.workflow.workflowId,
+        worktreeId: workspace.worktreeId,
+        baseBranch: workspace.baseBranch,
+        fromSha: workspace.baseTip,
+        toSha: now ?? null,
+        commands,
+        stopped: commands > 0,
+      },
+      projectId: view.workflow.projectId,
+      taskId: task.taskId,
+    });
+    if (commands === 0) return null;
+    return {
+      status: "failed",
+      code: BASE_MOVED_CODE,
+      message: baseMovedMessage(workspace.baseBranch, workspace.baseTip, now, commands),
+    };
+  };
 
   const runAbort = async (path: string, options: GitOptions): Promise<void> => {
     if (await mergeInProgress(path, options)) await abortMerge(path, options);
@@ -389,7 +462,7 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
     epoch: number,
     view: WorkflowView,
     repo: string,
-  ): Promise<TurnWorkspace> => {
+  ): Promise<PreparedWorkspace> => {
     const workflowId = view.workflow.workflowId;
     const branch = integrationBranchOf(workflowId);
     const path = folderOf(workflowId, "integration");
@@ -439,7 +512,7 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
     view: WorkflowView,
     task: Task,
     repo: string,
-  ): Promise<TurnWorkspace> => {
+  ): Promise<PreparedWorkspace> => {
     const workflowId = view.workflow.workflowId;
     const branch = executorBranchOf(workflowId, view, task.threadId);
     const path = folderOf(workflowId, short(task.threadId));
@@ -537,6 +610,18 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
     if (!isWritingWorkflow(view)) return null;
     const repo = repoOf(store, view);
     if (repo === undefined) throw new Error("the workflow's project is not registered");
+    // Read before the turn's agent starts: the turn's end compares the base branch with it.
+    const baseTip = (await branchCommit(repo, view.workflow.baseBranch as string, git)) ?? null;
+    return { ...(await prepareIn(store, epoch, view, task, repo)), baseTip };
+  };
+
+  const prepareIn = async (
+    store: Store,
+    epoch: number,
+    view: WorkflowView,
+    task: Task,
+    repo: string,
+  ): Promise<PreparedWorkspace> => {
     if (task.role === "executor") return ensureExecutor(store, epoch, view, task, repo);
     if (task.role === "auditor") {
       const subject = view.task(task.parentTaskId);
@@ -649,6 +734,9 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
     return withRepository(workspace.repo, async () => {
       // Before any git run: the .git pointer file must still be the one git wrote. A rewritten one fails the turn.
       const pointer = await checkPointer(workspace.root, workspace.pointer);
+      // The base branch must still be where the turn found it (git runs in the main repository here, never through the
+      // worktree's .git file). A move while a command ran fails the turn whatever else it did: nothing is committed.
+      const stop = await checkBase(store, epoch, view, task, workspace);
       if (pointer !== "intact") {
         await runAbort(workspace.root, own);
         await restoreGuarded();
@@ -668,19 +756,21 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
           projectId: view.workflow.projectId,
           taskId: task.taskId,
         });
-        return {
-          status: "failed",
-          code: "workspace.tampered",
-          message:
-            "the worktree's .git file was changed during the turn; its work was discarded and nothing was committed",
-        };
+        return (
+          stop ?? {
+            status: "failed",
+            code: "workspace.tampered",
+            message:
+              "the worktree's .git file was changed during the turn; its work was discarded and nothing was committed",
+          }
+        );
       }
       if (workspace.kind === "executor") {
         // A turn that did not succeed commits nothing: a commit a command made goes too, so its retry starts clean.
-        if (outcome.status !== "succeeded") {
+        if (outcome.status !== "succeeded" || stop !== null) {
           await restoreGuarded();
           await discardChanges(workspace.root, own);
-          return outcome;
+          return stop ?? outcome;
         }
         try {
           await commitExecutor(store, epoch, view, task, workspace);
@@ -714,7 +804,7 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
       await runAbort(workspace.root, own);
       await restoreGuarded();
       await discardChanges(workspace.root, own);
-      return outcome;
+      return stop ?? outcome;
     });
   };
 
@@ -809,7 +899,10 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
       ...(settings.env === undefined ? {} : { env: settings.env }),
       ...(settings.killTree === undefined ? {} : { killTree: settings.killTree }),
       ...(hooks.signal === undefined ? {} : { signal: hooks.signal }),
-      ...(hooks.onSpawn === undefined ? {} : { onSpawn: hooks.onSpawn }),
+      onSpawn: (process) => {
+        commandsRan.set(workspace, (commandsRan.get(workspace) ?? 0) + 1);
+        hooks.onSpawn?.(process);
+      },
       ...(hooks.onExit === undefined ? {} : { onExit: hooks.onExit }),
     });
 

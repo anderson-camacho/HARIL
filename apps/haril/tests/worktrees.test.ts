@@ -15,6 +15,7 @@ import { addWorktree, worktreeIdentity } from "@haril/git";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Task, WorkflowView } from "../src/runtime/workflow-view.js";
 import { applyEdits, createWorkspaces, type TurnWorkspace } from "../src/runtime/worktrees.js";
+import { COMMIT_MAIN_SCRIPT } from "./command-scripts.js";
 
 // Real git and real processes: under the load of the full suite one test can take several seconds, so this file gives
 // its tests and hooks a minute instead of the suite's 15 s (a hang still fails it).
@@ -88,6 +89,7 @@ function workspace(): TurnWorkspace {
     gitDir: identity.gitDir,
     pointer: identity.pointer,
     startHead: gitIn(tree, "rev-parse", "HEAD"),
+    baseTip: gitIn(repo, "rev-parse", "main"),
   };
 }
 
@@ -139,10 +141,10 @@ const FAILED: AgentOutcome = { status: "failed", code: "agent.exit", message: "t
 
 const SUCCEEDED: AgentOutcome = { status: "succeeded", summary: "done" };
 
-const workspaces = () =>
+const workspaces = (allow: readonly string[] = []) =>
   createWorkspaces({
     root: join(base, "worktrees"),
-    commands: { allow: [], timeoutMs: 1_000, outputMaxBytes: 1_000 },
+    commands: { allow, timeoutMs: 30_000, outputMaxBytes: 4_000 },
     git: { env },
   });
 
@@ -416,6 +418,68 @@ describe.skipIf(!HAS_GIT)(
     });
   },
 );
+
+describe.skipIf(!HAS_GIT)("a base branch that moved during a turn", () => {
+  it("fails the turn when a command moved main through a repointed .git file, and never moves main back", async () => {
+    const ws = workspace();
+    const host = workspaces(["node commit-main.mjs"]);
+    const fakes = turnFakes();
+    const before = gitIn(repo, "rev-parse", "main");
+    writeFileSync(join(tree, "commit-main.mjs"), COMMIT_MAIN_SCRIPT);
+    const ran = await host.run(ws, "node", ["commit-main.mjs"]);
+    expect(ran).toMatchObject({ ok: true, exitCode: 0 });
+    const after = gitIn(repo, "rev-parse", "main");
+    expect(after).not.toBe(before);
+    // The command put the .git file back: only the base branch shows what it did.
+    expect(readFileSync(join(tree, ".git"), "utf8")).toBe(identity.pointer);
+    expect(
+      await host.write(ws, ws.writeSurface, "src/button.ts", "export const color = 'blue';\n"),
+    ).toMatchObject({ ok: true });
+    const outcome = await host.finish(fakes.store, 1, fakes.view, fakes.task, ws, SUCCEEDED);
+    expect(outcome).toMatchObject({ status: "failed", code: "workspace.base_moved" });
+    const message = (outcome as { message: string }).message;
+    expect(message).toContain(`git log ${before}..${after}`);
+    expect(message).toContain(`git branch -f main ${before}`);
+    expect(message).toContain(`git reset --keep ${before}`);
+    // Nothing was committed on the step's branch, and main stays where the command left it.
+    expect(gitIn(repo, "rev-parse", "haril/wf/step/s1")).toBe(ws.startHead);
+    expect(gitIn(repo, "rev-parse", "main")).toBe(after);
+    expect(fakes.verified).toEqual([]);
+    expect(fakes.events.map((event) => event.type)).toEqual(["base.moved"]);
+    expect(fakes.events[0]?.payload).toMatchObject({
+      baseBranch: "main",
+      fromSha: before,
+      toSha: after,
+      commands: 1,
+      stopped: true,
+    });
+  });
+
+  it("only records the move when the turn ran no command: the user committed on main", async () => {
+    const ws = workspace();
+    const host = workspaces();
+    const fakes = turnFakes();
+    const before = gitIn(repo, "rev-parse", "main");
+    gitIn(repo, "commit", "--quiet", "--allow-empty", "-m", "the user's own commit");
+    const after = gitIn(repo, "rev-parse", "main");
+    expect(
+      await host.write(ws, ws.writeSurface, "src/button.ts", "export const color = 'blue';\n"),
+    ).toMatchObject({ ok: true });
+    expect(await host.finish(fakes.store, 1, fakes.view, fakes.task, ws, SUCCEEDED)).toEqual(
+      SUCCEEDED,
+    );
+    expect(gitIn(repo, "show", "haril/wf/step/s1:src/button.ts")).toBe(
+      "export const color = 'blue';",
+    );
+    expect(fakes.events.map((event) => event.type)).toEqual(["base.moved"]);
+    expect(fakes.events[0]?.payload).toMatchObject({
+      fromSha: before,
+      toSha: after,
+      commands: 0,
+      stopped: false,
+    });
+  });
+});
 
 describe.skipIf(!HAS_GIT)("a step's next turn after a crash", () => {
   it("starts from the step's verified commit, never from a HEAD a command moved", async () => {
