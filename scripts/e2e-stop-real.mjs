@@ -7,13 +7,15 @@
 // (npm run e2e:stop-real), not part of npm test, and it never runs a local model. It runs only when everything it needs
 // is present; otherwise it prints the reason and exits 0. A key is read from the environment only when the model's
 // provider declares one, and it is never printed or stored. Everything lives in one temporary folder, removed after a
-// pass and kept after a failure.
+// pass and kept after a failure. Its cleanup kills only what it started or the store recorded: the runtime through the
+// handle of its own child, then the recorded agents through haril stop --now, then any recorded pid that still runs
+// with its recorded start time. Nothing is killed by name or by command line.
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, posix, win32 } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
 const ENTRY = join(REPO, "apps", "haril", "dist", "haril.mjs");
@@ -114,22 +116,30 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function powershellPath() {
+  return join(
+    process.env.SystemRoot || "C:\\Windows",
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
+}
+
+// The PowerShell script of processesNaming: fixed text. The folder reaches it through an environment variable, never
+// inside the script, so no character of a path can change what the script does.
+export const NAMING_SCRIPT =
+  "$root = $env:HARIL_E2E_STOP_ROOT; Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -and $_.CommandLine.Contains($root) } | ForEach-Object { '{0}|{1}|{2}' -f $_.ProcessId, $_.ParentProcessId, $_.Name }";
+
 // The OS processes whose command line names this run's scratch folder: the Pi agents (their --session-dir lives under
-// the data folder) and the runtime (its --data-dir). A read-only listing; nothing is killed by it.
-function processesNaming(root) {
+// the data folder) and the runtime (its --data-dir). A read-only listing for the proof; nothing is killed by it.
+export function processesNaming(root) {
   if (process.platform === "win32") {
-    const powershell = join(
-      process.env.SystemRoot || "C:\\Windows",
-      "System32",
-      "WindowsPowerShell",
-      "v1.0",
-      "powershell.exe",
-    );
-    const script = `Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -and $_.CommandLine.Contains('${root}') } | ForEach-Object { '{0}|{1}|{2}' -f $_.ProcessId, $_.ParentProcessId, $_.Name }`;
     const out =
-      spawnSync(powershell, ["-NoProfile", "-NonInteractive", "-Command", script], {
+      spawnSync(powershellPath(), ["-NoProfile", "-NonInteractive", "-Command", NAMING_SCRIPT], {
         encoding: "utf8",
         windowsHide: true,
+        env: { ...process.env, HARIL_E2E_STOP_ROOT: root },
       }).stdout ?? "";
     return out
       .split(/\r?\n/)
@@ -147,6 +157,74 @@ function processesNaming(root) {
       const [pid, ppid, ...args] = line.trim().split(/\s+/);
       return { pid: Number(pid), ppid: Number(ppid), name: args[0] };
     });
+}
+
+// The start times of running pids, as the OS reports them (milliseconds), for the cleanup's guard. Only whole-number pids
+// reach the query. A pid missing from the map is not running.
+export function startTimesOf(pids) {
+  const valid = [...new Set(pids.filter((pid) => Number.isSafeInteger(pid) && pid > 0))];
+  const times = new Map();
+  if (valid.length === 0) return times;
+  if (process.platform === "win32") {
+    const script = `$ErrorActionPreference='SilentlyContinue'; Get-Process -Id ${valid.join(",")} | ForEach-Object { try { '{0} {1}' -f $_.Id, $_.StartTime.ToFileTime() } catch {} }`;
+    const out =
+      spawnSync(powershellPath(), ["-NoProfile", "-NonInteractive", "-Command", script], {
+        encoding: "utf8",
+        windowsHide: true,
+      }).stdout ?? "";
+    for (const line of out.split(/\r?\n/)) {
+      const match = /^\s*(\d+)\s+(\d+)\s*$/.exec(line);
+      if (match)
+        times.set(Number(match[1]), Number(BigInt(match[2]) / 10_000n - 11_644_473_600_000n));
+    }
+    return times;
+  }
+  const out =
+    spawnSync("ps", ["-o", "pid=,etime=", "-p", valid.join(",")], { encoding: "utf8" }).stdout ??
+    "";
+  const now = Date.now();
+  for (const line of out.split("\n")) {
+    const match = /^\s*(\d+)\s+(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)\s*$/.exec(line);
+    if (!match) continue;
+    const [, pid, days, hours, minutes, seconds] = match;
+    const elapsed =
+      (((Number(days ?? 0) * 24 + Number(hours ?? 0)) * 60 + Number(minutes)) * 60 +
+        Number(seconds)) *
+      1000;
+    times.set(Number(pid), now - elapsed);
+  }
+  return times;
+}
+
+// The recorded agents that still run as themselves: the OS's start time agrees with the recorded one within the window
+// of Core's sameProcess (2 s before it, 100 ms after it; 1 s after it on macOS, whose ps truncates to seconds).
+export function stillRecorded(records, times, platform = process.platform) {
+  const afterMs = platform === "darwin" ? 1_000 : 100;
+  return records.filter((record) => {
+    const observed = times.get(record.pid);
+    if (observed === undefined || !Number.isFinite(record.startedAt)) return false;
+    const delta = observed - record.startedAt;
+    return delta >= -2_000 && delta <= afterMs;
+  });
+}
+
+// After a failure: the runtime this script spawned dies through its own child handle (its pid cannot name another
+// program while the handle is open); then haril stop --now kills the recorded agents' trees with its own pid and
+// start-time guard; then any recorded pid still running as itself is killed alone. Never by name or command line.
+function cleanUp(runtime, env, data, dataDir) {
+  if (runtime !== undefined && runtime.exitCode === null) runtime.kill("SIGKILL");
+  try {
+    haril(env, ["stop", "--now", ...data], 30_000);
+  } catch {}
+  if (!existsSync(join(dataDir, "haril.db"))) return;
+  const records = readStore(dataDir).runs.filter(
+    (run) => Number.isSafeInteger(run.pid) && Number.isFinite(run.startedAt),
+  );
+  for (const record of stillRecorded(records, startTimesOf(records.map((run) => run.pid)))) {
+    try {
+      process.kill(record.pid, "SIGKILL");
+    } catch {}
+  }
 }
 
 // The store, read only: the pids the runs recorded, the workflow, the tasks, the halt and the open reservations.
@@ -192,16 +270,16 @@ async function main() {
   const root = mkdtempSync(join(tmpdir(), "haril-e2e-stop-"));
   let runtime;
   let passed = false;
+  const dataDir = join(root, "data");
+  const env = { ...process.env, HARIL_HOME: join(root, "home-unused") };
+  delete env.HARIL_PI_CLI_OVERRIDE;
+  const data = ["--data-dir", dataDir];
   try {
-    const dataDir = join(root, "data");
     const projectDir = join(root, "notes-project");
     for (const [file, text] of Object.entries(NOTES)) {
       mkdirSync(dirname(join(projectDir, file)), { recursive: true });
       writeFileSync(join(projectDir, file), text);
     }
-    const env = { ...process.env, HARIL_HOME: join(root, "home-unused") };
-    delete env.HARIL_PI_CLI_OVERRIDE;
-    const data = ["--data-dir", dataDir];
     console.log(`      model ${MODEL}; scratch folder ${root}`);
 
     const provider = MODEL.split("/")[0];
@@ -372,25 +450,14 @@ async function main() {
     console.log(`FAIL  ${error.message}`);
     return 1;
   } finally {
-    // Never leave this run's own processes behind: the runtime child, and any process naming this unique folder.
-    if (runtime !== undefined && runtime.exitCode === null && runtime.pid !== undefined) {
-      if (process.platform === "win32") {
-        const taskkill = join(process.env.SystemRoot || "C:\\Windows", "System32", "taskkill.exe");
-        spawnSync(taskkill, ["/F", "/T", "/PID", String(runtime.pid)], { windowsHide: true });
-      } else {
-        runtime.kill("SIGKILL");
-      }
-    }
-    if (!passed) {
-      for (const item of processesNaming(root)) {
-        try {
-          process.kill(item.pid, "SIGKILL");
-        } catch {}
-      }
-    }
+    // Never leave this run's own processes behind: only what it spawned or the store recorded (cleanUp).
+    if (!passed) cleanUp(runtime, env, data, dataDir);
+    else if (runtime !== undefined && runtime.exitCode === null) runtime.kill("SIGKILL");
     if (passed) rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     else console.log(`      the scratch folder is kept for inspection: ${root}`);
   }
 }
 
-process.exitCode = await main();
+if (process.argv[1] !== undefined && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  process.exitCode = await main();
+}
