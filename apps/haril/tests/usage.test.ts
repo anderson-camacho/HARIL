@@ -281,6 +281,29 @@ describe("haril usage export", () => {
     expect(h.out[1]).toContain('"Change the primary button color"');
   });
 
+  // A spreadsheet runs a cell that starts with =, +, -, @, a tab or a carriage return as a formula.
+  it("neutralizes cells a spreadsheet would run as formulas, and still quotes them", async () => {
+    const store = seedStore();
+    try {
+      now = T0;
+      for (const preview of [
+        '=HYPERLINK("http://example.invalid","x")',
+        "+1",
+        "-2",
+        "@SUM(A1)",
+        "\tx",
+      ]) {
+        store.usageLog.appendOrder({ mode: "cli", source: "cli", text: preview, preview });
+      }
+    } finally {
+      store.close();
+    }
+    expect(await invoke(["usage", "export", "--format", "csv", "--table", "orders"])).toBe(0);
+    const previews = h.out.slice(1).map((line) => line.split(",").slice(10, 11).join(""));
+    expect(h.out[1]).toContain(`"'=HYPERLINK(""http://example.invalid""`);
+    expect(previews.slice(1)).toEqual([`"'+1"`, `"'-2"`, `"'@SUM(A1)"`, `"'\tx"`]);
+  });
+
   it("writes to --out, refuses an existing file, and needs --format", async () => {
     seed();
     const out = join(sb.root, "usage.jsonl");

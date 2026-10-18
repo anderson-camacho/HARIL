@@ -196,12 +196,18 @@ export function chainLine(report: ChainReport): string {
   return `${report.table}: ${rows}, chain broken at seq ${seq} (${reason}: ${BREAK_TEXT[reason] ?? reason})`;
 }
 
+// A spreadsheet runs a text cell that starts with =, +, -, @, a tab or a carriage return as a formula (CSV injection),
+// so such a cell starts with an apostrophe, which spreadsheets show as text. Text is always quoted.
+const FORMULA_START = /^[=+\-@\t\r]/;
+
 function csvCell(value: unknown): string {
   if (value === null || value === undefined) return "";
-  const text = typeof value === "string" ? value : String(value);
-  return /[",\r\n]/.test(text) || typeof value === "string"
-    ? `"${text.replace(/"/g, '""')}"`
-    : text;
+  if (typeof value !== "string") {
+    const text = String(value);
+    return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  }
+  const text = FORMULA_START.test(value) ? `'${value}` : value;
+  return `"${text.replace(/"/g, '""')}"`;
 }
 
 // Header from the record's keys, then one line per row; text is quoted, null is an empty cell.
