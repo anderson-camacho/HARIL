@@ -276,6 +276,30 @@ describe("a three-layer workflow through the runtime", () => {
     expect(peaks.delegators).toBe(2);
   });
 
+  // The seed scripts a rejection, an escalation and a stalled attempt, which its timeout ends and the rework relaunches.
+  it("drains a larger queue within the default limits, with no deadlock", async () => {
+    const store = open();
+    startWorkflow(store, "Many steps [fake:parts=4] [fake:steps=8] [fake:seed=3]");
+    const limits = { ...DEFAULT_DELEGATION_LIMITS, attemptTimeoutMs: 400 };
+    const { peaks } = await run(store, { msPerMinute: 2, limits });
+    const { workflow, view } = onlyWorkflow(store);
+    expect(workflow.state).toBe("completed");
+    expect(view.tasks.filter((task) => task.role === "executor").length).toBeGreaterThanOrEqual(32);
+    expect(peaks.executors).toBeLessThanOrEqual(DEFAULT_DELEGATION_LIMITS.maxConcurrent.executors);
+    expect(peaks.auditors).toBeLessThanOrEqual(DEFAULT_DELEGATION_LIMITS.maxConcurrent.auditors);
+    expect(peaks.childrenOfDelegator).toBeLessThanOrEqual(
+      DEFAULT_DELEGATION_LIMITS.maxActiveChildren.delegator,
+    );
+    expect(peaks.writers).toBeLessThanOrEqual(1);
+    expect(workflow.agentsCreated).toBeLessThanOrEqual(
+      DEFAULT_DELEGATION_LIMITS.maxAgentsPerWorkflow,
+    );
+    const failures = store.usageLog
+      .usage({ workflowId: workflow.workflowId })
+      .filter((row) => row.outcome === "failed_retry");
+    expect(failures).toHaveLength(1);
+  });
+
   it("relaunches a step its auditor rejected once, and a dependent step waits for the approval", async () => {
     const store = open();
     startWorkflow(
