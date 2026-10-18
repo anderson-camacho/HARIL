@@ -112,7 +112,7 @@ export function worktreeGit(git: GitOptions, workspace: TurnWorkspace): GitOptio
 // such as .env.example, may be resolved too).
 export type WriteScope = readonly string[] | { readonly conflicts: readonly string[] };
 
-export interface CommandHooks {
+interface CommandHooks {
   // The turn's end: an aborted turn kills the command's tree.
   readonly signal?: AbortSignal;
   readonly onSpawn?: (process: HostCommandProcess) => void;
