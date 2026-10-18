@@ -129,9 +129,9 @@ async function agentsInFlight(store: Store, count: number): Promise<Agent[]> {
   return agents;
 }
 
-function queue(host: HostInfo, argv: readonly string[]): void {
+async function queue(host: HostInfo, argv: readonly string[]): Promise<void> {
   const h = harness();
-  const code = run(argv, h.io, host);
+  const code = await run(argv, h.io, host);
   if (code !== 0)
     throw new Error(`haril ${argv.join(" ")} exited ${String(code)}: ${h.err.join(" ")}`);
 }
@@ -158,7 +158,7 @@ describe("haril stop --now with real agent processes", () => {
         signals: new EventEmitter(),
         forceExit: () => undefined,
       };
-      queue(host, [
+      await queue(host, [
         "workflow",
         "start",
         "Ship the button",
@@ -166,7 +166,7 @@ describe("haril stop --now with real agent processes", () => {
         "fake/high-model",
         "--autonomous",
       ]);
-      queue(host, [
+      await queue(host, [
         "workflow",
         "start",
         "Write the tests",
@@ -174,8 +174,8 @@ describe("haril stop --now with real agent processes", () => {
         "fake/high-model",
         "--autonomous",
       ]);
-      queue(host, ["task", "add", "Slow standalone", "--agent", "fake:slow:600000"]);
-      queue(host, ["task", "add", "Later standalone", "--agent", "fake:succeed"]);
+      await queue(host, ["task", "add", "Slow standalone", "--agent", "fake:slow:600000"]);
+      await queue(host, ["task", "add", "Later standalone", "--agent", "fake:succeed"]);
       const runtime = startRuntime(host);
       const store = open();
       const agents = await agentsInFlight(store, 3);
@@ -273,7 +273,7 @@ describe("haril stop --now with real agent processes", () => {
         signals: new EventEmitter(),
         forceExit: () => undefined,
       };
-      queue(host, [
+      await queue(host, [
         "workflow",
         "start",
         "Ship the button",
@@ -281,7 +281,7 @@ describe("haril stop --now with real agent processes", () => {
         "fake/high-model",
         "--autonomous",
       ]);
-      queue(host, [
+      await queue(host, [
         "workflow",
         "start",
         "Write the tests",
@@ -343,7 +343,7 @@ describe("haril stop --now with real agent processes", () => {
         signals: new EventEmitter(),
         forceExit: () => undefined,
       };
-      queue(host, [
+      await queue(host, [
         "workflow",
         "start",
         "Ship the button",
@@ -351,7 +351,7 @@ describe("haril stop --now with real agent processes", () => {
         "fake/high-model",
         "--autonomous",
       ]);
-      queue(host, ["task", "add", "Slow standalone", "--agent", "fake:slow:600000"]);
+      await queue(host, ["task", "add", "Slow standalone", "--agent", "fake:slow:600000"]);
       const runtime = startRuntime(host);
       const store = open();
       const agents = await agentsInFlight(store, 2);
@@ -400,7 +400,7 @@ describe("haril stop --now with real agent processes", () => {
           });
         },
       };
-      queue(host, [
+      await queue(host, [
         "workflow",
         "start",
         "Ship the button",
