@@ -43,6 +43,31 @@ describe("orderPreview", () => {
     }
   });
 
+  it("redacts the value of a quoted key, as JSON or a Python dict writes it", () => {
+    expect(orderPreview(`send {"password": "hunter2value", "user": "ana"}`)).toBe(
+      'send {"password": [redacted], "user": "ana"}',
+    );
+    expect(orderPreview(`cfg = {'token': 'abc', 'x': 1}`)).toBe(
+      "cfg = {'token': [redacted], 'x': 1}",
+    );
+    expect(orderPreview(`{"api_key":"hunter2value"}`)).toBe('{"api_key":[redacted]}');
+  });
+
+  it("redacts the credential of an Authorization header, not only its scheme word", () => {
+    const credential = "x".repeat(16);
+    expect(orderPreview(`Authorization: Basic ${credential} then go`)).toBe(
+      "Authorization: Basic [redacted] then go",
+    );
+    expect(orderPreview("authorization=Bearer abc next")).toBe(
+      "authorization=Bearer [redacted] next",
+    );
+    expect(orderPreview(`{"Authorization": "Bearer short"}`)).toBe(
+      '{"Authorization": "Bearer [redacted]"}',
+    );
+    expect(orderPreview(`Authorization: ${credential}`)).toBe("Authorization: [redacted]");
+    expect(orderPreview(`curl -H "Basic ${credential}"`)).toBe('curl -H "Basic [redacted]"');
+  });
+
   it("redacts long hex and base64-looking runs that mix letters and digits", () => {
     const hex = "0123456789abcdef".repeat(3);
     const base64 = `${"Ab3".repeat(12)}==`;
