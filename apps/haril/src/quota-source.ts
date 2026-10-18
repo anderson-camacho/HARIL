@@ -14,6 +14,9 @@ import { PROBE_TIMEOUT_MS, type ProviderEntry, secretStoreFor } from "./provider
 export interface ProviderQuota {
   readonly providerId: string;
   readonly snapshot: QuotaSnapshot;
+  // The provider the management API stands behind: its reading is kept even when it says "sin dato" (a key not set, a
+  // refused key), so the views say why; a provider with no quota source leaves nothing to keep.
+  readonly source: boolean;
 }
 
 // How long one management request may take; the default is the provider probe's.
@@ -40,6 +43,7 @@ export async function readProviderQuota(
             reason: "not_configured",
             detail: "no quota source for this provider",
           },
+          source: false,
         };
       }
       const reader = createCliProxyQuotaProvider({
@@ -50,7 +54,7 @@ export async function readProviderQuota(
         timeoutMs: host.gatewayTimeoutMs ?? QUOTA_TIMEOUT_MS,
         now,
       });
-      return { providerId: entry.id, snapshot: await reader.sample(entry.id) };
+      return { providerId: entry.id, snapshot: await reader.sample(entry.id), source: true };
     }),
   );
 }

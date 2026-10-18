@@ -110,9 +110,9 @@ export function createLiveModels(deps: LiveModelsDeps): LiveModels {
     quotaAt = now;
     quotaRead = readQuota(providersNow(now), settingsNow(now))
       .then((readings) => {
-        for (const { providerId, snapshot } of readings) {
-          // A provider with no quota source leaves no rows: there is nothing to keep.
-          if (!snapshot.ok && snapshot.reason === "not_configured") continue;
+        for (const { providerId, snapshot, source } of readings) {
+          // A provider with no quota source leaves no rows; the source's "sin dato" is kept, with its reason.
+          if (!source) continue;
           store.quota.recordSnapshot(providerId, snapshot);
           if (!snapshot.ok && snapshot.reason === "unauthorized") quotaStopped = true;
         }

@@ -117,6 +117,7 @@ describe("the live models of a runtime", () => {
     let quotaAnswer: ProviderQuota[] = [
       {
         providerId: "cliproxy",
+        source: true,
         snapshot: {
           ok: true,
           sampledAt: now,
@@ -229,6 +230,7 @@ describe("the live models of a runtime", () => {
     answer([
       {
         providerId: "cliproxy",
+        source: true,
         snapshot: { ok: false, sampledAt: clock.now(), reason: "unauthorized", detail: "refused" },
       },
     ]);
@@ -239,5 +241,10 @@ describe("the live models of a runtime", () => {
     models(clock.now(), workflow);
     await live.close();
     expect(quotaCalls).toHaveLength(2);
+    // The refusal itself is kept: the views say "sin dato" and why.
+    expect(store.quota.latest(0).map((row) => [row.credentialRef, row.note])).toEqual([
+      [null, "unauthorized: refused"],
+      [null, "unauthorized: refused"],
+    ]);
   });
 });

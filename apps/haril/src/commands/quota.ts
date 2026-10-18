@@ -103,8 +103,9 @@ export async function quota(args: readonly string[], io: CliIo, host: HostInfo):
   let cooldowns: readonly ModelCooldownRecord[] = [];
   const reports: ProviderReport[] = [];
   try {
-    for (const { providerId, snapshot } of readings) {
-      store?.quota.recordSnapshot(providerId, snapshot);
+    for (const { providerId, snapshot, source } of readings) {
+      // The source's reading is kept, its "sin dato" too; a provider with no quota source has nothing to keep.
+      if (source) store?.quota.recordSnapshot(providerId, snapshot);
       reports.push({
         id: providerId,
         status: snapshot.ok ? "ok" : "sin dato",
