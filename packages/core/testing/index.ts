@@ -2,6 +2,7 @@
 export * from "./contract-api.js";
 export * from "./fake-agent-runtime.js";
 export * from "./fake-clock.js";
+export * from "./fake-delegation-agents.js";
 export * from "./fake-memory-deps.js";
 export * from "./fake-memory-provider.js";
 export * from "./fake-secret-store.js";
