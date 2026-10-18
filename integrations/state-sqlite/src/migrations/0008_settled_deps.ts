@@ -27,6 +27,4 @@ export const MIGRATION_0008: Migration = {
   name: "settled_deps",
   kind: "incompatible",
   sql: SQL,
-  // The first text of this migration, without ORDER BY on the copy, built the same schema (0.12.0).
-  previousChecksums: ["1e317b000746f60b688ffa61ed8e83f5de6081e8488be97bb81a9411f0fe2b6c"],
 };

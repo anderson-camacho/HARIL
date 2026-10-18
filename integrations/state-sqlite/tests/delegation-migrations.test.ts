@@ -321,7 +321,7 @@ describe("tasks.promote with settled dependencies (3.7)", () => {
 });
 
 describe("the 0008 copy keeps the declaration order", () => {
-  it("copies task_dependencies in rowid order, and still opens a database 0008 migrated with its first text", () => {
+  it("copies task_dependencies in rowid order, and refuses any other recorded checksum of 0008", () => {
     const db = raw();
     migrate(db, manualClock(), sequentialIds("old"), BEFORE_0007);
     db.exec(`
@@ -348,10 +348,6 @@ describe("the 0008 copy keeps the declaration order", () => {
           .prepare("SELECT depends_on_task_id AS dep FROM task_dependencies ORDER BY rowid")
           .all(),
       ).toEqual([{ dep: "t-z" }, { dep: "t-a" }]);
-      // A database 0.12.0 migrated recorded the checksum of 0008's first text, which built the same schema.
-      after
-        .prepare("UPDATE schema_migrations SET checksum = ? WHERE version = 8")
-        .run("1e317b000746f60b688ffa61ed8e83f5de6081e8488be97bb81a9411f0fe2b6c");
     } finally {
       after.close();
     }
@@ -362,14 +358,19 @@ describe("the 0008 copy keeps the declaration order", () => {
       rules: testRules,
     });
     reopened.close();
-    const tampered = raw();
-    tampered
-      .prepare("UPDATE schema_migrations SET checksum = ? WHERE version = 8")
-      .run("f".repeat(64));
-    tampered.close();
-    expect(() =>
-      openStore({ dataDir: dir, clock: fixedClock(), ids: sequentialIds(), rules: testRules }),
-    ).toThrow(/different checksum/);
+    // An applied migration is never edited, so no earlier text of 0008 is accepted: the first text (never released, so
+    // no database recorded it) is refused like any other checksum.
+    for (const checksum of [
+      "1e317b000746f60b688ffa61ed8e83f5de6081e8488be97bb81a9411f0fe2b6c",
+      "f".repeat(64),
+    ]) {
+      const tampered = raw();
+      tampered.prepare("UPDATE schema_migrations SET checksum = ? WHERE version = 8").run(checksum);
+      tampered.close();
+      expect(() =>
+        openStore({ dataDir: dir, clock: fixedClock(), ids: sequentialIds(), rules: testRules }),
+      ).toThrow(/different checksum/);
+    }
   });
 });
 
