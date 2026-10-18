@@ -6,10 +6,11 @@ import { cimDateTimeMs } from "../src/processes/process-control.js";
 // The OS side of the emergency stop and the startup sweep (docs/modos-y-delegacion.md 3.14): real processes, a real
 // tree (a child that starts a grandchild, as Pi starts a tool command) and the real OS queries.
 
-// A child that starts a grandchild, prints the grandchild's pid and idles. POSIX leads its own group, as Pi does.
+// A child that starts a grandchild, prints the grandchild's pid and idles. POSIX leads its own group, as Pi does. The
+// grandchild is detached so that only a kill ends it: on Windows a Node child otherwise dies with its parent's job.
 const PARENT_SCRIPT =
   "const { spawn } = require('node:child_process');" +
-  "const g = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });" +
+  "const g = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', detached: true });" +
   "console.log(g.pid); setInterval(() => {}, 1000);";
 
 const strays: number[] = [];
@@ -90,70 +91,73 @@ describe("createProcessControl", () => {
 
   it("says the OS could not be read instead of reporting every process gone", async () => {
     const { child } = spawnIdle();
-    const nowhere = createProcessControl({
-      platform: process.platform === "win32" ? "win32" : "darwin",
-      env: { SystemRoot: "Z:\no-windows-here" },
-      timeoutMs: 2000,
-    });
     if (process.platform === "win32") {
+      const nowhere = createProcessControl({
+        platform: "win32",
+        env: { SystemRoot: "Z:\no-windows-here" },
+        timeoutMs: 2000,
+      });
       await expect(nowhere.startTimes([child.pid as number])).resolves.toBeUndefined();
-      await expect(
-        nowhere.killTrees([{ pid: child.pid as number, startedAt: Date.now() }]),
-      ).resolves.toBeUndefined();
+      await expect(nowhere.processTable()).resolves.toBeUndefined();
     }
     const unknownOs = createProcessControl({ platform: "aix" });
     await expect(unknownOs.startTimes([child.pid as number])).resolves.toBeUndefined();
-    await expect(
-      unknownOs.killTrees([{ pid: child.pid as number, startedAt: Date.now() }]),
-    ).resolves.toBeUndefined();
+    await expect(unknownOs.processTable()).resolves.toBeUndefined();
     expect(alive(child.pid as number)).toBe(true);
     child.kill();
   });
 
-  it("kills a recorded root and the process it started, the child first, and reports the root", async () => {
+  it("lists every process with its parent pid and start time in one snapshot", async () => {
     const tree = await spawnTree();
-    expect(alive(tree.parent)).toBe(true);
-    expect(alive(tree.grandchild)).toBe(true);
-    const result = await control.killTrees([{ pid: tree.parent, startedAt: tree.startedAt }]);
-    expect(result?.roots).toEqual([tree.parent]);
-    // The root and its child at least; Windows may also list the hidden console host it started.
-    expect(result?.killed).toBeGreaterThanOrEqual(2);
-    await until(() => !alive(tree.parent) && !alive(tree.grandchild), "the tree killed", 3000);
+    const table = (await control.processTable()) ?? [];
+    const parent = table.find((entry) => entry.pid === tree.parent);
+    const grandchild = table.find((entry) => entry.pid === tree.grandchild);
+    expect(parent?.parentPid).toBe(process.pid);
+    expect(grandchild?.parentPid).toBe(tree.parent);
+    expect(Math.abs((parent?.startedAt ?? 0) - tree.startedAt)).toBeLessThan(2000);
+    // A child never started before its parent.
+    expect(grandchild?.startedAt).toBeGreaterThanOrEqual(
+      parent?.startedAt ?? Number.POSITIVE_INFINITY,
+    );
   });
 
-  it("leaves a root alone, with its children, when its pid no longer names the recorded process", async () => {
+  it("kills one process and never the process it started", async () => {
     const tree = await spawnTree();
-    const result = await control.killTrees([
-      { pid: tree.parent, startedAt: tree.startedAt - 3_600_000 },
-    ]);
-    expect(result).toEqual({ roots: [], killed: 0 });
+    const table = (await control.processTable()) ?? [];
+    const parent = table.find((entry) => entry.pid === tree.parent);
+    if (parent === undefined) throw new Error("the parent is not in the snapshot");
+    control.killProcess(parent);
+    await until(() => !alive(tree.parent), "the parent killed", 3000);
     await new Promise((resolve) => setTimeout(resolve, 200));
-    expect(alive(tree.parent)).toBe(true);
     expect(alive(tree.grandchild)).toBe(true);
   });
 
-  it("resolves for a pid that is not running, and ignores an invalid one and its own process", async () => {
+  it("ignores a pid that is not running, an invalid one and its own process", async () => {
     const { child, startedAt } = spawnIdle();
     const pid = child.pid as number;
     child.kill();
     await new Promise((resolve) => child.once("exit", resolve));
     await until(() => !alive(pid), "the child gone");
-    await expect(control.killTrees([{ pid, startedAt }])).resolves.toEqual({
-      roots: [],
-      killed: 0,
-    });
-    await expect(control.killTrees([{ pid: 0, startedAt }])).resolves.toEqual({
-      roots: [],
-      killed: 0,
-    });
-    await expect(control.killTrees([{ pid: process.pid, startedAt: Date.now() }])).resolves.toEqual(
-      {
-        roots: [],
-        killed: 0,
-      },
-    );
+    expect(() => control.killProcess({ pid, parentPid: process.pid, startedAt })).not.toThrow();
+    expect(() => control.killProcess({ pid: 0, parentPid: 0, startedAt })).not.toThrow();
+    expect(() => control.killProcess({ pid: 1.5, parentPid: 0, startedAt })).not.toThrow();
+    control.killProcess({ pid: process.pid, parentPid: process.ppid, startedAt: Date.now() });
     expect(alive(process.pid)).toBe(true);
   });
+
+  it.runIf(process.platform === "linux")(
+    "on Linux leaves a pid alone whose start time is not the one of the snapshot",
+    async () => {
+      const tree = await spawnTree();
+      control.killProcess({
+        pid: tree.parent,
+        parentPid: process.pid,
+        startedAt: tree.startedAt - 3_600_000,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(alive(tree.parent)).toBe(true);
+    },
+  );
 });
 
 describe("cimDateTimeMs", () => {

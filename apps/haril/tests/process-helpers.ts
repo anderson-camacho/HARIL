@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { planProcessKills, processStartWindow } from "@haril/core";
 import { createProcessControl } from "@haril/os";
+import { killTrees } from "../src/runtime/processes.js";
 
 // Process helpers of the tests that run real agent processes (3.14). A test kills only processes it started, and only
 // after their start time matched the one it noted: a pid freed by an earlier kill may already name another program.
@@ -43,7 +44,7 @@ export async function killNoted(noted: readonly NotedProcess[]): Promise<void> {
   const times = await processControl.startTimes(noted.map((item) => item.pid));
   if (times === undefined) return;
   const plan = planProcessKills(noted, times, processStartWindow(process.platform));
-  if (plan.kill.length > 0) await processControl.killTrees(plan.kill);
+  if (plan.kill.length > 0) await killTrees(processControl, plan.kill);
 }
 
 export function sleep(ms: number): Promise<void> {

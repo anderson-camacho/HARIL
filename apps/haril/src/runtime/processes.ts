@@ -1,4 +1,4 @@
-import { planProcessKills, processStartWindow, sameProcess } from "@haril/core";
+import { planProcessKills, planTreeKills, processStartWindow, sameProcess } from "@haril/core";
 import type {
   ProcessControl,
   RecordedProcess,
@@ -56,7 +56,7 @@ export async function killRecordedProcesses(
     const running = records.filter((record) =>
       sameProcess(record.startedAt, startTimes.get(record.pid), window),
     );
-    const killed = await control.killTrees(plan.kill);
+    const killed = await killTrees(control, plan.kill);
     // Nothing was killed when the snapshot could not be read: one look says what still runs.
     const after = await stillRunning(control, running, killed === undefined ? 1 : RECHECK.times);
     alive = after.alive;
@@ -66,6 +66,35 @@ export async function killRecordedProcesses(
   const gone = records.filter((record) => !open.has(record));
   if (gone.length > 0) store.runs.markProcessesGone(gone, (options.now ?? Date.now)());
   return { checked: records.length, killed: plan.kill, kept: plan.reused, alive, unverified };
+}
+
+export interface TreeKillResult {
+  // The roots found running as the recorded process: each was killed after every descendant under it.
+  readonly roots: readonly number[];
+  // How many processes were killed, the roots included.
+  readonly killed: number;
+}
+
+// Kills each recorded root's process tree, one pid at a time, children first. One snapshot of the OS's processes gives
+// every pid's parent and start time; Core's planTreeKills keeps a root only while it still started at its recorded time
+// and a descendant only when it started at or after its parent, so a process that merely names a reused pid as its
+// parent is left alone (the OS's own tree kill walks parent pids alone). Each kill follows the snapshot at once.
+// undefined when the OS could not be read: then nothing was killed.
+export async function killTrees(
+  control: ProcessControl,
+  roots: readonly { readonly pid: number; readonly startedAt: number }[],
+  platform: string = process.platform,
+): Promise<TreeKillResult | undefined> {
+  if (roots.length === 0) return { roots: [], killed: 0 };
+  const table = await control.processTable();
+  if (table === undefined) return undefined;
+  const plan = planTreeKills(roots, table, {
+    window: processStartWindow(platform),
+    protectedPids: new Set([process.pid]),
+  });
+  const rootPids = new Set(plan.roots.map((root) => root.pid));
+  for (const target of plan.order) control.killProcess(target, { group: rootPids.has(target.pid) });
+  return { roots: [...rootPids], killed: plan.order.length };
 }
 
 // The killed processes that still run as the recorded process: none, unless a kill failed.

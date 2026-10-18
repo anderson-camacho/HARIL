@@ -5,6 +5,8 @@
 // therefore asymmetric: wide before the recorded time, narrow after it. A process whose start time cannot be read is
 // never killed. Pure: the OS is read by the ProcessControl port.
 
+import type { ProcessEntry } from "../ports/index.js";
+
 // How far the OS's start time may fall before and after the recorded one for the same process (milliseconds).
 export interface ProcessStartWindow {
   readonly beforeMs: number;
@@ -66,13 +68,6 @@ export function planProcessKills<T extends { readonly pid: number; readonly star
     }
   }
   return { kill, reused, gone };
-}
-
-// One running process as one snapshot of the OS shows it: its pid, the pid it names as its parent and its start time.
-export interface ProcessEntry {
-  readonly pid: number;
-  readonly parentPid: number;
-  readonly startedAt: number;
 }
 
 export interface TreeKillPlan {

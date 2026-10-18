@@ -1,8 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { type ProcessEntry, planTreeKills, processStartWindow } from "@haril/core";
-import type { ProcessControl, ProcessRoot, TreeKillResult } from "@haril/core/ports";
+import type { ProcessControl, ProcessEntry } from "@haril/core/ports";
 
 // ProcessControl over the operating system (docs/modos-y-delegacion.md 3.14): the start time of running processes and the
 // kill of a process tree, without dependencies. Windows asks PowerShell's Get-Process for the start times (one call for
@@ -12,8 +11,9 @@ import type { ProcessControl, ProcessRoot, TreeKillResult } from "@haril/core/po
 // read, Core's planTreeKills keeps only the children that started at or after their parent, and each pid is killed on
 // its own, children first, with process.kill: no shell, no command line, a validated whole-number pid. On Linux each
 // kill first checks that the pid still has the start of the snapshot; on POSIX a root's process group goes with it
-// (agents lead their own group: they are spawned detached). Nothing is ever found or killed by name: the caller names
-// pids it recorded with their start time.
+// (agents lead their own group: they are spawned detached). The walk itself is the caller's (Core's planTreeKills, run
+// by the runtime and the CLI). Nothing is ever found or killed by name: the caller names pids it recorded with their
+// start time.
 
 export interface ProcessControlOptions {
   readonly platform?: NodeJS.Platform;
@@ -177,13 +177,21 @@ function linuxStartTimes(pids: readonly number[]): Map<number, number> {
   return times;
 }
 
-interface LinuxTable {
-  readonly table: ProcessEntry[];
-  // The raw start ticks by pid, which each kill compares again just before it.
-  readonly ticks: Map<number, number>;
+// Two reads of one process's start differ by the resolution of /proc/uptime (10 ms) and the clock's drift between them.
+const LINUX_SAME_START_MS = 50;
+
+// The pid runs and started when the snapshot said: the guard of a kill on Linux.
+function linuxStartsAt(pid: number, startedAt: number): boolean {
+  const uptimeSeconds = readUptimeSeconds();
+  const stat = linuxStat(pid);
+  if (uptimeSeconds === undefined || stat === undefined) return false;
+  return (
+    Math.abs(linuxStartMs(stat.startTicks, uptimeSeconds, Date.now()) - startedAt) <=
+    LINUX_SAME_START_MS
+  );
 }
 
-function linuxTable(): LinuxTable | undefined {
+function linuxTable(): ProcessEntry[] | undefined {
   const uptimeSeconds = readUptimeSeconds();
   if (uptimeSeconds === undefined) return undefined;
   let names: string[];
@@ -194,7 +202,6 @@ function linuxTable(): LinuxTable | undefined {
   }
   const now = Date.now();
   const table: ProcessEntry[] = [];
-  const ticks = new Map<number, number>();
   for (const name of names) {
     if (!/^\d+$/.test(name)) continue;
     const pid = Number(name);
@@ -205,9 +212,8 @@ function linuxTable(): LinuxTable | undefined {
       parentPid: stat.parentPid,
       startedAt: linuxStartMs(stat.startTicks, uptimeSeconds, now),
     });
-    ticks.set(pid, stat.startTicks);
   }
-  return table.length === 0 ? undefined : { table, ticks };
+  return table.length === 0 ? undefined : table;
 }
 
 // ps -o etime: the elapsed time as [[dd-]hh:]mm:ss.
@@ -281,48 +287,24 @@ export function createProcessControl(options: ProcessControlOptions = {}): Proce
       if (!valid.includes(process.pid)) times.delete(process.pid);
       return times;
     },
-    async killTrees(roots: readonly ProcessRoot[]): Promise<TreeKillResult | undefined> {
-      const valid = roots.filter(
-        (root) =>
-          Number.isSafeInteger(root.pid) &&
-          root.pid > 0 &&
-          root.pid !== process.pid &&
-          Number.isFinite(root.startedAt),
-      );
-      if (valid.length === 0) return { roots: [], killed: 0 };
-      let table: readonly ProcessEntry[] | undefined;
-      let linuxTicks: ReadonlyMap<number, number> | undefined;
-      if (platform === "win32") table = await windowsTable(systemRoot, timeoutMs);
-      else if (platform === "linux") {
-        const read = linuxTable();
-        table = read?.table;
-        linuxTicks = read?.ticks;
-      } else if (platform === "darwin") table = await psTable(timeoutMs);
-      if (table === undefined) return undefined;
-      const plan = planTreeKills(valid, table, {
-        window: processStartWindow(platform),
-        protectedPids: new Set([process.pid]),
-      });
-      const rootPids = new Set(plan.roots.map((root) => root.pid));
-      let killed = 0;
-      for (const target of plan.order) {
-        // Linux: the pid still has the start of the snapshot (one file read, no process started).
-        if (
-          linuxTicks !== undefined &&
-          linuxStat(target.pid)?.startTicks !== linuxTicks.get(target.pid)
-        ) {
-          continue;
-        }
-        // POSIX: a verified root leads its own process group; the group goes with it.
-        if (platform !== "win32" && rootPids.has(target.pid)) {
-          try {
-            process.kill(-target.pid, "SIGKILL");
-          } catch {}
-        }
-        killPid(target.pid);
-        killed += 1;
+    async processTable() {
+      if (platform === "win32") return windowsTable(systemRoot, timeoutMs);
+      if (platform === "linux") return linuxTable();
+      if (platform === "darwin") return psTable(timeoutMs);
+      return undefined;
+    },
+    killProcess(target, killOptions) {
+      if (!Number.isSafeInteger(target.pid) || target.pid <= 0 || target.pid === process.pid)
+        return;
+      // Linux: the pid still has the start of the snapshot (one file read, no process started).
+      if (platform === "linux" && !linuxStartsAt(target.pid, target.startedAt)) return;
+      // POSIX: a root leads its own process group (agents are spawned detached); the group goes with it.
+      if (platform !== "win32" && killOptions?.group === true) {
+        try {
+          process.kill(-target.pid, "SIGKILL");
+        } catch {}
       }
-      return { roots: [...rootPids], killed };
+      killPid(target.pid);
     },
   };
 }

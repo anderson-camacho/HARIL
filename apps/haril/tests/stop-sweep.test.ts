@@ -7,7 +7,7 @@ import {
   checkTaskKind,
   type RunEvent,
 } from "@haril/core";
-import type { AgentRuntime, Clock, ProcessControl, ProcessRoot, Store } from "@haril/core/ports";
+import type { AgentRuntime, Clock, ProcessControl, ProcessEntry, Store } from "@haril/core/ports";
 import { FakeAgentRuntime } from "@haril/core/testing";
 import { openStore } from "@haril/state-sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -40,7 +40,7 @@ const DEAD_PID = 2_000_000_000;
 // The OS as a map of running pids to start times; a kill removes a pid only while kills take.
 class FakeOs implements ProcessControl {
   readonly running = new Map<number, number>();
-  readonly kills: ProcessRoot[][] = [];
+  readonly kills: ProcessEntry[] = [];
   killsTake = true;
   unreadable = false;
 
@@ -54,12 +54,16 @@ class FakeOs implements ProcessControl {
     return times;
   }
 
-  async killTrees(roots: readonly ProcessRoot[]) {
+  async processTable(): Promise<readonly ProcessEntry[] | undefined> {
     if (this.unreadable) return undefined;
-    this.kills.push([...roots]);
-    const killed = roots.filter((root) => this.running.get(root.pid) === root.startedAt);
-    if (this.killsTake) for (const root of killed) this.running.delete(root.pid);
-    return { roots: killed.map((root) => root.pid), killed: killed.length };
+    return [...this.running].map(([pid, startedAt]) => ({ pid, parentPid: 1, startedAt }));
+  }
+
+  killProcess(target: ProcessEntry): void {
+    this.kills.push(target);
+    if (this.killsTake && this.running.get(target.pid) === target.startedAt) {
+      this.running.delete(target.pid);
+    }
   }
 }
 
@@ -145,7 +149,7 @@ describe("the CLI's emergency stop", () => {
     const first = await stopNow(host);
     expect(first.code).toBe(1);
     expect(first.report.processes).toMatchObject({ recorded: 1, killed: 1, alive: 1 });
-    expect(os.kills).toEqual([[expect.objectContaining({ pid: 4242, startedAt })]]);
+    expect(os.kills).toEqual([expect.objectContaining({ pid: 4242, startedAt })]);
 
     // A second stop, minutes later, still sees it and tries again.
     const second = await stopNow(host);
@@ -214,7 +218,7 @@ describe("the startup sweep", () => {
         processControl: os,
       });
     expect((await start()).kind).toBe("idle");
-    expect(os.kills).toEqual([[expect.objectContaining({ pid: 4244, startedAt })]]);
+    expect(os.kills).toEqual([expect.objectContaining({ pid: 4244, startedAt })]);
     expect(events).toContainEqual({ type: "runtime.swept", killed: 1, kept: 0 });
     expect(
       store.events
