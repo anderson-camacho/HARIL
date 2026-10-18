@@ -1,5 +1,6 @@
 // Public surface of @haril/os: operating-system adapters. The block loader reads block.md files (ADR-0014 D7);
-// EnvSecretStore reads real keys by reference from the Runtime's environment (ADR-0020 SEC-2).
+// EnvSecretStore reads real keys by reference from the Runtime's environment (ADR-0020 SEC-2); createProcessControl
+// reads process start times and kills process trees for the emergency stop and the startup sweep (3.14).
 export {
   type BlockFileParse,
   checkSectionMarkers,
@@ -14,4 +15,5 @@ export {
   loadBlockRegistry,
 } from "./blocks/registry.js";
 export { parseStrictJson, type StrictJsonResult } from "./blocks/strict-json.js";
+export { createProcessControl } from "./processes/process-control.js";
 export { EnvSecretStore } from "./secret-store/env-secret-store.js";

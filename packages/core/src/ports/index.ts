@@ -5,6 +5,7 @@ export * from "./clock.js";
 export * from "./delegation.js";
 export * from "./delegation-channel.js";
 export * from "./memory.js";
+export * from "./process-control.js";
 export * from "./result.js";
 export * from "./secret-store.js";
 export * from "./store.js";
