@@ -277,10 +277,15 @@ describe("a three-layer workflow through the runtime", () => {
   });
 
   // The seed scripts a rejection, an escalation and a stalled attempt, which its timeout ends and the rework relaunches.
+  // The timeout must end the one stalled attempt and no other: every other fake turn takes a few milliseconds of drawn
+  // time, but under the load of the full suite (every package's tests in parallel, SQLite writes waiting on the disk) a
+  // healthy turn has been seen to take more than 400 ms from claim to close, time out, and relaunch once more. 2 s keeps
+  // a margin of two orders of magnitude over a healthy turn and still ends the stall early in a test of several seconds;
+  // the assertions below stay exact (one failed_retry), so a turn that really hangs or retries twice still fails it.
   it("drains a larger queue within the default limits, with no deadlock", async () => {
     const store = open();
     startWorkflow(store, "Many steps [fake:parts=4] [fake:steps=8] [fake:seed=3]");
-    const limits = { ...DEFAULT_DELEGATION_LIMITS, attemptTimeoutMs: 400 };
+    const limits = { ...DEFAULT_DELEGATION_LIMITS, attemptTimeoutMs: 2_000 };
     const { peaks } = await run(store, { msPerMinute: 2, limits });
     const { workflow, view } = onlyWorkflow(store);
     expect(workflow.state).toBe("completed");
