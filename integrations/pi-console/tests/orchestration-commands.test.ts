@@ -61,6 +61,9 @@ function fakeHost(): CommandHost {
     async openOrchestrationView() {
       views++;
     },
+    mode: () => "action",
+    switchMode: () => undefined,
+    lastPlan: () => undefined,
   };
   return host as CommandHost;
 }

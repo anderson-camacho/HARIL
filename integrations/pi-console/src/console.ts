@@ -5,7 +5,7 @@
 // into one file next to the bridge.
 
 import { cliAvailable } from "./cli.js";
-import { type CommandHost, registerCommands } from "./commands.js";
+import { type CommandHost, chooseMode, registerCommands } from "./commands.js";
 import {
   DASHBOARD_AREAS,
   type DashboardArea,
@@ -17,6 +17,7 @@ import {
 import { openDashboardActionMenu, runDashboardAction } from "./dashboard-actions.js";
 import type { DashboardAction } from "./dashboard-controls.js";
 import { type DashboardData, emptyDashboardData, loadDashboardData } from "./dashboard-data.js";
+import { installModes } from "./mode-controller.js";
 import { levelLabel } from "./model-levels.js";
 import { chooseLevel, chooseModel, createLevelMemory, type LevelMemory } from "./model-picker.js";
 import {
@@ -25,6 +26,7 @@ import {
   registerHarilModels,
   restoreHarilModel,
 } from "./models.js";
+import { modeLabel } from "./modes.js";
 import { ASCII_GLYPHS, orchestrationGlyphs } from "./orchestration-draw.js";
 import { openOrchestrationOverlay } from "./orchestration-overlay.js";
 import {
@@ -145,6 +147,14 @@ export default function harilConsole(pi: ConsolePi): void {
 
   const redraw = (): void => session?.tui?.requestRender();
 
+  // The console modes and their read-only guard (F4): registered once, before any session, so the guard is in place
+  // for the first tool call. Research files go under the bound project's root, else the folder Pi opened in.
+  const modes = installModes(pi, {
+    researchRoot: () => session?.project?.rootPath ?? session?.cwd ?? process.cwd(),
+    now: () => Date.now(),
+    redraw,
+  });
+
   function runtimeState(current: Session): RuntimeState {
     if (current.runtimeAlive === true) return "running";
     if (current.started?.running === true) return "starting";
@@ -167,6 +177,7 @@ export default function harilConsole(pi: ConsolePi): void {
       cwd: current.cwd,
       branch,
       statuses,
+      mode: modeLabel(modes.mode()),
     };
   }
 
@@ -342,6 +353,11 @@ export default function harilConsole(pi: ConsolePi): void {
         }
       },
       closed: false,
+      mode: () => modes.mode(),
+      switchMode(mode, modeCtx) {
+        modes.switchTo(mode, modeCtx);
+      },
+      lastPlan: () => modes.lastPlan(),
       harilModelRef: () => harilRef(current.model, current.registration),
       modelRef: () => harilRef(current.model, current.registration),
       runtime: () => runtimeState(current),
@@ -522,6 +538,7 @@ export default function harilConsole(pi: ConsolePi): void {
           );
           if (barHit !== undefined) {
             if (barHit.target === "model") void chooseModel(current.ctx, pi);
+            else if (barHit.target === "mode") void chooseMode(current, current.ctx);
             else void chooseLevel(current.ctx, pi, current.levels);
             return { handled: true, render: true };
           }
@@ -698,9 +715,19 @@ export default function harilConsole(pi: ConsolePi): void {
     },
   });
 
+  // Alt+M is free in Pi 1.2.0's default keybindings (docs/keybindings.md), on Windows too.
+  pi.registerShortcut("alt+m", {
+    description: "Cycle the HARIL console mode (ACTION, CONSULT, PLAN, DELEGATION)",
+    handler: (ctx) => {
+      modes.cycle(ctx);
+    },
+  });
+
   pi.on("session_start", (event, ctx) => {
     const current = openSession(ctx);
     session = current;
+    // The mode kept in the session comes back (resume, reload); a new session starts in ACTION.
+    modes.restore(ctx);
     installUi(current);
     current.openArea("agents");
     if (!cliAvailable()) return;

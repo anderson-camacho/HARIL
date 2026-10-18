@@ -12,6 +12,7 @@ import {
   summarizeApproval,
 } from "./dashboard-data.js";
 import { chooseLevel, chooseModel, type LevelMemory, openModelAndLevel } from "./model-picker.js";
+import { actionRefusal, type ConsoleMode } from "./modes.js";
 import { demoNotice } from "./orchestration-state.js";
 import type { ConsoleContext, ConsolePi } from "./pi-types.js";
 import { type BoundProject, folderName } from "./project.js";
@@ -19,6 +20,7 @@ import type { PendingApproval } from "./status.js";
 import { plainText, textWidth, truncate, wrap } from "./text.js";
 
 const HARIL_COMMANDS = [
+  "/mode",
   "/goal",
   "/plans",
   "/plan",
@@ -67,6 +69,8 @@ export interface DashboardActionHost {
   readonly openOrchestrationView: (ctx: ConsoleContext) => Promise<void>;
   readonly toggleOrchestrationDemo: () => boolean;
   readonly orchestrationDemo: () => boolean;
+  // The console mode: CONSULT refuses the actions that change state (modes.ts). Absent means ACTION.
+  readonly mode?: () => ConsoleMode;
 }
 
 function projectSlug(host: DashboardActionHost, ctx: ConsoleContext): string | undefined {
@@ -493,6 +497,11 @@ export async function runDashboardAction(
   pi: ConsolePi,
   host: DashboardActionHost,
 ): Promise<void> {
+  const refusal = actionRefusal(host.mode?.() ?? "action", action);
+  if (refusal !== undefined) {
+    ctx.ui.notify(refusal, "warning");
+    return;
+  }
   switch (action) {
     case "register-project":
       await registerProject(ctx, host);
@@ -733,7 +742,13 @@ export async function openDashboardActionMenu(
     "Refresh data",
     "Cancel",
   ];
-  const choice = await ctx.ui.select("HARIL console controls", options);
+  // CONSULT hides the actions it would refuse.
+  const mode = host.mode?.() ?? "action";
+  const shown = options.filter((option) => {
+    const action = MENU_ACTIONS[option];
+    return action === undefined || actionRefusal(mode, action) === undefined;
+  });
+  const choice = await ctx.ui.select("HARIL console controls", shown);
   if (choice === undefined || choice === "Cancel") return;
   if (choice === "Open an area") {
     const labels = ["AGENTS", "ORCHESTRATION", "AUTOMATION", "TOOLS", "WORKFLOWS", "EVERYWHERE"];
@@ -741,27 +756,29 @@ export async function openDashboardActionMenu(
     if (area !== undefined) host.openArea(area.toLowerCase() as DashboardArea);
     return;
   }
-  const actions: Record<string, DashboardAction> = {
-    "Register this folder": "register-project",
-    "Open orchestration view": "orchestration-view",
-    "Orchestration demo on": "orchestration-demo",
-    "Orchestration demo off": "orchestration-demo",
-    "Choose Pi model": "model",
-    "Choose reasoning level": "level",
-    "Review approvals": "approvals",
-    "Inspect tasks": "tasks",
-    "Queue a goal": "goal",
-    "Run project queue": "run-queue",
-    "Project events": "events",
-    "Start runtime": "start-runtime",
-    "Stop shared runtime": "stop-runtime",
-    "Toggle Pi tools": "toggle-tools",
-    "Browse methodologies": "methodologies",
-    "Browse HARIL commands": "commands",
-    "Memory status": "memory",
-    "View area details": "details",
-    "Refresh data": "refresh",
-  };
-  const action = actions[choice];
+  const action = MENU_ACTIONS[choice];
   if (action !== undefined) await runDashboardAction(action, ctx, pi, host);
 }
+
+// The /haril menu's options and the actions they run.
+const MENU_ACTIONS: Readonly<Record<string, DashboardAction>> = {
+  "Register this folder": "register-project",
+  "Open orchestration view": "orchestration-view",
+  "Orchestration demo on": "orchestration-demo",
+  "Orchestration demo off": "orchestration-demo",
+  "Choose Pi model": "model",
+  "Choose reasoning level": "level",
+  "Review approvals": "approvals",
+  "Inspect tasks": "tasks",
+  "Queue a goal": "goal",
+  "Run project queue": "run-queue",
+  "Project events": "events",
+  "Start runtime": "start-runtime",
+  "Stop shared runtime": "stop-runtime",
+  "Toggle Pi tools": "toggle-tools",
+  "Browse methodologies": "methodologies",
+  "Browse HARIL commands": "commands",
+  "Memory status": "memory",
+  "View area details": "details",
+  "Refresh data": "refresh",
+};

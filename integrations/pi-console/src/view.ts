@@ -23,10 +23,13 @@ export interface BarFacts {
   readonly cwd: string;
   readonly branch: string | null;
   readonly statuses: readonly string[];
+  // The console mode as the bar names it (ACTION, CONSULT, PLAN, DELEGATION).
+  readonly mode: string;
 }
 
-// The parts of the bar a click acts on: the model opens the model selector, the level the level selector.
-type BarTarget = "model" | "level";
+// The parts of the bar a click acts on: the model opens the model selector, the level the level selector, the mode the
+// mode selector.
+type BarTarget = "model" | "level" | "mode";
 
 export interface BarLayout {
   readonly lines: string[];
@@ -147,6 +150,7 @@ function barLine(
 ): { line: string; hits: BarLayout["hits"][number][] } {
   const left = joined([
     [{ text: "◆ HARIL", tone: MAIN, bold: true }],
+    [{ text: `MODE: ${plainText(facts.mode)}`, tone: MAIN, bold: true, target: "mode" }],
     [{ text: plainText(facts.place), tone: MAIN }],
     modelParts(facts),
   ]);
@@ -196,9 +200,9 @@ function placeLine(facts: BarFacts, width: number, theme: ConsoleTheme): string 
   return paint(fit(parts, width), theme);
 }
 
-// The two lines of the bar: HARIL, the place and `model · level` on the left, the session and the runtime on the
-// right; below, the folder, its git branch and the statuses other extensions set. The hit-boxes are the model and
-// the level on the first line.
+// The two lines of the bar: HARIL, the mode, the place and `model · level` on the left, the session and the runtime on
+// the right; below, the folder, its git branch and the statuses other extensions set. The hit-boxes are the mode, the
+// model and the level on the first line.
 export function renderBarLayout(facts: BarFacts, width: number, theme: ConsoleTheme): BarLayout {
   if (width <= 0) return { lines: [], hits: [] };
   const first = barLine(facts, width, theme);

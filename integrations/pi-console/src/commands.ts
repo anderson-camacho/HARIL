@@ -1,5 +1,13 @@
 import { cliAvailable, NOT_LAUNCHED, runHaril, type StartedRuntime, startRuntime } from "./cli.js";
 import { DASHBOARD_AREAS, type DashboardArea } from "./dashboard.js";
+import {
+  CONSOLE_MODES,
+  type ConsoleMode,
+  commandRefusal,
+  modeDescription,
+  modeLabel,
+  parseMode,
+} from "./modes.js";
 import { demoNotice } from "./orchestration-state.js";
 import type { AutocompleteItem, ConsoleContext, ConsolePi } from "./pi-types.js";
 import { type BoundProject, folderName } from "./project.js";
@@ -14,6 +22,8 @@ const DEFAULT_MODEL_ENV = "HARIL_DEFAULT_MODEL";
 const PLANNER = "planner";
 const SIMULATED_PLANNER = "fake:plan";
 const EVENTS_LIMIT = "20";
+// A plan PLAN mode wrote goes to the planner as the goal; Windows caps a command line near 32 000 characters.
+const PLAN_GOAL_MAX = 8_000;
 const NO_PROJECT = "this folder is not a HARIL project: /init registers it";
 // What the plan commands of a folder that is not a project cover, said in their titles and notifications.
 const ALL_PROJECTS = "all projects (this folder is not a HARIL project)";
@@ -40,6 +50,11 @@ export interface CommandHost {
   toggleOrchestrationDemo(): boolean;
   // Opens the ORCHESTRATION full view over the terminal.
   openOrchestrationView(ctx: ConsoleContext): Promise<void>;
+  // The console mode (modes.ts) and the switch to another one.
+  mode(): ConsoleMode;
+  switchMode(mode: ConsoleMode, ctx: ConsoleContext): void;
+  // The last plan PLAN mode wrote in this session, which /goal sends when it gets no text.
+  lastPlan(): string | undefined;
 }
 
 interface CommandSpec {
@@ -200,7 +215,44 @@ function plannerArgs(host: CommandHost): { readonly args: string[]; readonly not
   };
 }
 
+// Asks for a mode with a select, each mode with what it does (the bar's MODE click and /mode without a name).
+export async function chooseMode(host: CommandHost, ctx: ConsoleContext): Promise<void> {
+  const current = host.mode();
+  const options = CONSOLE_MODES.map(
+    (mode) => `${mode === current ? "●" : "○"} ${modeLabel(mode)} · ${modeDescription(mode)}`,
+  );
+  const choice = await ctx.ui.select(`Console mode · now ${modeLabel(current)}`, options);
+  const picked = CONSOLE_MODES.find((_mode, index) => options[index] === choice);
+  if (picked !== undefined) host.switchMode(picked, ctx);
+}
+
+const MODE_COMPLETIONS: readonly AutocompleteItem[] = CONSOLE_MODES.map((mode) => ({
+  value: mode,
+  label: mode,
+  description: modeDescription(mode),
+}));
+
 const COMMANDS: readonly CommandSpec[] = [
+  {
+    name: "mode",
+    usage: "/mode [action|consult|plan|delegation]",
+    description: "Switch the console mode (Alt+M cycles; a click on MODE in the bar chooses)",
+    local: true,
+    async run(args, host, ctx) {
+      const name = plainText(args).trim();
+      if (name === "") {
+        await chooseMode(host, ctx);
+        return;
+      }
+      const mode = parseMode(name);
+      if (mode === undefined) {
+        ctx.ui.notify("usage: /mode action | consult | plan | delegation", "warning");
+        return;
+      }
+      if (mode === host.mode()) ctx.ui.notify(`MODE: ${modeLabel(mode)} already`, "info");
+      else host.switchMode(mode, ctx);
+    },
+  },
   {
     name: "haril",
     usage: "/haril",
@@ -228,11 +280,19 @@ const COMMANDS: readonly CommandSpec[] = [
   {
     name: "goal",
     usage: "/goal <text>",
-    description: "Ask the planner for a plan to reach a goal; it waits for /approve",
+    description:
+      "Ask the planner for a plan to reach a goal; it waits for /approve (in PLAN mode, without text: the plan above)",
     async run(args, host, ctx) {
-      const goal = plainText(args).trim();
+      const typed = plainText(args).trim();
+      const plan = typed === "" && host.mode() === "plan" ? host.lastPlan()?.trim() : undefined;
+      const goal = typed !== "" ? typed : (plan ?? "").slice(0, PLAN_GOAL_MAX);
       if (goal === "") {
-        ctx.ui.notify("usage: /goal <what you want done>", "warning");
+        ctx.ui.notify(
+          host.mode() === "plan"
+            ? "usage: /goal <what you want done> (no plan written in this session yet)"
+            : "usage: /goal <what you want done>",
+          "warning",
+        );
         return;
       }
       if (host.project === undefined) {
@@ -346,10 +406,23 @@ export function registerCommands(pi: ConsolePi, host: () => CommandHost | undefi
       description: `HARIL: ${command.description}`,
       ...(command.completesApprovals === true
         ? { getArgumentCompletions: (prefix: string) => approvalCompletions(host(), prefix) }
-        : {}),
+        : command.name === "mode"
+          ? {
+              getArgumentCompletions: (prefix: string) =>
+                MODE_COMPLETIONS.filter((item) =>
+                  item.value.startsWith(prefix.trim().toLowerCase()),
+                ),
+            }
+          : {}),
       async handler(args, ctx) {
         const current = host();
         if (current === undefined) return;
+        // CONSULT is read-only: a command that changes HARIL state does not run, whatever it is asked to do.
+        const refusal = commandRefusal(current.mode(), command.name);
+        if (refusal !== undefined) {
+          ctx.ui.notify(refusal, "warning");
+          return;
+        }
         if (command.local !== true && !cliAvailable()) {
           ctx.ui.notify(NOT_LAUNCHED, "error");
           return;

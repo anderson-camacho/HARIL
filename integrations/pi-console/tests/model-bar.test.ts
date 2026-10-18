@@ -23,6 +23,7 @@ function bar(overrides: Partial<BarFacts> = {}): BarFacts {
     cwd: "fake-cwd",
     branch: null,
     statuses: [],
+    mode: "ACTION",
     ...overrides,
   };
 }
@@ -48,7 +49,7 @@ describe("HARIL bar", () => {
     expect(stripAnsi(plain.lines[0] ?? "")).toContain("Gemini1/gemini-3-flash · no reasoning");
     const none = renderBarLayout(bar({ model: undefined, level: undefined }), 120, THEME);
     expect(stripAnsi(none.lines[0] ?? "")).toContain("no model");
-    expect(none.hits.map((hit) => hit.target)).toEqual(["model"]);
+    expect(none.hits.map((hit) => hit.target)).toEqual(["mode", "model"]);
   });
 
   it("keeps the hit-boxes inside a narrow bar", () => {
@@ -61,6 +62,15 @@ describe("HARIL bar", () => {
         expect(hit.end).toBeGreaterThan(hit.start);
       }
     }
+  });
+});
+
+describe("mode in the bar (F4)", () => {
+  it("shows the mode with a hit-box", () => {
+    const layout = renderBarLayout(bar({ mode: "CONSULT" }), 140, THEME);
+    const line = layout.lines[0] ?? "";
+    const mode = layout.hits.find((hit) => hit.target === "mode");
+    expect(hitText(line, mode ?? { start: 0, end: 0 })).toBe("MODE: CONSULT");
   });
 });
 
