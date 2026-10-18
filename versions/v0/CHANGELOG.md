@@ -4,6 +4,49 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.9.0
+
+- **Fecha:** 2026-10-18
+- **Estado:** **La vista de orquestación en la consola, con datos de ejemplo.** El módulo `ORCHESTRATION` de la consola sobre Pi muestra la maqueta aprobada de la delegación en tres capas (ADR-0021): un resumen en el panel y una vista completa en superposición, manejables con clic y con teclado. El motor de orquestación todavía no existe, así que la vista solo tiene datos con `/orchestration demo`, siempre rotulados como de ejemplo. La versión incluye también la consola interactiva integrada en el PR #37: cabecera y áreas navegables con clic, controles por módulo y registro de la carpeta como proyecto.
+
+### Añadido
+
+- **Vista de orquestación (fase F5a de la delegación):**
+  - resumen en el módulo `ORCHESTRATION`: métricas de cabecera (tokens, tiempo, ejecutores de 5, auditores de 5, agentes de 100, cola), un árbol compacto que cabe en la altura disponible, los botones de las vistas, «Open full view» y «■ Stop all», todos con clic;
+  - vista completa en una superposición de Pi: las vistas Tree, By layer, Queue, Quota y Log; el detalle del nodo seleccionado (objetivo, modelo con su origen y nivel, archivos, dificultad, contexto frente al umbral con barra, cuota de 5 h y semanal con la marca del 80 % o `n/a`, progreso, próxima revisión del vigilante, auditoría y memo); los eventos recientes. Versión ancha desde 120×40 y compacta por debajo;
+  - teclado dentro de la vista: `Tab` y `←` `→` cambian de vista, `↑` `↓` mueven la selección, `Enter` muestra u oculta el detalle, `L` abre la vista en vivo, `F` filtra el registro (all, agent_run, chat), `D` activa la demostración, `W` simula el vigilante, `R` reinicia, `S` para todo y `Esc` cierra. Cada acción tiene su equivalente con clic, y se reconocen también las secuencias del protocolo de teclado de Kitty;
+  - vista en vivo de un agente: en la demostración, cabecera (rol, capa, modelo, nivel, estado, tokens y contexto), línea de tiempo y una transcripción simulada rotulada DEMO; fuera de ella, dice que llegará con los workflows reales;
+  - modo demostración: `/orchestration demo`, el control «Demo on/off» del módulo, `D` o el menú `/haril` cargan los once nodos de ejemplo de ADR-0021 con el rótulo permanente «DEMO · sample data, not real». «Simular vigilante» cierra solo el nodo sin progreso (e5) y deja continuar a los activos; «Stop all» cancela los nodos vivos sin parar nada real; «Reset» vuelve al inicio;
+  - `/orchestration view`, el control «Open orchestration view» y el atajo `Alt+O` (libre en los atajos por defecto de Pi 1.2.0) abren la vista completa; `/orchestration` sin argumentos sigue abriendo el área;
+  - cada estado se dibuja con símbolo y texto, nunca solo con color; `HARIL_CONSOLE_ASCII=1` cambia `●`, `○`, `✓`, `✗`, `■`, `‖` y `→` por `*`, `o`, `v`, `x`, `#`, `||` y `->`;
+  - el contrato `WorkflowSnapshot v1` copiado en la consola: `null` se muestra como `n/a` y nunca se inventa un valor.
+- **Primeras pruebas de la consola:** `integrations/pi-console/tests/`, con 59 pruebas de Vitest sobre funciones puras y un Pi falso: ancho de cada línea a 80 y 140 columnas, símbolo y texto por estado, contenido del detalle, estado vacío sin números de ejemplo, respaldo ASCII, teclado, vigilante y parada simulados, mapeo de clics y el comando `/orchestration`.
+
+### Cambiado
+
+- El módulo `ORCHESTRATION` muestra primero el resumen del workflow (o el estado vacío «No workflows yet») y, debajo, una sola línea con las tareas, la cola, las aprobaciones y los eventos del proyecto. Conserva todos sus controles y suma «Open orchestration view» y «Demo on/off».
+- «■ Stop all» fuera de la demostración reutiliza la parada del runtime compartido, con su confirmación, y la ejecuta después de cerrar la superposición.
+
+### Corregido
+
+- Sin correcciones en esta versión.
+
+### Desvíos y aplazamientos
+
+- **Solo datos de ejemplo.** La vista no lee workflows reales: el cargador de datos y `haril workflow show` llegan en la fase siguiente (F5b).
+- **El módulo WORKFLOWS sigue.** Se retira en una fase posterior, cuando las metodologías pasen a TOOLS.
+- **«Stop all» todavía no es la parada inmediata:** fuera de la demostración pide confirmación; la parada de emergencia sin confirmación y su atajo global llegan con su fase.
+- **Sin «Continuar una parada» (`C`):** la demostración no tiene paradas humanas pendientes.
+- **Tiempo del workflow de ejemplo:** 00:21:12 en lugar del 00:03:12 de la maqueta, para que e5 pueda llevar 17 minutos sin actividad.
+- **Sin probar en una terminal real:** el dibujo, los símbolos en PowerShell y los clics dentro de Pi solo se comprobaron con pruebas automáticas y con la extensión compilada cargada en un Pi falso.
+
+### Verificación
+
+- Local: `pnpm run check` 0; `pnpm test` con 1638 pruebas de Vitest (1 omitida, solo POSIX) y 89 de `node:test`; `npm run build` compila la extensión de la consola y `haril --version` imprime `haril 0.9.0`.
+- La extensión compilada, cargada con un Pi falso, registra `Alt+O` y `/orchestration`; `/orchestration demo` dibuja el resumen, un clic en una fila abre la superposición y las teclas la manejan.
+
+---
+
 ## 0.8.0
 
 - **Fecha:** 2026-10-17
