@@ -8,6 +8,8 @@ import { alive, killNoted, type NotedProcess, processControl, until } from "./pr
 // snapshot of the OS's processes, instead of the OS's tree kill, which follows parent pids alone. A root is killed only
 // while it still has its recorded start time; a descendant only when it started at or after its parent; every pid is
 // killed on its own, children first.
+// It runs in npm run test:stop (a step of npm test), on its own: the OS's process list is read through PowerShell's WMI
+// on Windows, which took over 10 s under the load of every other test file in parallel and about 1 s alone.
 
 // A child that starts a detached grandchild (only a kill ends it), prints its pid and idles.
 const TREE_SCRIPT =

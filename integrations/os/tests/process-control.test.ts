@@ -5,6 +5,8 @@ import { cimDateTimeMs } from "../src/processes/process-control.js";
 
 // The OS side of the emergency stop and the startup sweep (docs/modos-y-delegacion.md 3.14): real processes, a real
 // tree (a child that starts a grandchild, as Pi starts a tool command) and the real OS queries.
+// It runs in npm run test:stop (a step of npm test), on its own: the OS's process list is read through PowerShell's WMI
+// on Windows, which took over 10 s under the load of every other test file in parallel and about 1 s alone.
 
 // A child that starts a grandchild, prints the grandchild's pid and idles. POSIX leads its own group, as Pi does. The
 // grandchild is detached so that only a kill ends it: on Windows a Node child otherwise dies with its parent's job.

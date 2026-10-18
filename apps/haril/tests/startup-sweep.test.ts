@@ -21,6 +21,8 @@ import { alive, killNoted, type NotedProcess, processControl } from "./process-h
 // its runs open and, possibly, its agents alive. The next runtime kills the recorded processes that still run as the
 // process that was recorded (pid and start time), keeps a pid the OS reused for another program, and only then
 // reconciles the orphans as before (back to ready, at most 3 infrastructure restarts).
+// It runs in npm run test:stop (a step of npm test), on its own: the OS's process list is read through PowerShell's WMI
+// on Windows, which took over 10 s under the load of every other test file in parallel and about 1 s alone.
 
 const clock: Clock = {
   now: () => Date.now(),
