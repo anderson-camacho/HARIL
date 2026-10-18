@@ -181,7 +181,8 @@ export async function restoreHarilModel(
     (current?.provider !== savedProvider || current.id !== savedModel)
   ) {
     wanted = find(savedProvider, savedModel);
-  } else if (current === undefined) {
+  } else if (current === undefined || find(current.provider, current.id) === undefined) {
+    // Without a usable model Pi 1.2.0 reports a placeholder (provider and id "unknown"), not undefined.
     wanted = defaultHarilModel(registration, find) ?? firstHarilModel(ctx, registration);
   }
   if (wanted === undefined) return undefined;
