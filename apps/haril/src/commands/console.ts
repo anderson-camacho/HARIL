@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
-import { dirname, join, posix, win32 } from "node:path";
+import { dirname, join, posix, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_USAGE, type HostInfo } from "../context.js";
@@ -78,6 +78,7 @@ export async function consoleCommand(
   const ops = host.platform === "win32" ? win32 : posix;
   const agentDir = ops.join(root, AGENT_DIR);
   mkdirSync(agentDir, { recursive: true });
+  const cwd = host.cwd ?? process.cwd();
   const dataDir = lastValue(parsed, "--data-dir");
   const env: NodeJS.ProcessEnv = {
     ...(host.env ?? process.env),
@@ -89,11 +90,12 @@ export async function consoleCommand(
     HARIL_CLI: ports.harilEntry,
     HARIL_RUNTIME_DIR: root,
     HARIL_VERSION: VERSION,
-    // --data-dir reaches every command the extension runs the way HARIL_HOME does.
-    ...(dataDir === undefined ? {} : { HARIL_HOME: dataDirFor(host, dataDir) }),
+    // --data-dir reaches every command the extension runs the way HARIL_HOME does, as an absolute path: the runtime
+    // the console starts works from the runtime root, not from this folder.
+    ...(dataDir === undefined ? {} : { HARIL_HOME: resolve(cwd, dataDirFor(host, dataDir)) }),
   };
   return runPi(runtime.node.path, [runtime.pi.cliPath, "-e", extension], {
-    cwd: host.cwd ?? process.cwd(),
+    cwd,
     env,
     io,
   });
