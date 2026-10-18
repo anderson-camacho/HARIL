@@ -9,9 +9,11 @@
     "node": "^24.21.0 || >=26.8.0"
   },
   "scripts": {
-    "check": "npm run check:biome && npm run check:types && npm run check:scripts && npm run check:deps && npm run check:compat",
+    "check": "npm run check:biome && npm run check:types && npm run check:scripts && npm run check:deps && npm run check:compat && npm run check:version",
     "generate:compat": "node scripts/generate-compat.mjs",
     "check:compat": "node scripts/generate-compat.mjs --check",
+    "check:version": "node scripts/check-version.mjs",
+    "version:bump": "node scripts/bump-version.mjs",
     "check:biome": "biome ci .",
     "check:types": "tsc --noEmit -p packages/contracts && tsc --noEmit -p packages/core && tsc --noEmit -p integrations/os && tsc --noEmit -p integrations/control && tsc --noEmit -p integrations/git && tsc --noEmit -p integrations/state-sqlite && tsc --noEmit -p integrations/gateway && tsc --noEmit -p integrations/agent-pi && tsc --noEmit -p integrations/agent-pi-bridge && tsc --noEmit -p integrations/pi-console && tsc --noEmit -p integrations/memory-engram && tsc --noEmit -p apps/haril && tsc --noEmit -p apps/bootstrap && tsc --noEmit -p apps/shell && tsc --noEmit -p tsconfig.check.json",
     "check:scripts": "node scripts/check-layers.mjs && node scripts/check-purity.mjs && node scripts/check-forbidden.mjs",

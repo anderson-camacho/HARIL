@@ -22,6 +22,9 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v5
+        with:
+          # Full history and origin/main, so check:version can find the merge-base of the change (scripts/check-version.mjs).
+          fetch-depth: 0
       - uses: actions/setup-node@v5
         with:
           node-version: 24.21.x
@@ -32,7 +35,7 @@ jobs:
         run: corepack enable
       - name: Install
         run: pnpm install --frozen-lockfile
-      - name: Check (biome, tsc, layer/purity/forbidden scripts, knip)
+      - name: Check (biome, tsc, layer/purity/forbidden scripts, knip, compat, version)
         run: pnpm run check
       - name: Test (vitest + node:test)
         run: pnpm test

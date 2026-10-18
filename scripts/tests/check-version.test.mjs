@@ -1,0 +1,217 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { main as bump } from "../bump-version.mjs";
+import { main } from "../check-version.mjs";
+import { PLACEHOLDER } from "../lib/version-files.mjs";
+import {
+  capture,
+  changelog,
+  gitSandbox,
+  readAt,
+  sandbox,
+  versionsReadme,
+  writeAt,
+  writeVersionTree,
+} from "./version-fixture.mjs";
+
+// scripts/check-version.mjs: public changes since the base need a bump, equal version strings, a filled top
+// changelog entry and versions/README.md naming the version. Every repository here is temporary.
+
+function check(root, env = {}) {
+  const io = capture();
+  const code = main([], { root, env, ...io });
+  return { code, text: io.text(), out: io.out.join("\n"), err: io.err.join("\n") };
+}
+
+// Bump with the real script and fill the entry the way an author would.
+function bumpAndFill(root, kind = "minor") {
+  assert.equal(bump([kind], { root, today: "2026-10-18", ...capture() }), 0);
+  const log = readAt(root, "versions/v0/CHANGELOG.md").replaceAll(PLACEHOLDER, "Hecho.");
+  writeAt(root, "versions/v0/CHANGELOG.md", log);
+}
+
+test("passes when nothing public changed since the base", () => {
+  const repo = gitSandbox("0.10.0");
+  try {
+    const result = check(repo.root, { HARIL_VERSION_BASE: repo.base });
+    assert.equal(result.code, 0, result.text);
+    assert.match(result.out, /no public change since/);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("fails when a public file changed without a bump", () => {
+  const repo = gitSandbox("0.10.0");
+  try {
+    writeAt(repo.root, "src/code.ts", "export const value = 2;\n");
+    repo.commit("change code");
+    const result = check(repo.root, { HARIL_VERSION_BASE: repo.base });
+    assert.equal(result.code, 1);
+    assert.match(result.err, /without a version bump/);
+    assert.match(result.err, /bump-version\.mjs/);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("counts uncommitted changes to tracked files", () => {
+  const repo = gitSandbox("0.10.0");
+  try {
+    writeAt(repo.root, "src/code.ts", "export const value = 3;\n");
+    const result = check(repo.root, { HARIL_VERSION_BASE: repo.base });
+    assert.equal(result.code, 1, result.text);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("passes when the change comes with a bump, a filled entry and versions/README.md", () => {
+  const repo = gitSandbox("0.10.0");
+  try {
+    writeAt(repo.root, "src/code.ts", "export const value = 2;\n");
+    bumpAndFill(repo.root);
+    repo.commit("feature and release");
+    const result = check(repo.root, { HARIL_VERSION_BASE: repo.base });
+    assert.equal(result.code, 0, result.text);
+    assert.match(result.out, /0\.10\.0 -> 0\.11\.0/);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("ignores changes under docs/ and odd/, which are not public", () => {
+  const repo = gitSandbox("0.10.0");
+  try {
+    writeAt(repo.root, "docs/notes.md", "# Notes\n");
+    writeAt(repo.root, "odd/tasks/x.md", "# Tasks\n");
+    repo.commit("local docs");
+    const result = check(repo.root, { HARIL_VERSION_BASE: repo.base });
+    assert.equal(result.code, 0, result.text);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("fails when the version strings differ", () => {
+  const repo = gitSandbox("0.10.0");
+  try {
+    bumpAndFill(repo.root);
+    writeAt(
+      repo.root,
+      "apps/shell/package.json",
+      readAt(repo.root, "apps/shell/package.json").replace("0.11.0", "0.10.0"),
+    );
+    repo.commit("half bump");
+    const result = check(repo.root, { HARIL_VERSION_BASE: repo.base });
+    assert.equal(result.code, 1);
+    assert.match(result.err, /apps\/shell\/package\.json has 0\.10\.0/);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("fails while the top changelog entry still has the placeholder", () => {
+  const repo = gitSandbox("0.10.0");
+  try {
+    assert.equal(bump(["minor"], { root: repo.root, today: "2026-10-18", ...capture() }), 0);
+    repo.commit("unfilled release");
+    const result = check(repo.root, { HARIL_VERSION_BASE: repo.base });
+    assert.equal(result.code, 1);
+    assert.match(result.err, /TODO\(bump-version\)/);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("fails when the top changelog entry is not the current version", () => {
+  const { root, cleanup } = sandbox();
+  try {
+    writeVersionTree(root, "0.11.0");
+    writeAt(root, "versions/v0/CHANGELOG.md", changelog([{ version: "0.10.0" }]));
+    const result = check(root);
+    assert.equal(result.code, 1);
+    assert.match(result.err, /top entry is 0\.10\.0, not 0\.11\.0/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("fails when versions/README.md does not name the current version", () => {
+  const { root, cleanup } = sandbox();
+  try {
+    writeVersionTree(root, "0.11.0");
+    writeAt(root, "versions/README.md", versionsReadme("0.10.0"));
+    const result = check(root);
+    assert.equal(result.code, 1);
+    assert.match(result.err, /versions\/README\.md names 0\.10\.0/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("uses the merge-base with origin/main when no base is given", () => {
+  const repo = gitSandbox("0.10.0");
+  try {
+    repo.git("update-ref", "refs/remotes/origin/main", repo.base);
+    repo.git("switch", "-q", "-c", "feature");
+    writeAt(repo.root, "src/code.ts", "export const value = 2;\n");
+    repo.commit("change code");
+    const failing = check(repo.root);
+    assert.equal(failing.code, 1, failing.text);
+    assert.match(
+      failing.err,
+      new RegExp(`merge-base with origin/main \\(${repo.base.slice(0, 7)}`),
+    );
+    bumpAndFill(repo.root);
+    repo.commit("release");
+    const passing = check(repo.root);
+    assert.equal(passing.code, 0, passing.text);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("without any base it checks consistency only and says the comparison was skipped", () => {
+  const repo = gitSandbox("0.10.0");
+  try {
+    writeAt(repo.root, "src/code.ts", "export const value = 2;\n");
+    repo.commit("change code");
+    const result = check(repo.root);
+    assert.equal(result.code, 0, result.text);
+    assert.match(result.out, /bump comparison skipped/);
+    writeAt(repo.root, "apps/haril/src/version.ts", 'export const VERSION = "9.9.9";\n');
+    assert.equal(check(repo.root).code, 1);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("outside a git repository it checks consistency only", () => {
+  const { root, cleanup } = sandbox();
+  try {
+    writeVersionTree(root, "0.10.0");
+    const result = check(root);
+    assert.equal(result.code, 0, result.text);
+    assert.match(result.out, /bump comparison skipped/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("fails on a HARIL_VERSION_BASE that does not resolve", () => {
+  const repo = gitSandbox("0.10.0");
+  try {
+    const result = check(repo.root, { HARIL_VERSION_BASE: "no-such-ref" });
+    assert.equal(result.code, 1);
+    assert.match(result.err, /HARIL_VERSION_BASE "no-such-ref" does not name a commit/);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("rejects arguments it does not know", () => {
+  const io = capture();
+  assert.equal(main(["--fix"], { root: ".", env: {}, ...io }), 2);
+  assert.match(io.err.join("\n"), /usage: check-version\.mjs/);
+});
