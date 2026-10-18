@@ -89,6 +89,20 @@ function repo(name: string, branch = "main"): string {
   return dir;
 }
 
+describe("hasConflictMarkers", () => {
+  it("finds the markers git writes, and never a Markdown heading underlined with seven =", () => {
+    const conflict = ["<<<<<<< HEAD", "ours", "=======", "theirs", ">>>>>>> haril/wf/step/b", ""];
+    expect(hasConflictMarkers(conflict.join("\n"))).toBe(true);
+    expect(hasConflictMarkers(conflict.join("\r\n"))).toBe(true);
+    expect(hasConflictMarkers("kept\n>>>>>>> haril/wf/step/b\n")).toBe(true);
+    expect(hasConflictMarkers("<<<<<<< HEAD\nonly the start\n")).toBe(true);
+    // A setext heading, a rule of seven = and quoted mail are text, not markers.
+    expect(hasConflictMarkers("Title\n=======\n\nBody\n")).toBe(false);
+    expect(hasConflictMarkers("=======\n")).toBe(false);
+    expect(hasConflictMarkers(">>>>>>>quoted\n<<<<<<<\n")).toBe(false);
+  });
+});
+
 describe.skipIf(!HAS_GIT)("repository and base branch", () => {
   it("accepts the top level of a repository with commits and refuses anything else", async () => {
     const project = repo("project");

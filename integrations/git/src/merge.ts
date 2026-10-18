@@ -24,11 +24,14 @@ export type FinishResult =
   | { readonly ok: true; readonly sha: string }
   | { readonly ok: false; readonly detail: string; readonly unresolved: readonly string[] };
 
-const MARKER = /^(<{7}|>{7}|={7}|\|{7})( |$)/m;
+// The lines that open and close a conflict, as git writes them: seven < or > and a space before the side's label. A
+// line of seven = alone is no marker (a Markdown heading is underlined that way): the "=======" between the sides only
+// ever stands inside an opening and a closing line, which this already finds.
+const OPEN_OR_CLOSE = /^(<{7}|>{7}) /m;
 
-// Whether a text still holds a conflict marker line ("<<<<<<< ", "=======", ">>>>>>> " or the diff3 "|||||||").
+// Whether a text still holds a conflict: a "<<<<<<< " or ">>>>>>> " line (a whole conflict has both).
 export function hasConflictMarkers(text: string): boolean {
-  return MARKER.test(text);
+  return OPEN_OR_CLOSE.test(text);
 }
 
 function refProblem(ref: string): boolean {
