@@ -4,6 +4,21 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.20.2
+
+- **Fecha:** 2026-10-18
+- **Estado:** Corrección de una prueba que fallaba a veces en la CI de Linux; el producto no cambia.
+
+### Corregido
+
+- `integrations/pi-console/tests/fake-cli.ts`: al terminar cada prueba, el CLI falso borraba su carpeta temporal mientras una llamada tardía de la consola (el temporizador de estado o el registro del chat) todavía escribía en ella, y el borrado fallaba con `ENOTEMPTY`. Ahora el borrado reintenta hasta 10 veces con 50 ms de espera. Ocurrió en una de las dos corridas de `ubuntu-latest` del PR #38 (`chat-log-console.test.ts`).
+
+### Verificación
+
+- `corepack pnpm vitest run integrations/pi-console` y `corepack pnpm run check` (con `check-version`): salida 0.
+
+---
+
 ## 0.20.1
 
 - **Fecha:** 2026-10-18
