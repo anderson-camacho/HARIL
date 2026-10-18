@@ -361,8 +361,12 @@ export interface RecordedProcess {
 }
 
 export interface RecordedProcessFilter {
-  // Open runs (prepared, running, settled) of every epoch but this one: the attempts a dead runtime left behind.
+  // Open runs (prepared, running, settled) of every epoch but this one: the attempts a dead runtime left behind. With
+  // unverified, the open runs of this epoch are left out (the runtime's own attempts in flight).
   readonly excludeEpoch?: number;
+  // Every run, open or ended, whose recorded process was not verified gone yet (3.14): what the startup sweep and the
+  // emergency stop check, so a run a stop cancelled while its kill failed is never forgotten.
+  readonly unverified?: boolean;
   // Also the runs that ended at or after this time (a stop that just cancelled them): their processes may still be
   // dying.
   readonly endedSince?: number;
@@ -866,6 +870,13 @@ export interface Store {
     recordProcess(epoch: number, runId: string, process: AgentProcess): void;
     // The processes runs recorded, as the filter selects them; with no filter, those of every open run.
     processes(filter?: RecordedProcessFilter): readonly RecordedProcess[];
+    // Marks recorded processes verified gone (not running, or their pid now names another process). A mark names the
+    // run, pid and start time it verified, so it never marks a process recorded since; returns how many it marked. An
+    // observation, not a change of the run: the CLI writes it without the lease.
+    markProcessesGone(
+      verified: readonly Pick<RecordedProcess, "runId" | "pid" | "startedAt">[],
+      at: number,
+    ): number;
     // The run's progress signals since a time (3.16).
     activity(runId: string, since: number): RunActivity;
   };

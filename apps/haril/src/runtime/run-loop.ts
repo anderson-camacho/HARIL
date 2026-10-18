@@ -182,7 +182,7 @@ export async function runUntilIdle(options: RunLoopOptions): Promise<RunLoopResu
     channelOpen = await openChannel(options.control);
     // 3.14.5: the agents a dead runtime left are killed first, while their runs still name them; a recorded pid is
     // killed only while it still names the recorded process (pid and start time).
-    await sweepOrphanProcesses(store, epoch, options.processControl, emit);
+    await sweepOrphanProcesses(store, epoch, options.clock, options.processControl, emit);
     // M1-T7: attempts orphaned by a previous runtime go back to the queue before anything is claimed.
     for (const recovered of store.runtime.reconcile(epoch, MAX_INFRA_RESTARTS)) {
       emit(recoveryEvent(recovered));
@@ -210,6 +210,8 @@ export async function runUntilIdle(options: RunLoopOptions): Promise<RunLoopResu
     // serve() releases the lease itself, cleanly, on idle and on a stop.
     const hooks: AttemptHooks = {
       recordProcess: (runId, process) => store.runs.recordProcess(epoch, runId, process),
+      processGone: (runId, process) =>
+        store.runs.markProcessesGone([{ runId, ...process }], options.clock.now()),
       ...(options.killSwitch === undefined ? {} : { killSwitch: options.killSwitch }),
     };
     const kind = await serve(options, shutdown, { epoch, beat, emit, setup, memory, hooks });
@@ -230,16 +232,19 @@ export async function runUntilIdle(options: RunLoopOptions): Promise<RunLoopResu
   }
 }
 
-// The startup sweep (3.14.5): the open runs of other epochs that recorded a process. With none, the OS is not asked.
+// The startup sweep (3.14.5): every run that recorded a process not verified gone yet, open or ended (a run a stop
+// cancelled while its kill failed included). With none, the OS is not asked.
 async function sweepOrphanProcesses(
   store: Store,
   epoch: number,
+  clock: Clock,
   control: ProcessControl | undefined,
   emit: (event: RunEvent) => void,
 ): Promise<void> {
-  if (store.runs.processes({ excludeEpoch: epoch }).length === 0) return;
-  const report = await killRecordedProcesses(store, control ?? createProcessControl(), {
-    excludeEpoch: epoch,
+  const filter = { unverified: true, excludeEpoch: epoch };
+  if (store.runs.processes(filter).length === 0) return;
+  const report = await killRecordedProcesses(store, control ?? createProcessControl(), filter, {
+    now: () => clock.now(),
   });
   recordSweep(store, report, "startup_sweep");
   emit({ type: "runtime.swept", killed: report.killed.length, kept: report.kept.length });
@@ -268,9 +273,10 @@ interface ServeContext {
 }
 
 // What an attempt tells the loop once its agent started (3.14): its process, recorded on its run for the startup sweep,
-// and its kill, registered for a forced exit.
+// and its kill, registered for a forced exit; then that its process exited, so no sweep checks it again.
 interface AttemptHooks {
   readonly recordProcess: (runId: string, process: AgentProcess) => void;
+  readonly processGone: (runId: string, process: AgentProcess) => void;
   readonly killSwitch?: KillSwitch;
 }
 
@@ -934,9 +940,10 @@ async function runAttempt(
   attempt.kill = () => {
     kill().catch(() => undefined);
   };
-  if (handle.process !== undefined) {
+  const recorded = handle.process;
+  if (recorded !== undefined) {
     try {
-      hooks.recordProcess(spec.runId, handle.process);
+      hooks.recordProcess(spec.runId, recorded);
     } catch {
       // A process left unrecorded only leaves the startup sweep blind to it; the attempt itself goes on.
     }
@@ -955,6 +962,14 @@ async function runAttempt(
     attempt.abort = () => undefined;
     attempt.kill = () => undefined;
     await handle.dispose();
+    // dispose resolves once the agent's process exited: verified gone.
+    if (recorded !== undefined) {
+      try {
+        hooks.processGone(spec.runId, recorded);
+      } catch {
+        // Unmarked, the next sweep checks it once more and marks it then.
+      }
+    }
   }
 }
 

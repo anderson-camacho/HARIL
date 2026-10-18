@@ -41,6 +41,7 @@ export function toolProcesses(runsDir: string): NotedProcess[] {
 export async function killNoted(noted: readonly NotedProcess[]): Promise<void> {
   if (noted.length === 0) return;
   const times = await processControl.startTimes(noted.map((item) => item.pid));
+  if (times === undefined) return;
   const plan = planProcessKills(noted, times, processStartWindow(process.platform));
   if (plan.kill.length > 0) await processControl.killTrees(plan.kill);
 }

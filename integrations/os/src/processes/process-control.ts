@@ -271,10 +271,15 @@ export function createProcessControl(options: ProcessControlOptions = {}): Proce
     async startTimes(pids) {
       const valid = validPids(pids);
       if (valid.length === 0) return new Map();
-      if (platform === "win32") return windowsStartTimes(valid, systemRoot, timeoutMs);
-      if (platform === "linux") return linuxStartTimes(valid);
-      if (platform === "darwin") return psStartTimes(valid, timeoutMs);
-      return new Map();
+      // The query also asks for this process, which always runs: when it is missing, the OS was not read.
+      const asked = [...new Set([...valid, process.pid])];
+      let times: Map<number, number> | undefined;
+      if (platform === "win32") times = await windowsStartTimes(asked, systemRoot, timeoutMs);
+      else if (platform === "linux") times = linuxStartTimes(asked);
+      else if (platform === "darwin") times = await psStartTimes(asked, timeoutMs);
+      if (times === undefined || !times.has(process.pid)) return undefined;
+      if (!valid.includes(process.pid)) times.delete(process.pid);
+      return times;
     },
     async killTrees(roots: readonly ProcessRoot[]): Promise<TreeKillResult | undefined> {
       const valid = roots.filter(

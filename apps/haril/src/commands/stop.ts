@@ -4,7 +4,7 @@ import { createProcessControl } from "@haril/os";
 import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_OK, EXIT_USAGE, EXIT_WARN, type HostInfo } from "../context.js";
 import { clockFor, defaultPidAlive, storeAccess } from "../host.js";
-import { killRecordedProcesses, stillRunning } from "../runtime/processes.js";
+import { killRecordedProcesses } from "../runtime/processes.js";
 import { RUNTIME_STOP } from "../runtime/shutdown.js";
 import { dataDirFor, nudgeQueued, openExisting, sha256 } from "./common.js";
 
@@ -71,7 +71,7 @@ async function emergencyStop(
     return EXIT_OK;
   }
   try {
-    const since = clockFor(host).now();
+    const clock = clockFor(host);
     const lease = store.runtime.leaseSummary();
     const active = runtimeIsActive(store, host);
     const holder = active && lease.status === "active" ? lease.pid : null;
@@ -92,10 +92,16 @@ async function emergencyStop(
     }
     const status = commandId === null ? undefined : store.commands.get(commandId);
 
-    // Whatever the runtime did, no recorded agent process outlives the stop.
+    // Whatever the runtime did, no recorded agent process outlives the stop: every run whose process was not verified
+    // gone yet is checked, however long ago it ended, so a kill that failed before is tried again.
     const control = host.processControl ?? createProcessControl();
-    const swept = await killRecordedProcesses(store, control, { endedSince: since });
-    const left = await stillRunning(control, swept.killed);
+    const swept = await killRecordedProcesses(
+      store,
+      control,
+      { unverified: true },
+      { now: () => clock.now() },
+    );
+    const left = swept.alive;
     const report = {
       commandId,
       runtime,
@@ -108,11 +114,12 @@ async function emergencyStop(
         killed: swept.killed.length,
         kept: swept.kept.length,
         alive: left.length,
+        unverified: swept.unverified.length,
       },
     };
     if (json) io.out(JSON.stringify(report));
     else printReport(io, report, holder, left);
-    return left.length === 0 ? EXIT_OK : EXIT_WARN;
+    return left.length === 0 && swept.unverified.length === 0 ? EXIT_OK : EXIT_WARN;
   } finally {
     store.close();
   }
@@ -130,6 +137,7 @@ interface StopReport {
     readonly killed: number;
     readonly kept: number;
     readonly alive: number;
+    readonly unverified: number;
   };
 }
 
@@ -141,7 +149,7 @@ function noStoreReport(): StopReport {
     halted: false,
     cancelledTasks: 0,
     stoppedWorkflows: 0,
-    processes: { recorded: 0, killed: 0, kept: 0, alive: 0 },
+    processes: { recorded: 0, killed: 0, kept: 0, alive: 0, unverified: 0 },
   };
 }
 
@@ -173,7 +181,11 @@ function printReport(
   if (report.halted || report.queued) {
     io.out("the runtime stays halted: nothing is claimed until haril resume");
   }
-  const { recorded, killed, kept } = report.processes;
+  const { recorded, killed, kept, unverified } = report.processes;
+  if (unverified > 0) {
+    io.out(unverifiedLine(unverified));
+    if (left.length === 0) return;
+  }
   const extra = [
     ...(killed > 0 ? [`${killed} killed here`] : []),
     ...(kept > 0 ? [`${kept} kept: the pid now names another process`] : []),
@@ -187,6 +199,11 @@ function printReport(
       `${plural(left.length, "agent process is", "agent processes are")} still alive after the kill: pid ${left.map((item) => item.pid).join(", ")}`,
     );
   }
+}
+
+// The OS's process list could not be read: nothing about these processes is claimed either way.
+export function unverifiedLine(count: number): string {
+  return `${plural(count, "recorded agent process", "recorded agent processes")} could not be checked: the process list of the OS could not be read; run the stop again`;
 }
 
 function enqueueStop(store: Store, host: HostInfo, commandArgs: Record<string, unknown>): string {

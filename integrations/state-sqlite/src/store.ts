@@ -312,6 +312,8 @@ export class SqliteStore implements Store {
           this.stops.recordProcess(epoch, runId, process);
         }),
       processes: (filter) => this.stops.processes(filter),
+      markProcessesGone: (verified, at) =>
+        this.inTransaction(() => this.stops.markProcessesGone(verified, at)),
       activity: (runId, since) => this.stops.activity(runId, since),
     };
     this.events = {

@@ -48,6 +48,10 @@ export interface StopsFacet {
   // Writes the pid and start time of a run in flight of this epoch; false when the run is not one.
   recordProcess(epoch: number, runId: string, process: AgentProcess): boolean;
   processes(filter?: RecordedProcessFilter): RecordedProcess[];
+  markProcessesGone(
+    verified: readonly Pick<RecordedProcess, "runId" | "pid" | "startedAt">[],
+    at: number,
+  ): number;
   activity(runId: string, since: number): RunActivity;
 }
 
@@ -256,6 +260,17 @@ export function createStopsFacet(options: StopsFacetOptions): StopsFacet {
 
   const processes = (filter: RecordedProcessFilter = {}): RecordedProcess[] => {
     const excludeEpoch = filter.excludeEpoch ?? null;
+    if (filter.unverified === true) {
+      return db
+        .prepare(
+          `SELECT run_id AS runId, task_id AS taskId, project_id AS projectId, runtime_epoch AS runtimeEpoch, status AS runStatus, pid, pid_started_at AS startedAt
+           FROM runs
+           WHERE pid IS NOT NULL AND pid_started_at IS NOT NULL AND pid_gone_at IS NULL
+             AND NOT (status IN ${OPEN_RUN} AND ? IS NOT NULL AND runtime_epoch = ?)
+           ORDER BY created_at, rowid`,
+        )
+        .all(excludeEpoch, excludeEpoch) as unknown as RecordedProcess[];
+    }
     const endedSince = filter.endedSince ?? null;
     return db
       .prepare(
@@ -267,6 +282,20 @@ export function createStopsFacet(options: StopsFacetOptions): StopsFacet {
          ORDER BY created_at, rowid`,
       )
       .all(excludeEpoch, excludeEpoch, endedSince, endedSince) as unknown as RecordedProcess[];
+  };
+
+  const markProcessesGone = (
+    verified: readonly Pick<RecordedProcess, "runId" | "pid" | "startedAt">[],
+    at: number,
+  ): number => {
+    const mark = db.prepare(
+      "UPDATE runs SET pid_gone_at = ? WHERE run_id = ? AND pid = ? AND pid_started_at = ? AND pid_gone_at IS NULL",
+    );
+    let marked = 0;
+    for (const record of verified) {
+      marked += Number(mark.run(at, record.runId, record.pid, record.startedAt).changes);
+    }
+    return marked;
   };
 
   // Tokens are counted on the project budget only, which every Broker reservation holds, so a call counts once.
@@ -299,6 +328,7 @@ export function createStopsFacet(options: StopsFacetOptions): StopsFacet {
     haltState,
     recordProcess,
     processes,
+    markProcessesGone,
     activity,
   };
 }

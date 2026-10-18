@@ -3,8 +3,9 @@ import { createProcessControl } from "@haril/os";
 import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_OK, EXIT_USAGE, EXIT_WARN, type HostInfo } from "../context.js";
 import { clockFor, storeAccess } from "../host.js";
-import { killRecordedProcesses, stillRunning } from "../runtime/processes.js";
+import { killRecordedProcesses } from "../runtime/processes.js";
 import { dataDirFor, leaseHolderAlive, nudgeQueued, openExisting, sha256 } from "./common.js";
+import { unverifiedLine } from "./stop.js";
 
 // `haril workflow stop <workflowId>` (docs/modos-y-delegacion.md 3.14, 6): stops one workflow and its agents now. The
 // runtime applies workflow.stop: the workflow ends stopped (reason user_stop), its turns are cancelled with their
@@ -47,7 +48,6 @@ export async function workflowStop(
       else io.out(`workflow ${workflowId} is already ${workflow.state}: nothing to stop`);
       return EXIT_OK;
     }
-    const since = clockFor(host).now();
     const commandArgs = { workflowId };
     const queued = store.commands.enqueue({
       type: WORKFLOW_STOP,
@@ -71,16 +71,24 @@ export async function workflowStop(
     // Only this workflow's agents: the processes its turns' runs recorded.
     const turns = new Set(store.workflows.tasks(workflowId).map((task) => task.taskId));
     const control = host.processControl ?? createProcessControl();
-    const swept = await killRecordedProcesses(store, control, { endedSince: since }, (record) =>
-      turns.has(record.taskId),
+    const swept = await killRecordedProcesses(
+      store,
+      control,
+      { unverified: true },
+      { select: (record) => turns.has(record.taskId), now: () => clockFor(host).now() },
     );
-    const left = await stillRunning(control, swept.killed);
+    const left = swept.alive;
     const report = {
       workflowId,
       commandId: queued.commandId,
       state: status?.status ?? "queued",
       cancelledTasks: status?.taskIds.length ?? 0,
-      processes: { recorded: swept.checked, killed: swept.killed.length, alive: left.length },
+      processes: {
+        recorded: swept.checked,
+        killed: swept.killed.length,
+        alive: left.length,
+        unverified: swept.unverified.length,
+      },
     };
     if (json) {
       io.out(JSON.stringify(report));
@@ -95,13 +103,13 @@ export async function workflowStop(
         `workflow ${workflowId}: the stop is queued (${active ? "the runtime has not applied it yet" : "the next haril start or haril run applies it"})`,
       );
     }
-    if (left.length > 0) {
+    if (left.length > 0 && !json) {
       io.out(
         `${left.length} agent processes are still alive: pid ${left.map((item) => item.pid).join(", ")}`,
       );
-      return EXIT_WARN;
     }
-    return EXIT_OK;
+    if (swept.unverified.length > 0 && !json) io.out(unverifiedLine(swept.unverified.length));
+    return left.length > 0 || swept.unverified.length > 0 ? EXIT_WARN : EXIT_OK;
   } finally {
     store.close();
   }

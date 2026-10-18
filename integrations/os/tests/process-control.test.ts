@@ -71,7 +71,7 @@ describe("createProcessControl", () => {
   it("reads the start time of a running process, close to the time taken right after its spawn", async () => {
     const { child, startedAt } = spawnIdle();
     const times = await control.startTimes([child.pid as number]);
-    const observed = times.get(child.pid as number);
+    const observed = times?.get(child.pid as number);
     expect(observed).toBeDefined();
     expect(Math.abs((observed as number) - startedAt)).toBeLessThan(2000);
     child.kill();
@@ -84,8 +84,30 @@ describe("createProcessControl", () => {
     await new Promise((resolve) => child.once("exit", resolve));
     await until(() => !alive(pid), "the child gone");
     const times = await control.startTimes([pid, 0, -4, Number.NaN, 1.5]);
-    expect(times.has(pid)).toBe(false);
-    expect(times.size).toBe(0);
+    expect(times?.has(pid)).toBe(false);
+    expect(times?.size).toBe(0);
+  });
+
+  it("says the OS could not be read instead of reporting every process gone", async () => {
+    const { child } = spawnIdle();
+    const nowhere = createProcessControl({
+      platform: process.platform === "win32" ? "win32" : "darwin",
+      env: { SystemRoot: "Z:\no-windows-here" },
+      timeoutMs: 2000,
+    });
+    if (process.platform === "win32") {
+      await expect(nowhere.startTimes([child.pid as number])).resolves.toBeUndefined();
+      await expect(
+        nowhere.killTrees([{ pid: child.pid as number, startedAt: Date.now() }]),
+      ).resolves.toBeUndefined();
+    }
+    const unknownOs = createProcessControl({ platform: "aix" });
+    await expect(unknownOs.startTimes([child.pid as number])).resolves.toBeUndefined();
+    await expect(
+      unknownOs.killTrees([{ pid: child.pid as number, startedAt: Date.now() }]),
+    ).resolves.toBeUndefined();
+    expect(alive(child.pid as number)).toBe(true);
+    child.kill();
   });
 
   it("kills a recorded root and the process it started, the child first, and reports the root", async () => {

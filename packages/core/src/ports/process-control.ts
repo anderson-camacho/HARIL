@@ -17,8 +17,9 @@ export interface TreeKillResult {
 
 export interface ProcessControl {
   // The start time (milliseconds since the epoch, as the OS reports it) of each pid that is running. A pid missing
-  // from the map is not running, or its start time cannot be read; either way it must not be killed.
-  startTimes(pids: readonly number[]): Promise<ReadonlyMap<number, number>>;
+  // from the map is not running, or its start time cannot be read; either way it must not be killed. undefined when the
+  // OS could not be read at all: then nothing may be concluded, neither that a process runs nor that it is gone.
+  startTimes(pids: readonly number[]): Promise<ReadonlyMap<number, number> | undefined>;
   // Kills each root's process tree, one pid at a time, children first (supervisor's planTreeKills). One snapshot of the
   // OS's processes gives every pid's parent and start time: a root is killed only while it still started at its recorded
   // time, and a descendant only when it started at or after its parent, so a process that merely names a reused pid as

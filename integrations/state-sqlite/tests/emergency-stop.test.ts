@@ -465,6 +465,50 @@ describe("recorded processes and run activity", () => {
     expect(store.runs.processes({ endedSince: stopAt + 1 })).toEqual([]);
   });
 
+  it("keeps listing every run with a recorded process, open or ended, until its process is verified gone", () => {
+    const stopped = claim(addTask("Stopped long ago"));
+    store.runs.recordProcess(epoch, stopped.runId, { pid: 77, startedAt: clock.now() });
+    const live = claim(addTask("Still running"));
+    store.runs.recordProcess(epoch, live.runId, { pid: 78, startedAt: clock.now() });
+    command("workflow.start", {
+      goal: "Unrelated",
+      model: "fake/high-model",
+      agent: "fake:orchestrate",
+      autonomy: { mode: "autonomous", stops: [] },
+      budgetTokens: 50_000,
+      timeoutMs: 600_000,
+    });
+    store.runs.cancel(stopped.runId, "user_stop");
+    // An hour later the stop's kill may have failed: the cancelled run still names a process nobody verified.
+    clock.advance(3_600_000);
+
+    const unverified = () => store.runs.processes({ unverified: true }).map((item) => item.runId);
+    expect(unverified()).toEqual([stopped.runId, live.runId]);
+    // The runtime's own open runs are left out of its startup sweep; its closed ones are not.
+    expect(
+      store.runs.processes({ unverified: true, excludeEpoch: epoch }).map((item) => item.runId),
+    ).toEqual([stopped.runId]);
+
+    // A mark names the process it verified: a mismatch marks nothing.
+    expect(
+      store.runs.markProcessesGone([{ runId: stopped.runId, pid: 99, startedAt: 0 }], clock.now()),
+    ).toBe(0);
+    expect(unverified()).toEqual([stopped.runId, live.runId]);
+    expect(
+      store.runs.markProcessesGone(
+        [{ runId: stopped.runId, pid: 77, startedAt: 12_345 }],
+        clock.now(),
+      ),
+    ).toBe(0);
+    const record = store.runs.processes({ unverified: true })[0];
+    if (record === undefined) throw new Error("no record");
+    expect(store.runs.markProcessesGone([record], clock.now())).toBe(1);
+    expect(unverified()).toEqual([live.runId]);
+    // Marking it again changes nothing, and the open run stays listed as before.
+    expect(store.runs.markProcessesGone([record], clock.now())).toBe(0);
+    expect(store.runs.processes().map((item) => item.runId)).toEqual([live.runId]);
+  });
+
   it("refuses to record a process under another epoch", () => {
     const claimed = claim(addTask("Slow standalone"));
     store.runtime.release(epoch, true);
