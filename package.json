@@ -30,7 +30,8 @@
     "runtime:install": "npm run build:bootstrap && node apps/bootstrap/dist/haril-bootstrap.mjs install-runtime",
     "e2e": "npm run build && node scripts/e2e.mjs",
     "e2e:demo": "npm run build && node scripts/e2e-demo.mjs",
-    "e2e:real": "npm run build && npm run build:bridge && node scripts/e2e-real.mjs"
+    "e2e:real": "npm run build && npm run build:bridge && node scripts/e2e-real.mjs",
+    "e2e:workflow-real": "npm run build && npm run build:bridge && node scripts/e2e-workflow-real.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
