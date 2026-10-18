@@ -166,22 +166,32 @@ export function createWorkflowsFacet(options: WorkflowsFacetOptions): {
     });
   };
 
-  const dependenciesOf = (taskId: string) =>
-    (
-      db
-        .prepare(
-          "SELECT depends_on_task_id AS taskId, kind FROM task_dependencies WHERE task_id = ? ORDER BY rowid",
-        )
-        .all(taskId) as Array<{ taskId: string; kind: DependencyKind }>
-    ).map((row) => ({ taskId: row.taskId, kind: row.kind }));
+  // The dependencies of every turn of a workflow, in one query, in the order they were declared.
+  const dependenciesIn = (workflowId: string) => {
+    const rows = db
+      .prepare(
+        "SELECT d.task_id AS taskId, d.depends_on_task_id AS dependsOn, d.kind AS kind FROM task_dependencies d JOIN tasks t ON t.task_id = d.task_id WHERE t.workflow_id = ? ORDER BY d.rowid",
+      )
+      .all(workflowId) as Array<{ taskId: string; dependsOn: string; kind: DependencyKind }>;
+    const byTask = new Map<string, { taskId: string; kind: DependencyKind }[]>();
+    for (const row of rows) {
+      const list = byTask.get(row.taskId) ?? [];
+      list.push({ taskId: row.dependsOn, kind: row.kind });
+      byTask.set(row.taskId, list);
+    }
+    return byTask;
+  };
 
-  const toTask = (row: Row): WorkflowTaskRecord => ({
+  const toTask = (
+    row: Row,
+    dependencies: ReadonlyMap<string, readonly { taskId: string; kind: DependencyKind }[]>,
+  ): WorkflowTaskRecord => ({
     ...(row as unknown as WorkflowTaskRecord),
     modelPinned: row.modelPinned === 1,
     surfaceWrite: JSON.parse(String(row.surfaceWrite)) as string[],
     surfaceRead: JSON.parse(String(row.surfaceRead)) as string[],
     result: row.result === null ? null : (JSON.parse(String(row.result)) as JsonObject),
-    dependsOn: dependenciesOf(String(row.taskId)),
+    dependsOn: [...(dependencies.get(String(row.taskId)) ?? [])],
   });
 
   const applyStart = (command: CommandRecord, now: number): ApplyVerdict => {
@@ -642,7 +652,8 @@ export function createWorkflowsFacet(options: WorkflowsFacetOptions): {
       const rows = db
         .prepare(`SELECT ${TASK_COLUMNS} FROM tasks WHERE workflow_id = ? ORDER BY created_seq`)
         .all(workflowId) as Row[];
-      return rows.map(toTask);
+      const dependencies = dependenciesIn(workflowId);
+      return rows.map((row) => toTask(row, dependencies));
     },
     delegations(workflowId) {
       return db
