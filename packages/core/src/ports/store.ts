@@ -18,6 +18,7 @@ import type { BootStart } from "./process-control.js";
 import type { QuotaStorePort } from "./quota.js";
 import type { HarilError, Result } from "./result.js";
 import type { UsageLogPort } from "./usage-log.js";
+import type { WorktreesPort } from "./worktrees.js";
 
 export type GateStatus = "ok" | "warn" | "error";
 
@@ -902,6 +903,8 @@ export interface Store {
   readonly usageLog: UsageLogPort;
   // Quota samples and model cooldowns (3.11): observations of the providers, written without a lease.
   readonly quota: QuotaStorePort;
+  // The git worktrees of workflows that write (3.10, phase F8).
+  readonly worktrees: WorktreesPort;
   // Runs `work` in one transaction: the store's own writes inside it join it, so they commit together or, when `work`
   // throws, none of them does. The runtime closes an attempt this way: its run, its verdict, the turns that follow it
   // and its usage row (3.8 rule 6: a restart never finds half of it).

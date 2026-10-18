@@ -48,7 +48,7 @@ describe.each(backends)("Store contract (%s)", (_name, open) => {
   it("info reports schema 8, a SQLite of at least 3.51.3 and the pragmas read back", () => {
     const info = store.info();
     expect(info.storeId).not.toBe("");
-    expect(info.schemaVersion).toBe(13);
+    expect(info.schemaVersion).toBe(14);
     const [major = 0, minor = 0, patch = 0] = info.sqliteVersion.split(".").map(Number);
     expect(major * 1_000_000 + minor * 1_000 + patch).toBeGreaterThanOrEqual(3_051_003);
     expect(info.pragmas.synchronous).toBe(2);
