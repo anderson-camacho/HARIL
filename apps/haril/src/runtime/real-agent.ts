@@ -12,6 +12,7 @@ import type {
   AgentRuntime,
   AgentSpec,
   Clock,
+  DelegationToolHandler,
   HarilError,
   PlanProposer,
   Result,
@@ -74,6 +75,10 @@ export interface RealAgentsOptions {
   // The host handler of haril_propose_plan (LD-T4), the one the hermetic lane gets, so both lanes share one attempt
   // window. Without it, the bridge's plan.propose is unsupported and a planner task cannot propose.
   readonly proposePlan?: PlanProposer;
+  // The host handler of the delegation tools (phase F2b), the one the fake workflow agents get, so a workflow turn's
+  // calls land in the window the run loop opened for it whichever lane runs it. Without it, a real workflow turn's
+  // delegation.call is unsupported and the turn cannot decide.
+  readonly delegationTools?: DelegationToolHandler;
 }
 
 export function createRealAgents(options: RealAgentsOptions): RealAgents {
@@ -207,6 +212,9 @@ export function createRealAgents(options: RealAgentsOptions): RealAgents {
         virtualKey,
         onBridgeOperation: (event) => recordBridgeOperation(store, spec, event),
         ...(options.proposePlan === undefined ? {} : { proposePlan: options.proposePlan }),
+        ...(options.delegationTools === undefined
+          ? {}
+          : { delegationTools: options.delegationTools }),
       };
       const started = await createPiAgentRuntime(piOptions).start(runSpec);
       if (!started.ok) {
@@ -382,8 +390,18 @@ function recordEvent(
 
 // A PathGuard denial is a permission event (criterion 12): the path is hashed, never recorded.
 // A plan proposal (LD-T4) is tool.plan.propose with the plan's hash and size and the approval it became, never the plan.
-// Every other bridge operation keeps its tool.<op> record.
+// A delegation call (phase F2b) is tool.<its tool> (tool.haril_delegate...) with the input's hash and size and the
+// capped reason of a refusal, never the input. Every other bridge operation keeps its tool.<op> record.
 function recordBridgeOperation(store: Store, spec: AgentSpec, event: BridgeOperationEvent): void {
+  if (event.tool !== undefined) {
+    recordEvent(store, spec, `tool.${event.tool === "" ? event.op : event.tool}`, {
+      outcome: event.outcome,
+      inputSha256: event.inputSha256 ?? "",
+      inputBytes: event.inputBytes ?? 0,
+      ...(event.reason === undefined ? {} : { reason: event.reason }),
+    });
+    return;
+  }
   if (event.outcome === "path_denied") {
     recordEvent(store, spec, "security.pathguard.denied", {
       tool: event.op,

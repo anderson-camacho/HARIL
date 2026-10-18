@@ -5,6 +5,7 @@ import {
   completionFor,
   DEPENDENCY_GOAL_MAX_CHARS,
   DEPENDENCY_RESULT_MAX_CHARS,
+  isRealAgent,
   M1_ALLOWED_TOOLS,
   PLAN_ALLOWED_TOOLS,
   PROMPT_DATA_MAX_BYTES,
@@ -166,8 +167,17 @@ describe("buildAgentSpec", () => {
     );
   });
 
-  it("serves the planner archetype in the real lane, like the analyst", () => {
-    expect(REAL_AGENT_REFS).toEqual(["analyst", "planner"]);
+  it("serves the planner and the four workflow archetypes in the real lane, like the analyst", () => {
+    expect(REAL_AGENT_REFS).toEqual([
+      "analyst",
+      "planner",
+      "orchestrator",
+      "delegator",
+      "executor",
+      "auditor",
+    ]);
+    expect(isRealAgent("auditor")).toBe(true);
+    expect(isRealAgent("fake:audit")).toBe(false);
   });
 });
 

@@ -1,5 +1,11 @@
 import type { AcceptanceCheck } from "@haril/contracts";
-import { checkTaskKind, isRealAgent, type Verification, visibleText } from "@haril/core";
+import {
+  checkTaskKind,
+  isDelegationArchetype,
+  isRealAgent,
+  type Verification,
+  visibleText,
+} from "@haril/core";
 import { allValues, argsProblem, lastValue, type ParsedArgs, parseArgs } from "../args.js";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
 import { storeAccess } from "../host.js";
@@ -102,6 +108,14 @@ function taskAdd(args: readonly string[], io: CliIo, host: HostInfo): number {
   const agent = (lastValue(parsed, "--agent") ?? DEFAULT_AGENT).trim();
   if (agent === "") {
     io.err("haril: --agent needs an agent reference");
+    return EXIT_USAGE;
+  }
+  // A workflow archetype takes its prompt, its tools and its deciding call from its workflow (phase F2b): alone it would
+  // run with none of them.
+  if (isDelegationArchetype(agent)) {
+    io.err(
+      `haril: agent ${agent} runs only inside a workflow (haril workflow start <goal> --agent orchestrator)`,
+    );
     return EXIT_USAGE;
   }
   const kindFlag = lastValue(parsed, "--kind")?.trim();

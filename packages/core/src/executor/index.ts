@@ -1,7 +1,7 @@
 // Executor rules (M1-T5): the AgentSpec built from a claimed task, the handshake check that runs
 // before any prompt is sent, and the mapping of an agent outcome to the run completion. Pure.
 import type { TaskKind } from "@haril/contracts";
-import { archetypeTools } from "../delegation/archetypes.js";
+import { archetypeTools, DELEGATION_ARCHETYPES } from "../delegation/archetypes.js";
 import { READ_ONLY_AGENT_REFS } from "../domain/plan-graph.js";
 import type {
   AgentOutcome,
@@ -56,7 +56,9 @@ export interface ExecutableTask {
 
 // Agent references served by a real runtime (Pi through the Broker, M2-D6). Every other reference keeps the
 // simulated behaviour of M1. The planner archetype (LD-T4, AGENTS.md 3.2) shares the analyst's lane and needs a model.
-export const REAL_AGENT_REFS: readonly string[] = ["analyst", "planner"];
+// The four workflow archetypes (phase F2b) run there too, read-only, on the model the host gives each turn; their
+// prompt and tools follow their archetype (delegation-prompt.ts, archetypeTools).
+export const REAL_AGENT_REFS: readonly string[] = ["analyst", "planner", ...DELEGATION_ARCHETYPES];
 
 export function isRealAgent(agentRef: string): boolean {
   return REAL_AGENT_REFS.includes(agentRef);

@@ -11,14 +11,16 @@ import { buildWorkflowSnapshot, headerLines, treeLines } from "./workflow-snapsh
 // for the runtime with the human's choices: the goal, the orchestrator's model (pinned, 3.11), the agent family and the
 // autonomy (P1: with nothing said, it stops after the first plan). It also writes the order to the orders log (4.5).
 // list and show read the store; show --json prints WorkflowSnapshot v1 (ADR-0021). continue queues the human's
-// workflow.continue, the only way a stop is lifted (3.13). The agents follow the orchestrator's ref: fake:orchestrate
-// runs the fake workflow agents (fake:delegate, fake:execute, fake:audit); the real ones get Pi's bridge tools in F2b.
+// workflow.continue, the only way a stop is lifted (3.13). The agents follow the orchestrator's ref: orchestrator runs
+// real Pi agents (orchestrator, delegator, executor, auditor; read-only until writing arrives, phase F2b), and
+// fake:orchestrate runs the fake workflow agents (fake:delegate, fake:execute, fake:audit).
 
 const START_USAGE = [
   "usage: haril workflow start <goal> [--model <ref>] [--agent <ref>] [--autonomous | --stop-at <stops>] [--project <slug>]",
   "                            [--budget-tokens <n>] [--idempotency-key <key>] [--json] [--data-dir <path>]",
   "  queues a three-layer workflow for the runtime (haril start runs it). --model is the orchestrator's model (pinned),",
-  "  default HARIL_DEFAULT_MODEL. --agent defaults to fake:orchestrate (the simulated agents; real ones arrive in F2b).",
+  "  default HARIL_DEFAULT_MODEL; every child runs on it until the model catalog arrives. --agent orchestrator runs real",
+  "  Pi agents (read-only); the default, fake:orchestrate, runs the simulated agents.",
   "  Without --autonomous or --stop-at it stops after the first plan (after_plan); continue it with haril workflow continue.",
 ].join("\n");
 const LIST_USAGE = "usage: haril workflow list [--project <slug>] [--json] [--data-dir <path>]";
@@ -26,7 +28,10 @@ const SHOW_USAGE = "usage: haril workflow show <workflowId> [--json] [--data-dir
 const CONTINUE_USAGE =
   "usage: haril workflow continue <workflowId> [--remove-stop <stop>]... [--project <slug>] [--json] [--data-dir <path>]";
 const MODEL_ENV = "HARIL_DEFAULT_MODEL";
+// Provisional (F2b): the default stays the simulated family, like haril task add's fake:succeed; real agents are asked
+// for with --agent orchestrator.
 const DEFAULT_AGENT = "fake:orchestrate";
+const REAL_ORCHESTRATOR = "orchestrator";
 // The orchestrator turn's token budget when --budget-tokens is not given.
 const DEFAULT_BUDGET_TOKENS = 200_000;
 const NOT_INITIALIZED =
@@ -82,6 +87,14 @@ export function workflowStart(args: readonly string[], io: CliIo, host: HostInfo
   }
   const agent = (lastValue(parsed, "--agent") ?? DEFAULT_AGENT).trim();
   if (agent === "") return fail(io, "--agent needs an agent reference");
+  // The root decides the family of every turn (orchestrator's children are the real archetypes, a fake: root's are the
+  // fake workflow agents), so any other ref would start a workflow no agent can run.
+  if (agent !== REAL_ORCHESTRATOR && agent !== DEFAULT_AGENT) {
+    return fail(
+      io,
+      `--agent takes ${REAL_ORCHESTRATOR} (real agents) or ${DEFAULT_AGENT} (simulated agents); got "${agent}"`,
+    );
+  }
   const stops = stopsOf(lastValue(parsed, "--stop-at"));
   if (typeof stops === "string") return fail(io, stops);
   const autonomous = parsed.flags.has("--autonomous");

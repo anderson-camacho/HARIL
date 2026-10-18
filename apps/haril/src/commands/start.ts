@@ -75,13 +75,15 @@ async function serve(
   const planProposals = createPlanProposals(store);
   // The host handler of the delegation tools (phase F2): the workflow turns of every lane call it.
   const delegationTools = createDelegationTools({ store, clock: clockFor(host) });
-  // The real lane (M2-T6): the analyst and planner agents in Pi through one Broker, closed when the run ends.
+  // The real lane (M2-T6): the analyst, the planner and the workflow archetypes in Pi through one Broker, closed when
+  // the run ends. A real workflow turn's tool calls reach the same delegation tools as a fake one's (phase F2b).
   const realAgents = createRealAgents({
     host,
     store,
     clock: clockFor(host),
     dataDir,
     proposePlan: planProposals.propose,
+    delegationTools: delegationTools.call,
   });
   // The control channel (LD-T2): the runtime opens it after taking the lease, so subscribed shells and nudging CLIs
   // reach this runtime only while it holds the lease.
