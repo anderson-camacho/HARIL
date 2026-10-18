@@ -170,6 +170,7 @@ describe("workflow.start", () => {
       baseBranch: null,
       baseSha: null,
       simulated: true,
+      orderId: null,
       createdAt: clock.now(),
       endedAt: null,
     });
@@ -269,6 +270,7 @@ describe("store.workflows.applyTurns (delegation.apply)", () => {
         tool: "haril_delegate",
         payloadHash: HASH_A,
         memo: "styles first, tests second",
+        payload: null,
         createdAt: clock.now(),
       },
     ]);
@@ -459,7 +461,9 @@ describe("store.workflows.applyTurns (delegation.apply)", () => {
     expect(store.workflows.tasks(workflowId)).toHaveLength(1);
   });
 
-  it("refuses a workflow that is not running, and a fenced epoch", () => {
+  // A workflow paused for the human keeps its queue: an attempt that ends while it waits still records its turns, which
+  // run once the human continues it. A workflow that ended takes no turn.
+  it("takes turns while it waits for the human, and refuses an ended workflow and a fenced epoch", () => {
     const { workflowId, rootTaskId } = start();
     expect(
       caught(() =>
@@ -470,14 +474,107 @@ describe("store.workflows.applyTurns (delegation.apply)", () => {
       ).code,
     ).toBe("store.fenced");
     store.workflows.setState(epoch, { workflowId, state: "awaiting_human", reason: "after_plan" });
+    const paused = store.workflows.applyTurns(epoch, {
+      workflowId,
+      turns: [turn({ key: "d1", parentTaskId: rootTaskId })],
+    });
+    expect(paused.created).toBe(true);
+    store.workflows.setState(epoch, { workflowId, state: "stopped", reason: "user_stop" });
     const error = caught(() =>
       store.workflows.applyTurns(epoch, {
         workflowId,
-        turns: [turn({ key: "d1", parentTaskId: rootTaskId })],
+        turns: [turn({ key: "d2", parentTaskId: rootTaskId })],
       }),
     );
     expect(error.code).toBe("store.conflict");
-    expect(error.message).toMatch(/awaiting_human/);
+    expect(error.message).toMatch(/stopped/);
+  });
+
+  it("keeps the applied proposal's payload, and the order behind a workflow.start", () => {
+    const { workflowId, rootTaskId } = start({ orderId: "order-1" });
+    expect(store.workflows.get(workflowId)?.orderId).toBe("order-1");
+    expect(start().workflowId).toBeDefined();
+    const payload = { schemaVersion: 1, memo: "split in two", delegations: [{ localId: "d1" }] };
+    store.workflows.applyTurns(epoch, {
+      workflowId,
+      turns: [turn({ key: "d1", parentTaskId: rootTaskId })],
+      delegation: {
+        threadId: store.workflows.tasks(workflowId)[0]?.threadId as string,
+        parentTaskId: rootTaskId,
+        proposedByRunId: null,
+        tool: "haril_delegate",
+        payloadHash: HASH_A,
+        memo: "split in two",
+        payload,
+      },
+    });
+    expect(store.workflows.delegations(workflowId)).toEqual([
+      expect.objectContaining({ tool: "haril_delegate", memo: "split in two", payload }),
+    ]);
+  });
+});
+
+describe("claims of workflow turns (3.14, 3.15)", () => {
+  it("never hands out a turn of a workflow that is not running, and claims it again once it runs", () => {
+    const { workflowId, rootTaskId } = start();
+    store.workflows.setState(epoch, { workflowId, state: "awaiting_human", reason: "after_plan" });
+    expect(store.workflows.list({ state: "running" })).toEqual([]);
+    expect(store.workflows.list({ state: "awaiting_human" }).map((row) => row.workflowId)).toEqual([
+      workflowId,
+    ]);
+    expect(store.tasks.claimNext(epoch)).toBeUndefined();
+    expect(store.tasks.claimTask(epoch, rootTaskId)).toBeUndefined();
+    enqueue("workflow.continue", { workflowId });
+    expect(store.tasks.claimNext(epoch)?.taskId).toBe(rootTaskId);
+  });
+
+  it("claims one named ready turn, and nothing that is not ready", () => {
+    const { workflowId, rootTaskId } = start();
+    const other = start().rootTaskId;
+    const claimed = store.tasks.claimTask(epoch, other);
+    expect(claimed).toMatchObject({ taskId: other, attempt: 1 });
+    expect(store.tasks.claimTask(epoch, other)).toBeUndefined();
+    expect(store.tasks.claimTask(epoch, "no-such-task")).toBeUndefined();
+    expect(caught(() => store.tasks.claimTask(epoch + 1, rootTaskId)).code).toBe("store.fenced");
+    expect(store.workflows.tasks(workflowId)[0]?.state).toBe("ready");
+  });
+
+  it("leaves workflow turns to the workflow scheduler when asked for standalone tasks only", () => {
+    start();
+    const standalone = enqueue("task.create", {
+      goal: "standalone",
+      dependsOn: [],
+      agent: "fake:succeed",
+      maxAttempts: 1,
+      timeoutMs: 1000,
+    }).taskIds[0];
+    expect(store.tasks.claimNext(epoch, [], [], { standaloneOnly: true })?.taskId).toBe(standalone);
+    expect(store.tasks.claimNext(epoch, [], [], { standaloneOnly: true })).toBeUndefined();
+  });
+});
+
+describe("store.transaction", () => {
+  it("commits several writes together, or none of them when the work throws", () => {
+    const { workflowId, rootTaskId } = start();
+    expect(() =>
+      store.transaction(() => {
+        store.workflows.applyTurns(epoch, {
+          workflowId,
+          turns: [turn({ key: "d1", parentTaskId: rootTaskId })],
+        });
+        throw new Error("crash before the end of the commit");
+      }),
+    ).toThrow(/crash/);
+    expect(store.workflows.tasks(workflowId)).toHaveLength(1);
+    const value = store.transaction(() => {
+      store.workflows.applyTurns(epoch, {
+        workflowId,
+        turns: [turn({ key: "d1", parentTaskId: rootTaskId })],
+      });
+      return "done";
+    });
+    expect(value).toBe("done");
+    expect(store.workflows.tasks(workflowId)).toHaveLength(2);
   });
 });
 

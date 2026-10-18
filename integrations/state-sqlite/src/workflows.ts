@@ -72,13 +72,13 @@ const TERMINAL = new Set(["completed", "failed", "stopped"]);
 const TERMINAL_TASK = new Set(["completed", "failed", "cancelled"]);
 
 const WORKFLOW_COLUMNS =
-  "workflow_id AS workflowId, project_id AS projectId, root_task_id AS rootTaskId, goal, state, autonomy, limits, orchestrator_model AS orchestratorModel, agents_created AS agentsCreated, stop_reason AS stopReason, base_branch AS baseBranch, base_sha AS baseSha, simulated, created_at AS createdAt, ended_at AS endedAt";
+  "workflow_id AS workflowId, project_id AS projectId, root_task_id AS rootTaskId, goal, state, autonomy, limits, orchestrator_model AS orchestratorModel, agents_created AS agentsCreated, stop_reason AS stopReason, base_branch AS baseBranch, base_sha AS baseSha, simulated, order_id AS orderId, created_at AS createdAt, ended_at AS endedAt";
 
 const TASK_COLUMNS =
   "task_id AS taskId, workflow_id AS workflowId, thread_id AS threadId, parent_task_id AS parentTaskId, role, layer, kind, local_id AS localId, delegation_id AS delegationId, goal, description, state, block_reason AS blockReason, agent_ref AS agentRef, model, model_pinned AS modelPinned, difficulty, difficulty_reason AS difficultyReason, priority, created_seq AS createdSeq, attempt, budget_max_tokens AS budgetTokens, timeout_ms AS timeoutMs, surface_write AS surfaceWrite, surface_read AS surfaceRead, result, next_check_at AS nextCheckAt, created_at AS createdAt, completed_at AS completedAt";
 
 const DELEGATION_COLUMNS =
-  "delegation_id AS delegationId, workflow_id AS workflowId, thread_id AS threadId, parent_task_id AS parentTaskId, proposed_by_run_id AS proposedByRunId, tool, payload_hash AS payloadHash, memo, created_at AS createdAt";
+  "delegation_id AS delegationId, workflow_id AS workflowId, thread_id AS threadId, parent_task_id AS parentTaskId, proposed_by_run_id AS proposedByRunId, tool, payload_hash AS payloadHash, memo, payload, created_at AS createdAt";
 
 const AUDIT_COLUMNS =
   "audit_id AS auditId, workflow_id AS workflowId, subject_task_id AS subjectTaskId, auditor_task_id AS auditorTaskId, scope, verdict, reasons, rework_action AS reworkAction, created_at AS createdAt";
@@ -95,6 +95,7 @@ function toWorkflow(row: Row): WorkflowRecord {
     autonomy: JSON.parse(String(row.autonomy)) as WorkflowAutonomy,
     limits: JSON.parse(String(row.limits)) as JsonObject,
     simulated: row.simulated === 1,
+    orderId: row.orderId === undefined ? null : (row.orderId as string | null),
   };
 }
 
@@ -216,7 +217,7 @@ export function createWorkflowsFacet(options: WorkflowsFacetOptions): {
     const timeoutMs = optionalInteger(args.timeoutMs, DEFAULT_TIMEOUT_MS, 1);
     if (timeoutMs === undefined)
       return { ok: false, reason: "timeoutMs must be a whole number >= 1" };
-    for (const key of ["baseBranch", "baseSha"] as const) {
+    for (const key of ["baseBranch", "baseSha", "orderId"] as const) {
       if (args[key] !== undefined && args[key] !== null && !nonBlank(args[key])) {
         return { ok: false, reason: `${key} must be a non-empty text` };
       }
@@ -226,7 +227,7 @@ export function createWorkflowsFacet(options: WorkflowsFacetOptions): {
     const taskId = ids.next();
     const threadId = ids.next();
     db.prepare(
-      "INSERT INTO workflows (workflow_id, project_id, root_task_id, goal, state, autonomy, limits, orchestrator_model, agents_created, base_branch, base_sha, simulated, created_at) VALUES (?, ?, NULL, ?, 'running', ?, ?, ?, 0, ?, ?, ?, ?)",
+      "INSERT INTO workflows (workflow_id, project_id, root_task_id, goal, state, autonomy, limits, orchestrator_model, agents_created, base_branch, base_sha, simulated, order_id, created_at) VALUES (?, ?, NULL, ?, 'running', ?, ?, ?, 0, ?, ?, ?, ?, ?)",
     ).run(
       workflowId,
       projectId,
@@ -237,6 +238,7 @@ export function createWorkflowsFacet(options: WorkflowsFacetOptions): {
       (args.baseBranch as string | undefined) ?? null,
       (args.baseSha as string | undefined) ?? null,
       args.simulated === true ? 1 : 0,
+      (args.orderId as string | undefined) ?? null,
       now,
     );
     options.insertTask(
@@ -331,7 +333,7 @@ export function createWorkflowsFacet(options: WorkflowsFacetOptions): {
     transaction(() => {
       assertActiveEpoch(epoch);
       const workflow = requireWorkflow(input.workflowId);
-      if (workflow.state !== "running") {
+      if (TERMINAL.has(workflow.state)) {
         throw conflict(
           `workflow ${workflow.workflowId} is ${workflow.state}; it takes no new turns`,
           {
@@ -356,7 +358,7 @@ export function createWorkflowsFacet(options: WorkflowsFacetOptions): {
       const delegationId = proposal === undefined ? null : ids.next();
       if (proposal !== undefined) {
         db.prepare(
-          "INSERT INTO delegations (delegation_id, workflow_id, thread_id, parent_task_id, proposed_by_run_id, tool, payload_hash, memo, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          "INSERT INTO delegations (delegation_id, workflow_id, thread_id, parent_task_id, proposed_by_run_id, tool, payload_hash, memo, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         ).run(
           delegationId,
           workflow.workflowId,
@@ -366,6 +368,7 @@ export function createWorkflowsFacet(options: WorkflowsFacetOptions): {
           proposal.tool,
           proposal.payloadHash,
           proposal.memo,
+          proposal.payload === undefined ? null : JSON.stringify(proposal.payload),
           now,
         );
       }
@@ -662,9 +665,14 @@ export function createWorkflowsFacet(options: WorkflowsFacetOptions): {
     list(filter) {
       const rows = db
         .prepare(
-          `SELECT ${WORKFLOW_COLUMNS} FROM workflows WHERE (? IS NULL OR project_id = ?) ORDER BY created_at DESC, rowid DESC`,
+          `SELECT ${WORKFLOW_COLUMNS} FROM workflows WHERE (? IS NULL OR project_id = ?) AND (? IS NULL OR state = ?) ORDER BY created_at DESC, rowid DESC`,
         )
-        .all(filter?.projectId ?? null, filter?.projectId ?? null) as Row[];
+        .all(
+          filter?.projectId ?? null,
+          filter?.projectId ?? null,
+          filter?.state ?? null,
+          filter?.state ?? null,
+        ) as Row[];
       return rows.map(toWorkflow);
     },
     tasks(workflowId) {
@@ -675,11 +683,18 @@ export function createWorkflowsFacet(options: WorkflowsFacetOptions): {
       return rows.map((row) => toTask(row, dependencies));
     },
     delegations(workflowId) {
-      return db
+      const rows = db
         .prepare(
           `SELECT ${DELEGATION_COLUMNS} FROM delegations WHERE workflow_id = ? ORDER BY created_at, rowid`,
         )
-        .all(workflowId) as unknown as DelegationRecord[];
+        .all(workflowId) as Row[];
+      return rows.map(
+        (row) =>
+          ({
+            ...row,
+            payload: row.payload === null ? null : (JSON.parse(String(row.payload)) as JsonObject),
+          }) as unknown as DelegationRecord,
+      );
     },
     audits(workflowId) {
       const rows = db

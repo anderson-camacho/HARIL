@@ -1,7 +1,7 @@
 // The delegation module of the Store (docs/modos-y-delegacion.md 4.2, 4.3; ADR-0021): workflows, the turns of their
 // threads, the applied proposals and the auditor verdicts. The Core decides (checkDelegation, chooseModel, the rework
 // machine, the stop rule); the store only records what was decided, in one transaction per decision, and refuses what
-// would break its own invariants (a workflow that is not running, a turn whose role, layer and kind disagree, a
+// would break its own invariants (a workflow that ended, a turn whose role, layer and kind disagree, a
 // dependency outside the workflow). Every runtime write is fenced by its epoch.
 import type {
   BlockReason,
@@ -38,6 +38,8 @@ export interface WorkflowRecord {
   readonly baseSha: string | null;
   // A simulated workflow (haril workflow demo).
   readonly simulated: boolean;
+  // The order (usage log, 4.5) behind a workflow started from the CLI; null otherwise.
+  readonly orderId: string | null;
   readonly createdAt: number;
   readonly endedAt: number | null;
 }
@@ -85,6 +87,9 @@ export interface DelegationRecord {
   readonly tool: "haril_delegate" | "haril_assign" | "haril_request_audit";
   readonly payloadHash: string;
   readonly memo: string | null;
+  // The proposal as the agent sent it (its tool input), so its criteria, tests and files outlive a restart; null for a
+  // proposal recorded before schema 10.
+  readonly payload: JsonObject | null;
   readonly createdAt: number;
 }
 
@@ -156,6 +161,7 @@ export interface ApplyTurnsInput {
     readonly tool: DelegationRecord["tool"];
     readonly payloadHash: string;
     readonly memo: string | null;
+    readonly payload?: JsonObject;
   };
   // Stops the proposal added (3.13: an agent only adds; checkDelegation already refused a removal).
   readonly addStops?: readonly Stop[];
@@ -190,6 +196,7 @@ export interface SetWorkflowStateInput {
 
 export interface WorkflowFilter {
   readonly projectId?: string;
+  readonly state?: WorkflowState;
 }
 
 export interface WorkflowsPort {
@@ -200,6 +207,8 @@ export interface WorkflowsPort {
   tasks(workflowId: string): readonly WorkflowTaskRecord[];
   delegations(workflowId: string): readonly DelegationRecord[];
   audits(workflowId: string): readonly AuditRecord[];
+  // Refused for a workflow that ended (completed, failed, stopped). A workflow that waits for the human still takes
+  // turns: an attempt that ends meanwhile records what follows it, and the turns run once the human continues it.
   applyTurns(epoch: number, input: ApplyTurnsInput): ApplyTurnsResult;
   // A second verdict for the same auditor turn is store.conflict.
   recordAudit(epoch: number, input: RecordAuditInput): AuditRecord;

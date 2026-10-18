@@ -87,7 +87,7 @@ describe("doctor with the real store inspection", () => {
       status: string;
       store: { initialized: boolean; schemaVersion: number; status: string };
     };
-    expect(report.store).toMatchObject({ initialized: true, schemaVersion: 9, status: "ok" });
+    expect(report.store).toMatchObject({ initialized: true, schemaVersion: 10, status: "ok" });
     expect(report.status).toBe("ok");
   });
 });

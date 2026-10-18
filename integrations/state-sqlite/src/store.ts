@@ -97,6 +97,11 @@ const EVENT_COLUMNS =
 
 const PRIORITY_MIN = 0;
 const PRIORITY_MAX = 9;
+const READY_COLUMNS =
+  "task_id AS taskId, project_id AS projectId, goal, description, kind, agent_ref AS agentRef, model, budget_max_tokens AS maxTokens, acceptance, surface_read AS surfaceRead, attempt, attempts_used AS attemptsUsed, max_attempts AS maxAttempts, timeout_ms AS timeoutMs, claim_epoch AS claimEpoch";
+// A turn of a workflow is claimable only while its workflow runs (3.14).
+const RUNNING_WORKFLOW_ONLY =
+  " AND (workflow_id IS NULL OR workflow_id IN (SELECT workflow_id FROM workflows WHERE state = 'running'))";
 
 interface EventRow
   extends Omit<
@@ -265,8 +270,14 @@ export class SqliteStore implements Store {
       list: (filter) => this.listTasks(filter),
       get: (taskId) => this.getTask(taskId),
       promote: () => this.promoteTasks(),
-      claimNext: (epoch, excludeAgentRefs, excludeTaskIds) =>
-        this.claimNextTask(epoch, excludeAgentRefs, excludeTaskIds),
+      claimNext: (epoch, excludeAgentRefs, excludeTaskIds, options) =>
+        this.claimNextTask(
+          epoch,
+          excludeAgentRefs,
+          excludeTaskIds,
+          options?.standaloneOnly === true,
+        ),
+      claimTask: (epoch, taskId) => this.claimNamedTask(epoch, taskId),
     };
     this.runtime = {
       leaseSummary: () => this.leaseSummary(),
@@ -345,6 +356,11 @@ export class SqliteStore implements Store {
       pragmas: readPragmas(this.db),
       gates: this.gates,
     };
+  }
+
+  // Store.transaction: the work's own store writes join this one transaction (inTransaction joins an open one).
+  transaction<T>(work: () => T): T {
+    return this.inTransaction(work);
   }
 
   close(): void {
@@ -986,11 +1002,13 @@ export class SqliteStore implements Store {
     });
   }
 
-  // ready -> running in one transaction, with the run row and the next claim epoch (M1-D4: no budget held).
+  // ready -> running in one transaction, with the run row and the next claim epoch (M1-D4: no budget held). A turn of a
+  // workflow that is not running (3.14) is never claimed; standaloneOnly leaves every workflow turn to claimNamedTask.
   private claimNextTask(
     epoch: number,
     excludeAgentRefs: readonly string[] = [],
     excludeTaskIds: readonly string[] = [],
+    standaloneOnly = false,
   ): ClaimedTask | undefined {
     return this.inTransaction(() => {
       this.assertActiveEpoch(epoch);
@@ -1005,13 +1023,35 @@ export class SqliteStore implements Store {
         excludedTasks.length === 0
           ? ""
           : ` AND task_id NOT IN (${excludedTasks.map(() => "?").join(", ")})`;
+      const workflows = standaloneOnly ? " AND workflow_id IS NULL" : RUNNING_WORKFLOW_ONLY;
       const row = this.db
         .prepare(
-          `SELECT task_id AS taskId, project_id AS projectId, goal, description, kind, agent_ref AS agentRef, model, budget_max_tokens AS maxTokens, acceptance, surface_read AS surfaceRead, attempt, attempts_used AS attemptsUsed, max_attempts AS maxAttempts, timeout_ms AS timeoutMs, claim_epoch AS claimEpoch FROM tasks WHERE state = 'ready'${notExcludedAgents}${notExcludedTasks} ORDER BY priority DESC, created_seq LIMIT 1`,
+          `SELECT ${READY_COLUMNS} FROM tasks WHERE state = 'ready'${workflows}${notExcludedAgents}${notExcludedTasks} ORDER BY priority DESC, created_seq LIMIT 1`,
         )
         .get(...excludedAgents, ...excludedTasks) as unknown as ReadyRow | undefined;
       if (row === undefined) return undefined;
+      return this.claimReadyRow(epoch, row);
+    });
+  }
 
+  // The same claim for one named task, as the workflow scheduler picks it (3.9): undefined when it is not ready or its
+  // workflow is not running.
+  private claimNamedTask(epoch: number, taskId: string): ClaimedTask | undefined {
+    return this.inTransaction(() => {
+      this.assertActiveEpoch(epoch);
+      const row = this.db
+        .prepare(
+          `SELECT ${READY_COLUMNS} FROM tasks WHERE state = 'ready' AND task_id = ?${RUNNING_WORKFLOW_ONLY}`,
+        )
+        .get(taskId) as unknown as ReadyRow | undefined;
+      if (row === undefined) return undefined;
+      return this.claimReadyRow(epoch, row);
+    });
+  }
+
+  // ready -> running for a row read inside the caller's transaction.
+  private claimReadyRow(epoch: number, row: ReadyRow): ClaimedTask {
+    {
       this.transition("ready", "running");
       const acceptance = JSON.parse(row.acceptance) as ClaimedTask["acceptance"];
       const now = this.clock.now();
@@ -1076,7 +1116,7 @@ export class SqliteStore implements Store {
         claimEpoch,
         runtimeEpoch: epoch,
       };
-    });
+    }
   }
 
   // The results of a task's direct dependencies, in the order the dependencies were created, which for a plan is its

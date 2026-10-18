@@ -745,11 +745,17 @@ export interface Store {
     // Highest priority, then oldest ready task: ready -> running, one run row, one claim epoch. Tasks whose
     // agentRef is in excludeAgentRefs are not claimed (M2-T6: a real agent without its prerequisites). Tasks whose
     // id is in excludeTaskIds stay ready and are not claimed (M3-T7: a task whose model cannot run yet).
+    // A turn of a workflow that is not running is never claimed (3.14); standaloneOnly leaves every workflow turn to
+    // the workflow scheduler, which claims them one by one with claimTask under its limits (3.9).
     claimNext(
       epoch: number,
       excludeAgentRefs?: readonly string[],
       excludeTaskIds?: readonly string[],
+      options?: { readonly standaloneOnly?: boolean },
     ): ClaimedTask | undefined;
+    // Claims one named task the same way: ready -> running, one run row, one claim epoch, in one transaction.
+    // Undefined when the task is not ready or belongs to a workflow that is not running.
+    claimTask(epoch: number, taskId: string): ClaimedTask | undefined;
   };
   readonly runtime: {
     leaseSummary(): RuntimeLeaseSummary;
@@ -788,5 +794,9 @@ export interface Store {
   readonly workflows: WorkflowsPort;
   // The orders and usage logs (4.5): append-only, hash-chained, written without a lease (P14).
   readonly usageLog: UsageLogPort;
+  // Runs `work` in one transaction: the store's own writes inside it join it, so they commit together or, when `work`
+  // throws, none of them does. The runtime closes an attempt this way: its run, its verdict, the turns that follow it
+  // and its usage row (3.8 rule 6: a restart never finds half of it).
+  transaction<T>(work: () => T): T;
   close(): void;
 }
