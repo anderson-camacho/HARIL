@@ -6,6 +6,12 @@
 
 import { cliAvailable } from "./cli.js";
 import { type CommandHost, registerCommands } from "./commands.js";
+import {
+  harilRef,
+  type ModelRegistration,
+  registerHarilModels,
+  restoreHarilModel,
+} from "./models.js";
 import type { ConsoleContext, ConsolePi, ConsoleTui, PiModel, SessionEntry } from "./pi-types.js";
 import { type BoundProject, findProject, folderName } from "./project.js";
 import { type PendingApproval, readStatus } from "./status.js";
@@ -22,6 +28,8 @@ interface Session extends CommandHost {
   pending: readonly PendingApproval[];
   tui: ConsoleTui | undefined;
   model: PiModel | undefined;
+  // HARIL's providers as registered in Pi; undefined until `haril models` answers.
+  registration: ModelRegistration | undefined;
   cost: number;
   runtimeAlive: boolean | undefined;
   timer: ReturnType<typeof setInterval> | undefined;
@@ -104,13 +112,14 @@ export default function harilConsole(pi: ConsolePi): void {
       started: undefined,
       tui: undefined,
       model: ctx.model,
+      registration: undefined,
       cost: safely(() => sessionCost(ctx.sessionManager.getEntries()), 0),
       runtimeAlive: undefined,
       timer: undefined,
       refreshing: undefined,
       refreshAgain: false,
       closed: false,
-      harilModelRef: () => undefined,
+      harilModelRef: () => harilRef(current.model, current.registration),
       showOutput(title, lines) {
         if (!ctx.hasUI) return;
         if (ctx.mode !== "tui") {
@@ -176,15 +185,32 @@ export default function harilConsole(pi: ConsolePi): void {
     });
   }
 
+  // HARIL's models join Pi's catalog once `haril models` answers; the bar and /goal follow. On a start, Pi chose its
+  // model before they existed, so a saved HARIL default is put back.
+  async function loadModels(current: Session, reason: string): Promise<void> {
+    const registration = await registerHarilModels(pi, current.ctx);
+    if (current.closed) return;
+    current.registration = registration;
+    if (current.ctx.hasUI && (reason === "startup" || reason === "reload")) {
+      for (const note of registration.notes) current.ctx.ui.notify(note, "warning");
+    }
+    if (reason === "startup") {
+      const restored = await restoreHarilModel(pi, current.ctx, registration, current.model);
+      if (restored !== undefined && !current.closed) current.model = restored;
+    }
+    redraw();
+  }
+
   registerCommands(pi, () => session);
 
-  pi.on("session_start", (_event, ctx) => {
+  pi.on("session_start", (event, ctx) => {
     const current = openSession(ctx);
     session = current;
     installUi(current);
     if (!cliAvailable()) return;
-    // The project and the HARIL state arrive after the first frame: the bar shows the folder until then.
+    // The project, the HARIL state and the models arrive after the first frame: the bar shows the folder until then.
     void current.rebind().then(() => current.refresh());
+    void loadModels(current, event.reason);
   });
 
   pi.on("session_shutdown", () => {

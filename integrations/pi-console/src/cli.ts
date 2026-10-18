@@ -70,13 +70,14 @@ export function runHaril(
   });
 }
 
-// The JSON a `--json` command printed, or undefined when it failed or printed something else.
+// The JSON a `--json` command printed, or undefined when it printed none. The exit code does not decide: `haril
+// models` prints its listing and exits 1 when only some providers answered.
 export async function runHarilJson(
   args: readonly string[],
   options: { readonly timeoutMs?: number } = {},
 ): Promise<unknown> {
   const result = await runHaril(args, options);
-  if (!result.ok) return undefined;
+  if (result.stdout.trim() === "") return undefined;
   try {
     return JSON.parse(result.stdout) as unknown;
   } catch {

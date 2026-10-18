@@ -1,6 +1,6 @@
 // The part of Pi 1.2.0's extension API the console uses, declared locally so the bundle stays self-contained (it
 // imports only node:* builtins, like the bridge). The shapes follow vendor/pi/1.2.0: dist/core/extensions/types.d.ts
-// (ExtensionAPI, ExtensionContext, ExtensionUIContext), dist/core/footer-data-provider.d.ts and
+// (ExtensionAPI, ExtensionContext, ExtensionUIContext, ProviderConfig), dist/core/footer-data-provider.d.ts and
 // pi-tui's Component. Only the members read here are declared; Pi passes richer objects.
 
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -70,12 +70,20 @@ interface ConsoleUi {
   ): void;
 }
 
+interface ModelRegistry {
+  getAll(): readonly PiModel[];
+  find(provider: string, modelId: string): PiModel | undefined;
+}
+
 export interface ConsoleContext {
   readonly ui: ConsoleUi;
   readonly mode: "tui" | "rpc" | "json" | "print";
   readonly hasUI: boolean;
   readonly cwd: string;
   readonly model: PiModel | undefined;
+  readonly modelRegistry: ModelRegistry;
+  // Models scoped with --models or enabledModels; empty when every model is usable.
+  readonly scopedModels: readonly unknown[];
   readonly sessionManager: { getEntries(): readonly SessionEntry[] };
   getContextUsage(): ContextUsage | undefined;
 }
@@ -100,6 +108,31 @@ interface ModelSelectEvent {
   readonly model: PiModel;
 }
 
+export interface ProviderModelConfig {
+  readonly id: string;
+  readonly name: string;
+  readonly input: ("text" | "image")[];
+  readonly reasoning: boolean;
+  readonly contextWindow: number;
+  readonly maxTokens: number;
+  readonly cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
+}
+
+// The legacy registration form (ProviderConfig): a static endpoint and its models.
+export interface ProviderConfig {
+  readonly name: string;
+  readonly baseUrl: string;
+  // A literal, or $NAME / ${NAME}: Pi reads that environment variable itself when it sends a request.
+  readonly apiKey: string;
+  readonly api: "openai-completions";
+  readonly models: ProviderModelConfig[];
+}
+
+interface ConsoleSettings {
+  readonly defaultProvider?: string;
+  readonly defaultModel?: string;
+}
+
 type Handler<E> = (event: E, ctx: ConsoleContext) => void | Promise<void>;
 
 export interface ConsolePi {
@@ -111,5 +144,9 @@ export interface ConsolePi {
   on(event: "agent_end", handler: Handler<unknown>): () => void;
   on(event: "input", handler: Handler<unknown>): () => void;
   registerCommand(name: string, options: CommandOptions): void;
+  registerProvider(name: string, config: ProviderConfig): void;
   getThinkingLevel(): ThinkingLevel;
+  getSettings(): ConsoleSettings;
+  // Sets the session's model without changing the configured default; false without auth for its provider.
+  setModel(model: PiModel): Promise<boolean>;
 }
