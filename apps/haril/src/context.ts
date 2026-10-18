@@ -25,6 +25,8 @@ export interface HostInfo {
   readonly cwd?: string;
   // stdin and stdout are a terminal, so a bare `haril` opens the shell instead of printing help. Absent means no.
   readonly interactive?: boolean;
+  // Reads all of stdin as UTF-8 (haril usage record --stdin); defaults to the process's stdin. Tests inject it.
+  readonly readStdin?: () => string;
   // Store inspection (read-only) and opening; defaults to the real SQLite store.
   readonly inspectStore?: (dataDir: string) => StoreInspection;
   readonly openStore?: (dataDir: string) => Store;

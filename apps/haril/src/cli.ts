@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { StoreError } from "@haril/state-sqlite";
 import { approvals, approve, deny } from "./commands/approvals.js";
@@ -35,6 +36,8 @@ function currentHost(): HostInfo {
     cwd: process.cwd(),
     interactive: process.stdin.isTTY === true && process.stdout.isTTY === true,
     user: operatorName(),
+    // File descriptor 0: the whole of stdin, read only by the commands that ask for it.
+    readStdin: () => readFileSync(0, "utf8"),
   };
 }
 
@@ -99,6 +102,8 @@ const HELP_LINES = [
   "  haril usage summary [--by day|model|layer|difficulty|workflow|mode|role] [--json]   token and time totals",
   "  haril usage verify [--json]      walk the hash chains of the orders and usage logs; exit 1 if a row was edited",
   "  haril usage export --format jsonl|csv [--table usage|orders] [--out <file>]   export the log, hashes included",
+  "  haril usage record --stdin [--project <slug>] [--json]   append one order or chat usage row given as JSON on",
+  "    stdin (how the console logs its chat); the order keeps its hash, length and a redacted preview, never its text",
   "  haril console [--data-dir <path>]   open Pi in this folder with the HARIL extension: Pi's own commands, logins",
   "    and models, plus the HARIL bar and /haril, /goal, /plans, /approve, /deny, /tasks; needs npm run runtime:install",
   "  haril shell [--data-dir <path>] [--no-runtime]   open the previous terminal UI; it starts haril start",

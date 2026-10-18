@@ -25,13 +25,15 @@ import {
   summaryLines,
   usageLine,
 } from "./usage-format.js";
+import { usageRecord } from "./usage-record.js";
 
 // `haril usage log|summary|verify|export` (docs/modos-y-delegacion.md 4.5 and 6, R-L1): read-only views of the orders
 // and usage logs. A missing database is never created. Time bounds apply to the time a row was written: --since is
-// measured back from now, --from is inclusive and --to (or --before) exclusive.
+// measured back from now, --from is inclusive and --to (or --before) exclusive. `haril usage record` (usage-record.ts)
+// is the one writer here: the console's chat rows.
 
 const USAGE = [
-  "usage: haril usage log|summary|verify|export",
+  "usage: haril usage log|summary|verify|export|record",
   "  haril usage log [--since 2h | --from <time> --to <time>] [--kind order|chat|agent_run] [--model <id>] [--workflow <id>]",
   "    [--layer 1|2|3] [--mode <mode>] [--difficulty <class>] [--limit <n>] [--include-simulated] [--json] [--data-dir <path>]",
   "  haril usage summary [--by day|model|layer|difficulty|workflow|mode|role] [--since ... | --from ... --to ...] [--include-simulated] [--json]",
@@ -39,6 +41,7 @@ const USAGE = [
   "  haril usage verify [--json]          walk both hash chains; exit 1 when a row was changed or deleted",
   "  haril usage export --format jsonl|csv [--table usage|orders] [--since ... | --from ... --to ... | --before <time>]",
   "    [--out <file>]   a time is an ISO 8601 date or time, or epoch milliseconds",
+  "  haril usage record --stdin [--project <slug>] [--json]   append one order or chat usage row (JSON on stdin)",
 ].join("\n");
 const NOT_INITIALIZED =
   "store not initialized (run haril project init <path> --name <name> --yes first)";
@@ -391,6 +394,7 @@ export function usage(args: readonly string[], io: CliIo, host: HostInfo): numbe
   if (sub === "summary") return summary(rest, io, host);
   if (sub === "verify") return verify(rest, io, host);
   if (sub === "export") return exportRows(rest, io, host);
+  if (sub === "record") return usageRecord(rest, io, host);
   io.err(USAGE);
   return EXIT_USAGE;
 }
