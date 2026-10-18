@@ -19,6 +19,7 @@ import { openDashboardActionMenu, runDashboardAction } from "./dashboard-actions
 import type { DashboardAction } from "./dashboard-controls.js";
 import { type DashboardData, emptyDashboardData, loadDashboardData } from "./dashboard-data.js";
 import { delegateFromChat } from "./delegation.js";
+import { effectText, sourceText, valueText } from "./delegation-settings.js";
 import { stopAll } from "./emergency.js";
 import { installModes } from "./mode-controller.js";
 import { levelLabel } from "./model-levels.js";
@@ -804,6 +805,13 @@ export default function harilConsole(pi: ConsolePi): void {
             ? facts.commands.map((command) => `/${command}`)
             : ["No command list available."]),
           "Native Pi slash commands remain separate and available.",
+          "DELEGATION SETTINGS (haril.json; change them with Delegation settings or /delegation)",
+          ...(data.delegation === undefined
+            ? [data.delegationError ?? "Not loaded yet; refresh to read them."]
+            : data.delegation.fields.map(
+                (field) =>
+                  `${field.path} = ${valueText(field)} · ${sourceText(field)} · ${effectText(field)}`,
+              )),
         );
         break;
       case "everywhere": {

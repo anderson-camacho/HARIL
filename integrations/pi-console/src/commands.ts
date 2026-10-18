@@ -6,6 +6,7 @@ import {
   lastUserText,
   startDelegation,
 } from "./delegation.js";
+import { openDelegationSettings } from "./delegation-panel.js";
 import {
   CONSOLE_MODES,
   type ConsoleMode,
@@ -284,6 +285,54 @@ const COMMANDS: readonly CommandSpec[] = [
     local: true,
     async run(_args, host, ctx) {
       await host.openActions(ctx);
+    },
+  },
+  {
+    name: "delegation",
+    usage: "/delegation [<setting>] | /delegation set <setting> <value>",
+    description:
+      "Open TOOLS' Delegation settings (context per layer, limits, models and levels, quota, watchdog, autonomy)",
+    async run(args, host, ctx) {
+      const words = plainText(args)
+        .trim()
+        .split(/s+/)
+        .filter((word) => word !== "");
+      const full = (path: string): string =>
+        path.startsWith("delegation.") ? path : `delegation.${path}`;
+      if (words[0] === "set") {
+        const [, path, ...rest] = words;
+        if (path === undefined || rest.length === 0) {
+          ctx.ui.notify(
+            "usage: /delegation set <setting> <value> (for example context.compactAtTokens 300000)",
+            "warning",
+          );
+          return;
+        }
+        if (host.mode() === "consult") {
+          ctx.ui.notify(
+            "CONSULT mode is read-only: /delegation set changes haril.json. Switch with /mode action (or Alt+M) first.",
+            "warning",
+          );
+          return;
+        }
+        const value = rest.join(" ");
+        if (
+          !(await ctx.ui.confirm(
+            "Change a delegation setting",
+            `${full(path)} → ${value}
+This writes haril.json (haril config set).`,
+          ))
+        )
+          return;
+        await runAndShow(ctx, host, ["config", "set", full(path), value], { title: "config set" });
+        return;
+      }
+      host.openArea("tools");
+      await openDelegationSettings(
+        ctx,
+        { cwd: host.cwd, mode: () => host.mode() },
+        words[0] === undefined ? undefined : full(words[0]),
+      );
     },
   },
   {

@@ -2,6 +2,7 @@ import { renderNeuralProfile, renderWordmark } from "./dashboard-art.js";
 import { controlsFor, type DashboardAction } from "./dashboard-controls.js";
 import type { DashboardData } from "./dashboard-data.js";
 import { frameGlyph, paddedCell, visualText } from "./dashboard-theme.js";
+import { delegationSummary } from "./delegation-settings.js";
 import { ASCII_GLYPHS, UNICODE_GLYPHS } from "./orchestration-draw.js";
 import type { OrchestrationState, OrchestrationTarget } from "./orchestration-state.js";
 import { renderOrchestrationSummary } from "./orchestration-view.js";
@@ -342,6 +343,11 @@ function linesFor(area: DashboardArea, facts: DashboardFacts): string[] {
                 "The local registry successfully returned no methodologies; the CLI has no import command.",
               ]
             : []),
+        ...(data.delegation !== undefined
+          ? delegationSummary(data.delegation)
+          : data.delegationError === undefined
+            ? []
+            : [`Delegation settings unavailable: ${data.delegationError}`]),
         "Browse a methodology to read its complete bundled definition; browsing does not execute it.",
       ];
     case "everywhere":

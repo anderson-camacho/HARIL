@@ -14,6 +14,7 @@ export type DashboardAction =
   | "start-runtime"
   | "stop-runtime"
   | "toggle-tools"
+  | "delegation"
   | "methodologies"
   | "commands"
   | "memory"
@@ -107,6 +108,7 @@ export function controlsFor(
       return [
         { action: "details", label: "View complete details", hint: "D" },
         { action: "model-level", label: "Model and level", hint: "M" },
+        { action: "delegation", label: "Delegation settings", hint: "S" },
         { action: "toggle-tools", label: "Enable or disable Pi tools", hint: "T" },
         { action: "methodologies", label: "Browse HARIL methodologies", hint: "B" },
         { action: "commands", label: "Browse HARIL commands", hint: "C" },

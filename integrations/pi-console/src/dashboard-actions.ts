@@ -11,6 +11,7 @@ import {
   readMethodologyDefinition,
   summarizeApproval,
 } from "./dashboard-data.js";
+import { openDelegationSettings } from "./delegation-panel.js";
 import { chooseLevel, chooseModel, type LevelMemory, openModelAndLevel } from "./model-picker.js";
 import { actionRefusal, type ConsoleMode } from "./modes.js";
 import { demoNotice } from "./orchestration-state.js";
@@ -22,6 +23,7 @@ import { plainText, textWidth, truncate, wrap } from "./text.js";
 const HARIL_COMMANDS = [
   "/mode",
   "/delegate",
+  "/delegation",
   "/continue",
   "/goal",
   "/plans",
@@ -693,6 +695,10 @@ export async function runDashboardAction(
     case "methodologies":
       await browseMethodologies(ctx, host);
       return;
+    case "delegation":
+      await openDelegationSettings(ctx, { cwd: host.cwd, mode: () => host.mode?.() ?? "action" });
+      await host.reload();
+      return;
     case "commands": {
       const choice = await ctx.ui.select(
         "HARIL slash commands · select to prefill the editor",
@@ -742,6 +748,7 @@ export async function openDashboardActionMenu(
       ? ["Stop shared runtime"]
       : []),
     "Toggle Pi tools",
+    "Delegation settings",
     "Browse methodologies",
     "Browse HARIL commands",
     "Memory status",
@@ -784,6 +791,7 @@ const MENU_ACTIONS: Readonly<Record<string, DashboardAction>> = {
   "Start runtime": "start-runtime",
   "Stop shared runtime": "stop-runtime",
   "Toggle Pi tools": "toggle-tools",
+  "Delegation settings": "delegation",
   "Browse methodologies": "methodologies",
   "Browse HARIL commands": "commands",
   "Memory status": "memory",

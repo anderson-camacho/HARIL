@@ -1,0 +1,698 @@
+{
+  "path": "delegation",
+  "value": {
+    "context": {
+      "compactAtTokens": 300000,
+      "perLayer": {
+        "orchestrator": 400000
+      }
+    },
+    "limits": {
+      "maxActiveChildren": {
+        "orchestrator": 3,
+        "delegator": 4
+      },
+      "maxConcurrent": {
+        "executors": 5,
+        "auditors": 5,
+        "delegators": 5,
+        "writers": 1
+      },
+      "maxQueuedTasksPerThread": 100,
+      "maxProposalsPerThread": 3,
+      "maxAgentsPerWorkflow": 100,
+      "maxAuditRetries": 1,
+      "maxEscalationsPerTask": 1,
+      "maxWorkflowTokens": 20000000,
+      "maxWorkflowWallMs": 7200000,
+      "largeTaskTokens": 50000,
+      "attemptTimeoutMs": 3600000
+    },
+    "models": {
+      "layers": {
+        "orchestrator": {
+          "model": null,
+          "level": null
+        },
+        "delegator": {
+          "model": null,
+          "level": null
+        },
+        "executor": {
+          "model": "cliproxy/Gemini1/gemini-3-flash",
+          "level": "medium"
+        },
+        "auditor": {
+          "model": null,
+          "level": null
+        }
+      },
+      "allow": {
+        "delegator": [],
+        "executor": [],
+        "auditor": []
+      },
+      "auditorDistinctFromExecutor": true
+    },
+    "quota": {
+      "source": "cliproxyapi-management",
+      "managementBaseUrl": null,
+      "managementKeyEnv": "CLIPROXYAPI_MANAGEMENT_KEY",
+      "switchAtPercent5h": 80,
+      "stopAtPercentWeekly": 80,
+      "minRemainingPercentForLargeTask": 20,
+      "maxWaitMs": 18000000
+    },
+    "watchdog": {
+      "intervalMs": 900000,
+      "idleStrikesToClose": 1,
+      "closeResidualImmediately": true
+    },
+    "autonomy": {
+      "defaultStops": ["after_plan"]
+    },
+    "commands": {
+      "allow": []
+    },
+    "research": {
+      "folder": "docs/investigacion"
+    }
+  },
+  "fields": [
+    {
+      "path": "delegation.context.compactAtTokens",
+      "group": "context",
+      "label": "Compact at, every layer",
+      "kind": {
+        "type": "integer",
+        "min": 32768,
+        "max": 10000000,
+        "unit": "tokens"
+      },
+      "value": 300000,
+      "default": 300000,
+      "source": "default",
+      "effect": "new workflows"
+    },
+    {
+      "path": "delegation.context.perLayer.orchestrator",
+      "group": "context",
+      "label": "Compact at, orchestrator",
+      "kind": {
+        "type": "integer",
+        "min": 32768,
+        "max": 10000000,
+        "unit": "tokens",
+        "inherits": "context.compactAtTokens"
+      },
+      "value": 400000,
+      "default": null,
+      "source": "file",
+      "effect": "new workflows"
+    },
+    {
+      "path": "delegation.context.perLayer.delegator",
+      "group": "context",
+      "label": "Compact at, delegator",
+      "kind": {
+        "type": "integer",
+        "min": 32768,
+        "max": 10000000,
+        "unit": "tokens",
+        "inherits": "context.compactAtTokens"
+      },
+      "value": 300000,
+      "default": null,
+      "source": "default",
+      "effect": "new workflows"
+    },
+    {
+      "path": "delegation.context.perLayer.executor",
+      "group": "context",
+      "label": "Compact at, executor",
+      "kind": {
+        "type": "integer",
+        "min": 32768,
+        "max": 10000000,
+        "unit": "tokens",
+        "inherits": "context.compactAtTokens"
+      },
+      "value": 300000,
+      "default": null,
+      "source": "default",
+      "effect": "new workflows"
+    },
+    {
+      "path": "delegation.context.perLayer.auditor",
+      "group": "context",
+      "label": "Compact at, auditor",
+      "kind": {
+        "type": "integer",
+        "min": 32768,
+        "max": 10000000,
+        "unit": "tokens",
+        "inherits": "context.compactAtTokens"
+      },
+      "value": 300000,
+      "default": null,
+      "source": "default",
+      "effect": "new workflows"
+    },
+    {
+      "path": "delegation.limits.maxActiveChildren.orchestrator",
+      "group": "limits",
+      "label": "Live children of the orchestrator",
+      "kind": {
+        "type": "integer",
+        "min": 1,
+        "max": 20,
+        "unit": "count"
+      },
+      "value": 3,
+      "default": 5,
+      "source": "file",
+      "effect": "new workflows"
+    },
+    {
+      "path": "delegation.limits.maxActiveChildren.delegator",
+      "group": "limits",
+      "label": "Live children of a delegator",
+      "kind": {
+        "type": "integer",
+        "min": 1,
+        "max": 20,
+        "unit": "count"
+      },
+      "value": 4,
+      "default": 4,
+      "source": "default",
+      "effect": "new workflows"
+    },
+    {
+      "path": "delegation.limits.maxConcurrent.executors",
+      "group": "limits",
+      "label": "Executors at once",
+      "kind": {
+        "type": "integer",
+        "min": 1,
+        "max": 20,
+        "unit": "count"
+      },
+      "value": 5,
+      "default": 5,
+      "source": "default",
+      "effect": "new workflows"
+    },
+    {
+      "path": "delegation.limits.maxConcurrent.auditors",
+      "group": "limits",
+      "label": "Auditors at once",
+      "kind": {
+        "type": "integer",
+        "min": 1,
+        "max": 20,
+        "unit": "count"
+      },
+      "value": 5,
+      "default": 5,
+      "source": "default",
+      "effect": "new workflows"
+    },
+    {
+      "path": "delegation.limits.maxConcurrent.delegators",
+      "group": "limits",
+      "label": "Delegators at once",
+      "kind": {
+        "type": "integer",
+        "min": 1,
+        "max": 20,
+        "unit": "count"
+      },
+      "value": 5,
+      "default": 5,
+      "source": "default",
+      "effect": "new workflows"
+    },
+    {
+      "path": "delegation.limits.maxConcurrent.writers",
+      "group": "limits",
+      "label": "Writers at once",
+      "kind": {
+        "type": "integer",
+        "min": 1,
+        "max": 20,
+        "unit": "count"
+      },
+      "value": 1,
+      "default": 1,
+      "source": "default",
+      "effect": "new workflows"
+    },
+    {
+      "path": "delegation.limits.maxQueuedTasksPerThread",
+      "group": "limits",
+      "label": "Queued children per thread",
+      "kind": {
+        "type": "integer",
+        "min": 1,
+        "max": 1000,
+        "unit": "count"
+      },
+      "value": 100,
+      "default": 100,
+      "source": "default",
+      "effect": "new workflows"
+    },
+    {
+      "path": "delegation.limits.maxProposalsPerThread",
+      "group": "limits",
+      "label": "Proposals per thread",
+      "kind": {
+        "type": "integer",
+        "min": 1,
+        "max": 20,
+        "unit": "count"
+      },
+      "value": 3,
+      "default": 3,
+      "source": "default",
+      "effect": "new workflows"
+    },
+    {
+      "path": "delegation.limits.maxAgentsPerWorkflow",
+      "group": "limits",
+      "label": "Agents per workflow",
+      "kind": {
+        "type": "integer",
+        "min": 1,
+        "max": 1000,
+        "unit": "count"
+      },
+      "value": 100,
+      "default": 100,
+      "source": "default",
+      "effect": "new workflows"
+    },
+    {
+      "path": "delegation.limits.maxAuditRetries",
+      "group": "limits",
+      "label": "Relaunches after a rejected audit",
+      "kind": {
+        "type": "integer",
+        "min": 0,
+        "max": 1,
+        "unit": "count"
+      },
+      "value": 1,
+      "default": 1,
+      "source": "default",
+      "effect": "new workflows"
+    },
+    {
+      "path": "delegation.limits.maxEscalationsPerTask",
+      "group": "limits",
+      "label": "Escalations per task",
+      "kind": {
+        "type": "integer",
+        "min": 0,
+        "max": 1,
+        "unit": "count"
+      },
+      "value": 1,
+      "default": 1,
+      "source": "default",
+      "effect": "new workflows"
+    },
+    {
+      "path": "delegation.limits.maxWorkflowTokens",
+      "group": "limits",
+      "label": "Workflow token budget",
+      "kind": {
+        "type": "integer",
+        "min": 10000,
+        "max": 1000000000,
+        "unit": "tokens"
+      },
+      "value": 20000000,
+      "default": 20000000,
+      "source": "default",
+      "effect": "new workflows"
+    },
+    {
+      "path": "delegation.limits.maxWorkflowWallMs",
+      "group": "limits",
+      "label": "Workflow wall time",
+      "kind": {
+        "type": "integer",
+        "min": 60000,
+        "max": 604800000,
+        "unit": "ms"
+      },
+      "value": 7200000,
+      "default": 7200000,
+      "source": "default",
+      "effect": "new workflows"
+    },
+    {
+      "path": "delegation.limits.largeTaskTokens",
+      "group": "limits",
+      "label": "A task is large from",
+      "kind": {
+        "type": "integer",
+        "min": 1000,
+        "max": 10000000,
+        "unit": "tokens"
+      },
+      "value": 50000,
+      "default": 50000,
+      "source": "default",
+      "effect": "new workflows"
+    },
+    {
+      "path": "delegation.limits.attemptTimeoutMs",
+      "group": "limits",
+      "label": "Longest attempt",
+      "kind": {
+        "type": "integer",
+        "min": 10000,
+        "max": 86400000,
+        "unit": "ms"
+      },
+      "value": 3600000,
+      "default": 3600000,
+      "source": "default",
+      "effect": "new workflows"
+    },
+    {
+      "path": "delegation.models.layers.orchestrator.model",
+      "group": "models",
+      "label": "Model, orchestrator",
+      "kind": {
+        "type": "model-or-null"
+      },
+      "value": null,
+      "default": null,
+      "source": "default",
+      "effect": "next model choice"
+    },
+    {
+      "path": "delegation.models.layers.orchestrator.level",
+      "group": "models",
+      "label": "Reasoning level, orchestrator",
+      "kind": {
+        "type": "level-or-null"
+      },
+      "value": null,
+      "default": null,
+      "source": "default",
+      "effect": "next agent launch"
+    },
+    {
+      "path": "delegation.models.layers.delegator.model",
+      "group": "models",
+      "label": "Model, delegator",
+      "kind": {
+        "type": "model-or-null"
+      },
+      "value": null,
+      "default": null,
+      "source": "default",
+      "effect": "next model choice"
+    },
+    {
+      "path": "delegation.models.layers.delegator.level",
+      "group": "models",
+      "label": "Reasoning level, delegator",
+      "kind": {
+        "type": "level-or-null"
+      },
+      "value": null,
+      "default": null,
+      "source": "default",
+      "effect": "next agent launch"
+    },
+    {
+      "path": "delegation.models.layers.executor.model",
+      "group": "models",
+      "label": "Model, executor",
+      "kind": {
+        "type": "model-or-null"
+      },
+      "value": "cliproxy/Gemini1/gemini-3-flash",
+      "default": null,
+      "source": "file",
+      "effect": "next model choice"
+    },
+    {
+      "path": "delegation.models.layers.executor.level",
+      "group": "models",
+      "label": "Reasoning level, executor",
+      "kind": {
+        "type": "level-or-null"
+      },
+      "value": "medium",
+      "default": null,
+      "source": "file",
+      "effect": "next agent launch"
+    },
+    {
+      "path": "delegation.models.layers.auditor.model",
+      "group": "models",
+      "label": "Model, auditor",
+      "kind": {
+        "type": "model-or-null"
+      },
+      "value": null,
+      "default": null,
+      "source": "default",
+      "effect": "next model choice"
+    },
+    {
+      "path": "delegation.models.layers.auditor.level",
+      "group": "models",
+      "label": "Reasoning level, auditor",
+      "kind": {
+        "type": "level-or-null"
+      },
+      "value": null,
+      "default": null,
+      "source": "default",
+      "effect": "next agent launch"
+    },
+    {
+      "path": "delegation.models.allow.delegator",
+      "group": "models",
+      "label": "Allowed models, delegator",
+      "kind": {
+        "type": "model-list"
+      },
+      "value": [],
+      "default": [],
+      "source": "default",
+      "effect": "next model choice"
+    },
+    {
+      "path": "delegation.models.allow.executor",
+      "group": "models",
+      "label": "Allowed models, executor",
+      "kind": {
+        "type": "model-list"
+      },
+      "value": [],
+      "default": [],
+      "source": "default",
+      "effect": "next model choice"
+    },
+    {
+      "path": "delegation.models.allow.auditor",
+      "group": "models",
+      "label": "Allowed models, auditor",
+      "kind": {
+        "type": "model-list"
+      },
+      "value": [],
+      "default": [],
+      "source": "default",
+      "effect": "next model choice"
+    },
+    {
+      "path": "delegation.models.auditorDistinctFromExecutor",
+      "group": "models",
+      "label": "Auditor on another model than its executor",
+      "kind": {
+        "type": "boolean"
+      },
+      "value": true,
+      "default": true,
+      "source": "default",
+      "effect": "next model choice"
+    },
+    {
+      "path": "delegation.quota.source",
+      "group": "quota",
+      "label": "Quota source",
+      "kind": {
+        "type": "enum",
+        "values": ["cliproxyapi-management"]
+      },
+      "value": "cliproxyapi-management",
+      "default": "cliproxyapi-management",
+      "source": "default",
+      "effect": "next model choice"
+    },
+    {
+      "path": "delegation.quota.managementBaseUrl",
+      "group": "quota",
+      "label": "Management server URL",
+      "kind": {
+        "type": "url-or-null"
+      },
+      "value": null,
+      "default": null,
+      "source": "default",
+      "effect": "next model choice"
+    },
+    {
+      "path": "delegation.quota.managementKeyEnv",
+      "group": "quota",
+      "label": "Management key variable",
+      "kind": {
+        "type": "env-name"
+      },
+      "value": "CLIPROXYAPI_MANAGEMENT_KEY",
+      "default": "CLIPROXYAPI_MANAGEMENT_KEY",
+      "source": "default",
+      "effect": "next model choice"
+    },
+    {
+      "path": "delegation.quota.switchAtPercent5h",
+      "group": "quota",
+      "label": "Switch model above (5-hour window)",
+      "kind": {
+        "type": "percent"
+      },
+      "value": 80,
+      "default": 80,
+      "source": "default",
+      "effect": "next model choice"
+    },
+    {
+      "path": "delegation.quota.stopAtPercentWeekly",
+      "group": "quota",
+      "label": "Stop using a model above (week)",
+      "kind": {
+        "type": "percent"
+      },
+      "value": 80,
+      "default": 80,
+      "source": "default",
+      "effect": "next model choice"
+    },
+    {
+      "path": "delegation.quota.minRemainingPercentForLargeTask",
+      "group": "quota",
+      "label": "Left for a large task, at least",
+      "kind": {
+        "type": "percent"
+      },
+      "value": 20,
+      "default": 20,
+      "source": "default",
+      "effect": "next model choice"
+    },
+    {
+      "path": "delegation.quota.maxWaitMs",
+      "group": "quota",
+      "label": "Longest wait for a quota reset",
+      "kind": {
+        "type": "integer",
+        "min": 0,
+        "max": 604800000,
+        "unit": "ms"
+      },
+      "value": 18000000,
+      "default": 18000000,
+      "source": "default",
+      "effect": "next model choice"
+    },
+    {
+      "path": "delegation.watchdog.intervalMs",
+      "group": "watchdog",
+      "label": "Check every",
+      "kind": {
+        "type": "integer",
+        "min": 60000,
+        "max": 86400000,
+        "unit": "ms"
+      },
+      "value": 900000,
+      "default": 900000,
+      "source": "default",
+      "effect": "next runtime start"
+    },
+    {
+      "path": "delegation.watchdog.idleStrikesToClose",
+      "group": "watchdog",
+      "label": "Checks without progress before closing",
+      "kind": {
+        "type": "integer",
+        "min": 1,
+        "max": 10,
+        "unit": "count"
+      },
+      "value": 1,
+      "default": 1,
+      "source": "default",
+      "effect": "next runtime start"
+    },
+    {
+      "path": "delegation.watchdog.closeResidualImmediately",
+      "group": "watchdog",
+      "label": "Close residual tasks at once",
+      "kind": {
+        "type": "always-true"
+      },
+      "value": true,
+      "default": true,
+      "source": "default",
+      "effect": "next runtime start"
+    },
+    {
+      "path": "delegation.autonomy.defaultStops",
+      "group": "autonomy",
+      "label": "Default stops",
+      "kind": {
+        "type": "stop-list"
+      },
+      "value": ["after_plan"],
+      "default": ["after_plan"],
+      "source": "default",
+      "effect": "new workflows"
+    },
+    {
+      "path": "delegation.commands.allow",
+      "group": "commands",
+      "label": "Commands agents may run",
+      "kind": {
+        "type": "command-list"
+      },
+      "value": [],
+      "default": [],
+      "source": "default",
+      "effect": "next agent launch"
+    },
+    {
+      "path": "delegation.research.folder",
+      "group": "research",
+      "label": "Research folder (CONSULT)",
+      "kind": {
+        "type": "folder"
+      },
+      "value": "docs/investigacion",
+      "default": "docs/investigacion",
+      "source": "default",
+      "effect": "next research file"
+    }
+  ],
+  "configPath": "fake-config/haril.json"
+}

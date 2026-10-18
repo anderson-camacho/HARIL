@@ -100,7 +100,7 @@ function layerFields(): DelegationField[] {
     fields.push({
       path: `context.perLayer.${layer}`,
       group: "context",
-      label: `Compaction threshold, ${layer}`,
+      label: `Compact at, ${layer}`,
       kind: int(CONTEXT_MIN, CONTEXT_MAX, "tokens", "context.compactAtTokens"),
       default: null,
       effect: "new workflows",
@@ -157,7 +157,7 @@ export const DELEGATION_FIELDS: readonly DelegationField[] = Object.freeze([
   {
     path: "context.compactAtTokens",
     group: "context",
-    label: "Compaction threshold, every layer",
+    label: "Compact at, every layer",
     kind: int(CONTEXT_MIN, CONTEXT_MAX, "tokens"),
     default: 300_000,
     effect: "new workflows",
