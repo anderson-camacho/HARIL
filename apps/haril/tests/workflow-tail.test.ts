@@ -192,6 +192,19 @@ describe("sessionLines", () => {
     });
   });
 
+  it("counts a system prompt that Pi keeps in sections, as a real session does", () => {
+    const [line] = sessionLines({
+      type: "message",
+      timestamp: at(1),
+      message: {
+        role: "system",
+        content: "",
+        sections: { preamble: "You are HARIL's executor.", tools: "read", rules: "Read only." },
+      },
+    });
+    expect(line).toMatchObject({ kind: "system", text: "system prompt, 39 characters" });
+  });
+
   it("keeps no control character of what an agent wrote, and shortens a long text", () => {
     const [line] = sessionLines({
       type: "message",

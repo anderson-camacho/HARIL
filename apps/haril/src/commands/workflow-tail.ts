@@ -173,14 +173,16 @@ export function sessionLines(entry: unknown): TailLine[] {
   if (message === undefined) return [];
   const atMessage = at ?? timeOf(message);
   switch (message.role) {
-    case "system":
-      return [
-        {
-          at: atMessage,
-          kind: "system",
-          text: `system prompt, ${Array.from(textOf(message.content)).length} characters`,
-        },
-      ];
+    case "system": {
+      // Pi keeps the prompt in content, or in named sections with an empty content.
+      const sections = Object.values(record(message.sections) ?? {}).filter(
+        (value): value is string => typeof value === "string",
+      );
+      const length =
+        Array.from(textOf(message.content)).length ||
+        sections.reduce((sum, value) => sum + Array.from(value).length, 0);
+      return [{ at: atMessage, kind: "system", text: `system prompt, ${length} characters` }];
+    }
     case "user":
       return [{ at: atMessage, kind: "user", text: short(textOf(message.content)) }];
     case "assistant":
