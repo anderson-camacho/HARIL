@@ -194,6 +194,21 @@ export interface UsageVerification {
   readonly usage: ChainReport;
 }
 
+// One row of the model_stats view (4.5, 3.11): the real (non-simulated) executor runs of a model at a difficulty class,
+// how many an auditor approved or rejected (the newest verdict of each run's task), their retries, tokens and time.
+// Token and time sums are null when no run reported them.
+export interface ModelStatRow {
+  readonly model: string;
+  readonly difficulty: UsageDifficulty;
+  readonly runs: number;
+  readonly approved: number;
+  readonly rejected: number;
+  readonly retries: number;
+  readonly tokensIn: number | null;
+  readonly tokensOut: number | null;
+  readonly durationMs: number | null;
+}
+
 export interface UsageLogPort {
   appendOrder(input: AppendOrderInput): AppendResult<OrderRecord>;
   appendUsage(input: AppendUsageInput): AppendResult<UsageRecord>;
@@ -201,5 +216,7 @@ export interface UsageLogPort {
   usage(filter?: UsageFilter): readonly UsageRecord[];
   // Groups in key order (null last).
   summary(groupBy: UsageGroupBy, filter?: UsageFilter): readonly UsageSummaryRow[];
+  // The model_stats view, by model then difficulty: what haril difficulty calibrate recomputes the table from.
+  modelStats(): readonly ModelStatRow[];
   verify(): UsageVerification;
 }

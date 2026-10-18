@@ -141,11 +141,13 @@ describe("haril quota", () => {
     const report = parseJson<QuotaJson>(json.out);
     const [provider] = report.providers;
     expect(provider).toMatchObject({ id: "cliproxy", status: "ok" });
-    expect(provider?.accounts.map((account) => [account.prefix, account.window5h.usedPct])).toEqual([
-      ["Gemini1", 38],
-      ["Gemini2", 85],
-      [null, null],
-    ]);
+    expect(provider?.accounts.map((account) => [account.prefix, account.window5h.usedPct])).toEqual(
+      [
+        ["Gemini1", 38],
+        ["Gemini2", 85],
+        [null, null],
+      ],
+    );
     expect(provider?.accounts[1]?.note).toContain("over 80% of its 5-hour window");
     expect(provider?.accounts[2]?.note).toContain("sin dato");
     expect(report.cooldowns).toEqual([
@@ -172,7 +174,10 @@ describe("haril quota", () => {
     const withKey = writeConfig({ delegation: { quota: { managementKey: "x" } } });
     const refused = harness();
     expect(
-      await run(["quota"], refused.io, { ...sb.host, env: { ...sb.host.env, HARIL_CONFIG: withKey } }),
+      await run(["quota"], refused.io, {
+        ...sb.host,
+        env: { ...sb.host.env, HARIL_CONFIG: withKey },
+      }),
     ).toBe(2);
     expect(refused.err.join("\n")).toContain("/delegation/quota/managementKey");
 

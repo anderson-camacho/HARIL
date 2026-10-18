@@ -7,6 +7,7 @@ import type {
   ChainReport,
   Clock,
   Ids,
+  ModelStatRow,
   OrderFilter,
   OrderRecord,
   StoreRules,
@@ -416,6 +417,15 @@ export function createUsageLogFacet(options: UsageLogFacetOptions): UsageLogPort
         )
         .all(...where.values) as unknown as UsageSummaryRow[];
       return rows.map((row) => ({ ...row }));
+    },
+
+    modelStats() {
+      return db
+        .prepare(
+          "SELECT model, difficulty, runs, approved, rejected, retries, tokens_in AS tokensIn, tokens_out AS tokensOut, duration_ms AS durationMs FROM model_stats ORDER BY model, difficulty",
+        )
+        .all()
+        .map((row) => ({ ...row })) as unknown as ModelStatRow[];
     },
 
     verify(): UsageVerification {

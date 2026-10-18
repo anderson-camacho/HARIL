@@ -3,6 +3,7 @@ import { homedir, userInfo } from "node:os";
 import { StoreError } from "@haril/state-sqlite";
 import { approvals, approve, deny } from "./commands/approvals.js";
 import { consoleCommand } from "./commands/console.js";
+import { difficulty } from "./commands/difficulty.js";
 import { doctor } from "./commands/doctor.js";
 import { events } from "./commands/events.js";
 import { memory } from "./commands/memory.js";
@@ -61,6 +62,10 @@ const HELP_LINES = [
   "  haril models [--json] [--provider <id>]   list the models of every provider as <provider>/<model> (haril.json)",
   "  haril quota [--json] [--provider <id>]   5-hour and weekly quota of each account (CLIProxyAPI management API,",
   "    key in CLIPROXYAPI_MANAGEMENT_KEY or delegation.quota.managementKeyEnv) and the model cooldowns; sin dato if unknown",
+  "  haril difficulty show [--json]   the difficulty table: per class its recommended models and cost levels, and the",
+  "    source of each value (config/difficulty.json or the provisional defaults)",
+  "  haril difficulty calibrate [--yes] [--json]   recompute the success rates from real runs (model_stats), show the",
+  "    change and write config/difficulty.json only with --yes; nothing else updates the table",
   "  haril states                     print the task states and legal transitions",
   "  haril plan validate <file> [--json]   validate a plan file",
   "  haril plan import <file> [--project <slug>] [--json]   queue a plan (applied by start)",
@@ -160,6 +165,8 @@ function dispatch(argv: readonly string[], io: CliIo, host: HostInfo): number | 
       return EXIT_OK;
     case "doctor":
       return doctor(rest, io, host);
+    case "difficulty":
+      return difficulty(rest, io, host);
     case "quota":
       return quota(rest, io, host);
     case "models":
