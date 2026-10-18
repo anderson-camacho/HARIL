@@ -17,6 +17,7 @@ import { status } from "./commands/status.js";
 import { stop } from "./commands/stop.js";
 import { task } from "./commands/task.js";
 import { usage } from "./commands/usage.js";
+import { workflow } from "./commands/workflow.js";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "./context.js";
 import { VERSION } from "./version.js";
 
@@ -78,6 +79,9 @@ const HELP_LINES = [
   "  haril metrics [--project <slug>] [--json]   runs, retries and success rate from the event log",
   "  haril events [--project <slug>] [--task <id>] [--limit <n>] [--json]   the newest events, oldest first",
   "  haril memory status [--json]     the memory provider, its health, whether memory is degraded and the outbox depth",
+  "  haril workflow demo [--seed <n>] [--delegators <n>] [--executors <n>] [--stop-at <stops>] [--json]",
+  "    run a simulated three-layer workflow with fake agents on a temporary store and print its tree and totals;",
+  "    --data-dir <path> keeps its rows there (never the default data dir); no model is called",
   "  haril usage log [--since 2h | --from <time> --to <time>] [--kind order|chat|agent_run] [--model <id>] [--json]",
   "    every order and every model use, one line per row; also --workflow, --layer, --mode, --difficulty, --limit",
   "  haril usage summary [--by day|model|layer|difficulty|workflow|mode|role] [--json]   token and time totals",
@@ -162,6 +166,8 @@ function dispatch(argv: readonly string[], io: CliIo, host: HostInfo): number | 
       return memory(rest, io, host);
     case "usage":
       return usage(rest, io, host);
+    case "workflow":
+      return workflow(rest, io, host);
     case "start":
       return start(rest, io, host);
     case "run":
