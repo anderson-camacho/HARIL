@@ -16,6 +16,7 @@ import { states } from "./commands/states.js";
 import { status } from "./commands/status.js";
 import { stop } from "./commands/stop.js";
 import { task } from "./commands/task.js";
+import { usage } from "./commands/usage.js";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "./context.js";
 import { VERSION } from "./version.js";
 
@@ -77,6 +78,11 @@ const HELP_LINES = [
   "  haril metrics [--project <slug>] [--json]   runs, retries and success rate from the event log",
   "  haril events [--project <slug>] [--task <id>] [--limit <n>] [--json]   the newest events, oldest first",
   "  haril memory status [--json]     the memory provider, its health, whether memory is degraded and the outbox depth",
+  "  haril usage log [--since 2h | --from <time> --to <time>] [--kind order|chat|agent_run] [--model <id>] [--json]",
+  "    every order and every model use, one line per row; also --workflow, --layer, --mode, --difficulty, --limit",
+  "  haril usage summary [--by day|model|layer|difficulty|workflow|mode|role] [--json]   token and time totals",
+  "  haril usage verify [--json]      walk the hash chains of the orders and usage logs; exit 1 if a row was edited",
+  "  haril usage export --format jsonl|csv [--table usage|orders] [--out <file>]   export the log, hashes included",
   "  haril console [--data-dir <path>]   open Pi in this folder with the HARIL extension: Pi's own commands, logins",
   "    and models, plus the HARIL bar and /haril, /goal, /plans, /approve, /deny, /tasks; needs npm run runtime:install",
   "  haril shell [--data-dir <path>] [--no-runtime]   open the previous terminal UI; it starts haril start",
@@ -154,6 +160,8 @@ function dispatch(argv: readonly string[], io: CliIo, host: HostInfo): number | 
       return events(rest, io, host);
     case "memory":
       return memory(rest, io, host);
+    case "usage":
+      return usage(rest, io, host);
     case "start":
       return start(rest, io, host);
     case "run":
