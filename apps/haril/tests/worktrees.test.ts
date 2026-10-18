@@ -87,6 +87,7 @@ function workspace(): TurnWorkspace {
     writeSurface: ["src/button.ts", "tests/**"],
     gitDir: identity.gitDir,
     pointer: identity.pointer,
+    startHead: gitIn(tree, "rev-parse", "HEAD"),
   };
 }
 
@@ -235,6 +236,46 @@ describe.skipIf(!HAS_GIT)("the end of an executor's turn", () => {
     // The change was discarded with the worktree's own git folder, not main's.
     expect(readFileSync(join(tree, "src", "button.ts"), "utf8")).toContain("'red'");
     expect(gitIn(repo, "status", "--porcelain")).toBe("");
+  });
+
+  it("commits only the surface even when a command staged a file outside it", async () => {
+    const ws = workspace();
+    const host = workspaces();
+    const fakes = turnFakes();
+    expect(
+      await host.write(ws, ws.writeSurface, "src/button.ts", "export const color = 'blue';\n"),
+    ).toMatchObject({ ok: true });
+    // What a command could leave: a file outside the surface, already staged.
+    writeFileSync(join(tree, "outside.txt"), "not part of the step\n");
+    gitIn(tree, "add", "outside.txt");
+    expect(await host.finish(fakes.store, 1, fakes.view, fakes.task, ws, SUCCEEDED)).toEqual(
+      SUCCEEDED,
+    );
+    expect(gitIn(repo, "show", "--name-only", "--format=", "haril/wf/step/s1")).toBe(
+      "src/button.ts",
+    );
+    expect(existsSync(join(tree, "outside.txt"))).toBe(false);
+  });
+
+  it("fails the turn and puts the branch back when a command committed outside the surface", async () => {
+    const ws = workspace();
+    const host = workspaces();
+    const fakes = turnFakes();
+    const stepBefore = gitIn(repo, "rev-parse", "haril/wf/step/s1");
+    const mainBefore = gitIn(repo, "rev-parse", "main");
+    writeFileSync(join(tree, "outside.txt"), "committed by a command\n");
+    gitIn(tree, "add", "outside.txt");
+    gitIn(tree, "commit", "--quiet", "-m", "sneaked in");
+    expect(
+      await host.write(ws, ws.writeSurface, "src/button.ts", "export const color = 'blue';\n"),
+    ).toMatchObject({ ok: true });
+    const outcome = await host.finish(fakes.store, 1, fakes.view, fakes.task, ws, SUCCEEDED);
+    expect(outcome).toMatchObject({ status: "failed", code: "workspace.outside_surface" });
+    expect(gitIn(repo, "rev-parse", "haril/wf/step/s1")).toBe(stepBefore);
+    expect(gitIn(repo, "rev-parse", "main")).toBe(mainBefore);
+    expect(fakes.heads).toEqual([]);
+    expect(fakes.events.map((event) => event.type)).toEqual(["worktree.outside_surface"]);
+    expect(gitIn(tree, "status", "--porcelain")).toBe("");
   });
 
   it("refuses to commit when the worktree's HEAD is not the step's branch", async () => {

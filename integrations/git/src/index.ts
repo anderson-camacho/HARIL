@@ -2,7 +2,13 @@
 // three-layer delegation (phase F8, docs/modos-y-delegacion.md 3.10): the repository and its base branch, one worktree
 // and branch per executor, the commit of an executor's work, and the integration merges with their conflicts. No
 // function contacts a remote: HARIL never fetches, pulls or pushes.
-export { changedPaths, commitPaths, discardChanges } from "./changes.js";
+export {
+  changedPaths,
+  commitPaths,
+  discardChanges,
+  pathsChangedSince,
+  resetBranchTo,
+} from "./changes.js";
 export {
   abortMerge,
   type FinishResult,

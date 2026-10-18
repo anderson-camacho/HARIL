@@ -28,8 +28,9 @@ export async function changedPaths(
   return [...paths];
 }
 
-// Stages `paths` and commits them with `message`; a commit with nothing staged is no commit (sha null). Never runs a
-// hook (run.ts) and never asks for a message.
+// Stages `paths` and commits them with `message`; a commit with nothing staged is no commit (sha null). Whatever was
+// staged before (a command may have staged other files) is unstaged first, so only `paths` go in. Never runs a hook
+// (run.ts) and never asks for a message.
 export async function commitPaths(
   worktree: string,
   paths: readonly string[],
@@ -39,6 +40,8 @@ export async function commitPaths(
   | { readonly ok: true; readonly sha: string | null }
   | { readonly ok: false; readonly detail: string }
 > {
+  const unstaged = await runGit(worktree, ["reset", "--quiet"], options);
+  if (!unstaged.ok) return { ok: false, detail: detailOf(unstaged) };
   for (let start = 0; start < paths.length; start += PATHS_PER_RUN) {
     const chunk = paths.slice(start, start + PATHS_PER_RUN);
     const added = await runGit(worktree, ["add", "--all", "--", ...chunk], options);
@@ -55,6 +58,31 @@ export async function commitPaths(
   if (!committed.ok) return { ok: false, detail: detailOf(committed) };
   const head = await runGit(worktree, ["rev-parse", "HEAD"], options);
   return head.ok ? { ok: true, sha: head.stdout.trim() } : { ok: false, detail: detailOf(head) };
+}
+
+// The paths the commits after `base` changed, up to HEAD (both paths of a rename); undefined when git fails.
+export async function pathsChangedSince(
+  worktree: string,
+  base: string,
+  options: GitOptions = {},
+): Promise<string[] | undefined> {
+  if (!/^[0-9a-f]{7,64}$/.test(base)) return undefined;
+  const result = await runGit(
+    worktree,
+    ["diff", "--name-only", "-z", "--no-renames", base, "HEAD", "--"],
+    options,
+  );
+  return result.ok ? [...new Set(recordsOf(result.stdout))] : undefined;
+}
+
+// Moves the worktree's branch back to `sha`, dropping the commits after it and every change.
+export async function resetBranchTo(
+  worktree: string,
+  sha: string,
+  options: GitOptions = {},
+): Promise<boolean> {
+  if (!/^[0-9a-f]{7,64}$/.test(sha)) return false;
+  return (await runGit(worktree, ["reset", "--quiet", "--hard", sha], options)).ok;
 }
 
 // Puts the worktree back to its last commit: tracked changes reset, untracked files and folders removed (ignored files,

@@ -14,9 +14,12 @@ import {
   discardChanges,
   type GitOptions,
   headBranch,
+  headCommit,
   mergeBranch,
   mergeInProgress,
+  pathsChangedSince,
   removeWorktree,
+  resetBranchTo,
   worktreeIdentity,
 } from "@haril/git";
 import { readConfinedFile, writeConfinedFile } from "@haril/os";
@@ -81,7 +84,12 @@ export interface TurnWorkspace {
   // The worktree's own git folder, found from the main repository, and the bytes of its .git pointer file.
   readonly gitDir: string;
   readonly pointer: string;
+  // The commit the worktree held when the turn started: what the turn added is checked against it.
+  readonly startHead: string;
 }
+
+// A turn's commits reached outside its write surface (a command staged or committed other files).
+class OutsideSurface extends Error {}
 
 // How git runs on a turn's worktree: its own git folder and work tree, named on every run.
 export function worktreeGit(git: GitOptions, workspace: TurnWorkspace): GitOptions {
@@ -239,18 +247,21 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
     if (await mergeInProgress(path, options)) await abortMerge(path, options);
   };
 
-  // The identity of a worktree HARIL made: its own git folder and its .git pointer file, from the main repository.
+  // The identity of a worktree HARIL made: its own git folder and its .git pointer file, from the main repository, and
+  // the commit it holds now.
   const identify = async (
     repo: string,
     path: string,
-  ): Promise<{ gitDir: string; pointer: string }> => {
+  ): Promise<{ gitDir: string; pointer: string; startHead: string }> => {
     const identity = await worktreeIdentity(repo, path, git);
     if (identity === undefined) {
       throw new Error(
         "the worktree's .git file does not point at its repository's own folder for it",
       );
     }
-    return identity;
+    const head = await headCommit(path, { ...git, gitDir: identity.gitDir, workTree: path });
+    if (head === undefined) throw new Error("the worktree has no commit checked out");
+    return { ...identity, startHead: head };
   };
 
   const repoOf = (store: Store, view: WorkflowView): string | undefined =>
@@ -323,13 +334,14 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
     const known = store.worktrees
       .list({ workflowId, kind: "executor" })
       .find((record) => record.threadId === task.threadId);
-    let identity: { gitDir: string; pointer: string } | undefined;
+    let identity: { gitDir: string; pointer: string; startHead: string } | undefined;
     const added = await withRepository(repo, async () => {
       const result = await addWorktree(repo, { path, branch, base: baseSha }, git);
       if (!result.ok) return result;
-      identity = await identify(repo, path);
+      const found = await identify(repo, path);
+      identity = found;
       if (result.reused || known !== undefined) return result;
-      const own: GitOptions = { ...git, gitDir: identity.gitDir, workTree: path };
+      const own: GitOptions = { ...git, gitDir: found.gitDir, workTree: path };
       // P13: a new step that waits for others starts with their approved work merged into its own branch.
       for (const thread of predecessors(view, task)) {
         const record = store.worktrees
@@ -357,6 +369,9 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
           });
         }
       }
+      // The step starts from what merged: its turn's work is checked against that commit.
+      const head = await headCommit(path, own);
+      if (head !== undefined) identity = { ...found, startHead: head };
       return result;
     });
     if (!added.ok) throw new Error(`the step's worktree could not be made: ${added.detail}`);
@@ -446,8 +461,24 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
     const committed = await commitPaths(workspace.root, inside, message, own);
     if (!committed.ok)
       throw new Error(`the step's work could not be committed: ${committed.detail}`);
+    // Everything the branch gained in the turn (a command's own commits too) must stay inside the surface.
+    const gained = await pathsChangedSince(workspace.root, workspace.startHead, own);
+    const outside =
+      gained === undefined
+        ? ["(git could not list the changes)"]
+        : gained.filter((path) => !pathMatchesSurface(path, workspace.writeSurface));
+    if (outside.length > 0) {
+      await resetBranchTo(workspace.root, workspace.startHead, own);
+      await discardChanges(workspace.root, own);
+      throw new OutsideSurface(
+        `the turn's commits reach outside its write surface (${outside.slice(0, 5).join(", ")}${outside.length > 5 ? ", ..." : ""}); the branch was put back`,
+      );
+    }
     await discardChanges(workspace.root, own);
-    if (committed.sha !== null) store.worktrees.setHead(epoch, workspace.worktreeId, committed.sha);
+    const tip = await headCommit(workspace.root, own);
+    if (tip !== undefined && tip !== workspace.startHead) {
+      store.worktrees.setHead(epoch, workspace.worktreeId, tip);
+    }
     return committed.sha;
   };
 
@@ -491,11 +522,25 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
           return outcome;
         } catch (error) {
           await discardChanges(workspace.root, own);
-          return {
-            status: "failed",
-            code: "workspace.commit_failed",
-            message: error instanceof Error ? error.message : String(error),
-          };
+          const message = error instanceof Error ? error.message : String(error);
+          if (error instanceof OutsideSurface) {
+            store.events.append({
+              aggregateType: "task",
+              aggregateId: task.taskId,
+              type: "worktree.outside_surface",
+              actorKind: "system",
+              actorId: `runtime:${epoch}`,
+              payload: {
+                workflowId: view.workflow.workflowId,
+                worktreeId: workspace.worktreeId,
+                branch: workspace.branch,
+              },
+              projectId: view.workflow.projectId,
+              taskId: task.taskId,
+            });
+            return { status: "failed", code: "workspace.outside_surface", message };
+          }
+          return { status: "failed", code: "workspace.commit_failed", message };
         }
       }
       // Everyone else leaves nothing behind: a merge left waiting is given up, and what commands changed is discarded.
