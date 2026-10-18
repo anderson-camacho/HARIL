@@ -87,6 +87,8 @@ describe("the delegation settings as the console shows them", () => {
     const decoded = view();
     expect(decoded.configPath).toBe("fake-config/haril.json");
     expect(decoded.fields).toHaveLength(48);
+    expect(valueText(field("limits.maxConcurrent.writers"))).toBe("5");
+    expect(sourceText(field("limits.maxConcurrent.writers"))).toBe("inherits");
     expect(valueText(field("commands.allow"))).toMatch(/^npm test, npm test \*, /);
     expect(valueText(field("commands.timeoutMs"))).toBe("5 min");
     expect(valueText(field("commands.outputMaxBytes"))).toBe("16,384");

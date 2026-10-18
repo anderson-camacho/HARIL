@@ -242,11 +242,13 @@ export const DELEGATION_FIELDS: readonly DelegationField[] = Object.freeze([
     effect: "new workflows",
   },
   {
+    // Phase F8: each writer has its own worktree, so as many may write as execute unless the file says otherwise; the
+    // surface locks still serialize writers whose files may overlap. Nothing writes in a read-only workflow.
     path: "limits.maxConcurrent.writers",
     group: "limits",
-    label: "Writers at once",
-    kind: int(1, CHILDREN_MAX, "count"),
-    default: 1,
+    label: "Writers at once (git projects)",
+    kind: int(1, CHILDREN_MAX, "count", "limits.maxConcurrent.executors"),
+    default: null,
     effect: "new workflows",
   },
   {
@@ -730,7 +732,8 @@ export interface DelegationSettings {
       readonly executors: number;
       readonly auditors: number;
       readonly delegators: number;
-      readonly writers: number;
+      // Absent: as many as the executors.
+      readonly writers?: number;
     };
     readonly maxAgentsPerWorkflow: number;
     readonly maxAuditRetries: number;
@@ -779,7 +782,8 @@ export interface DelegationSettings {
 }
 
 // The settings of a section that delegationSectionErrors accepted (or of no section); absent values take section 5's
-// defaults. A per-layer threshold the file does not set stays absent: the general one applies to that layer.
+// defaults. A field that inherits another and that the file does not set stays absent: a per-layer threshold takes the
+// general one, the writers at once take the executors.
 export function resolveDelegationSettings(section: unknown): DelegationSettings {
   const tree: Record<string, unknown> = {};
   for (const field of DELEGATION_FIELDS) {

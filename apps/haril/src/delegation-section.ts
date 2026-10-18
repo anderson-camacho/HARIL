@@ -30,13 +30,20 @@ export function delegationFieldsOf(document: unknown): DelegationFieldValue[] {
   return delegationFieldValues(section);
 }
 
-// The runtime's limits from the section's: the same keys, plus the depth rule, which is not a key of the file.
+// The runtime's limits from the section's: the same keys, plus the depth rule, which is not a key of the file. The
+// writers at once follow the executors unless the file sets them (phase F8: each writer has its own worktree).
 export function delegationLimitsOf(limits: DelegationSettings["limits"]): DelegationLimits {
+  const concurrent = limits.maxConcurrent;
   return {
     maxActiveChildren: { ...limits.maxActiveChildren },
     maxQueuedTasksPerThread: limits.maxQueuedTasksPerThread,
     maxProposalsPerThread: limits.maxProposalsPerThread,
-    maxConcurrent: { ...limits.maxConcurrent },
+    maxConcurrent: {
+      executors: concurrent.executors,
+      auditors: concurrent.auditors,
+      delegators: concurrent.delegators,
+      writers: concurrent.writers ?? concurrent.executors,
+    },
     maxAgentsPerWorkflow: limits.maxAgentsPerWorkflow,
     maxDepth: DEFAULT_DELEGATION_LIMITS.maxDepth,
     maxAuditRetries: limits.maxAuditRetries,

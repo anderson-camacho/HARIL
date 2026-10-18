@@ -4,6 +4,7 @@ import {
   DEFAULT_COMMAND_ALLOW,
   DELEGATION_FIELDS,
   DELEGATION_LAYERS,
+  delegationFieldValues,
   delegationSectionErrors,
   delegationValueProblem,
   resolveDelegationSettings,
@@ -55,6 +56,23 @@ describe("the delegation field table", () => {
         "/delegation/git/baseBranch: must be null (detect main, else the repository's default branch) or a local branch name",
       ]);
     }
+  });
+
+  it("shows the writers at once as inheriting the executors until the file sets them", () => {
+    const writers = (section: unknown) =>
+      delegationFieldValues(section).find(
+        (field) => field.path === "delegation.limits.maxConcurrent.writers",
+      );
+    expect(writers({ limits: { maxConcurrent: { executors: 3 } } })).toMatchObject({
+      value: 3,
+      default: null,
+      source: "default",
+      kind: { inherits: "limits.maxConcurrent.executors" },
+    });
+    expect(writers({ limits: { maxConcurrent: { writers: 2 } } })).toMatchObject({
+      value: 2,
+      source: "file",
+    });
   });
 
   it("gives each layer its own compaction threshold, else the general one", () => {

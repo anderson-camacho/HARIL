@@ -15,8 +15,7 @@
       "maxConcurrent": {
         "executors": 5,
         "auditors": 5,
-        "delegators": 5,
-        "writers": 1
+        "delegators": 5
       },
       "maxQueuedTasksPerThread": 100,
       "maxProposalsPerThread": 3,
@@ -270,15 +269,16 @@
     {
       "path": "delegation.limits.maxConcurrent.writers",
       "group": "limits",
-      "label": "Writers at once",
+      "label": "Writers at once (git projects)",
       "kind": {
         "type": "integer",
         "min": 1,
         "max": 20,
-        "unit": "count"
+        "unit": "count",
+        "inherits": "limits.maxConcurrent.executors"
       },
-      "value": 1,
-      "default": 1,
+      "value": 5,
+      "default": null,
       "source": "default",
       "effect": "new workflows"
     },

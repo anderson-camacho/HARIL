@@ -54,18 +54,18 @@ describe("the delegation section's defaults", () => {
     const { settings } = loaded;
     expect(settings.context).toEqual({ compactAtTokens: 300_000, perLayer: {} });
     expect(settings.limits.maxActiveChildren).toEqual({ orchestrator: 5, delegator: 4 });
-    expect(settings.limits.maxConcurrent).toEqual({
-      executors: 5,
-      auditors: 5,
-      delegators: 5,
-      writers: 1,
-    });
+    // Writers follow the executors unless the file sets them (phase F8: each writer has its own worktree).
+    expect(settings.limits.maxConcurrent).toEqual({ executors: 5, auditors: 5, delegators: 5 });
     expect(settings.autonomy.defaultStops).toEqual(["after_plan"]);
     expect(settings.research.folder).toBe("docs/investigacion");
     expect(settings.models.layers.executor).toEqual({ model: null, level: null });
     expect(settings.models.auditorDistinctFromExecutor).toBe(true);
-    // One set of numbers: the core's defaults are the section's defaults.
-    expect(delegationLimitsOf(settings.limits)).toEqual(DEFAULT_DELEGATION_LIMITS);
+    // One set of numbers: the core's defaults are the section's defaults, except the writers, which follow the
+    // executors (the core keeps 1 for a workflow without a snapshot of its own).
+    expect(delegationLimitsOf(settings.limits)).toEqual({
+      ...DEFAULT_DELEGATION_LIMITS,
+      maxConcurrent: { ...DEFAULT_DELEGATION_LIMITS.maxConcurrent, writers: 5 },
+    });
     expect({
       intervalMs: settings.watchdog.intervalMs,
       idleStrikesToClose: settings.watchdog.idleStrikesToClose,
@@ -77,6 +77,17 @@ describe("the delegation section's defaults", () => {
       ...policy
     } = settings.quota;
     expect(policy).toEqual(DEFAULT_QUOTA_POLICY);
+  });
+
+  it("let the writers follow the executors unless the file sets the writers", () => {
+    const follow = loadDelegationSettings(
+      hostWith({ delegation: { limits: { maxConcurrent: { executors: 3 } } } }),
+    );
+    expect(follow.ok && delegationLimitsOf(follow.settings.limits).maxConcurrent.writers).toBe(3);
+    const own = loadDelegationSettings(
+      hostWith({ delegation: { limits: { maxConcurrent: { executors: 3, writers: 1 } } } }),
+    );
+    expect(own.ok && delegationLimitsOf(own.settings.limits).maxConcurrent.writers).toBe(1);
   });
 
   it("are the same for a file without the section", () => {

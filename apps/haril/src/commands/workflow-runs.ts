@@ -1,5 +1,5 @@
 import { isStop, type Stop } from "@haril/contracts";
-import { type DelegationLimits, orderPreview, visibleText } from "@haril/core";
+import { orderPreview, visibleText } from "@haril/core";
 import type { Store, WorkflowRecord } from "@haril/core/ports";
 import { detectBaseBranch, inspectRepository } from "@haril/git";
 import { argsProblem, lastValue, parseArgs } from "../args.js";
@@ -97,18 +97,6 @@ async function writingBaseOf(
   return requested === null && configured !== null
     ? { writes: false, reason: base.detail, configured }
     : { writes: false, reason: base.detail };
-}
-
-// A writing workflow's limits (phase F8) on top of haril.json's (phase F7): with worktrees the writers no longer share
-// one checkout, so up to the executor limit write at once (3.9.4: the writer limit was 1 only until worktrees existed);
-// the surface locks still serialize writers whose files may overlap.
-function limitsFor(base: WritingBase, configured: DelegationLimits): DelegationLimits {
-  if (!base.writes) return configured;
-  const concurrent = configured.maxConcurrent;
-  return {
-    ...configured,
-    maxConcurrent: { ...concurrent, writers: Math.max(concurrent.writers, concurrent.executors) },
-  };
 }
 
 // The project root start would queue for: --project's, or the only one. Undefined when the store or the project is
@@ -227,7 +215,10 @@ export async function workflowStart(
       `delegation.git.baseBranch "${base.configured}": ${base.reason}; pass --base <branch> or --read-only, or change it with haril config set`,
     );
   }
-  const limits = limitsFor(base, delegationLimitsOf(settings.limits));
+  // P11: haril.json's limits. With worktrees the writers no longer share one checkout, so as many write at once as
+  // execute unless the file sets limits.maxConcurrent.writers (3.9.4: the writer limit was 1 only until worktrees
+  // existed); the surface locks still serialize writers whose files may overlap.
+  const limits = delegationLimitsOf(settings.limits);
   const idempotencyKey = explicitKey ?? `workflow-start-${storeAccess(host).ids.next()}`;
   return withProject(io, host, dataDir, slug, (store, project) => {
     // 4.5: the order that passes through the shell, its hash, length and redacted preview, never its text.

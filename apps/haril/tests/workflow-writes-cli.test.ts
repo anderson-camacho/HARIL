@@ -88,6 +88,31 @@ describe.skipIf(!HAS_GIT)("haril workflow start on a git project", () => {
     expect((args.limits as { maxConcurrent: { writers: number } }).maxConcurrent.writers).toBe(5);
   });
 
+  it("keeps the writers haril.json sets, and else lets as many write as the executors", async () => {
+    initRepo();
+    const configPath = join(sb.root, "haril.json");
+    sb = { ...sb, host: { ...sb.host, env: { ...sb.host.env, HARIL_CONFIG: configPath } } };
+    await init();
+    const writersOf = async (): Promise<number> => {
+      expect(await invoke(["status", "--json"])).toBe(0);
+      const status = parseJson<{ queuedCommands?: { args?: Record<string, unknown> }[] }>(h.out);
+      const last = status.queuedCommands?.[status.queuedCommands.length - 1]?.args ?? {};
+      return (last.limits as { maxConcurrent: { writers: number } }).maxConcurrent.writers;
+    };
+    writeFileSync(
+      configPath,
+      JSON.stringify({ delegation: { limits: { maxConcurrent: { executors: 4, writers: 2 } } } }),
+    );
+    expect(await invoke(["workflow", "start", "One", "--model", "fake/m", "--autonomous"])).toBe(0);
+    expect(await writersOf()).toBe(2);
+    writeFileSync(
+      configPath,
+      JSON.stringify({ delegation: { limits: { maxConcurrent: { executors: 3 } } } }),
+    );
+    expect(await invoke(["workflow", "start", "Two", "--model", "fake/m", "--autonomous"])).toBe(0);
+    expect(await writersOf()).toBe(3);
+  });
+
   it("stays read-only with --read-only, and refuses a --base that does not exist", async () => {
     initRepo();
     await init();

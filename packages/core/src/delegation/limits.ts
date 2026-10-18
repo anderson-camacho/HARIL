@@ -1,6 +1,7 @@
 // Limits of a delegation workflow (docs/modos-y-delegacion.md 3.6 and section 5). Every rule reads them from this
 // object, never from a literal, so haril.json can change them (delegation.limits, phase F7: its defaults are these
-// values, which a test checks); a workflow keeps a snapshot taken when it starts.
+// values, which a test checks, except the writers: haril.json lets as many write as execute unless it sets them, phase
+// F8); a workflow keeps a snapshot taken when it starts.
 // Reading L1: the 5 executors and 5 auditors are simultaneous and global per workflow, independent of each other;
 // the 5 delegators per orchestrator and 4 executors per delegator are live at once per thread, the rest queue.
 
