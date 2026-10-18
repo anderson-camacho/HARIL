@@ -1,13 +1,17 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { validateWorkflowSnapshot, type WorkflowSnapshot } from "@haril/contracts";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { run } from "../src/cli.js";
 import { type Harness, harness, makeSandbox, parseJson, type Sandbox } from "./helpers.js";
 
 // `haril workflow demo` (docs/modos-y-delegacion.md 9, the F1 stop): a simulated three-layer workflow driven by the
 // F1 Core rules on the real SQLite store. The limits are never exceeded, the rework never goes past 1 retry and 1
 // escalation, a fixed seed always prints the same tree, and the user's data directory is never touched.
+
+// Each demo runs a whole simulated workflow on a real SQLite store, and one test here runs five of them: on a slower CI
+// runner that passed the suite's 15 s. This file gives its tests and hooks a minute (a hang still fails it).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 
 interface DemoJson {
   readonly snapshot: WorkflowSnapshot;
