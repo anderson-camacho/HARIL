@@ -371,3 +371,86 @@ describe("the 0008 copy keeps the declaration order", () => {
     ).toThrow(/different checksum/);
   });
 });
+
+describe("the results a continuation receives from its settled dependencies (3.7)", () => {
+  it("names a child that failed, was blocked or completed, with the failure's code and message", () => {
+    const dataDir = makeTempDir();
+    const store = openStore({
+      dataDir,
+      clock: fixedClock(),
+      ids: sequentialIds(),
+      rules: testRules,
+    });
+    try {
+      const projectId = store.projects.register({
+        slug: "p",
+        name: "P",
+        rootPath: dataDir,
+      }).projectId;
+      const grant = store.runtime.acquire({
+        pid: 1,
+        nodeVersion: "v24.21.0",
+        sqliteVersion: store.info().sqliteVersion,
+        ttlMs: 60_000,
+      });
+      if (!grant.ok) throw new Error("lease not granted");
+      const epoch = grant.value.epoch;
+      let key = 0;
+      const add = (goal: string, dependsOn: string[] = []): string => {
+        store.commands.enqueue({
+          type: "task.create",
+          projectId,
+          args: { goal, dependsOn, agent: "fake:succeed", maxAttempts: 1, timeoutMs: 1000 },
+          idempotencyKey: `k-${++key}`,
+          requestHash: `h-${key}`,
+        });
+        store.commands.applyNext(epoch);
+        return store.tasks.list().find((task) => task.goal === goal)?.taskId as string;
+      };
+      const good = add("good");
+      const bad = add("bad");
+      const after = add("after bad", [bad]);
+      const continuation = add("continuation", [good, bad, after]);
+      const db = new DatabaseSync(join(dataDir, "haril.db"));
+      db.prepare("UPDATE task_dependencies SET kind = 'settled' WHERE task_id = ?").run(
+        continuation,
+      );
+      db.close();
+      for (const outcome of ["succeeded", "failed"] as const) {
+        const claimed = store.tasks.claimNext(epoch);
+        if (claimed === undefined) throw new Error("nothing claimable");
+        if (outcome === "succeeded") {
+          store.runs.complete({ runId: claimed.runId, outcome, result: { summary: "fine" } });
+        } else {
+          store.runs.complete({
+            runId: claimed.runId,
+            outcome,
+            error: { code: "fake.failed", message: "boom" },
+            endCause: "exit",
+          });
+        }
+      }
+      store.tasks.promote();
+      const claimed = store.tasks.claimNext(epoch);
+      expect(claimed?.taskId).toBe(continuation);
+      expect(claimed?.dependencyResults).toEqual([
+        { taskId: good, goal: "good", result: { summary: "fine" } },
+        {
+          taskId: bad,
+          goal: "bad",
+          result: null,
+          failure: { state: "failed", code: "fake.failed", message: "boom" },
+        },
+        {
+          taskId: after,
+          goal: "after bad",
+          result: null,
+          failure: { state: "blocked", code: "dep_failed", message: "a task it depends on failed" },
+        },
+      ]);
+    } finally {
+      store.close();
+      removeTempDir(dataDir);
+    }
+  });
+});

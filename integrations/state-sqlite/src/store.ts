@@ -1080,19 +1080,57 @@ export class SqliteStore implements Store {
   }
 
   // The results of a task's direct dependencies, in the order the dependencies were created, which for a plan is its
-  // dependency order (MC-T1). A ready task's dependencies all completed (promote), and a completed task always has a
-  // result (schema CHECK); the filter only keeps any other dependency out of the prompt.
+  // dependency order (MC-T1). A completed dependency gives its result (a completed task always has one: schema CHECK). A
+  // settled dependency (3.7) is also met by a task that will never complete: it is listed with how it ended, the newest
+  // run error of a failed task, so a continuation woken by a failed child knows which one and why. Any other
+  // dependency (one still running, which only a settled link could leave behind) stays out of the prompt.
   private dependencyResultsOf(taskId: string): DependencyResult[] {
     const rows = this.db
       .prepare(
-        "SELECT t.task_id AS taskId, t.goal AS goal, t.result AS result FROM task_dependencies d JOIN tasks t ON t.task_id = d.depends_on_task_id WHERE d.task_id = ? AND t.state = 'completed' AND t.result IS NOT NULL ORDER BY t.created_seq",
+        "SELECT t.task_id AS taskId, t.goal AS goal, t.state AS state, t.block_reason AS blockReason, t.result AS result, d.kind AS kind FROM task_dependencies d JOIN tasks t ON t.task_id = d.depends_on_task_id WHERE d.task_id = ? ORDER BY t.created_seq",
       )
-      .all(taskId) as unknown as Array<{ taskId: string; goal: string; result: string }>;
-    return rows.map((row) => ({
-      taskId: row.taskId,
-      goal: row.goal,
-      result: JSON.parse(row.result) as JsonObject,
-    }));
+      .all(taskId) as unknown as Array<{
+      taskId: string;
+      goal: string;
+      state: string;
+      blockReason: string | null;
+      result: string | null;
+      kind: string;
+    }>;
+    const newestError = this.db.prepare(
+      "SELECT error FROM runs WHERE task_id = ? AND status = 'failed' AND error IS NOT NULL ORDER BY attempt DESC, rowid DESC LIMIT 1",
+    );
+    const results: DependencyResult[] = [];
+    for (const row of rows) {
+      if (row.state === "completed" && row.result !== null) {
+        results.push({
+          taskId: row.taskId,
+          goal: row.goal,
+          result: JSON.parse(row.result) as JsonObject,
+        });
+        continue;
+      }
+      if (row.kind !== "settled" || !isDependencyFailure(row)) continue;
+      let failure: NonNullable<DependencyResult["failure"]>;
+      if (row.state === "failed") {
+        const stored = newestError.get(row.taskId) as { error: string } | undefined;
+        const error =
+          stored === undefined
+            ? {}
+            : (JSON.parse(stored.error) as { code?: unknown; message?: unknown });
+        failure = {
+          state: "failed",
+          code: typeof error.code === "string" ? error.code : "failed",
+          message: typeof error.message === "string" ? error.message : "the task failed",
+        };
+      } else if (row.state === "cancelled") {
+        failure = { state: "cancelled", code: "cancelled", message: "the task was cancelled" };
+      } else {
+        failure = { state: "blocked", code: "dep_failed", message: "a task it depends on failed" };
+      }
+      results.push({ taskId: row.taskId, goal: row.goal, result: null, failure });
+    }
+    return results;
   }
 
   // The newest attempt of a task that its acceptance checks rejected (MC-T2): the newest failed run whose error holds the

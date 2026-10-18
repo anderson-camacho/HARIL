@@ -327,12 +327,19 @@ export interface PromoteResult {
 }
 
 // The stored result of a task that a claimed task depends on (AGENTS.md 6.1, source 4; MC-T1). Another agent wrote it,
-// so the prompt that carries it labels it as data. `result` is the task's result as completed (never null: a task is
-// ready only once every dependency completed, and a completed task has a result).
+// so the prompt that carries it labels it as data. `result` is the task's result as completed. A dependency of kind
+// settled (3.7) is met by a task that will never complete too: then `result` is null and `failure` says how it ended
+// (failed with its newest error, cancelled, or blocked by an earlier failure), so a continuation knows which child
+// failed and why.
 export interface DependencyResult {
   readonly taskId: string;
   readonly goal: string;
-  readonly result: JsonObject;
+  readonly result: JsonObject | null;
+  readonly failure?: {
+    readonly state: "failed" | "cancelled" | "blocked";
+    readonly code: string;
+    readonly message: string;
+  };
 }
 
 // One acceptance check of a rejected attempt (MC-T2): the check as the task states it (kind, path, expected text), and
