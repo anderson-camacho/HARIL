@@ -21,3 +21,4 @@ export {
   type OpenAiCompatibleClient,
   type OpenAiCompatibleOptions,
 } from "./providers/openai-compatible.js";
+export { createCliProxyQuotaProvider } from "./quota/cliproxyapi-quota.js";
