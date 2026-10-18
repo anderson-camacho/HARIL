@@ -2,8 +2,10 @@
 
 ## Estado actual
 
-- **Versión actual:** 0.11.0.
-- **Estado:** **núcleo puro de la delegación en tres capas (0.11.0)**, sobre el modelo y nivel de razonamiento en la consola (0.10.0), la vista de orquestación con datos de ejemplo (0.9.0), la consola de HARIL sobre Pi (0.8.0), la demo en vivo de M4 (0.7.0) y el MVP cerrado en 0.6.0.
+- **Versión actual:** 0.12.0.
+- **Estado:** **datos de la delegación en tres capas, registro de consumo y de órdenes, y demostración simulada (0.12.0)**, sobre el núcleo puro de la delegación (0.11.0), el modelo y nivel de razonamiento en la consola (0.10.0), la vista de orquestación con datos de ejemplo (0.9.0), la consola de HARIL sobre Pi (0.8.0), la demo en vivo de M4 (0.7.0) y el MVP cerrado en 0.6.0.
+  - `haril workflow demo` corre un árbol simulado de orquestador, delegadores, ejecutores y auditores con las reglas del Core y el almacén real, sobre un almacén temporal, y muestra el árbol, los totales y los picos de agentes vivos frente a cada límite. Las migraciones `0007` y `0008` guardan workflows, propuestas, veredictos y dependencias `settled`.
+  - Cada orden y cada intento quedan en un registro de solo añadir con cadena de hashes: `haril usage log|summary|verify|export` lo lee, filtra por tiempo y tipo, y detecta una fila alterada a mano.
   - El Core valida las propuestas de los agentes (límites por hilo y por workflow, profundidad, modelos, paradas), decide qué tareas arrancan sin pasar ningún límite ni solapar superficies de escritura, elige el modelo de cada agente (el fijado por el usuario nunca se sustituye; reglas de cuota 80/80/20 y «sin dato»), acota los reprocesos a 1 relanzamiento y 1 escalada y da el veredicto del vigilante de 15 minutos. Son funciones puras con sus contratos de herramientas; todavía no hay runtime que las use.
   - Cada cambio entregado sube la versión: `scripts/bump-version.mjs` la sube en todos los archivos y `npm run check` (también en la CI) falla si falta la subida o la entrada del CHANGELOG.
   - La barra y las cabeceras muestran siempre el modelo y su nivel; un clic los cambia. Cada modelo de CLIProxyAPI ofrece solo los niveles que publica en su lista `?client_version=`, y el nivel llega al proveedor como `reasoning_effort`. El nivel se recuerda por modelo durante la sesión.
@@ -21,6 +23,7 @@
   - la CI pública corre en Windows y Linux en cada PR;
   - el carril real (Pi 1.2.0 con un modelo real a través de CLIProxyAPI) pasa en el equipo de referencia, y la demo en vivo de la 0.7.0 se ejecutó cuatro veces con `cliproxy/gemini-3-flash`;
   - la consola tiene pruebas automáticas (la vista de orquestación, el modelo y el nivel), pero todavía no se ha probado en una terminal real;
+  - la demostración de la delegación tiene pruebas automáticas con varias semillas y tamaños (límites, reprocesos, determinismo y cadena de hashes); no llama a ningún modelo;
   - el nivel elegido llega como `reasoning_effort` por el camino real de Pi 1.2.0, comprobado contra un servidor falso y contra el CLIProxyAPI local.
 - **Interfaz:** `haril` sin subcomando (o `haril console`) abre Pi, el fijado por HARIL, en la carpeta actual con la extensión de HARIL: todos los comandos de Pi (`/login`, `/model`, el nivel de razonamiento), una barra amarilla con proyecto, modelo y nivel (con clic para cambiarlos), contexto, coste, planes por aprobar y runtime, áreas navegables con clic, la vista de orquestación (`/orchestration demo`, `/orchestration view` o `Alt+O`) y `/goal`, `/plans`, `/plan`, `/approve`, `/deny`, `/tasks` y los demás comandos de HARIL. Los modelos de `haril.json` aparecen en `/model`. `haril shell` abre la interfaz anterior, sin la caja Taxis.
 - **Pendiente (M4):**
@@ -36,4 +39,4 @@ Las versiones 0.x son preliminares: pueden cambiar sin compatibilidad hacia atr�
 
 Más reciente primero. Cada carpeta contiene el archivo de cambios de su versión mayor, con las versiones menores y de parche, la más nueva arriba.
 
-- [v0](v0/CHANGELOG.md): versiones 0.1.0 a 0.11.0.
+- [v0](v0/CHANGELOG.md): versiones 0.1.0 a 0.12.0.

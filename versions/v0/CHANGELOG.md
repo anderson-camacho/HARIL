@@ -4,6 +4,80 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.12.0
+
+- **Fecha:** 2026-10-18
+- **Estado:** **Los datos de la delegación en tres capas, el registro de consumo y de órdenes, y una demostración simulada.** `haril workflow demo` corre un árbol de orquestador, delegadores, ejecutores y auditores con agentes simulados, guiado por las reglas puras de la 0.11.0 y guardado en el almacén SQLite real, y muestra el árbol y los totales. Cada orden y cada intento quedan en un registro de solo añadir con cadena de hashes que `haril usage verify` comprueba. Todavía no hay runtime concurrente ni agentes reales en la delegación (fase F1b de la delegación, ADR-0021).
+
+### Añadido
+
+- **Migraciones:**
+  - `0007_delegation`: las tablas `workflows`, `delegations`, `audits`, `model_cooldowns`, `quota_samples`, `orders` y `usage_log`, la vista `model_stats` (por modelo y clase de dificultad, sobre `usage_log` y `audits`, sin las filas simuladas) y las columnas de delegación de `tasks` (`workflow_id`, `layer`, `role`, `thread_id`, `difficulty`, `difficulty_reason`, `model_pinned`, `next_check_at`, `local_id`, `delegation_id`). `delegations`, `audits`, `orders` y `usage_log` son de solo añadir;
+  - `0008_settled_deps`: reconstruye `task_dependencies` para admitir el tipo `settled`. Una dependencia `settled` se cumple cuando su tarea terminó bien, falló, se canceló o quedó bloqueada por un fallo anterior, así que una continuación corre aunque un hijo haya fallado.
+- **Almacén** (`store.workflows`):
+  - los comandos `workflow.start` (el workflow y el primer turno del orquestador, con su modelo fijado) y `workflow.continue` (solo el humano saca un workflow de `awaiting_human` y puede quitar paradas);
+  - `applyTurns`, el `delegation.apply` interno bajo la época activa: crea en una transacción los turnos de una propuesta, sus dependencias y la propuesta misma, sin duplicarla si se repite con el mismo hash. Los dependientes de un hilo pasan a esperar su último turno;
+  - `recordAudit` con la acción del reproceso, `setState` y la próxima evaluación del vigilante de cada turno;
+  - eventos `workflow.created|awaiting_human|continued|completed|failed|stopped`, `delegation.applied`, `audit.verdict|retry|escalated`; la demostración añade `delegation.rejected`, `watchdog.checked`, `watchdog.closed` y `model.substituted`.
+- **Registro de consumo y de órdenes** (`store.usageLog`, R-L1):
+  - cada orden guarda su hash, su longitud y una vista previa de 200 caracteres con censura básica de claves y tokens (`orderPreview` en el Core), nunca el texto completo;
+  - cada intento guarda modelo pedido y servido, dificultad, tokens (nulos si no se reportaron, nunca 0), duración y horas;
+  - una cadena de hashes por tabla, con su cabeza en `meta`: `verify()` nombra la primera fila cambiada o borrada a mano, y también detecta las últimas filas borradas;
+  - escribir no necesita el arrendamiento del runtime (P14).
+- **CLI:**
+  - `haril usage log`: una línea por fila, como `haril events`, filtrable por `--since` o `--from`/`--to`, `--kind order|chat|agent_run`, `--model`, `--workflow`, `--layer`, `--mode`, `--difficulty` y `--limit`, con `--json`;
+  - `haril usage summary --by day|model|layer|difficulty|workflow|mode|role`: tokens, tokens no reportados, tiempo, reintentos y veredictos;
+  - `haril usage verify`: recorre las dos cadenas y sale con 1 si una fila fue alterada;
+  - `haril usage export --format jsonl|csv`, con `--table`, filtros de tiempo, `--before` y `--out` (no sobrescribe), hashes incluidos;
+  - `haril workflow demo [--seed] [--delegators] [--executors] [--stop-at] [--start] [--data-dir] [--json]`: el árbol de tres capas simulado. Usa un almacén temporal que borra al terminar; `--data-dir` guarda las filas en otra carpeta, nunca en la predeterminada por su cuenta. Con la hora de inicio fija y la misma semilla imprime siempre lo mismo. `--json` da un `WorkflowSnapshot v1`, los picos de agentes vivos frente a cada límite y la verificación de la cadena.
+- **Agentes simulados** `fake:orchestrate`, `fake:delegate`, `fake:execute` y `fake:audit` (`packages/core/testing`): funciones deterministas de su turno y una semilla que hacen las llamadas de un agente real (`haril_delegate`, `haril_assign`, `haril_report`, `haril_verdict`, `haril_request_audit`, `haril_abort`), todas válidas según los contratos. Un guion sembrado, escrito como texto visible, hace que un paso se rechace una vez, otro dos veces (escalada y reformulación) y otro se quede sin progreso; el orquestador propone además un modelo retirado en su primera llamada para que se vea el rechazo del Core.
+
+### Cambiado
+
+- `scripts/check-version.mjs`: el diff ignora los renombrados (un archivo público movido a `docs/` u `odd/` cuenta como cambio público), una subida debe dejar la entrada anterior de arriba del CHANGELOG debajo de la nueva (renombrarla no cuenta), en la CI falta de base es un error y `HARIL_VERSION_CHECK=consistency` comprueba solo la coherencia. La CI usa la comprobación completa en los PR y solo la coherencia en los push, para que un push de trabajo en curso no falle antes de la subida.
+- `scripts/bump-version.mjs` escribe todo o nada: calcula cada archivo, lo escribe en un temporal junto a su destino y los renombra al final; un fallo antes de renombrar no deja nada a medias.
+- `knip.json`: `state-sqlite` ya importa valores de `@haril/contracts`, así que deja de ignorarse esa dependencia.
+
+### Corregido
+
+Hallazgos del verificador independiente sobre la 0.11.0, cada uno con su prueba:
+
+- **Cuota:** los bordes siguen las palabras del usuario: exactamente 80 % usado y exactamente 20 % restante todavía se permiten; solo más del 80 % cambia o detiene un modelo y solo menos del 20 % rechaza una tarea grande. Un porcentaje `NaN`, negativo o mayor que 100 se trata como «sin dato», nunca como correcto.
+- **Modelo fijado:** un modelo vacío o en blanco para la tarea, o un `null` o vacío para la capa, no fija nada, igual en `chooseModel` y en `checkDelegation`.
+- **Vigilante:** un hilo cuyos hijos esperan capacidad (límites de rol, de escritores, de superficie o del workflow) cuenta como vivo y se vuelve a evaluar en 15 minutos, nunca se cierra. Lo residual se cancela siempre de inmediato: la opción `closeResidualImmediately` desaparece; `idleStrikesToClose` sigue configurable.
+- **Superficies:** un glob tiene como mucho 512 caracteres, una lista como mucho 64, y se rechazan las rutas absolutas y los segmentos `..`. `globsMayOverlap` ya no es recursivo, responde «se solapan» por encima del límite y nunca lanza; una ruta literal puede ser una carpeta (`src` se solapa con `src/a.ts`) y las dos partes se comparan en NFC.
+
+### Valores provisionales
+
+Tomados de la propuesta de la especificación (sección 10.3) o decididos para esta fase:
+
+- P1: `workflow.start` sin autonomía para en `after_plan`; la demostración es autónoma salvo `--stop-at`. P2: el presupuesto del workflow será un presupuesto de tarea sobre la tarea raíz, así que `0008` no reconstruye `budgets`. P3: 1 relanzamiento y 1 escalada. P14: el registro se escribe directo, sin runtime. P15: vista previa de 200 caracteres con censura básica. P16: vigilante cada 15 minutos que cierra tras 1 evaluación sin progreso. L1: los auditores no cuentan como hijos vivos.
+- Cada turno corre con `maxAttempts` 1: un relanzamiento es un turno nuevo del mismo hilo, así que solo la máquina de reproceso decide los reintentos.
+- Una reformulación es una asignación del delegador con el `localId` de un hilo escalado: continúa ese hilo.
+- Un hermano que depende de otro espera a que su predecesor termine de ejecutarse, no a que su auditor lo apruebe (los turnos rechazados se relanzan; si F2 quiere esperar la aprobación, lo decide allí).
+- Un intento cerrado por el vigilante deja sus tokens nulos (no reportados).
+- En la fila de consumo de un intento de ejecutor, `retries` vale 1 si el intento es un relanzamiento y 0 si no, así que `haril usage summary` suma relanzamientos.
+- En la vista, `modelSource` distingue `pinned` de `table`; el modelo propuesto por el padre todavía no se distingue.
+
+### Desvíos y aplazamientos
+
+- `runs` ya tenía `pid` y `pid_started_at` desde la `0001`: la `0007` no añade columnas a `runs`.
+- Columnas que la especificación no listaba: `workflows.simulated` y `usage_log.simulated` (las filas de la demostración se distinguen y `model_stats` las excluye), `tasks.local_id` y `tasks.delegation_id`, `audits.rework_action`, y `seq` e `idempotency_key` en `orders` y `usage_log`.
+- Los ids del registro no tienen claves foráneas (un registro nunca rechaza una fila por una referencia), salvo `usage_log.order_id`.
+- `haril usage log --kind order` muestra solo las órdenes (la especificación solo listaba `chat` y `agent_run`).
+- La sección 6 no nombra el comando de demostración: es `haril workflow demo`, junto a los `workflow start|list|show` de la fase F2.
+- Aplazado: el bucle concurrente, el puente y `haril workflow start|list|show` con agentes reales (F2); `workflow.stop`, `runtime.resume`, `stop --now`, `tasks.cancel` y `runs.cancel(user_stop)` (F3); `haril usage record` y la captura del chat (F4); escribir en `model_cooldowns` y `quota_samples` (F6).
+
+### Verificación
+
+- Pruebas primero en cada unidad: migraciones (base nueva y desde el esquema 6), cada operación del almacén, la cadena de hashes (una fila alterada se detecta en su posición, una borrada en la siguiente, las últimas por la cabeza), la vista previa, la CLI (filtros de tiempo y de tipo), los agentes simulados y la demostración (nunca pasa un límite, nunca más de 1 reintento y 1 escalada, mismo resultado con la misma semilla). Se vio el rojo antes del verde; en la demostración y el registro, las pruebas se pusieron en rojo quitando el comando o con una fachada vacía.
+- Las correcciones de la 0.11.0 tienen cada una su prueba, primero en rojo.
+- 121 pruebas nuevas: 114 de Vitest (migraciones, almacén, registro, CLI, agentes simulados, demostración y correcciones de la 0.11.0) y 7 de los scripts de versión.
+- La demostración se probó con cinco combinaciones de semilla y tamaño (de 2 a 30 ejecutores): todas terminan, ninguna pasa un límite y la cadena de hashes queda íntegra; con 5 delegadores de 6 ejecutores alcanza exactamente 5 ejecutores vivos y 1 escritor.
+- Local: `pnpm run check` 0; `pnpm test` con 1979 pruebas de Vitest (1 omitida, solo POSIX) y 119 de `node:test`; `npm run build` 0, `haril --version` imprime `haril 0.12.0` y `haril workflow demo --data-dir <carpeta temporal>` termina el workflow (42 agentes, 3 relanzamientos, 1 escalada, 1 cierre por inactividad) con `haril usage verify` en 0.
+
+---
+
 ## 0.11.0
 
 - **Fecha:** 2026-10-18

@@ -6,7 +6,7 @@ Una consola, múltiples inteligencias, un solo propósito.
 HARIL es una plataforma **local** de orquestación de agentes de IA, desarrollo de software y automatización, con un solo comando: `haril`.
 Un núcleo propio controla la ejecución; Pi, Engram, Herdr y los proveedores de modelos quedan detrás de puertos reemplazables.
 
-> **Estado real (2026-10-18): versión 0.11.0, `haril` abre Pi con la vista de orquestación y el modelo y su nivel de razonamiento siempre a la vista, y el Core ya tiene el núcleo puro de la delegación en tres capas.** El MVP se cerró en 0.6.0: sus 15 criterios de aceptación se cumplen o tienen un desvío explícito y justificado (ver `versions/`). En 0.7.0 se escribía un objetivo, se revisaba y aprobaba el plan que propone el agente `planner` y se seguían sus tareas en vivo; está probado con un modelo real a través de CLIProxyAPI (ver [Demo en vivo](#demo-en-vivo)). En 0.8.0, `haril` en una terminal abre Pi, el que instala HARIL, con una extensión de HARIL: todo Pi (`/login`, `/model`, el nivel de razonamiento), una barra amarilla y los comandos `/goal`, `/plans`, `/approve` y `/tasks` para pedir un plan, aprobarlo y seguir sus tareas (ver [Consola de HARIL sobre Pi](#m4-consola-de-haril-sobre-pi-haril)); la interfaz anterior sigue en `haril shell`. En 0.9.0, la consola tiene paneles con clic y el módulo `ORCHESTRATION` muestra la vista de workflow aprobada, por ahora solo con datos de ejemplo (`/orchestration demo`), porque el motor de delegación aún no existe. En 0.10.0, la barra y las cabeceras muestran siempre el modelo y su nivel de razonamiento, un clic los cambia y cada modelo de CLIProxyAPI ofrece solo los niveles que publica. En 0.11.0, el Core valida lo que proponen los agentes, decide qué tareas arrancan sin pasar ningún límite, elige el modelo de cada agente según quién lo fijó, la tabla de dificultad y la cuota, acota los reprocesos y da el veredicto del vigilante de 15 minutos; son funciones puras que todavía no usa ningún runtime. Desde esta versión, `npm run check` y la CI fallan si un cambio entregado no sube la versión (`scripts/bump-version.mjs`). La vista de orquestación y el selector de modelo y nivel están probados con pruebas automáticas, pero todavía no en una terminal real. La CI pública corre en Windows y Linux en cada PR, con la demo hermética incluida.
+> **Estado real (2026-10-18): versión 0.12.0, `haril` abre Pi con la vista de orquestación y el modelo y su nivel de razonamiento siempre a la vista, el Core tiene el núcleo puro de la delegación en tres capas y `haril workflow demo` corre un árbol de tres capas simulado sobre el almacén real.** El MVP se cerró en 0.6.0: sus 15 criterios de aceptación se cumplen o tienen un desvío explícito y justificado (ver `versions/`). En 0.7.0 se escribía un objetivo, se revisaba y aprobaba el plan que propone el agente `planner` y se seguían sus tareas en vivo; está probado con un modelo real a través de CLIProxyAPI (ver [Demo en vivo](#demo-en-vivo)). En 0.8.0, `haril` en una terminal abre Pi, el que instala HARIL, con una extensión de HARIL: todo Pi (`/login`, `/model`, el nivel de razonamiento), una barra amarilla y los comandos `/goal`, `/plans`, `/approve` y `/tasks` para pedir un plan, aprobarlo y seguir sus tareas (ver [Consola de HARIL sobre Pi](#m4-consola-de-haril-sobre-pi-haril)); la interfaz anterior sigue en `haril shell`. En 0.9.0, la consola tiene paneles con clic y el módulo `ORCHESTRATION` muestra la vista de workflow aprobada, por ahora solo con datos de ejemplo (`/orchestration demo`), porque el motor de delegación aún no existe. En 0.10.0, la barra y las cabeceras muestran siempre el modelo y su nivel de razonamiento, un clic los cambia y cada modelo de CLIProxyAPI ofrece solo los niveles que publica. En 0.11.0, el Core valida lo que proponen los agentes, decide qué tareas arrancan sin pasar ningún límite, elige el modelo de cada agente según quién lo fijó, la tabla de dificultad y la cuota, acota los reprocesos y da el veredicto del vigilante de 15 minutos; son funciones puras que todavía no usa ningún runtime. Desde esta versión, `npm run check` y la CI fallan si un cambio entregado no sube la versión (`scripts/bump-version.mjs`). En 0.12.0, el almacén guarda workflows, propuestas, veredictos y continuaciones que corren aunque un hijo falle; `haril workflow demo` muestra un árbol simulado de orquestador, delegadores, ejecutores y auditores sin pasar ningún límite, y cada orden y cada intento quedan en un registro con cadena de hashes que `haril usage` lee y verifica (ver [Delegación simulada y registro de consumo](#delegación-simulada-y-registro-de-consumo)). La vista de orquestación y el selector de modelo y nivel están probados con pruebas automáticas, pero todavía no en una terminal real. La CI pública corre en Windows y Linux en cada PR, con la demo hermética incluida.
 > **Carril real verificado (2026-10-16):** `npm run e2e:real` pasa en esta máquina con Pi 1.2.0 real y CLIProxyAPI (`cliproxy/gemini-3-flash`): una tarea `analyst` lee `README.md` con la herramienta del puente, responde el código pedido, HARIL lo verifica (`verified: true`) y el libro registra los tokens reales. Ollama no viene por defecto (demasiado pesado para el equipo de referencia). Bitácora: `odd/tasks/haril-phase4-real-lane.md`; matriz de criterios: `odd/tasks/haril-phase4-m3.md`.
 
 > **Nota sobre la documentación.** La documentación de diseño (`docs/`) se publicará al final del proyecto. Hasta entonces, los enlaces a `docs/` y a `odd/` de este README no están disponibles en el repositorio público.
@@ -103,6 +103,27 @@ El `analyst` solo lee: lee archivos del proyecto y responde en el texto de su re
 
 Si una comprobación falla y quedan intentos, la tarea vuelve a `ready` por `verify_failed` (como mucho dos reintentos por verificación, dentro de `--max-attempts`; un fallo de otro tipo sigue siendo `transient`). Los intentos siguientes de un agente real reciben en el prompt, después de los resultados de sus dependencias, el último intento rechazado por sus comprobaciones (aunque después haya fallado otro por otro motivo, por ejemplo por tiempo): su número, las comprobaciones que falló y la salida que rechazaron, marcada como escrita por un agente (datos, no instrucciones), con cada línea empezando por `| ` y la misma regla de caracteres de control e invisibles que la terminal (`?`). Esta sección usa como mucho la mitad del presupuesto de las secciones de datos (un octavo de los tokens de la tarea por llamada), con una sola excepción: su encabezado y la primera comprobación fallida salen siempre, con las notas que la cierran. Las demás comprobaciones entran mientras caben, con una nota para las que quedan fuera; la salida rechazada recibe lo que sobra (como mucho 8000 caracteres, con una nota si se corta) y los resultados de las dependencias, el resto del presupuesto. Cuando se agotan los reintentos por verificación, `run`, `start` y `task show` lo dicen (`verification_exhausted (2 verification retries used)`). `task show` muestra la salida rechazada del último intento fallido de una tarea fallida o pendiente (`rejected output: ...`; en `--json`, `error.output`); en una tarea completada, el fallo de un intento anterior es solo historia: una línea `earlier attempt <n> failed: ...` y, en `--json`, `earlierFailure` (con `error` a `null`). `haril task add --help` describe cada opción.
 
+### Delegación simulada y registro de consumo
+
+La delegación en tres capas todavía no tiene runtime ni agentes reales; su demostración usa agentes simulados y no llama a ningún modelo. Por defecto trabaja en un almacén temporal que borra al terminar, así que no toca la raíz de datos:
+
+| Comando | Qué hace |
+|---|---|
+| `haril workflow demo` | Corre un árbol simulado (orquestador, delegadores, ejecutores y un auditor por ejecutor) con las reglas del Core y muestra el árbol, los totales y los picos de agentes vivos frente a cada límite. `--seed`, `--delegators` y `--executors` cambian el escenario; con la misma semilla la salida es siempre la misma. `--stop-at after_plan` lo deja esperando al humano, `--json` da un `WorkflowSnapshot v1` y `--data-dir <carpeta>` guarda las filas allí |
+| `haril usage log` | Una línea por orden o por intento, como `haril events`: `--since 2h` o `--from`/`--to`, `--kind order\|chat\|agent_run`, `--model`, `--workflow`, `--layer`, `--mode`, `--difficulty`, `--limit`, `--json` |
+| `haril usage summary` | Tokens, tokens no reportados, tiempo, reintentos y veredictos por día, modelo, capa, dificultad, workflow, modo o rol (`--by`) |
+| `haril usage verify` | Recorre la cadena de hashes de las órdenes y del consumo; sale con 1 y nombra la primera fila si alguien la alteró o la borró a mano |
+| `haril usage export --format jsonl\|csv` | Exporta el registro con sus hashes (`--table usage\|orders`, filtros de tiempo, `--before`, `--out <archivo>`, que no sobrescribe) |
+
+```powershell
+.\bin\haril.ps1 workflow demo
+.\bin\haril.ps1 workflow demo --data-dir "$env:TEMP\haril-demo\delegacion"
+.\bin\haril.ps1 usage log --data-dir "$env:TEMP\haril-demo\delegacion" --since 2h
+.\bin\haril.ps1 usage verify --data-dir "$env:TEMP\haril-demo\delegacion"
+```
+
+Las órdenes guardan su hash, su longitud y una vista previa de 200 caracteres con las claves y los tokens censurados, nunca el texto completo. Los tokens que un proveedor no reporta quedan vacíos, no en 0.
+
 ### Instalar HARIL en tu usuario
 
 Un solo comando desde la raíz del repositorio:
@@ -179,7 +200,7 @@ Calidad del repositorio:
 | `npm run e2e:demo` | Compila y recorre la demo en vivo de punta a punta, hermética y en menos de un minuto (`scripts/e2e-demo.mjs`): una meta, el plan que propone el planificador, la aprobación y las tareas completadas, en el carril simulado (`fake:plan`) y en el carril real con el Pi falso y un servidor OpenAI falso en loopback (las tareas `analyst` heredan el modelo del planificador); además, un plan denegado no crea tareas |
 | `npm run e2e:real` | Carril real opt-in de M2 (`scripts/e2e-real.mjs`): una tarea `analyst` contra el gateway real; sale con `SKIP real lane` si falta el runtime, la clave o el modelo |
 
-El CI (`.github/workflows/ci.yml`) ejecuta lo mismo en `windows-latest` y `ubuntu-latest`.
+El CI (`.github/workflows/ci.yml`) ejecuta lo mismo en `windows-latest` y `ubuntu-latest`. La comprobación de versión es completa en los PR y, en los push, solo mira que las versiones y el CHANGELOG coincidan (`HARIL_VERSION_CHECK=consistency`).
 
 ### M3: proveedores en `config/haril.json`
 
@@ -498,7 +519,7 @@ Los dossiers de `docs/research/` se leen solo bajo demanda, cuando un documento 
 
 ## Versiones
 
-Versión actual: **0.11.0**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
+Versión actual: **0.12.0**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
 
 ## Licencia
 
