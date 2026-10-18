@@ -85,7 +85,9 @@ export function installFakeCli(): FakeCli {
       put("HARIL_CLI", saved.cli);
       put("FAKE_HARIL_LOG", saved.log);
       put("FAKE_HARIL_TABLE", saved.table);
-      rmSync(dir, { recursive: true, force: true });
+      // A late console call (status timer, chat log) may still be appending to calls.jsonl; retry instead of
+      // failing the test on ENOTEMPTY or EBUSY while that process finishes.
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
     },
   };
 }
