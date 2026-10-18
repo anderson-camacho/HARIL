@@ -4,6 +4,69 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.16.0
+
+- **Fecha:** 2026-10-18
+- **Estado:** **Los cuatro modos de la consola, el botón `■ STOP ALL`, la tarjeta `/delegate` y el registro del chat.** La consola tiene acción, consulta de solo lectura, plan y delegación, siempre a la vista en la barra; consulta no puede cambiar nada, muestra qué hizo y cómo y guarda una investigación en Markdown si se la pides; delegación arranca un workflow con agentes reales desde una tarjeta que confirmas; `■ STOP ALL` corta el turno del chat y para a todos los agentes sin pedir confirmación; cada orden y cada respuesta del modelo en la consola quedan en el registro de consumo (fase F4 de la delegación, ADR-0021). Probado con pruebas automáticas y con la extensión compilada en una sesión real de Pi 1.2.0; todavía no en una terminal real.
+
+### Añadido
+
+- **Cuatro modos en la consola:** `ACTION` (Pi como siempre), `CONSULT`, `PLAN` y `DELEGATION`. La barra muestra `MODE: <modo>` y un clic abre el selector; `/mode <modo>` (también los nombres en español y una letra) y `Alt+M`, que pasa al siguiente. El modo queda en la sesión (`appendEntry` de tipo `haril-mode`) y vuelve al reanudarla; al salir de un modo de solo lectura vuelven las herramientas que había antes.
+- **Consulta con defensa en profundidad:** `setActiveTools` deja `read`, `grep`, `find`, `ls` y `haril_save_research` (ni `bash`, ni `powershell`, ni `edit`, ni `write`); una guardia `tool_call` con denegación por defecto bloquea cualquier otra herramienta, de Pi, de otra extensión o de MCP, aunque alguien la reactive (si la guardia falla, Pi bloquea); `before_agent_start` declara el modo al modelo en cada turno; los comandos `!` del usuario no se ejecutan; `/init`, `/goal`, `/approve`, `/deny`, `/delegate` y `/continue` se rechazan antes de llamar a la CLI, y las acciones de la consola que cambian estado (registrar la carpeta, revisar aprobaciones, encolar un objetivo, ejecutar o iniciar el runtime, alternar herramientas) se rechazan y desaparecen del menú `/haril`. Las paradas siguen disponibles. `PLAN` usa la misma guardia, y `DELEGATION` también, sin la herramienta de investigación.
+- **`haril_save_research`:** la única escritura de consulta y plan, inactiva en los demás modos y rechazada fuera de ellos. El modelo da un título y el contenido en Markdown, nunca una ruta: el archivo va a `docs/investigacion/<fecha>-<título>.md` del proyecto (o de la carpeta), solo `.md`, nunca sobrescribe (añade `-2`, `-3`… y escribe con `wx`), admite hasta 200 KB y rechaza un título con `/`, `\`, `..`, una unidad o caracteres de control, y una carpeta que por un enlace salga del proyecto.
+- **Traza de la consulta:** tras cada turno en consulta queda en el chat (una entrada de sesión que el modelo no ve) cada herramienta, sobre qué actuó y su resultado en corto (`ok · 120 lines`, `blocked · …`, el error), las bloqueadas, las herramientas usadas y cuántas veces, los archivos leídos, las búsquedas, los tokens, el tiempo y la ruta de la investigación guardada. Nunca copia lo que se leyó o se quiso escribir.
+- **Plan:** el modelo arma un plan con la conversación; el plan queda como entrada de sesión (`haril-plan`) y `/goal` sin texto se lo pasa al `planner` con la aprobación de siempre.
+- **Tarjeta `/delegate`:** objetivo, modelo del orquestador (el de HARIL elegido; `M` elige otro), autonomía y paradas de esta ejecución, límites y cuota tal como están («not available yet»). Las paradas salen de las palabras del usuario con el vocabulario cerrado y unas frases en inglés y en español, sin pasar por un modelo; sin nada dicho, `after_plan`. Se marcan con `Espacio` o con un clic, `A` alterna autónomo, `Enter` arranca y `Esc` cancela. Al confirmar ejecuta `haril workflow start --goal … --model … --agent orchestrator` con `--stop-at` o `--autonomous`, arranca el runtime si no hay uno y abre `ORCHESTRATION`. Sin objetivo, `/delegate` toma el último mensaje de la conversación. En `DELEGATION`, lo que se escribe abre la tarjeta en vez de ir al modelo, y mientras un workflow del proyecto corre o espera se rechaza con una pista (P5).
+- **`/continue [id] [parada…]`:** libera la parada en que espera un workflow (`haril workflow continue`) y quita las paradas que se nombren; sin id, el único que espera o un selector.
+- **Botón `■ STOP ALL`** al final de la barra, en todos los modos, que nunca cede su sitio, y `Alt+X`. Sin confirmación: corta el turno del chat (`ctx.abort()`) y después ejecuta `haril stop --now --json`, y dice lo que informa la CLI: tareas canceladas y workflows detenidos, un runtime que no contestó a tiempo, procesos que siguen vivos o una orden que falló. La consola no mata procesos: lo hace la CLI.
+- **Registro del chat:** cada mensaje y cada comando de HARIL escritos en la consola son una orden (con el modo en que estaba), y cada respuesta del modelo una fila de consumo con proveedor, modelo pedido y servido, tokens (nulos si no se reportan), duración y resultado, unida a su orden. Van de una en una por `haril usage record --stdin`; si una falla se reintenta una vez y después cuenta en la barra (`log ✗ n`) y en los detalles de `EVERYWHERE`, sin frenar el chat.
+- **`haril usage record --stdin [--project <slug>] [--json]`:** añade una orden o una fila de consumo del chat leída como JSON de la entrada estándar, nunca de la línea de comandos. Comprueba cada campo (campos cerrados, vocabularios del registro, tokens enteros o nulos, identificadores ASCII sin espacios que la censura deja intactos) y la orden guarda su hash, su longitud y una vista previa censurada de 200 caracteres. Escribe sin arrendamiento del runtime (P14).
+- `pi-types.ts` declara lo que usa la consola de Pi 1.2.0: `tool_call` con bloqueo, `before_agent_start`, `input`, `user_bash`, `registerTool`, `registerEntryRenderer`, `appendEntry`, `abort`, `isIdle`, la rama y el id de la sesión.
+
+### Cambiado
+
+- El «■ Stop all» de `ORCHESTRATION` fuera de la demostración es ahora la parada de emergencia, sin confirmar, en lugar de la parada ordenada y confirmada del runtime compartido; la demostración sigue simulándola. «Stop shared runtime» de `AUTOMATION` no cambia.
+- La barra muestra el modo a la izquierda y el botón a la derecha; la nota del registro es lo primero que cede en una terminal estrecha.
+- La consola puede pasar texto por la entrada estándar de la CLI (`runHaril` con `input`).
+
+### Corregido
+
+- Nada respecto a 0.15.0.
+
+### Valores provisionales
+
+Tomados de la propuesta de la especificación (sección 10.3) o decididos para esta fase:
+
+- P1: sin paradas dichas, la tarjeta sale con `after_plan`.
+- P5: el texto escrito en delegación mientras un workflow corre o espera se rechaza con una pista.
+- P14: `haril usage record` escribe sin runtime vivo, la única escritura fuera del runtime.
+- P15: la orden guarda una vista previa de 200 caracteres con censura básica, nunca el texto.
+- P18: las investigaciones van a `docs/investigacion/`, todavía sin opción para cambiarla (llega con la configuración de F7).
+- P20: «Parar todo» sin confirmación, con `Alt+X`; `Alt+M` cambia de modo. Los dos están libres en las teclas de Pi 1.2.0, también en Windows.
+- P22: los textos de la interfaz en inglés (`ACTION`, `CONSULT`, `PLAN`, `DELEGATION`).
+- La tarjeta lee las paradas con un analizador determinista del vocabulario cerrado y unas frases, en lugar del modelo del chat que propone la sección 3.13: la decisión de autonomía no queda en manos de algo que interpreta una frase, y la tarjeta sigue siendo la única confirmación.
+- En delegación el chat también es de solo lectura (sin la herramienta de investigación): el trabajo lo hacen los agentes del workflow.
+- Plan no rechaza comandos: `/goal` es la forma de pasar su plan al `planner`.
+- Una respuesta sin ningún token reportado se registra con tokens nulos; el coste solo si Pi lo da mayor que cero.
+
+### Aplazado
+
+- F5b: datos reales en la vista `ORCHESTRATION`. F6: cuota (la tarjeta dice «not available yet»). F7: la sección de delegación en `TOOLS`, la carpeta de investigaciones configurable y los modelos por capa. F8: herramientas de escritura.
+- Los comandos propios de Pi (`/model`, `/login`…) no pasan por las extensiones y no dejan orden; los de HARIL sí.
+- La traza vive en la sesión; el registro de consumo guarda los tokens, la duración y el resultado de cada respuesta, no la traza.
+- `/delegate` y `DELEGATION` dejan su orden de chat y `haril workflow start` la suya (`source cli`): son dos filas, lo que se escribió y lo que se ejecutó.
+
+### Verificación
+
+- `corepack pnpm run check`: salida 0 (Biome, tipos, capas, pureza, knip, compatibilidad y `check-version`).
+- `corepack pnpm test`: salida 0; Vitest 2201 pasan y 1 omitida, las 3 pruebas de parada con procesos reales en su paso propio, `node:test` 122 de 122. Una primera pasada falló en `memory-engram/tests/serve.test.ts` (`engram serve` no estuvo listo en 5 s con toda la suite en paralelo); sola pasó 15 de 15 y la segunda pasada completa salió 0.
+- `npm run build`: salida 0; `haril --version` muestra 0.16.0.
+- Prueba funcional con la extensión compilada dentro de una sesión real de Pi 1.2.0 (su SDK), la CLI real compilada sobre una raíz de datos temporal y un gateway falso compatible con OpenAI que responde con llamadas a herramientas: 19 de 19. En consulta, `write` no existe para el modelo y, reactivado, la guardia lo bloquea («CONSULT mode is read-only…»); `bash` tampoco corre; `read` funciona; la investigación queda en `docs/investigacion/2026-10-18-claims-study.md`; la traza marca la escritura como bloqueada y nombra el archivo; 8 órdenes y 10 filas de consumo con modelo, tokens y duración, unidas a sus órdenes, y `usage verify` pasa; con un runtime corriendo una tarea lenta, `Alt+X` cortó el turno del chat en 29 ms y la CLI informó «runtime stopped: 1 task cancelled… no agent process left alive», el runtime salió con 0 y la tarea quedó cancelada; `/delegate … stop at the end` encoló `workflow.start` con `agent: orchestrator`, el modelo y la parada `at_end`.
+- Un turno real por CLIProxyAPI (`Gemini1/gemini-3-flash`, en acción): respondió; la orden quedó con 30 caracteres y su vista previa, y la fila de consumo con el modelo pedido y el servido, 1416 tokens de entrada y 23 de salida, 1909 ms, resultado `stop` y unida a la orden; `usage verify` pasó. La comprobación de la longitud de la orden en el arnés esperaba 31 por un error del arnés, no de la fila.
+- Pruebas nuevas, con ROJO observado y después VERDE: `haril usage record` (validación, censura, idempotencia, proyecto, cadena verificable), las reglas de los modos y la guardia, `haril_save_research`, la traza, `■ STOP ALL`, la tarjeta `/delegate` y el registro del chat. Escritas junto al código, sin ROJO previo: el controlador de modos sobre un `ConsolePi` falso, los comandos y las acciones en consulta, la consola con el botón y `Alt+X`, la tarjeta en la consola y `/continue`, y el registro del chat en la consola (con una CLI falsa). La prueba funcional encontró dos fallos que pasaban las pruebas automáticas y quedaron corregidos con sus pruebas: Pi rechaza una herramienta inactiva antes de cualquier guardia, así que la traza no veía esa llamada, y algunos gateways repiten el id de respuesta, así que las filas de consumo chocaban en su clave de idempotencia.
+
+---
+
 ## 0.15.0
 
 - **Fecha:** 2026-10-18
