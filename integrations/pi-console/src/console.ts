@@ -6,6 +6,7 @@
 
 import { cliAvailable } from "./cli.js";
 import { type CommandHost, registerCommands } from "./commands.js";
+import { DASHBOARD_AREAS, type DashboardArea, renderDashboard, renderHeader, type DashboardFacts } from "./dashboard.js";
 import {
   harilRef,
   type ModelRegistration,
@@ -22,7 +23,7 @@ import type {
 } from "./pi-types.js";
 import { type BoundProject, findProject, folderName } from "./project.js";
 import { type PendingApproval, readStatus } from "./status.js";
-import { type BarFacts, type RuntimeState, renderBar, renderHeader, renderOutput } from "./view.js";
+import { type BarFacts, type RuntimeState, renderBar, renderOutput } from "./view.js";
 
 const VERSION_ENV = "HARIL_VERSION";
 const OUTPUT_WIDGET = "haril-output";
@@ -33,7 +34,11 @@ interface Session extends CommandHost {
   readonly ctx: ConsoleContext;
   project: BoundProject | undefined;
   pending: readonly PendingApproval[];
+  pendingAvailable: boolean;
   tui: ConsoleTui | undefined;
+  area: DashboardArea | undefined;
+  branch: string | null | undefined;
+  extensionStatuses: readonly string[];
   model: PiModel | undefined;
   // HARIL's providers as registered in Pi; undefined until `haril models` answers.
   registration: ModelRegistration | undefined;
@@ -106,6 +111,30 @@ export default function harilConsole(pi: ConsolePi): void {
     };
   }
 
+  function dashboardFacts(current: Session): DashboardFacts {
+    const usage = current.model === undefined ? undefined : safely(() => current.ctx.getContextUsage(), undefined);
+    const allTools = safely(() => pi.getAllTools(), []);
+    const active = new Set(safely(() => pi.getActiveTools(), []));
+    const commands = safely(() => pi.getCommands(), []);
+    const servers = safely(() => pi.getMcpServers(), []);
+    return {
+      project: current.project?.slug ?? folderName(current.cwd),
+      cwd: current.cwd,
+      branch: current.branch,
+      model: current.model?.id ?? "no model selected",
+      thinking: current.model?.reasoning === true ? safely(() => pi.getThinkingLevel(), "unknown") : "n/a",
+      runtime: runtimeState(current),
+      pending: current.pendingAvailable ? current.pending.length : undefined,
+      context: usage === undefined ? "unavailable" : `${usage.percent === null ? "?" : Math.round(usage.percent)}%`,
+      cost: `$${current.cost.toFixed(3)}`,
+      activeTools: [...active],
+      tools: allTools.map((tool) => ({ name: tool.name, active: active.has(tool.name) })),
+      commands: commands.map((command) => command.name).sort(),
+      mcpServers: servers.map((server) => server.name).sort(),
+      extensionStatuses: current.extensionStatuses,
+    };
+  }
+
   // The light timer runs only while there is something to follow, and never keeps Pi alive.
   function followTimer(current: Session): void {
     const busy = current.runtimeAlive === true || current.started?.running === true;
@@ -125,8 +154,12 @@ export default function harilConsole(pi: ConsolePi): void {
       cwd: ctx.cwd,
       project: undefined,
       pending: [],
+      pendingAvailable: false,
       started: undefined,
       tui: undefined,
+      area: undefined,
+      branch: undefined,
+      extensionStatuses: [],
       model: ctx.model,
       registration: undefined,
       cost: safely(() => sessionCost(ctx.sessionManager.getEntries()), 0),
@@ -150,6 +183,15 @@ export default function harilConsole(pi: ConsolePi): void {
       clearOutput() {
         if (ctx.hasUI && ctx.mode === "tui") ctx.ui.setWidget(OUTPUT_WIDGET, undefined);
       },
+      openArea(area) {
+        current.area = area;
+        if (!ctx.hasUI || ctx.mode !== "tui") return;
+        ctx.ui.setWidget("haril-dashboard", (_tui, theme) => ({
+          render: (width) => renderDashboard(area, dashboardFacts(current), width, theme),
+          invalidate() {},
+        }), { placement: "aboveEditor" });
+        redraw();
+      },
       async rebind() {
         current.project = await findProject(current.cwd);
         redraw();
@@ -166,6 +208,7 @@ export default function harilConsole(pi: ConsolePi): void {
             const status = await readStatus(current.project?.slug);
             if (current.closed) return;
             current.runtimeAlive = status.runtimeAlive;
+            current.pendingAvailable = status.pending !== undefined;
             if (status.pending !== undefined) current.pending = status.pending;
           } while (current.refreshAgain);
           followTimer(current);
@@ -184,7 +227,13 @@ export default function harilConsole(pi: ConsolePi): void {
     if (!ctx.hasUI || ctx.mode !== "tui") return;
     const version = process.env[VERSION_ENV];
     ctx.ui.setHeader((_tui, theme) => ({
-      render: (width) => renderHeader(version === "" ? undefined : version, width, theme),
+      render: (width) => renderHeader(
+        version === "" ? undefined : version,
+        width,
+        dashboardFacts(current),
+        current.area,
+        theme,
+      ),
       invalidate() {},
     }));
     ctx.ui.setFooter((tui, theme, footerData) => {
@@ -193,6 +242,8 @@ export default function harilConsole(pi: ConsolePi): void {
       return {
         render(width) {
           const statuses = [...footerData.getExtensionStatuses().values()];
+          current.branch = footerData.getGitBranch();
+          current.extensionStatuses = statuses;
           return renderBar(facts(current, statuses, footerData.getGitBranch()), width, theme);
         },
         invalidate() {},
@@ -218,6 +269,12 @@ export default function harilConsole(pi: ConsolePi): void {
   }
 
   registerCommands(pi, () => session);
+  DASHBOARD_AREAS.forEach((area, index) => {
+    pi.registerShortcut(`ctrl+shift+${index + 1}`, {
+      description: `Open HARIL ${area.toUpperCase()} dashboard`,
+      handler: () => session?.openArea(area),
+    });
+  });
 
   pi.on("session_start", (event, ctx) => {
     const current = openSession(ctx);

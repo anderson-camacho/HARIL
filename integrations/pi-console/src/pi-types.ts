@@ -72,6 +72,19 @@ interface ConsoleUi {
   ): void;
 }
 
+interface ConsoleToolInfo {
+  readonly name: string;
+  readonly exposure: string;
+}
+
+interface ConsoleCommandInfo {
+  readonly name: string;
+}
+
+interface ConsoleMcpServer {
+  readonly name: string;
+}
+
 interface ModelRegistry {
   getAll(): readonly PiModel[];
   find(provider: string, modelId: string): PiModel | undefined;
@@ -154,6 +167,11 @@ export interface ConsolePi {
   registerProvider(name: string, config: ProviderConfig): void;
   getThinkingLevel(): ThinkingLevel;
   getSettings(): ConsoleSettings;
+  getActiveTools(): string[];
+  getAllTools(): ConsoleToolInfo[];
+  getCommands(): ConsoleCommandInfo[];
+  getMcpServers(): ConsoleMcpServer[];
+  registerShortcut(shortcut: string, options: { description?: string; handler(ctx: ConsoleContext): void }): void;
   // Sets the session's model without changing the configured default; false without auth for its provider.
   setModel(model: PiModel): Promise<boolean>;
 }

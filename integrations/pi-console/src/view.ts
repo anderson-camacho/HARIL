@@ -158,22 +158,6 @@ export function renderBar(facts: BarFacts, width: number, theme: ConsoleTheme): 
   return [barLine(facts, width, theme), placeLine(facts, width, theme)];
 }
 
-// The startup header: one line above the chat, where Pi draws its own logo.
-export function renderHeader(
-  version: string | undefined,
-  width: number,
-  theme: ConsoleTheme,
-): string[] {
-  const parts: Part[] = [
-    { text: version === undefined ? "◆ HARIL" : `◆ HARIL ${version}`, tone: MAIN, bold: true },
-    { text: " · ", tone: "dim" },
-    { text: "Many minds. One flow.", tone: MAIN },
-    { text: " · ", tone: "dim" },
-    { text: "/haril for commands", tone: MAIN },
-  ];
-  return ["", paint(fit(parts, width), theme)];
-}
-
 // A command's output: its title, then its lines wrapped to the width, at most OUTPUT_MAX_LINES of them.
 export function renderOutput(
   title: string,

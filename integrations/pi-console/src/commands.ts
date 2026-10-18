@@ -3,6 +3,7 @@ import type { AutocompleteItem, ConsoleContext, ConsolePi } from "./pi-types.js"
 import { type BoundProject, folderName } from "./project.js";
 import { type PendingApproval, readPending, readRuntimeAlive } from "./status.js";
 import { plainText } from "./text.js";
+import { DASHBOARD_AREAS, type DashboardArea } from "./dashboard.js";
 
 // The HARIL commands of the console. Each one runs the `haril` CLI (cli.ts) on the project of the folder Pi opened
 // in, so the CLI's validation and the store's rules decide, exactly as in a terminal. A multi-line answer is shown
@@ -26,6 +27,7 @@ export interface CommandHost {
   harilModelRef(): string | undefined;
   showOutput(title: string, lines: readonly string[]): void;
   clearOutput(): void;
+  openArea(area: DashboardArea): void;
   // Binds the folder's project again (after /init).
   rebind(): Promise<void>;
   // Reads the pending plans and the runtime again and redraws the bar.
@@ -353,6 +355,19 @@ export function registerCommands(pi: ConsolePi, host: () => CommandHost | undefi
         } finally {
           await current.refresh();
         }
+      },
+    });
+  }
+  const nativeCommands = new Set(pi.getCommands().map((command) => command.name));
+  for (const area of DASHBOARD_AREAS) {
+    if (nativeCommands.has(area)) continue;
+    pi.registerCommand(area, {
+      description: `HARIL: open the ${area.toUpperCase()} dashboard`,
+      handler(_args, ctx) {
+        const current = host();
+        if (current === undefined) return;
+        current.openArea(area);
+        ctx.ui.notify(`${area.toUpperCase()} dashboard · Ctrl+Shift+1..6 or /${area}`, "info");
       },
     });
   }
