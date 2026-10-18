@@ -390,8 +390,9 @@ async function serve(
     const applied = decided + applyQueuedCommands(store, epoch, emit, shutdown, live);
     if (shutdown.requested) {
       // ARCH 4.2: each attempt in flight was aborted when the stop was requested; the lease goes once they all closed.
+      // A nudge ends the wait too, so an emergency stop queued meanwhile is applied at once (3.14).
       if (live.size > 0) {
-        await waitForAttempts(clock, pollMs, (resolve) => {
+        await waitForAttempts(clock, pollMs, onNudge, (resolve) => {
           wake = done.length > 0 ? null : resolve;
           if (done.length > 0) resolve();
         });
@@ -916,9 +917,10 @@ function runtimeFor(options: RunLoopOptions, task: ClaimedTask): AgentRuntime {
 }
 
 // One attempt: start, handshake (before any prompt), prompt, settle within the timeout, dispose. A shutdown aborts the
-// run in flight (an emergency kills it, 3.14); the handle settles it as aborted, and the race with `settled` keeps a
-// handshake that never answers from holding the stop. While it runs, the registry's entry can abort or kill it (3.9).
-// Its process is recorded on its run as soon as it started, and its kill registered for a forced exit.
+// run in flight (an emergency kills it, 3.14, also when it upgrades a graceful stop under way); the handle settles it as
+// aborted, and the race with `settled` keeps a handshake that never answers from holding the stop. While it runs, the
+// registry's entry can abort or kill it (3.9). Its process is recorded on its run as soon as it started, and its kill
+// registered for a forced exit. It stays killable until its process is gone: through dispose's grace period too.
 async function runAttempt(
   agentRuntime: AgentRuntime,
   clock: Clock,
@@ -957,11 +959,14 @@ async function runAttempt(
   try {
     return await Promise.race([drive(handle, spec, clock), handle.settled]);
   } finally {
-    stopping();
-    unregister();
     attempt.abort = () => undefined;
-    attempt.kill = () => undefined;
-    await handle.dispose();
+    try {
+      await handle.dispose();
+    } finally {
+      stopping();
+      unregister();
+      attempt.kill = () => undefined;
+    }
     // dispose resolves once the agent's process exited: verified gone.
     if (recorded !== undefined) {
       try {
@@ -1018,19 +1023,7 @@ function sleepUnlessWoken(
   shutdown: Shutdown,
   onNudge: (listener: () => void) => () => void,
 ): Promise<void> {
-  return new Promise((resolve) => {
-    let unsubscribeStop: () => void = () => undefined;
-    let unsubscribeNudge: () => void = () => undefined;
-    const finish = (): void => {
-      cancel();
-      unsubscribeStop();
-      unsubscribeNudge();
-      resolve();
-    };
-    const cancel = clock.schedule(ms, finish);
-    unsubscribeStop = shutdown.onRequest(finish);
-    unsubscribeNudge = onNudge(finish);
-  });
+  return waitForWake(clock, ms, shutdown, onNudge, () => undefined);
 }
 
 // Waits like sleepUnlessWoken, and also until an attempt in flight settles: `register` hands the loop the function that
@@ -1056,26 +1049,32 @@ function waitForWake(
     };
     const cancel = clock.schedule(ms, finish);
     unsubscribeStop = shutdown.onRequest(finish);
+    // A stop already requested ended the wait inside onRequest, before its listener could be removed.
+    if (ended) unsubscribeStop();
     unsubscribeNudge = onNudge(finish);
     register(finish);
   });
 }
 
-// While a stop waits for the attempts it aborted: until one settles, or the poll interval passes.
+// While a stop waits for the attempts it aborted: until one settles, a nudge arrives or the poll interval passes.
 function waitForAttempts(
   clock: Clock,
   ms: number,
+  onNudge: (listener: () => void) => () => void,
   register: (resolve: () => void) => void,
 ): Promise<void> {
   return new Promise((resolve) => {
     let ended = false;
+    let unsubscribeNudge: () => void = () => undefined;
     const finish = (): void => {
       if (ended) return;
       ended = true;
       cancel();
+      unsubscribeNudge();
       resolve();
     };
     const cancel = clock.schedule(ms, finish);
+    unsubscribeNudge = onNudge(finish);
     register(finish);
   });
 }

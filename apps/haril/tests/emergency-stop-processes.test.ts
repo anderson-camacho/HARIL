@@ -335,6 +335,55 @@ describe("haril stop --now with real agent processes", () => {
   );
 
   it(
+    "stop --now after a graceful stop still kills every agent within 2 s, and the runtime applies it itself",
+    async () => {
+      const host: HostInfo = {
+        ...sb.host,
+        agentRuntime: stuckAgents(),
+        signals: new EventEmitter(),
+        forceExit: () => undefined,
+      };
+      queue(host, [
+        "workflow",
+        "start",
+        "Ship the button",
+        "--model",
+        "fake/high-model",
+        "--autonomous",
+      ]);
+      queue(host, ["task", "add", "Slow standalone", "--agent", "fake:slow:600000"]);
+      const runtime = startRuntime(host);
+      const store = open();
+      const agents = await agentsInFlight(store, 2);
+
+      // The graceful stop: each hung agent is asked to abort, ignores it and waits out its grace period.
+      const graceful = harness();
+      expect(await run(["stop", "--json"], graceful.io, host)).toBe(0);
+      const { commandId } = parseJson<{ commandId: string }>(graceful.out);
+      await until(() => store.commands.get(commandId)?.status === "applied", "the graceful stop");
+      for (const agent of agents) expect(alive(agent.pi)).toBe(true);
+
+      const stop = harness();
+      const stoppedAt = Date.now();
+      expect(await run(["stop", "--now", "--json"], stop.io, host)).toBe(0);
+      await until(
+        () => agents.every((agent) => !alive(agent.pi) && !alive(agent.tool)),
+        "every agent process gone",
+        STOP_BUDGET_MS,
+      );
+      expect(Date.now() - stoppedAt).toBeLessThan(STOP_BUDGET_MS);
+      expect(parseJson(stop.out)).toMatchObject({
+        runtime: "stopped",
+        halted: true,
+        processes: { alive: 0, unverified: 0 },
+      });
+      expect(await runtime.done).toBe(0);
+      expect(runtime.out.out.join("\n")).toContain("stopping now (emergency stop)");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     "a second signal kills the agents and their tools before the forced exit",
     async () => {
       const signals = new EventEmitter();

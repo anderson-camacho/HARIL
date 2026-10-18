@@ -1,7 +1,9 @@
 // Ordered stop of the runtime (ARCH 4.2): one shutdown per runtime, requested by an applied `runtime.stop` command or by
-// a signal (Ctrl+C, SIGTERM). The first request wins; a listener added after it is called at once. An applied
-// `runtime.stop {mode: "now"}` requests it as an emergency (docs/modos-y-delegacion.md 3.14): the attempts in flight
-// are killed instead of aborted, without the grace period.
+// a signal (Ctrl+C, SIGTERM). The first request wins, with one exception: an applied `runtime.stop {mode: "now"}`
+// requests it as an emergency (docs/modos-y-delegacion.md 3.14), and an emergency upgrades a graceful stop already under
+// way, so `haril stop --now` after a `haril stop` or one Ctrl+C still kills every attempt in flight at once, without
+// the grace period. Every listener is called on the first request and again on the upgrade; a listener added after a
+// request is called at once and still hears the upgrade.
 
 // The command type `haril stop` enqueues. The store accepts it without a project and the runtime acts on it.
 export const RUNTIME_STOP = "runtime.stop";
@@ -12,7 +14,8 @@ export interface Shutdown {
   readonly requested: boolean;
   readonly reason: ShutdownReason | undefined;
   request(reason: ShutdownReason): void;
-  // Returns the function that removes the listener. The listener runs once.
+  // Returns the function that removes the listener. The listener runs on the first request and once more when an
+  // emergency upgrades a graceful stop.
   onRequest(listener: (reason: ShutdownReason) => void): () => void;
 }
 
@@ -27,16 +30,14 @@ export function createShutdown(): Shutdown {
       return reason;
     },
     request(next) {
-      if (reason !== undefined) return;
+      const upgrade = reason !== undefined && reason !== "emergency" && next === "emergency";
+      if (reason !== undefined && !upgrade) return;
       reason = next;
       for (const listener of [...listeners]) listener(next);
     },
     onRequest(listener) {
-      if (reason !== undefined) {
-        listener(reason);
-        return () => undefined;
-      }
       listeners.add(listener);
+      if (reason !== undefined) listener(reason);
       return () => {
         listeners.delete(listener);
       };

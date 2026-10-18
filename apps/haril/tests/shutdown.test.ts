@@ -25,6 +25,28 @@ describe("shutdown control", () => {
     expect(reasons).toEqual(["signal"]);
     stop();
   });
+
+  it("upgrades a graceful stop to an emergency, and every listener hears it, one added after the first request included (3.14)", () => {
+    const shutdown = createShutdown();
+    const early: string[] = [];
+    const late: string[] = [];
+    const removed: string[] = [];
+    shutdown.onRequest((reason) => early.push(reason));
+    shutdown.request("command");
+    shutdown.onRequest((reason) => late.push(reason));
+    const remove = shutdown.onRequest((reason) => removed.push(reason));
+    remove();
+    shutdown.request("emergency");
+    expect(shutdown.reason).toBe("emergency");
+    expect(early).toEqual(["command", "emergency"]);
+    expect(late).toEqual(["command", "emergency"]);
+    expect(removed).toEqual(["command"]);
+    // An emergency is final: nothing downgrades it, and a repeat notifies nobody.
+    shutdown.request("signal");
+    shutdown.request("emergency");
+    expect(shutdown.reason).toBe("emergency");
+    expect(early).toEqual(["command", "emergency"]);
+  });
 });
 
 describe("attachStopSignals", () => {
