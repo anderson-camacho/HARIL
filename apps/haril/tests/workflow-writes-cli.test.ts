@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { validateWorkflowSnapshot, type WorkflowSnapshot } from "@haril/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { run } from "../src/cli.js";
+import { storeAccess } from "../src/host.js";
 import { type Harness, harness, makeSandbox, parseJson, type Sandbox } from "./helpers.js";
 
 // Real git and real processes: under the load of the full suite one test can take several seconds, so this file gives
@@ -152,5 +153,42 @@ describe.skipIf(!HAS_GIT)("haril workflow start on a git project", () => {
     expect(git("show", `haril/${workflowId}/integration:src/part-1/shared.ts`)).toBe(
       "part-1/step-2 attempt 1",
     );
+  }, 120_000);
+
+  it("runs the auditors' commands with haril.json's allow list", async () => {
+    initRepo();
+    // `node --version` is not in the default list: only haril.json's commands.allow lets the auditor run it.
+    const configPath = join(sb.root, "haril.json");
+    writeFileSync(
+      configPath,
+      JSON.stringify({ delegation: { commands: { allow: ["node --version"] } } }),
+    );
+    sb = { ...sb, host: { ...sb.host, env: { ...sb.host.env, HARIL_CONFIG: configPath } } };
+    await init();
+    expect(
+      await invoke([
+        "workflow",
+        "start",
+        "Write the part [fake:parts=1] [fake:steps=1] [fake:run=node --version]",
+        "--model",
+        "fake/m",
+        "--autonomous",
+      ]),
+    ).toBe(0);
+    expect(await invoke(["run"])).toBe(0);
+    const store = storeAccess(sb.host).open(sb.dataDir);
+    try {
+      const commands = store.events
+        .list()
+        .filter((event) => event.type === "workspace.command")
+        .map((event) => event.payload as { command?: unknown; exitCode?: unknown });
+      expect(commands.length).toBeGreaterThan(0);
+      expect(
+        commands.every((payload) => payload.command === "node" && payload.exitCode === 0),
+      ).toBe(true);
+      expect(store.workflows.list()[0]?.state).toBe("completed");
+    } finally {
+      store.close();
+    }
   }, 120_000);
 });

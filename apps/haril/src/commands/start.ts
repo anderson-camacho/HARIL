@@ -8,7 +8,7 @@ import { loadDelegationSettings } from "../delegation-config.js";
 import { delegationLimitsOf, delegationSettingsOf } from "../delegation-section.js";
 import { agentRuntimeFor, clockFor } from "../host.js";
 import { createDelegationTools } from "../runtime/delegation-tools.js";
-import { DEFAULT_HOST_COMMAND_SETTINGS } from "../runtime/host-commands.js";
+import type { HostCommandSettings } from "../runtime/host-commands.js";
 import { createLiveModels } from "../runtime/live-models.js";
 import { memoryLeftLine } from "../runtime/memory.js";
 import { withStoreState } from "../runtime/model-context.js";
@@ -38,12 +38,14 @@ const RUN_USAGE = "usage: haril run [--project <slug>] [--json] [--data-dir <pat
 const NOT_INITIALIZED =
   "store not initialized (run haril project init <path> --name <name> --yes first)";
 
-// What the runtime takes from haril.json's delegation section when it starts (docs/modos-y-delegacion.md 5, 3.16;
-// phase F7): the limits of a workflow that started without a full snapshot (P11) and the watchdog's cadence. A section
-// the rules refuse leaves the defaults in effect, with a warning that names its problems.
+// What the runtime takes from haril.json's delegation section when it starts (docs/modos-y-delegacion.md 5, 3.16,
+// 3.10.5; phases F7 and F8): the limits of a workflow that started without a full snapshot (P11), the watchdog's cadence
+// and haril_run's allow list, time limit and output cap. A section the rules refuse leaves the defaults in effect, with a
+// warning that names its problems.
 export function runtimeDelegationOf(host: HostInfo): {
   readonly limits: DelegationLimits;
   readonly watchdog: Required<WatchdogSettings>;
+  readonly commands: HostCommandSettings;
   readonly warning?: string;
 } {
   const loaded = loadDelegationSettings(host);
@@ -53,6 +55,11 @@ export function runtimeDelegationOf(host: HostInfo): {
     watchdog: {
       intervalMs: settings.watchdog.intervalMs,
       idleStrikesToClose: settings.watchdog.idleStrikesToClose,
+    },
+    commands: {
+      allow: [...settings.commands.allow],
+      timeoutMs: settings.commands.timeoutMs,
+      outputMaxBytes: settings.commands.outputMaxBytes,
     },
     ...(loaded.ok
       ? {}
@@ -119,12 +126,12 @@ async function serve(
   if (configured.warning !== undefined) io.err(`haril: ${configured.warning}`);
   const delegation = { ...liveModels.options, limits: configured.limits };
   // The git worktrees of workflows that write (phase F8): under the data directory, short hashed folders (git refuses a
-  // long worktree path on Windows). haril_run takes its commands from the allow list (provisional default until the
-  // delegation section's commands.allow, phase F7) and kills a command's tree through the verified tree kill.
+  // long worktree path on Windows). haril_run takes its allow list, time limit and output cap from haril.json's
+  // delegation.commands (the defaults when it says nothing) and kills a command's tree through the verified tree kill.
   const processControl = host.processControl ?? createProcessControl();
   const workspaces = createWorkspaces({
     root: join(dataDir, "worktrees"),
-    commands: DEFAULT_HOST_COMMAND_SETTINGS,
+    commands: configured.commands,
     ...(host.env === undefined ? {} : { env: { ...process.env, ...host.env } }),
     killTree: async (target) => {
       await killTrees(processControl, [target]);

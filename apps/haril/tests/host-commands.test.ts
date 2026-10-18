@@ -1,11 +1,11 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { DEFAULT_COMMAND_ALLOW } from "@haril/contracts";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   allowedCommand,
   cleanEnvironment,
-  DEFAULT_COMMAND_ALLOW,
   resolveProgram,
   runHostCommand,
 } from "../src/runtime/host-commands.js";

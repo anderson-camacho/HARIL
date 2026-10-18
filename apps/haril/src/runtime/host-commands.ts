@@ -26,48 +26,8 @@ export interface HostCommandSettings {
   readonly outputMaxBytes: number;
 }
 
-// Provisional (delegation.commands.allow of section 5, read by phase F7's config): the test, build and check commands of
-// the usual toolchains, and the installs a fresh worktree needs (it starts without dependencies). Never a shell, never an
-// evaluator such as `node -e`.
-export const DEFAULT_COMMAND_ALLOW: readonly string[] = Object.freeze([
-  "npm test",
-  "npm test *",
-  "npm run test",
-  "npm run build",
-  "npm run lint",
-  "npm run check",
-  "npm run typecheck",
-  "npm ci",
-  "pnpm test",
-  "pnpm test *",
-  "pnpm run test",
-  "pnpm run build",
-  "pnpm run lint",
-  "pnpm run check",
-  "pnpm run typecheck",
-  "pnpm install --frozen-lockfile",
-  "yarn test",
-  "yarn build",
-  "yarn lint",
-  "node --test",
-  "npx vitest run",
-  "npx tsc --noEmit",
-  "pytest",
-  "python -m pytest",
-  "go test ./...",
-  "go build ./...",
-  "cargo test",
-  "cargo build",
-]);
-
-const DEFAULT_COMMAND_TIMEOUT_MS = 300_000;
-const DEFAULT_COMMAND_OUTPUT_MAX_BYTES = 16_384;
-
-export const DEFAULT_HOST_COMMAND_SETTINGS: HostCommandSettings = Object.freeze({
-  allow: DEFAULT_COMMAND_ALLOW,
-  timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
-  outputMaxBytes: DEFAULT_COMMAND_OUTPUT_MAX_BYTES,
-});
+// The settings come from haril.json's delegation.commands (allow, timeoutMs, outputMaxBytes), read when the runtime
+// starts; without them the defaults of @haril/contracts apply (DEFAULT_COMMAND_ALLOW, 5 minutes, 16 KiB).
 
 const WILDCARD = "*";
 

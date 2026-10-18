@@ -1,6 +1,6 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { WorkflowSnapshot } from "@haril/contracts";
+import { DEFAULT_COMMAND_ALLOW, type WorkflowSnapshot } from "@haril/contracts";
 import type { Clock, Store, WorkflowRecord } from "@haril/core/ports";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { run } from "../src/cli.js";
@@ -143,6 +143,26 @@ describe("the runtime's delegation settings", () => {
     expect(read.limits.maxAuditRetries).toBe(0);
     expect(read.limits.maxDepth).toBe(3);
     expect(read.watchdog).toEqual({ intervalMs: 300_000, idleStrikesToClose: 3 });
+  });
+
+  it("give haril_run haril.json's allow list, time limit and output cap, else the defaults", () => {
+    writeDelegation({});
+    expect(runtimeDelegationOf(host()).commands).toEqual({
+      allow: DEFAULT_COMMAND_ALLOW,
+      timeoutMs: 300_000,
+      outputMaxBytes: 16_384,
+    });
+    writeDelegation({
+      commands: { allow: ["node --version"], timeoutMs: 60_000, outputMaxBytes: 4_096 },
+    });
+    expect(runtimeDelegationOf(host()).commands).toEqual({
+      allow: ["node --version"],
+      timeoutMs: 60_000,
+      outputMaxBytes: 4_096,
+    });
+    // An empty list is the user's choice: no command at all.
+    writeDelegation({ commands: { allow: [] } });
+    expect(runtimeDelegationOf(host()).commands.allow).toEqual([]);
   });
 
   it("fall back to the defaults with a warning when the section is invalid", () => {

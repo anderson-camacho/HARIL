@@ -88,6 +88,41 @@ const int = (
     ? { type: "integer", min, max, unit }
     : { type: "integer", min, max, unit, inherits };
 
+// haril_run's allow list when haril.json does not set commands.allow (docs/modos-y-delegacion.md 3.10.5; phase F8): the
+// test, build and check commands of the usual toolchains, and the installs a fresh worktree needs (it starts without
+// dependencies). Never a shell, never an evaluator such as `node -e`. An entry allows exactly that argv; one ending in
+// " *" allows any further arguments. An empty list in the file allows no command at all.
+export const DEFAULT_COMMAND_ALLOW: readonly string[] = Object.freeze([
+  "npm test",
+  "npm test *",
+  "npm run test",
+  "npm run build",
+  "npm run lint",
+  "npm run check",
+  "npm run typecheck",
+  "npm ci",
+  "pnpm test",
+  "pnpm test *",
+  "pnpm run test",
+  "pnpm run build",
+  "pnpm run lint",
+  "pnpm run check",
+  "pnpm run typecheck",
+  "pnpm install --frozen-lockfile",
+  "yarn test",
+  "yarn build",
+  "yarn lint",
+  "node --test",
+  "npx vitest run",
+  "npx tsc --noEmit",
+  "pytest",
+  "python -m pytest",
+  "go test ./...",
+  "go build ./...",
+  "cargo test",
+  "cargo build",
+]);
+
 const CONTEXT_MIN = 32_768;
 const CONTEXT_MAX = 10_000_000;
 const CHILDREN_MAX = 20;
@@ -377,8 +412,24 @@ export const DELEGATION_FIELDS: readonly DelegationField[] = Object.freeze([
     group: "commands",
     label: "Commands agents may run",
     kind: { type: "command-list" },
-    default: [],
-    effect: "next agent launch",
+    default: DEFAULT_COMMAND_ALLOW,
+    effect: "next runtime start",
+  },
+  {
+    path: "commands.timeoutMs",
+    group: "commands",
+    label: "Longest command",
+    kind: int(1_000, DAY_MS, "ms"),
+    default: 300_000,
+    effect: "next runtime start",
+  },
+  {
+    path: "commands.outputMaxBytes",
+    group: "commands",
+    label: "Output kept per stream (bytes)",
+    kind: int(1_024, 1_048_576, "count"),
+    default: 16_384,
+    effect: "next runtime start",
   },
   {
     path: "research.folder",
@@ -684,7 +735,13 @@ export interface DelegationSettings {
     readonly allow: Readonly<Record<"delegator" | "executor" | "auditor", readonly string[]>>;
     readonly auditorDistinctFromExecutor: boolean;
   };
-  readonly commands: { readonly allow: readonly string[] };
+  // haril_run's allow list, the longest a command may run (its tree is killed then) and how many bytes of the end of each
+  // output stream come back (phase F8).
+  readonly commands: {
+    readonly allow: readonly string[];
+    readonly timeoutMs: number;
+    readonly outputMaxBytes: number;
+  };
   readonly autonomy: { readonly defaultStops: readonly Stop[] };
   readonly watchdog: {
     readonly intervalMs: number;
