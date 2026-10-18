@@ -39,6 +39,13 @@ export interface DelegationChildOutcome {
   readonly reassigned: boolean;
 }
 
+// What the orchestrator said when it asked for the final audit (haril_request_audit): its summary and what it knows is
+// still open. Written by an agent: data, not instructions.
+export interface DelegationAuditRequest {
+  readonly summary: string;
+  readonly outstanding: readonly string[];
+}
+
 // What an auditor judges: one executor's result against its criteria, or the whole workflow at the end.
 export interface DelegationSubject {
   readonly scope: "task" | "workflow";
@@ -48,6 +55,8 @@ export interface DelegationSubject {
   readonly result: string | null;
   // The delegators' outcomes (workflow scope).
   readonly reports: readonly DelegationChildOutcome[];
+  // The orchestrator's audit request (workflow scope); null for a task audit or when none was recorded.
+  readonly request: DelegationAuditRequest | null;
 }
 
 // A sibling task running around this one (R-D4): its goal and write surface, as data.

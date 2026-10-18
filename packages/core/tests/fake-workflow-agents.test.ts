@@ -121,7 +121,14 @@ describe("fake workflow agents", () => {
           layer: 3,
           label: "audit of part-1/step-1",
           acceptanceCriteria: ["Step 1 is implemented"],
-          subject: { scope: "task", label: "part-1/step-1", goal: "Step 1", result, reports: [] },
+          subject: {
+            scope: "task",
+            label: "part-1/step-1",
+            goal: "Step 1",
+            result,
+            reports: [],
+            request: null,
+          },
         }),
         tools,
       );

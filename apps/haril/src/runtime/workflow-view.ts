@@ -18,6 +18,7 @@ import {
 } from "@haril/core";
 import type {
   AuditRecord,
+  DelegationAuditRequest,
   DelegationChildOutcome,
   DelegationRecord,
   DelegationVerdictView,
@@ -126,6 +127,17 @@ export function resultText(result: JsonObject | null): string | null {
   if (typeof result.text === "string") return result.text;
   if (typeof result.summary === "string") return result.summary;
   return null;
+}
+
+function isAuditRequest(value: unknown): value is DelegationAuditRequest {
+  const record = value as Record<string, unknown> | null;
+  return (
+    typeof record === "object" &&
+    record !== null &&
+    typeof record.summary === "string" &&
+    Array.isArray(record.outstanding) &&
+    record.outstanding.every((item) => typeof item === "string")
+  );
 }
 
 function isReport(value: unknown): value is ReportInput {
@@ -237,6 +249,17 @@ export class WorkflowView {
     const localId = this.turns(delegatorThreadId)[0]?.localId;
     const payload = this.proposalOf(delegatorThreadId)?.payload as DelegateInput | null | undefined;
     return payload?.delegations?.find((item) => item.localId === localId);
+  }
+
+  // The orchestrator's haril_request_audit behind a final auditor turn (3.8): its summary and outstanding list, as the
+  // proposal that created the turn stored them; null for any other turn.
+  auditRequestOf(auditorTurn: Task): DelegationAuditRequest | null {
+    const row =
+      auditorTurn.delegationId === null
+        ? undefined
+        : this.delegationById.get(auditorTurn.delegationId);
+    if (row?.tool !== "haril_request_audit" || !isAuditRequest(row.payload)) return null;
+    return { summary: row.payload.summary, outstanding: [...row.payload.outstanding] };
   }
 
   // The memo of the last proposal this thread applied (3.7).

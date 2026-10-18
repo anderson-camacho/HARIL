@@ -207,10 +207,14 @@ export function buildTurnInput(
             goal: subject.goal,
             result: resultText(subject.result),
             reports: [],
+            request: null,
           },
         };
       }
       const root = view.rootThreadId();
+      // The final auditor judges the delegators' reports and hears what the orchestrator said when it asked for the
+      // audit: its summary and what it knows is still open (3.8). All of it was written by agents: the prompt shows it
+      // as data.
       return {
         ...base,
         subject: {
@@ -222,6 +226,7 @@ export function buildTurnInput(
             root === null
               ? []
               : view.childThreads(root).map((child) => view.delegatorOutcome(child)),
+          request: view.auditRequestOf(task),
         },
       };
     }

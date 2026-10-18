@@ -81,6 +81,16 @@ function blocksOf(input: DelegationTurnInput): Block[] {
     });
   }
   if (subject !== null && subject.scope === "workflow") {
+    if (subject.request !== null) {
+      const outstanding =
+        subject.request.outstanding.length === 0
+          ? ["outstanding: none"]
+          : subject.request.outstanding.map((item) => `outstanding: ${item}`);
+      blocks.push({
+        header: "[the orchestrator's audit request]",
+        text: [`summary: ${subject.request.summary}`, ...outstanding].join("\n"),
+      });
+    }
     for (const report of subject.reports) blocks.push(childBlock(report));
   }
   if (input.finalAudit !== null) {
