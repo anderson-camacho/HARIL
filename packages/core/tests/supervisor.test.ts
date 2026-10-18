@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   PROCESS_START_WINDOW,
   planProcessKills,
+  planTreeKills,
   processStartWindow,
   sameProcess,
 } from "../src/supervisor/index.js";
@@ -102,5 +103,69 @@ describe("planProcessKills", () => {
       reused: [],
       gone: [bad],
     });
+  });
+});
+
+describe("planTreeKills", () => {
+  const T = SPAWNED;
+  // pid 10 is the agent; 11 its shell, 12 the tool the shell started; 20 an unrelated program.
+  const table = [
+    { pid: 10, parentPid: 1, startedAt: T },
+    { pid: 11, parentPid: 10, startedAt: T + 1000 },
+    { pid: 12, parentPid: 11, startedAt: T + 2000 },
+    { pid: 13, parentPid: 10, startedAt: T + 3000 },
+    { pid: 20, parentPid: 1, startedAt: T - 9000 },
+  ];
+
+  it("kills a verified root's descendants before the root, children before their parents", () => {
+    const plan = planTreeKills([{ pid: 10, startedAt: T + 20 }], table);
+    expect(plan.roots.map((entry) => entry.pid)).toEqual([10]);
+    expect(plan.order.map((entry) => entry.pid)).toEqual([12, 11, 13, 10]);
+    expect(plan.order.at(-1)).toEqual({ pid: 10, parentPid: 1, startedAt: T });
+  });
+
+  it("leaves out a process that names a parent pid but started before that parent: its real parent died and the pid was reused", () => {
+    const stale = [...table, { pid: 30, parentPid: 10, startedAt: T - 60_000 }];
+    const plan = planTreeKills([{ pid: 10, startedAt: T }], stale);
+    expect(plan.order.map((entry) => entry.pid)).not.toContain(30);
+    expect(plan.order.map((entry) => entry.pid)).toEqual([12, 11, 13, 10]);
+  });
+
+  it("kills nothing of a root whose pid now names another process, or that is not running", () => {
+    expect(planTreeKills([{ pid: 10, startedAt: T - 3_600_000 }], table)).toEqual({
+      roots: [],
+      order: [],
+    });
+    expect(planTreeKills([{ pid: 99, startedAt: T }], table)).toEqual({ roots: [], order: [] });
+  });
+
+  it("lists every pid once when two roots share a subtree, and never a protected pid or what runs under it", () => {
+    const plan = planTreeKills(
+      [
+        { pid: 11, startedAt: T + 1000 },
+        { pid: 10, startedAt: T },
+      ],
+      table,
+    );
+    expect(plan.order.map((entry) => entry.pid)).toEqual([12, 11, 13, 10]);
+    const guarded = planTreeKills([{ pid: 10, startedAt: T }], table, {
+      protectedPids: new Set([11]),
+    });
+    expect(guarded.order.map((entry) => entry.pid)).toEqual([13, 10]);
+  });
+
+  it("stops at a loop of parent pids instead of walking it forever", () => {
+    const loop = [
+      { pid: 40, parentPid: 41, startedAt: T },
+      { pid: 41, parentPid: 40, startedAt: T },
+    ];
+    expect(planTreeKills([{ pid: 40, startedAt: T }], loop).order.map((e) => e.pid)).toEqual([
+      41, 40,
+    ]);
+  });
+
+  it("never plans a pid that is not a positive whole number", () => {
+    const bad = [{ pid: 0, parentPid: 0, startedAt: T }];
+    expect(planTreeKills([{ pid: 0, startedAt: T }], bad)).toEqual({ roots: [], order: [] });
   });
 });

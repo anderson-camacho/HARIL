@@ -42,7 +42,7 @@ export async function killNoted(noted: readonly NotedProcess[]): Promise<void> {
   if (noted.length === 0) return;
   const times = await processControl.startTimes(noted.map((item) => item.pid));
   const plan = planProcessKills(noted, times, processStartWindow(process.platform));
-  await Promise.all(plan.kill.map((item) => processControl.killTree(item.pid)));
+  if (plan.kill.length > 0) await processControl.killTrees(plan.kill);
 }
 
 export function sleep(ms: number): Promise<void> {

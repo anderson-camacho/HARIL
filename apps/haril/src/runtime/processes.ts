@@ -30,7 +30,7 @@ export async function killRecordedProcesses(
   if (records.length === 0) return { checked: 0, killed: [], kept: [] };
   const startTimes = await control.startTimes(records.map((record) => record.pid));
   const plan = planProcessKills(records, startTimes, processStartWindow(process.platform));
-  await Promise.all(plan.kill.map((record) => control.killTree(record.pid)));
+  if (plan.kill.length > 0) await control.killTrees(plan.kill);
   return { checked: records.length, killed: plan.kill, kept: plan.reused };
 }
 

@@ -67,3 +67,84 @@ export function planProcessKills<T extends { readonly pid: number; readonly star
   }
   return { kill, reused, gone };
 }
+
+// One running process as one snapshot of the OS shows it: its pid, the pid it names as its parent and its start time.
+export interface ProcessEntry {
+  readonly pid: number;
+  readonly parentPid: number;
+  readonly startedAt: number;
+}
+
+export interface TreeKillPlan {
+  // The roots still running as the recorded process, as the snapshot shows them.
+  readonly roots: readonly ProcessEntry[];
+  // Every process to kill, one pid at a time: each child before its parent, each root after its whole tree.
+  readonly order: readonly ProcessEntry[];
+}
+
+export interface TreeKillOptions {
+  readonly window?: ProcessStartWindow;
+  // Pids never killed, nor anything under them (the process that kills).
+  readonly protectedPids?: ReadonlySet<number>;
+}
+
+function validPid(pid: number): boolean {
+  return Number.isSafeInteger(pid) && pid > 0;
+}
+
+// The processes to kill for recorded roots, from one snapshot of the OS's processes (docs/modos-y-delegacion.md 3.14).
+// A root counts only while its start time matches the recorded one. A child counts only when it names its parent's pid
+// and started at or after that parent: Windows keeps a dead parent's pid in its children's ParentProcessId, so a process
+// that names a pid the OS reused as its parent started before the process that now holds that pid. Walking the tree here,
+// instead of letting the OS's tree kill walk it by parent pid alone, keeps such a stranger out.
+export function planTreeKills(
+  roots: readonly { readonly pid: number; readonly startedAt: number }[],
+  table: readonly ProcessEntry[],
+  options: TreeKillOptions = {},
+): TreeKillPlan {
+  const window = options.window ?? PROCESS_START_WINDOW;
+  const protectedPids = options.protectedPids ?? new Set<number>();
+  const byPid = new Map<number, ProcessEntry>();
+  const children = new Map<number, ProcessEntry[]>();
+  for (const entry of table) {
+    if (!validPid(entry.pid) || !Number.isFinite(entry.startedAt) || byPid.has(entry.pid)) continue;
+    byPid.set(entry.pid, entry);
+    const siblings = children.get(entry.parentPid) ?? [];
+    siblings.push(entry);
+    children.set(entry.parentPid, siblings);
+  }
+  const verified: ProcessEntry[] = [];
+  const order: ProcessEntry[] = [];
+  const seen = new Set<number>();
+  // Iterative post-order walk: a deep tree or a loop of parent pids never overflows the stack.
+  const walk = (root: ProcessEntry): void => {
+    const stack: { entry: ProcessEntry; expanded: boolean }[] = [{ entry: root, expanded: false }];
+    seen.add(root.pid);
+    while (stack.length > 0) {
+      const top = stack[stack.length - 1] as { entry: ProcessEntry; expanded: boolean };
+      if (top.expanded) {
+        stack.pop();
+        order.push(top.entry);
+        continue;
+      }
+      top.expanded = true;
+      const kids = children.get(top.entry.pid) ?? [];
+      for (let index = kids.length - 1; index >= 0; index -= 1) {
+        const child = kids[index] as ProcessEntry;
+        if (child.pid === top.entry.pid || seen.has(child.pid) || protectedPids.has(child.pid))
+          continue;
+        if (child.startedAt < top.entry.startedAt) continue;
+        seen.add(child.pid);
+        stack.push({ entry: child, expanded: false });
+      }
+    }
+  };
+  for (const root of roots) {
+    if (!validPid(root.pid) || protectedPids.has(root.pid)) continue;
+    const entry = byPid.get(root.pid);
+    if (entry === undefined || !sameProcess(root.startedAt, entry.startedAt, window)) continue;
+    verified.push(entry);
+    if (!seen.has(entry.pid)) walk(entry);
+  }
+  return { roots: verified, order };
+}
