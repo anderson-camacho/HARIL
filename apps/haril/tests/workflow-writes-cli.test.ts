@@ -191,4 +191,51 @@ describe.skipIf(!HAS_GIT)("haril workflow start on a git project", () => {
       store.close();
     }
   }, 120_000);
+
+  it("takes the base branch from --base, else haril.json's git.baseBranch, else detects it", async () => {
+    initRepo();
+    git("branch", "release");
+    const configPath = join(sb.root, "haril.json");
+    writeFileSync(configPath, JSON.stringify({ delegation: { git: { baseBranch: "release" } } }));
+    sb = { ...sb, host: { ...sb.host, env: { ...sb.host.env, HARIL_CONFIG: configPath } } };
+    await init();
+    const sha = git("rev-parse", "release");
+    expect(await invoke(["workflow", "start", "One", "--model", "fake/m", "--autonomous"])).toBe(0);
+    expect(h.out.join("\n")).toContain(
+      `writes     in git worktrees from release ${sha.slice(0, 7)}`,
+    );
+    expect(
+      await invoke([
+        "workflow",
+        "start",
+        "Two",
+        "--model",
+        "fake/m",
+        "--autonomous",
+        "--base",
+        "main",
+      ]),
+    ).toBe(0);
+    expect(h.out.join("\n")).toContain("writes     in git worktrees from main");
+    // A configured branch the repository lacks stops the start: HARIL never picks another base on its own.
+    writeFileSync(configPath, JSON.stringify({ delegation: { git: { baseBranch: "stable" } } }));
+    expect(await invoke(["workflow", "start", "Three", "--model", "fake/m", "--autonomous"])).toBe(
+      2,
+    );
+    expect(h.err.join("\n")).toContain(
+      'delegation.git.baseBranch "stable": no local branch "stable"',
+    );
+    // --read-only does not need a base.
+    expect(
+      await invoke([
+        "workflow",
+        "start",
+        "Four",
+        "--model",
+        "fake/m",
+        "--autonomous",
+        "--read-only",
+      ]),
+    ).toBe(0);
+  });
 });

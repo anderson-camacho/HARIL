@@ -45,6 +45,18 @@ describe("the delegation field table", () => {
     ]);
   });
 
+  it("has a base branch for writing workflows, null (detect) by default, that must be a safe branch name", () => {
+    expect(resolveDelegationSettings(undefined).git).toEqual({ baseBranch: null });
+    expect(resolveDelegationSettings({ git: { baseBranch: "release/2.0" } }).git).toEqual({
+      baseBranch: "release/2.0",
+    });
+    for (const bad of ["-main", "a..b", "feature/.hidden", "main.lock", "main/", "a//b", "", 7]) {
+      expect(delegationSectionErrors({ git: { baseBranch: bad } })).toEqual([
+        "/delegation/git/baseBranch: must be null (detect main, else the repository's default branch) or a local branch name",
+      ]);
+    }
+  });
+
   it("gives each layer its own compaction threshold, else the general one", () => {
     const settings = resolveDelegationSettings({
       context: { compactAtTokens: 200_000, perLayer: { orchestrator: 400_000, executor: null } },

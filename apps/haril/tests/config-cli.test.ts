@@ -227,6 +227,25 @@ describe("haril config set", () => {
     });
   });
 
+  it("sets the base branch of writing workflows, or null to detect it, and refuses an unsafe name", async () => {
+    const path = writeConfig("{}");
+    const set = await cli(["config", "set", "delegation.git.baseBranch", "release/2.0"], path);
+    expect([set.code, set.err]).toEqual([0, []]);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
+      delegation: { git: { baseBranch: "release/2.0" } },
+    });
+    const refused = await cli(["config", "set", "delegation.git.baseBranch", "a..b"], path);
+    expect(refused.code).toBe(2);
+    expect(refused.err.join("\n")).toContain("/delegation/git/baseBranch");
+    const cleared = await cli(["config", "set", "delegation.git.baseBranch", "null"], path);
+    expect(cleared.code).toBe(0);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
+      delegation: { git: { baseBranch: null } },
+    });
+    const shown = await cli(["config", "get", "delegation.git"], path);
+    expect(shown.out).toEqual(["delegation.git.baseBranch = null  (haril.json)"]);
+  });
+
   it("--reset takes a value back to its default and drops the groups it empties", async () => {
     const path = writeConfig(
       JSON.stringify({

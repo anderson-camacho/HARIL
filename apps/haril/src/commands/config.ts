@@ -154,6 +154,7 @@ function settingValue(field: DelegationField, text: string): unknown {
       return word === "true" ? true : word === "false" ? false : word;
     case "url-or-null":
     case "model-or-null":
+    case "branch-or-null":
       return word === "" || word === "null" ? null : word;
     case "level-or-null":
       return word === "" || word === "null" ? null : word.toLowerCase();

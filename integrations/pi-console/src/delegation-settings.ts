@@ -23,7 +23,8 @@ type SettingKind =
   | { readonly type: "model-list" }
   | { readonly type: "command-list" }
   | { readonly type: "stop-list" }
-  | { readonly type: "folder" };
+  | { readonly type: "folder" }
+  | { readonly type: "branch-or-null" };
 
 export type SettingValue = string | number | boolean | null | readonly string[];
 
@@ -51,6 +52,7 @@ export const GROUP_TITLES: Readonly<Record<string, string>> = {
   watchdog: "WATCHDOG",
   autonomy: "AUTONOMY",
   commands: "COMMANDS",
+  git: "GIT",
   research: "RESEARCH (CONSULT)",
 };
 
@@ -70,6 +72,7 @@ const KIND_TYPES: ReadonlySet<string> = new Set([
   "command-list",
   "stop-list",
   "folder",
+  "branch-or-null",
 ]);
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -200,6 +203,8 @@ export function valueText(field: SettingField, value: SettingValue = field.value
       return value === null ? "not pinned" : String(value);
     case "level-or-null":
       return value === null ? "gateway default" : String(value);
+    case "branch-or-null":
+      return value === null ? "detect (main, else the repository's default branch)" : String(value);
     default:
       return value === null ? "not set" : String(value);
   }
@@ -246,6 +251,8 @@ export function rangeText(field: SettingField): string {
       return "after_plan, after_node:<id>, before_merge, on_audit_failure, on_budget_pct:<n>, at_end";
     case "folder":
       return "a folder inside the project";
+    case "branch-or-null":
+      return "a local branch name, or empty to detect main (else the repository's default branch)";
   }
 }
 
@@ -284,6 +291,15 @@ function typedInteger(text: string, unit: "tokens" | "ms" | "count"): number | u
   return Number.isSafeInteger(value) ? value : undefined;
 }
 
+// A branch name HARIL accepts for git.baseBranch (the same rules as @haril/contracts): ASCII letters, digits, "-", "_",
+// "." and "/", never starting with "-", never "..", "//" or a trailing "/", no segment starting with "." or ending in
+// ".lock".
+function isBranchName(word: string): boolean {
+  if (!/^[A-Za-z0-9_][A-Za-z0-9._/-]{0,199}$/.test(word)) return false;
+  if (word.includes("..") || word.includes("//") || word.endsWith("/")) return false;
+  return word.split("/").every((part) => !part.startsWith(".") && !part.endsWith(".lock"));
+}
+
 // What the user typed for a text field, checked as HARIL will check it, and the argument for `haril config set`.
 export function parseEntry(field: SettingField, text: string): ParsedEntry {
   const kind = field.kind;
@@ -311,6 +327,11 @@ export function parseEntry(field: SettingField, text: string): ParsedEntry {
     case "url-or-null":
       if (word === "") return { ok: true, arg: "null", value: null };
       return /^https?:\/\/\S+$/.test(word)
+        ? { ok: true, arg: word, value: word }
+        : { ok: false, error: `${field.label}: ${rangeText(field)}` };
+    case "branch-or-null":
+      if (word === "") return { ok: true, arg: "null", value: null };
+      return isBranchName(word)
         ? { ok: true, arg: word, value: word }
         : { ok: false, error: `${field.label}: ${rangeText(field)}` };
     case "folder":

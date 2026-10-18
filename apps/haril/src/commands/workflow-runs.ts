@@ -24,10 +24,11 @@ import { buildWorkflowSnapshot, headerLines, treeLines } from "./workflow-snapsh
 // (fake:delegate, fake:execute, fake:audit).
 //
 // Phase F8: a workflow on a project whose root is the top level of a git repository writes. start fixes its base branch
-// (main, or the default branch detected when the project names it otherwise; --base names another) and that branch's
-// commit, so every executor's worktree starts from it whatever happens to the branch meanwhile, and the result goes to
-// the integration branch haril/<workflow>/integration. --read-only keeps a workflow from writing. Without git, or when
-// the root is not a repository's top level, the workflow stays read-only and start says why.
+// (--base, else haril.json's delegation.git.baseBranch, else main or the default branch detected when the project names
+// it otherwise) and that branch's commit, so every executor's worktree starts from it whatever happens to the branch
+// meanwhile, and the result goes to the integration branch haril/<workflow>/integration. --read-only keeps a workflow
+// from writing. Without git, or when the root is not a repository's top level, the workflow stays read-only and start
+// says why.
 
 const START_USAGE = [
   "usage: haril workflow start <goal> [--model <ref>] [--agent <ref>] [--autonomous | --stop-at <stops>] [--project <slug>]",
@@ -38,9 +39,9 @@ const START_USAGE = [
   "  until the model catalog arrives. --agent orchestrator runs real Pi agents; the default, fake:orchestrate, runs the",
   "  simulated agents. Without --autonomous or --stop-at it stops at delegation.autonomy.defaultStops (default",
   "  after_plan); continue it with haril workflow continue. The workflow keeps haril.json's limits as they are now.",
-  "  In a git project the executors write, each in its own worktree from main (or --base), and the delegators merge their",
-  "  work into the branch haril/<workflow>/integration for you to review; nothing is merged into main or pushed.",
-  "  --read-only keeps the agents from writing.",
+  "  In a git project the executors write, each in its own worktree from main (or --base, or delegation.git.baseBranch),",
+  "  and the delegators merge their work into the branch haril/<workflow>/integration for you to review; nothing is",
+  "  merged into main or pushed. --read-only keeps the agents from writing.",
 ].join("\n");
 const LIST_USAGE = "usage: haril workflow list [--project <slug>] [--json] [--data-dir <path>]";
 const SHOW_USAGE = "usage: haril workflow show <workflowId> [--json] [--data-dir <path>]";
@@ -73,22 +74,28 @@ function stopsOf(text: string | undefined): Stop[] | string {
     : `--stop-at has an unknown stop "${bad}" (after_plan, after_node:<id>, on_audit_failure, on_budget_pct:<n>, at_end)`;
 }
 
-// What start fixes for a workflow that writes (phase F8), or why it stays read-only.
+// What start fixes for a workflow that writes (phase F8), or why it stays read-only. `configured` names haril.json's
+// git.baseBranch when that branch is what the repository lacks.
 type WritingBase =
   | { readonly writes: true; readonly branch: string; readonly sha: string }
-  | { readonly writes: false; readonly reason: string };
+  | { readonly writes: false; readonly reason: string; readonly configured?: string };
 
+// The base branch, in order: --base, haril.json's delegation.git.baseBranch, then detection (main, else the remote's
+// default, init.defaultBranch or master). A branch the user named, on the command line or in the file, is never swapped
+// for another one.
 async function writingBaseOf(
   root: string,
   readOnly: boolean,
   requested: string | null,
+  configured: string | null,
 ): Promise<WritingBase> {
   if (readOnly) return { writes: false, reason: "--read-only" };
   const repository = await inspectRepository(root);
   if (!repository.ok) return { writes: false, reason: repository.detail };
-  const base = await detectBaseBranch(root, requested);
-  return base.ok
-    ? { writes: true, branch: base.branch, sha: base.sha }
+  const base = await detectBaseBranch(root, requested ?? configured);
+  if (base.ok) return { writes: true, branch: base.branch, sha: base.sha };
+  return requested === null && configured !== null
+    ? { writes: false, reason: base.detail, configured }
     : { writes: false, reason: base.detail };
 }
 
@@ -207,12 +214,18 @@ export async function workflowStart(
   const dataDir = dataDirFor(host, lastValue(parsed, "--data-dir"));
   const slug = lastValue(parsed, "--project");
   const root = projectRootFor(host, dataDir, slug);
-  const base =
+  const base: WritingBase =
     root === undefined
-      ? ({ writes: false, reason: "no project" } as const)
-      : await writingBaseOf(root, readOnly, requestedBase);
+      ? { writes: false, reason: "no project" }
+      : await writingBaseOf(root, readOnly, requestedBase, settings.git.baseBranch);
   if (requestedBase !== null && !base.writes) {
     return fail(io, `--base ${requestedBase}: ${base.reason}`);
+  }
+  if (!base.writes && base.configured !== undefined) {
+    return fail(
+      io,
+      `delegation.git.baseBranch "${base.configured}": ${base.reason}; pass --base <branch> or --read-only, or change it with haril config set`,
+    );
   }
   const limits = limitsFor(base, delegationLimitsOf(settings.limits));
   const idempotencyKey = explicitKey ?? `workflow-start-${storeAccess(host).ids.next()}`;

@@ -32,6 +32,7 @@ export type DelegationGroup =
   | "watchdog"
   | "autonomy"
   | "commands"
+  | "git"
   | "research";
 
 // When a change takes effect, as the console says it next to each field.
@@ -63,7 +64,9 @@ export type DelegationFieldKind =
   | { readonly type: "model-list" }
   | { readonly type: "command-list" }
   | { readonly type: "stop-list" }
-  | { readonly type: "folder" };
+  | { readonly type: "folder" }
+  // A local branch name git accepts and HARIL may hand to it, or null (detect it).
+  | { readonly type: "branch-or-null" };
 
 type JsonLeaf = string | number | boolean | null | readonly string[];
 
@@ -432,6 +435,14 @@ export const DELEGATION_FIELDS: readonly DelegationField[] = Object.freeze([
     effect: "next runtime start",
   },
   {
+    path: "git.baseBranch",
+    group: "git",
+    label: "Base branch of writing workflows",
+    kind: { type: "branch-or-null" },
+    default: null,
+    effect: "new workflows",
+  },
+  {
     path: "research.folder",
     group: "research",
     label: "Research folder (CONSULT)",
@@ -478,6 +489,9 @@ const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 // Scheme, host (name, IPv4 or bracketed IPv6), optional port and path, as config.ts checks a provider URL.
 const HTTP_URL = /^https?:\/\/(\[[0-9a-fA-F:.]+\]|[A-Za-z0-9.-]+)(:\d{1,5})?([/?#]\S*)?$/;
 const FOLDER_SEGMENT = /^[A-Za-z0-9._ -]+$/;
+// The branch names HARIL hands to git (integrations/git's isSafeBranchName): ASCII letters, digits, "-", "_", "." and
+// "/", never starting with "-", never "..", "//" or a trailing "/", no segment starting with "." or ending in ".lock".
+const BRANCH = /^[A-Za-z0-9_][A-Za-z0-9._/-]{0,199}$/;
 const MAX_LIST = 100;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -527,6 +541,12 @@ function folderProblem(value: string): string | null {
       return "may hold only letters, digits, spaces, '.', '_' and '-' in each folder name";
   }
   return null;
+}
+
+function isBranchName(value: unknown): value is string {
+  if (typeof value !== "string" || !BRANCH.test(value)) return false;
+  if (value.includes("..") || value.includes("//") || value.endsWith("/")) return false;
+  return value.split("/").every((part) => !part.startsWith(".") && !part.endsWith(".lock"));
 }
 
 function listProblem(
@@ -605,6 +625,10 @@ export function delegationValueProblem(field: DelegationField, value: unknown): 
       );
     case "folder":
       return typeof value === "string" ? folderProblem(value) : "must be a folder path";
+    case "branch-or-null":
+      return value === null || isBranchName(value)
+        ? null
+        : "must be null (detect main, else the repository's default branch) or a local branch name";
   }
 }
 
@@ -743,6 +767,9 @@ export interface DelegationSettings {
     readonly outputMaxBytes: number;
   };
   readonly autonomy: { readonly defaultStops: readonly Stop[] };
+  // The branch a writing workflow's worktrees start from (3.10.2); null: main, else the repository's default branch.
+  // `haril workflow start --base` wins over it.
+  readonly git: { readonly baseBranch: string | null };
   readonly watchdog: {
     readonly intervalMs: number;
     readonly idleStrikesToClose: number;

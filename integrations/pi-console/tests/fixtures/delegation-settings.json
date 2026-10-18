@@ -105,6 +105,9 @@
       "timeoutMs": 300000,
       "outputMaxBytes": 16384
     },
+    "git": {
+      "baseBranch": null
+    },
     "research": {
       "folder": "docs/investigacion"
     }
@@ -799,6 +802,18 @@
       "default": 16384,
       "source": "default",
       "effect": "next runtime start"
+    },
+    {
+      "path": "delegation.git.baseBranch",
+      "group": "git",
+      "label": "Base branch of writing workflows",
+      "kind": {
+        "type": "branch-or-null"
+      },
+      "value": null,
+      "default": null,
+      "source": "default",
+      "effect": "new workflows"
     },
     {
       "path": "delegation.research.folder",

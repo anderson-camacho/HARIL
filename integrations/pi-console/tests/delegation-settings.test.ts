@@ -86,7 +86,7 @@ describe("the delegation settings as the console shows them", () => {
   it("decode HARIL's config get output, every field with its value and source", () => {
     const decoded = view();
     expect(decoded.configPath).toBe("fake-config/haril.json");
-    expect(decoded.fields).toHaveLength(47);
+    expect(decoded.fields).toHaveLength(48);
     expect(valueText(field("commands.allow"))).toMatch(/^npm test, npm test \*, /);
     expect(valueText(field("commands.timeoutMs"))).toBe("5 min");
     expect(valueText(field("commands.outputMaxBytes"))).toBe("16,384");
@@ -116,6 +116,23 @@ describe("the delegation settings as the console shows them", () => {
     expect(parseEntry(field("context.perLayer.executor"), "")).toMatchObject({ arg: "null" });
     expect(parseEntry(field("limits.maxAuditRetries"), "2")).toMatchObject({ ok: false });
     expect(parseEntry(field("context.compactAtTokens"), "lots")).toMatchObject({ ok: false });
+  });
+
+  it("show and read the base branch of writing workflows: a branch name, or empty to detect it", () => {
+    const base = field("git.baseBranch");
+    expect(valueText(base)).toBe("detect (main, else the repository's default branch)");
+    expect(rangeText(base)).toBe(
+      "a local branch name, or empty to detect main (else the repository's default branch)",
+    );
+    expect(parseEntry(base, "")).toEqual({ ok: true, arg: "null", value: null });
+    expect(parseEntry(base, " release/2.0 ")).toEqual({
+      ok: true,
+      arg: "release/2.0",
+      value: "release/2.0",
+    });
+    for (const bad of ["-main", "a..b", "feature/.hidden", "main.lock", "has space"]) {
+      expect([bad, parseEntry(base, bad).ok]).toEqual([bad, false]);
+    }
   });
 
   it("are summarized in the TOOLS panel, with a control that opens them", () => {
