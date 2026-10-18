@@ -12,6 +12,7 @@ import type {
   TaskKind,
   TaskState,
 } from "@haril/contracts";
+import type { WorkflowsPort } from "./delegation.js";
 import type { HarilError, Result } from "./result.js";
 import type { UsageLogPort } from "./usage-log.js";
 
@@ -311,6 +312,8 @@ export interface AppliedCommand {
   readonly reason?: string;
   readonly taskIds: readonly string[];
   readonly planId?: string;
+  // The workflow a workflow.start created.
+  readonly workflowId?: string;
 }
 
 export interface PromotedTask {
@@ -774,6 +777,8 @@ export interface Store {
   readonly virtualKeys: VirtualKeysPort;
   readonly approvals: ApprovalsPort;
   readonly memory: MemoryStorePort;
+  // Workflows of the Delegation mode, their turns, proposals and verdicts (4.2, 4.3).
+  readonly workflows: WorkflowsPort;
   // The orders and usage logs (4.5): append-only, hash-chained, written without a lease (P14).
   readonly usageLog: UsageLogPort;
   close(): void;

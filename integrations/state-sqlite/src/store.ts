@@ -50,6 +50,7 @@ import { readLeaseSummary } from "./lease.js";
 import { createMaintenance } from "./maintenance.js";
 import { createMemoryFacet } from "./memory.js";
 import { createUsageLogFacet } from "./usage-log.js";
+import { createWorkflowsFacet, type WorkflowCommandHandler } from "./workflows.js";
 
 // Implementation of the Store port over one node:sqlite connection. Writes run in BEGIN IMMEDIATE.
 // Core rules (transition table, plan checks) arrive through `rules`; this file never imports Core values.
@@ -164,11 +165,30 @@ const MAX_VERIFY_RETRIES = 2;
 type AcceptanceCheckEntry = Extract<ClaimedTask["acceptance"][number], { readonly kind: string }>;
 
 // Outcome of applying one command: applied with the ids it created, or rejected with a reason.
-type ApplyVerdict =
-  | { readonly ok: true; readonly taskIds: readonly string[]; readonly planId?: string }
+export type ApplyVerdict =
+  | {
+      readonly ok: true;
+      readonly taskIds: readonly string[];
+      readonly planId?: string;
+      readonly workflowId?: string;
+    }
   | { readonly ok: false; readonly reason: string };
 
-interface NewTask {
+// The delegation columns of a turn (migration 0007); absent for every other task.
+interface TaskDelegationColumns {
+  readonly workflowId: string;
+  readonly layer: number;
+  readonly role: string;
+  readonly threadId: string;
+  readonly parentTaskId: string | null;
+  readonly difficulty: string | null;
+  readonly difficultyReason: string | null;
+  readonly modelPinned: boolean;
+  readonly localId: string | null;
+  readonly delegationId: string | null;
+}
+
+export interface NewTask {
   readonly taskId: string;
   readonly projectId: string;
   readonly planId: string | null;
@@ -192,6 +212,7 @@ interface NewTask {
   readonly maxAttempts: number;
   readonly acceptance: readonly unknown[];
   readonly state: "pending" | "ready";
+  readonly delegation?: TaskDelegationColumns;
 }
 
 export class SqliteStore implements Store {
@@ -216,6 +237,8 @@ export class SqliteStore implements Store {
   readonly approvals: Store["approvals"];
   readonly memory: Store["memory"];
   readonly usageLog: Store["usageLog"];
+  readonly workflows: Store["workflows"];
+  private readonly applyWorkflowCommand: WorkflowCommandHandler;
   readonly maintenance: Store["maintenance"];
 
   constructor(options: StoreOptions) {
@@ -290,6 +313,20 @@ export class SqliteStore implements Store {
       appendEvent: (input) => this.appendEvent(input),
       assertActiveEpoch: (epoch) => this.assertActiveEpoch(epoch),
     });
+    const workflows = createWorkflowsFacet({
+      db: this.db,
+      clock: this.clock,
+      ids: this.ids,
+      transaction: (work) => this.inTransaction(work),
+      appendEvent: (input) => this.appendEvent(input),
+      assertActiveEpoch: (epoch) => this.assertActiveEpoch(epoch),
+      insertTask: (task, now) => this.insertTask(task, now),
+      insertDependency: (taskId, dependsOn, kind) => this.insertDependency(taskId, dependsOn, kind),
+      appendTaskCreated: (taskId, projectId, goal, state, extra) =>
+        this.appendTaskCreated(taskId, projectId, goal, state, extra),
+    });
+    this.workflows = workflows.port;
+    this.applyWorkflowCommand = workflows.applyCommand;
     this.usageLog = createUsageLogFacet({
       db: this.db,
       clock: this.clock,
@@ -587,7 +624,11 @@ export class SqliteStore implements Store {
           .run(
             now,
             epoch,
-            JSON.stringify({ taskIds: verdict.taskIds, planId: verdict.planId ?? null }),
+            JSON.stringify({
+              taskIds: verdict.taskIds,
+              planId: verdict.planId ?? null,
+              workflowId: verdict.workflowId ?? null,
+            }),
             command.commandId,
           );
         this.appendEvent({
@@ -604,6 +645,7 @@ export class SqliteStore implements Store {
           outcome: "applied",
           taskIds: verdict.taskIds,
           planId: verdict.planId,
+          workflowId: verdict.workflowId,
         };
       }
       this.db
@@ -639,6 +681,8 @@ export class SqliteStore implements Store {
     if (command.projectId === null) return { ok: false, reason: "command has no project" };
     if (command.type === "task.create") return this.applyTaskCreate(command, now);
     if (command.type === "plan.submit") return this.applyPlanSubmit(command, now);
+    const workflowVerdict = this.applyWorkflowCommand(command, now);
+    if (workflowVerdict !== undefined) return workflowVerdict;
     return { ok: false, reason: `unsupported command type "${command.type}"` };
   }
 
@@ -815,22 +859,51 @@ export class SqliteStore implements Store {
         now,
         now,
       );
-  }
-
-  private insertDependency(taskId: string, dependsOn: string): void {
+    const turn = task.delegation;
+    if (turn === undefined) return;
     this.db
-      .prepare("INSERT INTO task_dependencies (task_id, depends_on_task_id) VALUES (?, ?)")
-      .run(taskId, dependsOn);
+      .prepare(
+        "UPDATE tasks SET workflow_id = ?, layer = ?, role = ?, thread_id = ?, parent_task_id = ?, difficulty = ?, difficulty_reason = ?, model_pinned = ?, local_id = ?, delegation_id = ? WHERE task_id = ?",
+      )
+      .run(
+        turn.workflowId,
+        turn.layer,
+        turn.role,
+        turn.threadId,
+        turn.parentTaskId,
+        turn.difficulty,
+        turn.difficultyReason,
+        turn.modelPinned ? 1 : 0,
+        turn.localId,
+        turn.delegationId,
+        task.taskId,
+      );
   }
 
-  private appendTaskCreated(taskId: string, projectId: string, goal: string, state: string): void {
+  private insertDependency(
+    taskId: string,
+    dependsOn: string,
+    kind: "completed" | "settled" = "completed",
+  ): void {
+    this.db
+      .prepare("INSERT INTO task_dependencies (task_id, depends_on_task_id, kind) VALUES (?, ?, ?)")
+      .run(taskId, dependsOn, kind);
+  }
+
+  private appendTaskCreated(
+    taskId: string,
+    projectId: string,
+    goal: string,
+    state: string,
+    extra: Readonly<Record<string, unknown>> = {},
+  ): void {
     this.appendEvent({
       aggregateType: "task",
       aggregateId: taskId,
       type: "task.created",
       actorKind: "system",
       actorId: "runtime",
-      payload: { goal, state },
+      payload: { goal, state, ...extra },
       projectId,
       taskId,
     });

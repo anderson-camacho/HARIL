@@ -13,8 +13,7 @@
     },
     "integrations/git": { "ignoreDependencies": ["@haril/contracts"] },
     "integrations/state-sqlite": {
-      "entry": ["src/**/index.ts", "tests/crash/*.mjs"],
-      "ignoreDependencies": ["@haril/contracts"]
+      "entry": ["src/**/index.ts", "tests/crash/*.mjs"]
     },
     "integrations/agent-pi": { "ignoreDependencies": ["@haril/contracts"] },
     "integrations/pi-console": {
