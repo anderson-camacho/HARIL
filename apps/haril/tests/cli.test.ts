@@ -129,12 +129,12 @@ describe("version and help", () => {
     expect(err.join("\n")).toContain("doctor");
   });
 
-  it("no arguments in a terminal opens the shell, the same as haril shell", async () => {
+  it("no arguments in a terminal opens the console, the same as haril console", async () => {
     const { io, err } = harness();
-    // The host says it is a terminal, so the bare command goes to `haril shell`. Under the test runner the real
-    // stdin is not a TTY, so the shell itself refuses: its own message proves the dispatch, and no help is printed.
+    // The host says it is a terminal, so the bare command goes to `haril console`. Under the test runner the real
+    // stdin is not a TTY, so the console itself refuses: its own message proves the dispatch, and no help is printed.
     expect(await run([], io, { ...HOST, interactive: true })).toBe(2);
-    expect(err.join("\n")).toContain("the shell needs an interactive terminal");
+    expect(err.join("\n")).toContain("the console needs an interactive terminal");
     expect(err.join("\n")).not.toContain("doctor");
   });
 

@@ -1,6 +1,7 @@
 import { homedir, userInfo } from "node:os";
 import { StoreError } from "@haril/state-sqlite";
 import { approvals, approve, deny } from "./commands/approvals.js";
+import { consoleCommand } from "./commands/console.js";
 import { doctor } from "./commands/doctor.js";
 import { events } from "./commands/events.js";
 import { memory } from "./commands/memory.js";
@@ -47,7 +48,7 @@ const HELP_LINES = [
   "haril - HARIL command line",
   "",
   "usage:",
-  "  haril                            in a terminal, open the interactive terminal UI (haril shell); otherwise print this help",
+  "  haril                            in a terminal, open the HARIL console (haril console); otherwise print this help",
   "  haril --version | version        print the CLI version",
   "  haril doctor [--json] [--data-dir <path>]   check the runtime and the store",
   "  haril models [--json] [--provider <id>]   list the models of every provider as <provider>/<model> (haril.json)",
@@ -76,7 +77,9 @@ const HELP_LINES = [
   "  haril metrics [--project <slug>] [--json]   runs, retries and success rate from the event log",
   "  haril events [--project <slug>] [--task <id>] [--limit <n>] [--json]   the newest events, oldest first",
   "  haril memory status [--json]     the memory provider, its health, whether memory is degraded and the outbox depth",
-  "  haril shell [--data-dir <path>] [--no-runtime]   open the interactive terminal UI; it starts haril start",
+  "  haril console [--data-dir <path>]   open Pi in this folder with the HARIL extension: Pi's own commands, logins",
+  "    and models, plus the HARIL bar and /haril, /goal, /plans, /approve, /deny, /tasks; needs npm run runtime:install",
+  "  haril shell [--data-dir <path>] [--no-runtime]   open the previous terminal UI; it starts haril start",
   "    in the background when work waits and no runtime runs (output in logs/), never with --no-runtime",
   "  haril help                       print this help",
 ];
@@ -110,8 +113,8 @@ function dispatch(argv: readonly string[], io: CliIo, host: HostInfo): number | 
   const [command, ...rest] = argv;
   switch (command) {
     case undefined:
-      // A bare `haril` in a terminal is the shell, the way people open it; scripts and pipes still get the help.
-      if (host.interactive === true) return shell([], io, host);
+      // A bare `haril` in a terminal is the console, the way people open it; scripts and pipes still get the help.
+      if (host.interactive === true) return consoleCommand([], io, host);
       printHelp(io.err);
       return EXIT_USAGE;
     case "--version":
@@ -157,6 +160,8 @@ function dispatch(argv: readonly string[], io: CliIo, host: HostInfo): number | 
       return runQueue(rest, io, host);
     case "stop":
       return stop(rest, io, host);
+    case "console":
+      return consoleCommand(rest, io, host);
     case "shell":
       return shell(rest, io, host);
     default:

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { posix, win32 } from "node:path";
+import { dirname, join, posix, win32 } from "node:path";
 import type { HostInfo, RuntimeInspection } from "./context.js";
 
 // Runtime section of doctor (M2-T3). The root resolves like the bootstrap's, but this file does not import it.
@@ -7,6 +7,7 @@ import type { HostInfo, RuntimeInspection } from "./context.js";
 
 const RUNTIME_DIR_ENV = "HARIL_RUNTIME_DIR";
 const NOT_INSTALLED = "not installed: run npm run runtime:install";
+const PAYLOAD_SEARCH_DEPTH = 6;
 
 function nonEmpty(value: string | undefined): string | undefined {
   return value === undefined || value === "" ? undefined : value;
@@ -86,4 +87,19 @@ function parseRecorded(manifest: string): Recorded | null {
   } catch {
     return null;
   }
+}
+
+// A built file of the payload (the bridge, the console extension), by its repository-relative path: looked up from the
+// running bundle's directory and its parents, so it is found from apps/haril/dist in the repository and beside
+// haril.mjs under app/<version> when installed.
+export function findPayloadFile(relativePath: string, bundleDir: string): string | undefined {
+  let dir = bundleDir;
+  for (let depth = 0; depth <= PAYLOAD_SEARCH_DEPTH; depth++) {
+    const candidate = join(dir, relativePath);
+    if (existsSync(candidate)) return candidate;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return undefined;
 }
