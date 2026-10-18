@@ -23,6 +23,15 @@ import {
   registerHarilModels,
   restoreHarilModel,
 } from "./models.js";
+import { ASCII_GLYPHS, orchestrationGlyphs } from "./orchestration-draw.js";
+import { openOrchestrationOverlay } from "./orchestration-overlay.js";
+import {
+  initialOrchestrationState,
+  type OrchestrationState,
+  type OrchestrationTarget,
+  orchestrationClick,
+  reduceOrchestration,
+} from "./orchestration-state.js";
 import type {
   AgentMessage,
   ConsoleContext,
@@ -63,6 +72,10 @@ interface Session extends CommandHost {
   dashboardData: DashboardData;
   dashboardLoading: boolean;
   dashboardRefresh: Promise<void> | undefined;
+  // The ORCHESTRATION view's state, shared by the module panel and its full-view overlay.
+  orchestration: OrchestrationState;
+  orchestrationOpen: boolean;
+  orchestrationDemo(): boolean;
   runtime(): string;
   runtimeAvailable(): boolean;
   modelRef(): string | undefined;
@@ -190,7 +203,21 @@ export default function harilConsole(pi: ConsolePi): void {
       memory: current.dashboardData.memorySummary,
       data: current.dashboardData,
       loading: current.dashboardLoading,
+      orchestration: current.orchestration,
+      asciiGlyphs: orchestrationGlyphs() === ASCII_GLYPHS,
     };
+  }
+
+  // A click on the ORCHESTRATION summary: a row, a view or "Open full view" opens the overlay there; "Stop all"
+  // simulates in demo and otherwise runs the shared runtime stop, which asks for confirmation first.
+  function orchestrationPanelClick(current: Session, target: OrchestrationTarget): void {
+    const transition = orchestrationClick(current.orchestration, target, Date.now(), "panel");
+    current.orchestration = transition.state;
+    if (transition.effect === "open-view") void current.openOrchestrationView(current.ctx);
+    else if (transition.effect === "stop-runtime") openDashboardAction(current, "stop-runtime");
+    else if (target.kind === "stop" && transition.state.status !== undefined)
+      current.ctx.ui.notify(transition.state.status, "info");
+    redraw();
   }
 
   async function refreshDashboard(current: Session): Promise<void> {
@@ -257,6 +284,42 @@ export default function harilConsole(pi: ConsolePi): void {
       dashboardData: emptyDashboardData(),
       dashboardLoading: false,
       dashboardRefresh: undefined,
+      orchestration: initialOrchestrationState(),
+      orchestrationOpen: false,
+      orchestrationDemo: () => current.orchestration.demo,
+      toggleOrchestrationDemo() {
+        current.orchestration = reduceOrchestration(current.orchestration, {
+          type: "toggle-demo",
+          now: Date.now(),
+        }).state;
+        redraw();
+        return current.orchestration.demo;
+      },
+      async openOrchestrationView(viewCtx) {
+        if (!viewCtx.hasUI || viewCtx.mode !== "tui") {
+          if (viewCtx.hasUI)
+            viewCtx.ui.notify("The orchestration view needs the interactive console.", "warning");
+          return;
+        }
+        if (current.orchestrationOpen) return;
+        current.orchestrationOpen = true;
+        try {
+          const effect = await openOrchestrationOverlay(viewCtx, {
+            get: () => current.orchestration,
+            set: (state) => {
+              current.orchestration = state;
+            },
+            glyphs: orchestrationGlyphs(),
+          });
+          current.orchestration = { ...current.orchestration, screen: "workflow" };
+          // The real stop asks for confirmation, so it runs once the overlay is gone.
+          if (effect === "stop-runtime")
+            await runDashboardAction("stop-runtime", viewCtx, pi, current);
+        } finally {
+          current.orchestrationOpen = false;
+          redraw();
+        }
+      },
       closed: false,
       harilModelRef: () => harilRef(current.model, current.registration),
       modelRef: () => harilRef(current.model, current.registration),
@@ -332,11 +395,16 @@ export default function harilConsole(pi: ConsolePi): void {
               },
               handleMouse(event: ConsoleMouseEvent) {
                 if (event.type !== "click" || event.button !== "left") return undefined;
-                const hit = layout.controlHits.find(
-                  (item) => item.row === event.y && event.x >= item.start && event.x < item.end,
-                );
-                if (hit === undefined) return undefined;
-                openDashboardAction(current, hit.action);
+                const inside = (item: { row: number; start: number; end: number }): boolean =>
+                  item.row === event.y && event.x >= item.start && event.x < item.end;
+                const hit = layout.controlHits.find(inside);
+                if (hit !== undefined) {
+                  openDashboardAction(current, hit.action);
+                  return { handled: true, render: true };
+                }
+                const panelHit = layout.orchestrationHits.find(inside);
+                if (panelHit === undefined) return undefined;
+                orchestrationPanelClick(current, panelHit.target);
                 return { handled: true, render: true };
               },
               invalidate() {},
@@ -593,6 +661,15 @@ export default function harilConsole(pi: ConsolePi): void {
       description: `Open HARIL ${area.toUpperCase()} dashboard`,
       handler: () => session?.openArea(area),
     });
+  });
+  // Alt+O is free in Pi 1.2.0's default keybindings (docs/keybindings.md and the pi-tui/coding-agent defaults).
+  pi.registerShortcut("alt+o", {
+    description: "Open the HARIL orchestration view",
+    handler: (ctx) => {
+      if (session === undefined) return;
+      session.openArea("orchestration");
+      void session.openOrchestrationView(ctx);
+    },
   });
 
   pi.on("session_start", (event, ctx) => {

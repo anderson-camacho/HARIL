@@ -233,13 +233,26 @@ Los comandos de HARIL no chocan con ninguno de Pi y trabajan sobre el proyecto d
 | Área | Datos y acciones reales |
 |---|---|
 | `AGENTS` | Modelo Pi y agentes observados en tareas del proyecto. No existe un catálogo HARIL de perfiles. |
-| `ORCHESTRATION` | Tareas, cola, aprobaciones y eventos del proyecto. Las decisiones requieren selección y confirmación; un runtime activo puede aplicar una aprobación. |
+| `ORCHESTRATION` | La vista de workflow de delegación (resumen y vista completa, ver abajo) y, debajo, las tareas, la cola, las aprobaciones y los eventos del proyecto. Las decisiones requieren selección y confirmación; un runtime activo puede aplicar una aprobación. |
 | `AUTOMATION` | Estado del runtime con su disponibilidad, cola del proyecto y controles reales. Ejecutar/iniciar solo aparece con proyecto enlazado y lease confirmado como inactivo; detener solo si se confirma en marcha. El lease es compartido por la raíz de datos. No existe API de horarios programados. |
 | `TOOLS` | Herramientas Pi configuradas y activas; permite alternar su activación para esta sesión. |
 | `WORKFLOWS` | Catálogo global de metodologías incluso sin proyecto: seleccionar una abre su definición completa desplazable. `project init` permite vincular una metodología al registrar un proyecto, pero `task add` no acepta una metodología y navegarla no la ejecuta. Los comandos nativos de Pi siguen separados y disponibles. |
 | `EVERYWHERE` | Proyecto, carpeta, rama, sesión, runtime, salud de memoria, MCP y extensiones sin mostrar credenciales. |
 
 Las vistas cargan JSON local de HARIL al abrirse o al refrescarse, no en cada render. Si la carpeta no está enlazada, `AGENTS`, `ORCHESTRATION` y `AUTOMATION` muestran **Register this folder**; el menú `/haril` también ofrece ese acceso. Se pide un nombre y una metodología real del catálogo, se muestra el preview exacto de `project init` y solo una confirmación explícita aplica `--yes`. Cancelar no escribe ni registra nada. Las listas de tareas/aprobaciones/eventos se limitan al proyecto enlazado; al cambiar de proyecto se descarta el snapshot anterior. En runtime desconocido, actualizar vuelve a consultar el estado y se ocultan las acciones de ejecutar/iniciar/detener hasta confirmarlo. Los horarios recurrentes, la importación de metodologías y el selector de metodología para `task add` no existen en el backend.
+
+**Vista de orquestación.** El módulo `ORCHESTRATION` resume un workflow de delegación (tokens, tiempo, ejecutores, auditores, agentes, cola y un árbol compacto) y abre la vista completa en una superposición: las vistas Tree, By layer, Queue, Quota y Log, el detalle del agente seleccionado (modelo y quién lo eligió, archivos, dificultad, contexto frente al umbral, cuota con la marca del 80 %, progreso, próxima revisión, auditoría y memo) y la vista en vivo. El motor de orquestación todavía no existe, así que sin workflow el módulo lo dice. `/orchestration demo` carga datos de ejemplo, siempre rotulados «DEMO · sample data, not real», y `/orchestration view` (o `Alt+O`) abre la vista completa; también hay controles en el módulo y en `/haril`. Cada estado lleva símbolo y texto; si la fuente de la terminal no tiene `●`, `○`, `✓`, `✗`, `■` o `‖`, `HARIL_CONSOLE_ASCII=1` usa `*`, `o`, `v`, `x`, `#` y `||`.
+
+| Acción en la vista completa | Teclado | Clic |
+|---|---|---|
+| Cambiar de vista | `Tab`, `←` `→` | En el nombre de la vista |
+| Mover la selección | `↑` `↓` | En la fila |
+| Ver u ocultar el detalle | `Enter` | En la fila o `[Enter Detail]` |
+| Ver en vivo (en la demostración, una transcripción simulada) | `L` | `[L Live view]` |
+| Filtrar el registro (all, agent_run, chat) | `F` | En el filtro |
+| Demostración, simular el vigilante, reiniciar | `D`, `W`, `R` | Sus botones |
+| Parar todo: en la demostración solo simula; fuera, pide confirmar la parada del runtime compartido | `S` | `■ Stop all` |
+| Cerrar | `Esc` | `[Esc Close]` |
 
 | Comando | Acción |
 |---|---|
@@ -252,6 +265,7 @@ Las vistas cargan JSON local de HARIL al abrirse o al refrescarse, no en cada re
 | `/tasks` | El estado del proyecto, su cola y el runtime (`haril status`) |
 | `/task <id>` | Una tarea con su resultado, error y tokens (`haril task show`) |
 | `/events` | Los últimos 20 eventos del proyecto |
+| `/orchestration demo`, `/orchestration view` | Activa o desactiva los datos de ejemplo de la vista de orquestación; abre la vista completa (también `Alt+O`) |
 
 Después de `/goal` y de `/approve`, si ningún runtime está en marcha, la consola arranca `haril start --started-by shell` en segundo plano, como `haril shell`: sin ventana, con su salida en `logs\runtime-<fecha>.log` y saliendo solo tras 120 s sin trabajo. El avance se sigue con `/tasks`, `/task` y `/events`; la vista En vivo sigue siendo de `haril shell`.
 

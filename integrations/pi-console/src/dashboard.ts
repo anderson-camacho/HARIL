@@ -2,6 +2,9 @@ import { renderNeuralProfile, renderWordmark } from "./dashboard-art.js";
 import { controlsFor, type DashboardAction } from "./dashboard-controls.js";
 import type { DashboardData } from "./dashboard-data.js";
 import { frameGlyph, paddedCell, visualText } from "./dashboard-theme.js";
+import { ASCII_GLYPHS, UNICODE_GLYPHS } from "./orchestration-draw.js";
+import type { OrchestrationState, OrchestrationTarget } from "./orchestration-state.js";
+import { renderOrchestrationSummary } from "./orchestration-view.js";
 import type { ConsoleTheme, ThemeColor } from "./pi-types.js";
 import { plainText, textWidth, truncate, wrap } from "./text.js";
 
@@ -39,6 +42,9 @@ export interface DashboardFacts {
   readonly memory: string;
   readonly data: DashboardData;
   readonly loading: boolean;
+  // The ORCHESTRATION view's state (shared with its full-view overlay) and the glyph set it draws with.
+  readonly orchestration: OrchestrationState;
+  readonly asciiGlyphs: boolean;
 }
 
 export interface HeaderLayout {
@@ -58,6 +64,13 @@ export interface DashboardLayout {
     readonly start: number;
     readonly end: number;
     readonly action: DashboardAction;
+  }[];
+  // Hit-boxes of the ORCHESTRATION summary: its rows, view buttons, "Open full view" and "Stop all".
+  readonly orchestrationHits: readonly {
+    readonly row: number;
+    readonly start: number;
+    readonly end: number;
+    readonly target: OrchestrationTarget;
   }[];
 }
 
@@ -297,13 +310,11 @@ function linesFor(area: DashboardArea, facts: DashboardFacts): string[] {
         "No separate HARIL agent-profile registry is exposed.",
       ];
     case "orchestration":
+      // The workflow summary is drawn above (renderOrchestrationSummary); this is the project's secondary line.
       return [
         data.projectSlug === undefined
           ? "Project tasks, approvals, queue and events require registering this folder."
-          : `Project ${facts.project} · ${data.tasks.length} tasks · ${data.queued.length} queued commands`,
-        data.projectSlug === undefined
-          ? "Register this folder to load project-scoped orchestration data."
-          : `Approvals: ${facts.pending === undefined ? "unavailable" : facts.pending} pending · ${data.events.length} recent events`,
+          : `Project ${facts.project} · ${data.tasks.length} tasks · ${data.queued.length} queued commands · approvals ${facts.pending === undefined ? "unavailable" : `${facts.pending} pending`} · ${data.events.length} recent events`,
       ];
     case "automation":
       return [
@@ -379,7 +390,7 @@ export function renderDashboardLayout(
   theme: ConsoleTheme,
   height = 24,
 ): DashboardLayout {
-  if (width < 10) return { lines: [fit("HARIL", width)], controlHits: [] };
+  if (width < 10) return { lines: [fit("HARIL", width)], controlHits: [], orchestrationHits: [] };
   const lines = [
     border(width, "┌", "─", "┐"),
     boxRow(
@@ -414,6 +425,27 @@ export function renderDashboardLayout(
         "error",
       ),
     );
+  const orchestrationHits: DashboardLayout["orchestrationHits"][number][] = [];
+  if (area === "orchestration") {
+    // The summary's lines are already colored and exactly rowWidth wide: framed as they are, one space each side.
+    const summary = renderOrchestrationSummary(
+      facts.orchestration,
+      rowWidth,
+      height < 30 ? 4 : 8,
+      facts.asciiGlyphs ? ASCII_GLYPHS : UNICODE_GLYPHS,
+    );
+    const first = lines.length;
+    const space = paddedCell(" ", 1);
+    for (const line of summary.lines)
+      lines.push(`${frameGlyph("│")}${space}${line}${space}${frameGlyph("│")}`);
+    for (const hit of summary.hits)
+      orchestrationHits.push({
+        ...hit,
+        row: hit.row + first,
+        start: hit.start + 2,
+        end: hit.end + 2,
+      });
+  }
   const wrapped = body.flatMap((item) => wrap(plainText(item), rowWidth));
   const bodyBudget = height < 30 ? 3 : 6;
   const room = Math.max(1, bodyBudget - visibleWarnings.length - (warningLines.length > 2 ? 1 : 0));
@@ -422,7 +454,13 @@ export function renderDashboardLayout(
     lines.push(
       boxRow(`… ${wrapped.length - room} more lines; open Details`, width, theme, "warning"),
     );
-  const controls = controlsFor(area, facts.data, facts.runtime, facts.runtimeAvailable);
+  const controls = controlsFor(
+    area,
+    facts.data,
+    facts.runtime,
+    facts.runtimeAvailable,
+    facts.orchestration.demo,
+  );
   const controlHits: DashboardLayout["controlHits"][number][] = [];
   const rowIndex = lines.length;
   for (const [index, control] of controls.entries()) {
@@ -441,5 +479,5 @@ export function renderDashboardLayout(
     ),
   );
   lines.push(border(width, "└", "─", "┘"));
-  return { lines, controlHits };
+  return { lines, controlHits, orchestrationHits };
 }

@@ -16,7 +16,9 @@ export type DashboardAction =
   | "commands"
   | "memory"
   | "details"
-  | "register-project";
+  | "register-project"
+  | "orchestration-view"
+  | "orchestration-demo";
 
 export interface DashboardControl {
   readonly action: DashboardAction;
@@ -29,6 +31,7 @@ export function controlsFor(
   data: DashboardData,
   runtime: string,
   runtimeAvailable = true,
+  orchestrationDemo = false,
 ): DashboardControl[] {
   const refresh: DashboardControl = { action: "refresh", label: "Refresh data", hint: "R" };
   switch (area) {
@@ -50,6 +53,12 @@ export function controlsFor(
           ? [{ action: "register-project" as const, label: "Register this folder", hint: "I" }]
           : []),
         { action: "details", label: "View complete details", hint: "D" },
+        { action: "orchestration-view", label: "Open orchestration view", hint: "V" },
+        {
+          action: "orchestration-demo",
+          label: orchestrationDemo ? "Demo off (sample data)" : "Demo on (sample data)",
+          hint: "M",
+        },
         ...(data.projectSlug === undefined
           ? []
           : [

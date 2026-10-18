@@ -11,6 +11,7 @@ import {
   readMethodologyDefinition,
   summarizeApproval,
 } from "./dashboard-data.js";
+import { demoNotice } from "./orchestration-state.js";
 import type { ConsoleContext, ConsolePi } from "./pi-types.js";
 import { type BoundProject, folderName } from "./project.js";
 import type { PendingApproval } from "./status.js";
@@ -59,6 +60,10 @@ export interface DashboardActionHost {
   readonly refreshStatus: () => Promise<void>;
   readonly output: (title: string, lines: readonly string[]) => void;
   readonly openArea: (area: DashboardArea) => void;
+  // The ORCHESTRATION view: its full-view overlay and its demo mode (sample data, never HARIL state).
+  readonly openOrchestrationView: (ctx: ConsoleContext) => Promise<void>;
+  readonly toggleOrchestrationDemo: () => boolean;
+  readonly orchestrationDemo: () => boolean;
 }
 
 function projectSlug(host: DashboardActionHost, ctx: ConsoleContext): string | undefined {
@@ -690,6 +695,13 @@ export async function runDashboardAction(
         host.memorySummary(),
         "Provider credentials are not displayed.",
       ]);
+      return;
+    case "orchestration-view":
+      await host.openOrchestrationView(ctx);
+      return;
+    case "orchestration-demo":
+      ctx.ui.notify(demoNotice(host.toggleOrchestrationDemo()), "info");
+      return;
   }
 }
 
@@ -701,6 +713,8 @@ export async function openDashboardActionMenu(
   const options = [
     "Open an area",
     ...(host.project === undefined ? ["Register this folder"] : []),
+    "Open orchestration view",
+    host.orchestrationDemo() ? "Orchestration demo off" : "Orchestration demo on",
     "Choose Pi model",
     ...(host.project === undefined
       ? []
@@ -729,6 +743,9 @@ export async function openDashboardActionMenu(
   }
   const actions: Record<string, DashboardAction> = {
     "Register this folder": "register-project",
+    "Open orchestration view": "orchestration-view",
+    "Orchestration demo on": "orchestration-demo",
+    "Orchestration demo off": "orchestration-demo",
     "Choose Pi model": "model",
     "Review approvals": "approvals",
     "Inspect tasks": "tasks",

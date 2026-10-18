@@ -1,5 +1,6 @@
 import { cliAvailable, NOT_LAUNCHED, runHaril, type StartedRuntime, startRuntime } from "./cli.js";
 import { DASHBOARD_AREAS, type DashboardArea } from "./dashboard.js";
+import { demoNotice } from "./orchestration-state.js";
 import type { AutocompleteItem, ConsoleContext, ConsolePi } from "./pi-types.js";
 import { type BoundProject, folderName } from "./project.js";
 import { type PendingApproval, readPending, readRuntimeAlive } from "./status.js";
@@ -35,6 +36,10 @@ export interface CommandHost {
   refresh(): Promise<void>;
   reload(): Promise<void>;
   openActions(ctx: ConsoleContext): Promise<void>;
+  // The ORCHESTRATION demo (sample data) on or off; returns whether it is now on.
+  toggleOrchestrationDemo(): boolean;
+  // Opens the ORCHESTRATION full view over the terminal.
+  openOrchestrationView(ctx: ConsoleContext): Promise<void>;
 }
 
 interface CommandSpec {
@@ -367,17 +372,50 @@ export function registerCommands(pi: ConsolePi, host: () => CommandHost | undefi
   });
 }
 
+const ORCHESTRATION_SUBCOMMANDS: readonly AutocompleteItem[] = [
+  { value: "demo", label: "demo", description: "Turn the sample workflow on or off" },
+  { value: "view", label: "view", description: "Open the full orchestration view" },
+];
+
+// /orchestration demo toggles the sample workflow; /orchestration view opens the full view. Both open the area, so
+// the module panel shows the result.
+async function orchestrationCommand(
+  args: string,
+  current: CommandHost,
+  ctx: ConsoleContext,
+): Promise<boolean> {
+  const sub = plainText(args).trim().toLowerCase();
+  if (sub === "") return false;
+  current.openArea("orchestration");
+  if (sub === "demo") ctx.ui.notify(demoNotice(current.toggleOrchestrationDemo()), "info");
+  else if (sub === "view") await current.openOrchestrationView(ctx);
+  else ctx.ui.notify("usage: /orchestration [demo|view]", "warning");
+  return true;
+}
+
 // Pi binds runtime actions after extension factories have registered their listeners. Read its command list only
 // from session_start, when getCommands is initialized, before adding aliases that could shadow other extensions.
 function registerDashboardCommands(pi: ConsolePi, host: () => CommandHost | undefined): void {
   const registeredCommands = new Set(pi.getCommands().map((command) => command.name));
   for (const area of DASHBOARD_AREAS) {
     if (registeredCommands.has(area)) continue;
+    const orchestration = area === "orchestration";
     pi.registerCommand(area, {
-      description: `HARIL: open the ${area.toUpperCase()} dashboard`,
-      async handler(_args, ctx) {
+      description: orchestration
+        ? "HARIL: open the ORCHESTRATION dashboard (demo: sample workflow, view: full view)"
+        : `HARIL: open the ${area.toUpperCase()} dashboard`,
+      ...(orchestration
+        ? {
+            getArgumentCompletions: (prefix: string) =>
+              ORCHESTRATION_SUBCOMMANDS.filter((item) =>
+                item.value.startsWith(prefix.trim().toLowerCase()),
+              ),
+          }
+        : {}),
+      async handler(args, ctx) {
         const current = host();
         if (current === undefined) return;
+        if (orchestration && (await orchestrationCommand(args, current, ctx))) return;
         current.openArea(area);
         ctx.ui.notify(`${area.toUpperCase()} dashboard · Ctrl+Shift+1..6 or /${area}`, "info");
       },
