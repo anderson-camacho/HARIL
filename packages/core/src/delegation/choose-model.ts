@@ -81,6 +81,9 @@ export interface ModelSelectionContext {
   readonly stats: ModelStats;
   readonly policy: QuotaPolicy;
   readonly largeTaskTokens: number;
+  // delegation.models.auditorDistinctFromExecutor (3.8 rule 2, phase F7): false lets an auditor run on its executor's
+  // model like any other. Absent means true.
+  readonly auditorDistinctFromExecutor?: boolean;
 }
 
 export interface ModelRequest {
@@ -321,6 +324,11 @@ function costOf(ref: string, context: ModelSelectionContext): number {
   return context.table.models[ref]?.costTier ?? Number.POSITIVE_INFINITY;
 }
 
+// The model an auditor avoids (its executor's), unless haril.json turned the rule off.
+function avoidedModel(request: ModelRequest, context: ModelSelectionContext): string | null {
+  return context.auditorDistinctFromExecutor === false ? null : (request.avoid ?? null);
+}
+
 function chooseFromTable(
   request: ModelRequest,
   large: boolean,
@@ -345,7 +353,7 @@ function chooseFromTable(
   }
   if (eligible.length === 0) return waitOrGiveUp(null, exclusions, context);
 
-  const avoid = request.avoid ?? null;
+  const avoid = avoidedModel(request, context);
   if (avoid !== null && eligible.some((ref) => ref !== avoid)) {
     eligible = eligible.filter((ref) => ref !== avoid);
   }
@@ -388,7 +396,7 @@ export function modelPin(value: string | null | undefined): string | null {
 
 export function chooseModel(request: ModelRequest, context: ModelSelectionContext): ModelChoice {
   const large = isLargeTask(request.difficulty, request.budgetTokens, context.largeTaskTokens);
-  const avoid = request.avoid ?? null;
+  const avoid = avoidedModel(request, context);
 
   // 1. A model the user specified: exactly that one, or a wait, never another model.
   const explicit = modelPin(request.explicit);

@@ -87,6 +87,8 @@ export interface SnapshotOptions {
     model: string,
   ) => { window5hPct: number | null; weeklyPct: number | null } | null;
   readonly quota?: WorkflowSnapshot["quota"];
+  // How many tokens a real run's context holds (its Pi session, phase F7); null when unknown.
+  readonly contextUsedOf?: (runId: string) => number | null;
 }
 
 function sum(values: readonly (number | null)[]): number {
@@ -114,8 +116,11 @@ interface NodeContext {
   readonly memos: ReadonlyMap<string, string | null>;
   // The model a parent proposed for a child, by proposalKey (null: it left the choice to the table).
   readonly proposed: ReadonlyMap<string, string | null>;
-  // The reasoning level each attempt ran at, by task, when the runtime knew it (event model.selected).
+  // The reasoning level each attempt ran at, by task, when the runtime knew it: the level its layer asked for and Pi ran
+  // at (event run.started, phase F7), else the gateway's default level (event model.selected).
   readonly levels: ReadonlyMap<string, string | null>;
+  // The compaction threshold each real attempt was launched with, by task (event run.started, phase F7).
+  readonly compactAts: ReadonlyMap<string, number>;
   readonly options: SnapshotOptions;
 }
 
@@ -173,6 +178,35 @@ function auditSummary(audit: AuditRecord): string {
   return audit.reasons.length === 0
     ? audit.verdict
     : `${met} of ${audit.reasons.length} criteria met`;
+}
+
+// The compaction threshold a workflow kept for a layer when it started (P11; phase F7), else null.
+function keptThreshold(limits: unknown, role: WorkflowTaskRecord["role"]): number | null {
+  const kept = (limits as { context?: { compactAtTokens?: unknown; perLayer?: unknown } } | null)
+    ?.context;
+  const own = (kept?.perLayer as Record<string, unknown> | undefined)?.[role];
+  const value = typeof own === "number" ? own : kept?.compactAtTokens;
+  return typeof value === "number" && value > 0 ? value : null;
+}
+
+// The detail's context bar (3.12, 7.6): how full the node's last attempt was against its layer's threshold. The fill is
+// the Pi session's last reply when there is one, else the attempt's own tokens (a fake agent's single reply); with
+// either part unknown the snapshot says so (null).
+function contextOf(
+  thread: ThreadView,
+  rows: readonly UsageRecord[],
+  context: NodeContext,
+): WorkflowNode["context"] {
+  const last = [...rows].reverse().find((row) => row.kind === "agent_run");
+  if (last === undefined) return null;
+  const threshold =
+    (last.taskId === null ? undefined : context.compactAts.get(last.taskId)) ??
+    keptThreshold(context.workflow.limits, thread.role);
+  const fromSession =
+    last.runId === null ? null : (context.options.contextUsedOf?.(last.runId) ?? null);
+  const used =
+    fromSession ?? (last.tokensIn === null ? null : last.tokensIn + (last.tokensOut ?? 0));
+  return threshold === null || used === null ? null : { used, threshold };
 }
 
 function nodeOf(thread: ThreadView, context: NodeContext): WorkflowNode {
@@ -295,7 +329,7 @@ function nodeOf(thread: ThreadView, context: NodeContext): WorkflowNode {
       last === undefined ? null : { at: last.endedAt ?? last.ts, text: last.outcome ?? last.kind },
     // Only a live turn is checked again by the watchdog; an ended one keeps its last schedule in the store.
     nextCheckAt: LIVE_TURN.has(latest.state) ? latest.nextCheckAt : null,
-    context: null,
+    context: contextOf(thread, rows, context),
     quota: options.quotaOf?.(model) ?? null,
     difficulty:
       latest.difficulty === null
@@ -358,14 +392,27 @@ export function buildWorkflowSnapshot(
   }
   const projectEvents = store.events.list({ projectId: workflow.projectId });
   const levels = new Map<string, string | null>();
+  const compactAts = new Map<string, number>();
   for (const event of projectEvents) {
-    const payload = event.payload as { workflowId?: unknown; thinkingLevel?: unknown };
-    if (event.type !== "model.selected" || payload.workflowId !== workflowId) continue;
+    const payload = event.payload as {
+      workflowId?: unknown;
+      thinkingLevel?: unknown;
+      compactAtTokens?: unknown;
+    };
     if (event.taskId === null || event.taskId === undefined) continue;
-    levels.set(
-      event.taskId,
-      typeof payload.thinkingLevel === "string" ? payload.thinkingLevel : null,
-    );
+    if (event.type === "model.selected" && payload.workflowId === workflowId) {
+      levels.set(
+        event.taskId,
+        typeof payload.thinkingLevel === "string" ? payload.thinkingLevel : null,
+      );
+    } else if (event.type === "run.started") {
+      // The level the agent's layer asked for wins over the gateway's default (null: none was asked for).
+      if (typeof payload.thinkingLevel === "string")
+        levels.set(event.taskId, payload.thinkingLevel);
+      if (typeof payload.compactAtTokens === "number") {
+        compactAts.set(event.taskId, payload.compactAtTokens);
+      }
+    }
   }
   const context: NodeContext = {
     workflow,
@@ -376,6 +423,7 @@ export function buildWorkflowSnapshot(
     memos,
     proposed,
     levels,
+    compactAts,
     options,
   };
 

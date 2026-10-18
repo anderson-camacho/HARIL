@@ -1,3 +1,4 @@
+import { DELEGATION_LAYERS } from "@haril/contracts";
 import type { QuotaPolicy } from "@haril/core";
 import type { Clock, Store, WorkflowRecord } from "@haril/core/ports";
 import type { HostInfo } from "../context.js";
@@ -12,7 +13,8 @@ import { type DelegationModels, type DelegationOptions, defaultModels } from "./
 
 // The models of real workflows while a runtime runs (docs/modos-y-delegacion.md 3.11; phase F6): the live catalog of
 // the providers, the difficulty table (config/difficulty.json over its provisional defaults, its patterns expanded
-// against the catalog), the success rates of the last manual calibration and the quota policy of haril.json. The catalog
+// against the catalog), the success rates of the last manual calibration, and from haril.json the quota policy and the
+// models per layer (phase F7: a layer's model is pinned for it, the allowed lists, the auditor rule). The catalog
 // is read again every 10 minutes and the quota every 5, in the background, so a decision never waits for the network;
 // the quota readings go to the store, where every decision reads them with the cooldowns (model-context.ts). A
 // management key the server refuses stops the sampling for the rest of the run: repeated failures would lock the
@@ -146,13 +148,29 @@ export function createLiveModels(deps: LiveModelsDeps): LiveModels {
     return workflow.simulated || root?.agentRef.startsWith("fake:") === true;
   };
 
+  // haril.json's choices for the models of each layer (phase F7): a layer's model counts as pinned for that layer
+  // (3.11: the user specified it), the allowed lists by archetype, and whether an auditor avoids its executor's model.
+  const choicesOf = (value: DelegationSettings) => ({
+    pinned: Object.fromEntries(
+      DELEGATION_LAYERS.map((layer) => [layer, value.models.layers[layer].model]),
+    ),
+    allow: Object.fromEntries(
+      Object.entries(value.models.allow).map(([layer, refs]) => [layer, [...refs]]),
+    ),
+    auditorDistinctFromExecutor: value.models.auditorDistinctFromExecutor,
+  });
+
   const models = (now: number, workflow: WorkflowRecord): DelegationModels => {
-    const policy = policyOf(settingsNow(now));
+    const current = settingsNow(now);
+    const policy = policyOf(current);
     if (simulated(workflow)) return { ...defaultModels(workflow.orchestratorModel), policy };
     refreshCatalog(now);
     refreshQuota(now);
     const entries = catalog?.value ?? [];
-    if (entries.length === 0) return { ...defaultModels(workflow.orchestratorModel), policy };
+    const choices = choicesOf(current);
+    if (entries.length === 0) {
+      return { ...defaultModels(workflow.orchestratorModel), ...choices, policy };
+    }
     const keyed = new Map(
       providersNow(now).map((entry) => [
         entry.id,
@@ -168,8 +186,7 @@ export function createLiveModels(deps: LiveModelsDeps): LiveModels {
         hasKey: keyed.get(entry.providerId) ?? false,
         coolingUntil: null,
       })),
-      allow: {},
-      pinned: {},
+      ...choices,
       quota: {},
       table: tableFor(table, refs),
       stats: table.stats,

@@ -1,10 +1,13 @@
 import { isStop, type Stop } from "@haril/contracts";
-import { DEFAULT_DELEGATION_LIMITS, orderPreview, visibleText } from "@haril/core";
+import { orderPreview, visibleText } from "@haril/core";
 import type { Store, WorkflowRecord } from "@haril/core/ports";
 import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_INVALID, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
+import { loadDelegationSettings } from "../delegation-config.js";
+import { delegationLimitsOf } from "../delegation-section.js";
 import { clockFor, storeAccess } from "../host.js";
 import { dataDirFor, openExisting, queueCommand, withProject } from "./common.js";
+import { piContextUsed } from "./pi-context.js";
 import { storeQuota } from "./snapshot-quota.js";
 import { buildWorkflowSnapshot, headerLines, treeLines } from "./workflow-snapshot.js";
 
@@ -12,7 +15,10 @@ import { buildWorkflowSnapshot, headerLines, treeLines } from "./workflow-snapsh
 // for the runtime with the human's choices: the goal, the orchestrator's model (pinned, 3.11), the agent family and the
 // autonomy (P1: with nothing said, it stops after the first plan). It also writes the order to the orders log (4.5).
 // list and show read the store; show --json prints WorkflowSnapshot v1 (ADR-0021). continue queues the human's
-// workflow.continue, the only way a stop is lifted (3.13). The agents follow the orchestrator's ref: orchestrator runs
+// workflow.continue, the only way a stop is lifted (3.13). haril.json's delegation section (phase F7) gives what start
+// does not say: the orchestrator's model (models.layers.orchestrator.model, after --model and before
+// HARIL_DEFAULT_MODEL), the default stops (autonomy.defaultStops) and the snapshot of the limits and the compaction
+// thresholds the workflow keeps (P11). The agents follow the orchestrator's ref: orchestrator runs
 // real Pi agents (orchestrator, delegator, executor, auditor; read-only until writing arrives, phase F2b), and
 // fake:orchestrate runs the fake workflow agents (fake:delegate, fake:execute, fake:audit).
 
@@ -20,9 +26,10 @@ const START_USAGE = [
   "usage: haril workflow start <goal> [--model <ref>] [--agent <ref>] [--autonomous | --stop-at <stops>] [--project <slug>]",
   "                            [--budget-tokens <n>] [--idempotency-key <key>] [--json] [--data-dir <path>]",
   "  queues a three-layer workflow for the runtime (haril start runs it). --model is the orchestrator's model (pinned),",
-  "  default HARIL_DEFAULT_MODEL; every child runs on it until the model catalog arrives. --agent orchestrator runs real",
-  "  Pi agents (read-only); the default, fake:orchestrate, runs the simulated agents.",
-  "  Without --autonomous or --stop-at it stops after the first plan (after_plan); continue it with haril workflow continue.",
+  "  default delegation.models.layers.orchestrator.model in haril.json, then HARIL_DEFAULT_MODEL; every child runs on it",
+  "  until the model catalog arrives. --agent orchestrator runs real Pi agents (read-only); the default, fake:orchestrate,",
+  "  runs the simulated agents. Without --autonomous or --stop-at it stops at delegation.autonomy.defaultStops (default",
+  "  after_plan); continue it with haril workflow continue. The workflow keeps haril.json's limits as they are now.",
 ].join("\n");
 const LIST_USAGE = "usage: haril workflow list [--project <slug>] [--json] [--data-dir <path>]";
 const SHOW_USAGE = "usage: haril workflow show <workflowId> [--json] [--data-dir <path>]";
@@ -79,11 +86,24 @@ export function workflowStart(args: readonly string[], io: CliIo, host: HostInfo
   if (lastValue(parsed, "--goal") !== undefined && parsed.positionals.length > 0) {
     return fail(io, "give the goal once: as words or with --goal, not both");
   }
-  const model = (lastValue(parsed, "--model") ?? host.env?.[MODEL_ENV] ?? "").trim();
+  // P11: what the workflow keeps from haril.json; a file the rules refuse stops the start, with each problem.
+  const delegation = loadDelegationSettings(host);
+  if (!delegation.ok) {
+    io.err(`haril: ${delegation.path} has problems; fix them first (haril doctor lists them):`);
+    for (const error of delegation.errors) io.err(`  ${error}`);
+    return EXIT_USAGE;
+  }
+  const settings = delegation.settings;
+  const model = (
+    lastValue(parsed, "--model") ??
+    settings.models.layers.orchestrator.model ??
+    host.env?.[MODEL_ENV] ??
+    ""
+  ).trim();
   if (model === "") {
     return fail(
       io,
-      `the orchestrator needs a model: pass --model <ref> (see haril models) or set ${MODEL_ENV}`,
+      `the orchestrator needs a model: pass --model <ref> (see haril models), set delegation.models.layers.orchestrator.model (haril config set) or set ${MODEL_ENV}`,
     );
   }
   const agent = (lastValue(parsed, "--agent") ?? DEFAULT_AGENT).trim();
@@ -101,10 +121,10 @@ export function workflowStart(args: readonly string[], io: CliIo, host: HostInfo
   const autonomous = parsed.flags.has("--autonomous");
   if (autonomous && stops.length > 0)
     return fail(io, "--autonomous and --stop-at exclude each other");
-  // P1: with nothing said, the workflow stops after the orchestrator's first plan.
-  const autonomy = autonomous
-    ? { mode: "autonomous", stops: [] }
-    : { mode: "stops", stops: stops.length > 0 ? stops : ["after_plan"] };
+  // P1: with nothing said, the workflow stops at haril.json's default stops (after_plan unless changed); none is
+  // autonomous.
+  const chosen = autonomous ? [] : stops.length > 0 ? stops : [...settings.autonomy.defaultStops];
+  const autonomy = { mode: chosen.length === 0 ? "autonomous" : "stops", stops: chosen };
   const budgetText = lastValue(parsed, "--budget-tokens");
   const budgetTokens = budgetText === undefined ? DEFAULT_BUDGET_TOKENS : Number(budgetText);
   if (!Number.isSafeInteger(budgetTokens) || budgetTokens < 1) {
@@ -139,10 +159,10 @@ export function workflowStart(args: readonly string[], io: CliIo, host: HostInfo
           model,
           agent,
           autonomy,
-          // P11: the limits are a snapshot taken when the workflow starts.
-          limits: DEFAULT_DELEGATION_LIMITS,
+          // P11: the limits and the compaction thresholds are a snapshot taken when the workflow starts.
+          limits: { ...delegationLimitsOf(settings.limits), context: settings.context },
           budgetTokens,
-          timeoutMs: DEFAULT_DELEGATION_LIMITS.attemptTimeoutMs,
+          timeoutMs: settings.limits.attemptTimeoutMs,
           orderId: order.record.orderId,
         },
         idempotencyKey,
@@ -212,11 +232,13 @@ export function workflowShow(args: readonly string[], io: CliIo, host: HostInfo)
   if (problem !== null) return problem;
   const [workflowId, ...extra] = parsed.positionals;
   if (workflowId === undefined || extra.length > 0) return fail(io, SHOW_USAGE);
+  const dataDir = dataDirFor(host, lastValue(parsed, "--data-dir"));
   return withWorkflow(io, host, lastValue(parsed, "--data-dir"), workflowId, (store, workflow) => {
     const now = clockFor(host).now();
     const snapshot = buildWorkflowSnapshot(store, workflow.workflowId, {
       now,
       ...storeQuota(store, host, now),
+      contextUsedOf: (runId) => piContextUsed(dataDir, runId),
     });
     if (parsed.flags.has("--json")) {
       io.out(JSON.stringify(snapshot));

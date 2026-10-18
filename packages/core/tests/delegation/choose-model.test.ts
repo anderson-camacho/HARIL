@@ -413,6 +413,15 @@ describe("chooseModel: the difficulty table", () => {
     ).toMatchObject({ model: "mid/m", sameAsAvoided: true });
   });
 
+  it("lets an auditor share its executor's model when haril.json turns the rule off (phase F7)", () => {
+    expect(
+      chooseModel(
+        request({ archetype: "auditor", difficulty: "medium", avoid: "mid/m" }),
+        context({ auditorDistinctFromExecutor: false }),
+      ),
+    ).toMatchObject({ model: "mid/m", sameAsAvoided: false });
+  });
+
   it("waits for the earliest reset when only the 5-hour window excludes every model", () => {
     const quota = {
       mid: { ...used(90), window5hResetsAt: NOW + 2 * HOUR } as QuotaSample,

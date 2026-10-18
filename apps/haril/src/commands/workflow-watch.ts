@@ -5,6 +5,7 @@ import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
 import { clockFor } from "../host.js";
 import { dataDirFor, openExisting } from "./common.js";
+import { piContextUsed } from "./pi-context.js";
 import { storeQuota } from "./snapshot-quota.js";
 import { EXIT_ON_STDIN_END, onStdinEnd } from "./stdin-end.js";
 import { buildWorkflowSnapshot } from "./workflow-snapshot.js";
@@ -92,6 +93,7 @@ function follow(
     const snapshot = buildWorkflowSnapshot(store, workflowId, {
       now,
       ...storeQuota(store, host, now),
+      contextUsedOf: (runId) => piContextUsed(dataDir, runId),
     });
     const current = fingerprint(snapshot);
     if (force || current !== last) io.out(JSON.stringify(snapshot));

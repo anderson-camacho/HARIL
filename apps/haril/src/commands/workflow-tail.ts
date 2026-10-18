@@ -306,7 +306,7 @@ function nodeRun(store: Store, workflowId: string, node: string): NodeRun | unde
 }
 
 // The session file of a run: the newest .jsonl in runs/<runId>/pi, by name (Pi names them by their start time).
-function sessionFileOf(dataDir: string, runId: string): string | undefined {
+export function sessionFileOf(dataDir: string, runId: string): string | undefined {
   const dir = join(dataDir, RUNS_DIR, runId, SESSION_DIR);
   if (!existsSync(dir)) return undefined;
   try {

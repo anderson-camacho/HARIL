@@ -1,7 +1,9 @@
 import { type ControlServer, createControlServer } from "@haril/control";
-import { type RunEvent, runExitCode, visibleText } from "@haril/core";
+import { type DelegationLimits, type RunEvent, runExitCode, visibleText } from "@haril/core";
 import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_ERROR, EXIT_USAGE, type HostInfo } from "../context.js";
+import { loadDelegationSettings } from "../delegation-config.js";
+import { delegationLimitsOf, delegationSettingsOf } from "../delegation-section.js";
 import { agentRuntimeFor, clockFor } from "../host.js";
 import { createDelegationTools } from "../runtime/delegation-tools.js";
 import { createLiveModels } from "../runtime/live-models.js";
@@ -11,6 +13,7 @@ import { createPlanProposals } from "../runtime/plan-proposals.js";
 import { createRealAgents } from "../runtime/real-agent.js";
 import { runUntilIdle } from "../runtime/run-loop.js";
 import { attachStopSignals, createKillSwitch, createShutdown } from "../runtime/shutdown.js";
+import type { WatchdogSettings } from "../runtime/watchdog.js";
 import { workflowExitCode, workflowSummaryText } from "../runtime/workflow-summary.js";
 import { dataDirFor, failureReasonText, openExisting } from "./common.js";
 
@@ -29,6 +32,30 @@ const START_USAGE =
 const RUN_USAGE = "usage: haril run [--project <slug>] [--json] [--data-dir <path>]";
 const NOT_INITIALIZED =
   "store not initialized (run haril project init <path> --name <name> --yes first)";
+
+// What the runtime takes from haril.json's delegation section when it starts (docs/modos-y-delegacion.md 5, 3.16;
+// phase F7): the limits of a workflow that started without a full snapshot (P11) and the watchdog's cadence. A section
+// the rules refuse leaves the defaults in effect, with a warning that names its problems.
+export function runtimeDelegationOf(host: HostInfo): {
+  readonly limits: DelegationLimits;
+  readonly watchdog: Required<WatchdogSettings>;
+  readonly warning?: string;
+} {
+  const loaded = loadDelegationSettings(host);
+  const settings = loaded.ok ? loaded.settings : delegationSettingsOf(undefined);
+  return {
+    limits: delegationLimitsOf(settings.limits),
+    watchdog: {
+      intervalMs: settings.watchdog.intervalMs,
+      idleStrikesToClose: settings.watchdog.idleStrikesToClose,
+    },
+    ...(loaded.ok
+      ? {}
+      : {
+          warning: `${loaded.path}: delegation settings not used, the defaults apply (${loaded.errors.join("; ")})`,
+        }),
+  };
+}
 
 export function start(args: readonly string[], io: CliIo, host: HostInfo): Promise<number> {
   return serve(args, io, host, "start");
@@ -82,7 +109,10 @@ async function serve(
   // The models of real workflows (phase F6): the live catalog, the difficulty table, the quota and the cooldowns. The
   // delegation tools check a proposal against the same models the run loop decides with.
   const liveModels = createLiveModels({ host, store, clock: clockFor(host) });
-  const delegation = liveModels.options;
+  // Phase F7: haril.json's limits and watchdog cadence, read once at start.
+  const configured = runtimeDelegationOf(host);
+  if (configured.warning !== undefined) io.err(`haril: ${configured.warning}`);
+  const delegation = { ...liveModels.options, limits: configured.limits };
   // The host handler of the delegation tools (phase F2): the workflow turns of every lane call it.
   const delegationTools = createDelegationTools({
     store,
@@ -146,6 +176,7 @@ async function serve(
       planProposals,
       delegationTools,
       delegation,
+      watchdog: configured.watchdog,
       control: channel,
       idleExitMs: idleExitSec * 1000,
       startedByShell: startedBy === STARTED_BY_SHELL,
