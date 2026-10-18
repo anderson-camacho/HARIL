@@ -12,7 +12,8 @@ import type { DelegationArchetype } from "./archetypes.js";
 // 80% used and exactly 20% left are still allowed:
 //   ok = used5h <= switchAtPercent5h  and  usedWeekly <= stopAtPercentWeekly
 //        and (not large or remaining5h >= minRemainingPercentForLargeTask)
-// A percentage that is not a number between 0 and 100 makes the whole sample unknown: the rule is skipped, never passed.
+// A percentage that is not a number between 0 and 100 makes that window unknown ("sin dato" for it alone): its part of
+// the rule is skipped, never passed, and the other window still applies.
 // A task is large at difficulty "hard" or above, or with a budget of at least largeTaskTokens.
 
 export interface CatalogModel {
@@ -183,18 +184,27 @@ export function isLargeTask(
   );
 }
 
-function validPercent(value: number | null): boolean {
-  return value === null || (Number.isFinite(value) && value >= 0 && value <= 100);
+function validPercent(value: number | null): value is number {
+  return value !== null && Number.isFinite(value) && value >= 0 && value <= 100;
 }
 
-// A sample that reports, with every percentage it gives between 0 and 100. NaN, a negative or an above-100 value comes
-// from a broken reading: the sample is treated as unknown, never as ok.
+// A sample that reports, with each window checked on its own. NaN, a negative or an above-100 value comes from a broken
+// reading: that window becomes null (no data for it), never ok, and a valid window of the same sample is kept, so a
+// broken 5-hour reading cannot hide a 95% week. Null when nothing is reported.
 function usableSample(
   sample: QuotaSample | undefined,
 ): Extract<QuotaSample, { available: true }> | null {
   if (sample === undefined || !sample.available) return null;
-  if (!validPercent(sample.window5hUsedPct) || !validPercent(sample.weeklyUsedPct)) return null;
-  return sample;
+  const window5h = validPercent(sample.window5hUsedPct);
+  const weekly = validPercent(sample.weeklyUsedPct);
+  if (!window5h && !weekly) return null;
+  return {
+    available: true,
+    window5hUsedPct: window5h ? sample.window5hUsedPct : null,
+    window5hResetsAt: window5h ? sample.window5hResetsAt : null,
+    weeklyUsedPct: weekly ? sample.weeklyUsedPct : null,
+    weeklyResetsAt: weekly ? sample.weeklyResetsAt : null,
+  };
 }
 
 // The quota rule for one sample. Each window is checked only when it is reported; with neither, the rule is skipped.
@@ -206,7 +216,6 @@ export function evaluateQuota(
   const usable = usableSample(sample);
   if (usable === null) return { ok: true, data: "no_data" };
   const { window5hUsedPct: used5h, weeklyUsedPct: usedWeekly } = usable;
-  if (used5h === null && usedWeekly === null) return { ok: true, data: "no_data" };
   if (usedWeekly !== null && usedWeekly > policy.stopAtPercentWeekly) {
     return { ok: false, cause: "weekly", until: usable.weeklyResetsAt };
   }

@@ -330,15 +330,24 @@ describe("chooseModel: the difficulty table", () => {
     ).toMatchObject({ model: "mid/m" });
   });
 
-  it("treats a NaN, negative or above-100 percentage as no data: the rule is skipped, never passed as ok", () => {
+  it("treats a NaN, negative or above-100 percentage as no data for that window only; a valid window still applies", () => {
     for (const bad of [Number.NaN, -1, 100.5, Number.POSITIVE_INFINITY]) {
       expect(
         chooseModel(request({ difficulty: "medium" }), context({ quota: { mid: used(bad) } })),
-      ).toMatchObject({ model: "mid/m", quota: "no_data" });
+      ).toMatchObject({ model: "mid/m", quota: "ok" });
       expect(
         chooseModel(request({ difficulty: "medium" }), context({ quota: { mid: used(5, bad) } })),
-      ).toMatchObject({ model: "mid/m", quota: "no_data" });
+      ).toMatchObject({ model: "mid/m", quota: "ok" });
       expect(evaluateQuota(used(bad, 95), false, DEFAULT_QUOTA_POLICY)).toEqual({
+        ok: false,
+        cause: "weekly",
+        until: NOW + 72 * HOUR,
+      });
+      expect(evaluateQuota(used(95, bad), false, DEFAULT_QUOTA_POLICY)).toMatchObject({
+        ok: false,
+        cause: "window_5h",
+      });
+      expect(evaluateQuota(used(bad, bad), false, DEFAULT_QUOTA_POLICY)).toEqual({
         ok: true,
         data: "no_data",
       });
@@ -474,9 +483,16 @@ describe("worstQuota (P4: the worst account of the provider)", () => {
     });
   });
 
-  it("leaves out an account whose percentages are not valid, as one that does not report", () => {
-    expect(worstQuota([used(38, 52), used(Number.NaN, 99)])).toEqual(used(38, 52));
-    expect(worstQuota([used(-5, 10)]).available).toBe(false);
+  it("keeps the valid window of an account whose other window is not valid", () => {
+    expect(worstQuota([used(38, 52), used(Number.NaN, 99)])).toEqual({
+      available: true,
+      window5hUsedPct: 38,
+      window5hResetsAt: NOW + HOUR,
+      weeklyUsedPct: 99,
+      weeklyResetsAt: NOW + 72 * HOUR,
+    });
+    expect(worstQuota([used(-5, 10)])).toMatchObject({ window5hUsedPct: null, weeklyUsedPct: 10 });
+    expect(worstQuota([used(-5, Number.NaN)]).available).toBe(false);
   });
 
   it("is unavailable when no account reports", () => {
