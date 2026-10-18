@@ -22,6 +22,7 @@ import { clockFor, storeAccess } from "../host.js";
 import { dataDirFor } from "./common.js";
 import { parseInstant } from "./usage-format.js";
 import { type DemoResult, runDemoWorkflow } from "./workflow-demo-run.js";
+import { workflowContinue, workflowList, workflowShow, workflowStart } from "./workflow-runs.js";
 import { buildWorkflowSnapshot, headerLines, treeLines } from "./workflow-snapshot.js";
 
 // `haril workflow demo` (docs/modos-y-delegacion.md 9, the F1 stop: "a demo command runs a simulated three-layer
@@ -458,9 +459,21 @@ function renderText(
   return lines;
 }
 
+const WORKFLOW_USAGE = [
+  "usage: haril workflow start|list|show|continue|demo",
+  "  haril workflow start <goal> --model <ref> [--autonomous | --stop-at <stops>]   queue a three-layer workflow",
+  "  haril workflow list | show <workflowId> [--json]                              read workflows (show: tree, or WorkflowSnapshot v1)",
+  "  haril workflow continue <workflowId> [--remove-stop <stop>]...                lift the stop a workflow waits at",
+  USAGE,
+].join("\n");
+
 export function workflow(args: readonly string[], io: CliIo, host: HostInfo): number {
   const [sub, ...rest] = args;
   if (sub === "demo") return demo(rest, io, host);
-  io.err(USAGE);
+  if (sub === "start") return workflowStart(rest, io, host);
+  if (sub === "list") return workflowList(rest, io, host);
+  if (sub === "show") return workflowShow(rest, io, host);
+  if (sub === "continue") return workflowContinue(rest, io, host);
+  io.err(WORKFLOW_USAGE);
   return EXIT_USAGE;
 }

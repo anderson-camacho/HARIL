@@ -176,7 +176,13 @@ function nodeOf(thread: ThreadView, context: NodeContext): WorkflowNode {
       }
       break;
     case "failed":
-      state = closed ? "closed" : "failed";
+      // An auditor turn that rejected ends failed (its turn is the gate of the step's dependents), but it did its job.
+      state = closed
+        ? "closed"
+        : thread.role === "auditor" &&
+            ownAudits.some((audit) => audit.auditorTaskId === latest.taskId)
+          ? "done"
+          : "failed";
       break;
     case "pending":
       if (
@@ -195,7 +201,10 @@ function nodeOf(thread: ThreadView, context: NodeContext): WorkflowNode {
       break;
     case "ready":
       state = "queued";
-      waitingReason = "ready, waiting for capacity";
+      waitingReason =
+        workflow.state === "awaiting_human"
+          ? "waits until the workflow continues"
+          : "ready, waiting for capacity";
       break;
     case "blocked":
       state = latest.blockReason === "awaiting_human" ? "awaiting_human" : "failed";

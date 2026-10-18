@@ -222,6 +222,13 @@ export function createWorkflowsFacet(options: WorkflowsFacetOptions): {
         return { ok: false, reason: `${key} must be a non-empty text` };
       }
     }
+    // The order must exist: every agent_run row of the workflow will name it (usage_log.order_id is a foreign key).
+    if (
+      nonBlank(args.orderId) &&
+      db.prepare("SELECT 1 AS found FROM orders WHERE order_id = ?").get(args.orderId) === undefined
+    ) {
+      return { ok: false, reason: `orderId "${args.orderId}" names no order of the orders log` };
+    }
 
     const workflowId = ids.next();
     const taskId = ids.next();

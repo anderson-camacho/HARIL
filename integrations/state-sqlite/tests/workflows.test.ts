@@ -491,9 +491,20 @@ describe("store.workflows.applyTurns (delegation.apply)", () => {
   });
 
   it("keeps the applied proposal's payload, and the order behind a workflow.start", () => {
-    const { workflowId, rootTaskId } = start({ orderId: "order-1" });
-    expect(store.workflows.get(workflowId)?.orderId).toBe("order-1");
-    expect(start().workflowId).toBeDefined();
+    const order = store.usageLog.appendOrder({
+      mode: "cli",
+      source: "cli",
+      text: "x",
+      preview: null,
+    });
+    const { workflowId, rootTaskId } = start({ orderId: order.record.orderId });
+    expect(store.workflows.get(workflowId)?.orderId).toBe(order.record.orderId);
+    expect(
+      enqueue("workflow.start", { goal: "g", model: "m", orderId: "no-such-order" }),
+    ).toMatchObject({
+      outcome: "rejected",
+      reason: expect.stringMatching(/names no order/),
+    });
     const payload = { schemaVersion: 1, memo: "split in two", delegations: [{ localId: "d1" }] };
     store.workflows.applyTurns(epoch, {
       workflowId,
