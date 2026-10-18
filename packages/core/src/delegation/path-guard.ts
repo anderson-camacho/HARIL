@@ -62,12 +62,14 @@ function deny(reason: WorkspacePathDenial): WorkspacePathCheck {
   return { ok: false, reason };
 }
 
-function segmentProblem(segment: string): WorkspacePathDenial | null {
+function segmentProblem(segment: string, allowSecret: boolean): WorkspacePathDenial | null {
   const lower = segment.toLowerCase();
   if (SHORT_NAME.test(segment)) return "short_name";
   if (DENIED_SEGMENTS.has(lower)) return "denied_path";
-  if (SECRET_SEGMENTS.has(lower) || SECRET_NAMES.has(lower)) return "secret_path";
-  if (ENV_FILE.test(segment) || SECRET_EXTENSION.test(segment)) return "secret_path";
+  if (!allowSecret && (SECRET_SEGMENTS.has(lower) || SECRET_NAMES.has(lower))) return "secret_path";
+  if (!allowSecret && (ENV_FILE.test(segment) || SECRET_EXTENSION.test(segment))) {
+    return "secret_path";
+  }
   if (/[. ]$/.test(segment)) return "trailing_dot_or_space";
   if (RESERVED_NAME.test(segment.split(".")[0] ?? "")) return "reserved_name";
   return null;
@@ -78,6 +80,18 @@ function segmentProblem(segment: string): WorkspacePathDenial | null {
 export function checkWorkspacePath(
   requested: string,
   surface: readonly string[],
+): WorkspacePathCheck {
+  const checked = normalizeWorkspacePath(requested);
+  if (!checked.ok) return checked;
+  return pathMatchesSurface(checked.path, surface) ? checked : deny("outside_surface");
+}
+
+// Every rule of checkWorkspacePath but the surface: the normalized path, or why it may not be written. `allowSecret`
+// lets a name that looks like a secret through (a delegator resolving a conflict in a file the repository tracks, such
+// as .env.example); .git, .haril and .pi stay refused whatever it says.
+export function normalizeWorkspacePath(
+  requested: string,
+  options: { readonly allowSecret?: boolean } = {},
 ): WorkspacePathCheck {
   if (typeof requested !== "string" || requested.trim() === "") return deny("empty_path");
   if (requested.length > WORKSPACE_PATH_MAX_LENGTH) return deny("too_long");
@@ -91,9 +105,8 @@ export function checkWorkspacePath(
   if (segments.length === 0) return deny("empty_path");
   if (segments.some((segment) => segment === "..")) return deny("traversal");
   for (const segment of segments) {
-    const problem = segmentProblem(segment);
+    const problem = segmentProblem(segment, options.allowSecret === true);
     if (problem !== null) return deny(problem);
   }
-  const path = segments.join("/");
-  return pathMatchesSurface(path, surface) ? { ok: true, path } : deny("outside_surface");
+  return { ok: true, path: segments.join("/") };
 }

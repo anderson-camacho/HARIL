@@ -293,6 +293,50 @@ describe.skipIf(!HAS_GIT)("the end of an executor's turn", () => {
   });
 });
 
+describe.skipIf(!HAS_GIT)("a delegator resolving a merge's conflicting files", () => {
+  it("writes exactly the conflicting files, whatever characters their names hold", async () => {
+    const ws = { ...workspace(), kind: "integration" as const, writeSurface: [] };
+    const host = workspaces();
+    const conflicts = { conflicts: ["app/[id]/page.tsx", "café.md", "docs/{a,b}!.md"] };
+    for (const path of conflicts.conflicts) {
+      expect(await host.write(ws, conflicts, path, "resolved\n"), path).toMatchObject({
+        ok: true,
+        path,
+      });
+      expect(readFileSync(join(tree, ...path.split("/")), "utf8")).toBe("resolved\n");
+    }
+    // A path a glob would have matched is not one of the files.
+    expect(await host.write(ws, conflicts, "app/i/page.tsx", "x")).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining("not one of the conflicting files"),
+    });
+  });
+
+  it("edits a tracked file whose name looks secret, never an untracked one or anything under .git", async () => {
+    writeFileSync(join(tree, ".env.example"), "KEY=\n");
+    gitIn(tree, "add", ".env.example");
+    gitIn(tree, "commit", "--quiet", "-m", "example settings");
+    const ws = { ...workspace(), kind: "integration" as const, writeSurface: [] };
+    const host = workspaces();
+    const conflicts = { conflicts: [".env.example", ".env.local", ".git/config", ".haril/x"] };
+    expect(await host.write(ws, conflicts, ".env.example", "KEY=resolved\n")).toMatchObject({
+      ok: true,
+    });
+    expect(await host.write(ws, conflicts, ".env.local", "x")).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining("secret path"),
+    });
+    expect(await host.write(ws, conflicts, ".git/config", "x")).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining("denied path"),
+    });
+    expect(await host.write(ws, conflicts, ".haril/x", "x")).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining("denied path"),
+    });
+  });
+});
+
 describe("applyEdits", () => {
   it("applies every replacement against the original text", () => {
     expect(

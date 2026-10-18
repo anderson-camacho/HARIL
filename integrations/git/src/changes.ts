@@ -85,6 +85,15 @@ export async function resetBranchTo(
   return (await runGit(worktree, ["reset", "--quiet", "--hard", sha], options)).ok;
 }
 
+// Whether the repository tracks `path` (in the worktree's index: a conflicted file of a merge counts).
+export async function isTracked(
+  worktree: string,
+  path: string,
+  options: GitOptions = {},
+): Promise<boolean> {
+  return (await runGit(worktree, ["ls-files", "--error-unmatch", "--", path], options)).ok;
+}
+
 // Puts the worktree back to its last commit: tracked changes reset, untracked files and folders removed (ignored files,
 // such as installed dependencies, stay). True when both steps worked.
 export async function discardChanges(worktree: string, options: GitOptions = {}): Promise<boolean> {

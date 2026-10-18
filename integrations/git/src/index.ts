@@ -6,6 +6,7 @@ export {
   changedPaths,
   commitPaths,
   discardChanges,
+  isTracked,
   pathsChangedSince,
   resetBranchTo,
 } from "./changes.js";

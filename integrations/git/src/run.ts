@@ -9,6 +9,7 @@ import { execFile } from "node:child_process";
 //   - commit.gpgsign=false and gc.auto=0: nothing asks for a passphrase, and no garbage collection starts mid-workflow;
 //   - core.quotePath=false: paths with non-ASCII characters come back as they are, not as octal escapes;
 //   - a fixed identity: HARIL's commits and merges say who made them;
+//   - GIT_LITERAL_PATHSPECS=1: every path HARIL hands to git is a literal path, never a glob;
 //   - no Git LFS filter, no credential helper and no transport (protocol.allow=never), plus GIT_LFS_SKIP_SMUDGE=1: a
 //     user's global LFS setup would otherwise download objects from the remote when a worktree is checked out.
 // The variables that point git at another repository, index or object store are removed (the list of
@@ -98,6 +99,8 @@ function gitEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   );
   env.GIT_TERMINAL_PROMPT = "0";
   env.GIT_LFS_SKIP_SMUDGE = "1";
+  // A path HARIL names is that path: "app/[id]/page.tsx" never reads as a glob that also matches "app/i/page.tsx".
+  env.GIT_LITERAL_PATHSPECS = "1";
   return env;
 }
 

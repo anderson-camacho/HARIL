@@ -2,7 +2,12 @@ import { createHash } from "node:crypto";
 import { rmdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import type { EditInput } from "@haril/contracts";
-import { checkWorkspacePath, pathMatchesSurface, visibleText } from "@haril/core";
+import {
+  checkWorkspacePath,
+  normalizeWorkspacePath,
+  pathMatchesSurface,
+  visibleText,
+} from "@haril/core";
 import type { AgentOutcome, Store, WorktreeRecord } from "@haril/core/ports";
 import {
   abortMerge,
@@ -15,6 +20,7 @@ import {
   type GitOptions,
   headBranch,
   headCommit,
+  isTracked,
   mergeBranch,
   mergeInProgress,
   pathsChangedSince,
@@ -95,6 +101,11 @@ class OutsideSurface extends Error {}
 export function worktreeGit(git: GitOptions, workspace: TurnWorkspace): GitOptions {
   return { ...git, gitDir: workspace.gitDir, workTree: workspace.root };
 }
+
+// What a turn may write: its write surface's globs, or, for a delegator resolving a merge, exactly the conflicting files
+// (literal paths, so "app/[id]/page.tsx" or "café.md" is the file it names; a tracked file whose name looks secret,
+// such as .env.example, may be resolved too).
+export type WriteScope = readonly string[] | { readonly conflicts: readonly string[] };
 
 export interface CommandHooks {
   // The turn's end: an aborted turn kills the command's tree.
@@ -200,13 +211,13 @@ export interface Workspaces {
   ): Promise<AgentOutcome>;
   write(
     workspace: TurnWorkspace,
-    surface: readonly string[],
+    scope: WriteScope,
     path: string,
     content: string,
   ): Promise<WorkspaceReply>;
   edit(
     workspace: TurnWorkspace,
-    surface: readonly string[],
+    scope: WriteScope,
     path: string,
     edits: EditInput["edits"],
   ): Promise<WorkspaceReply>;
@@ -563,8 +574,42 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
     return { ok: false, reason: `${path.slice(0, 200)} cannot be written: ${where}` };
   };
 
-  const write: Workspaces["write"] = async (workspace, surface, path, content) => {
-    const checked = guardedPath(surface, path);
+  // A conflicting file of the merge in progress: the literal path git reported, and a name that looks secret only when
+  // the repository tracks it. .git, .haril and .pi are never written.
+  const conflictPath = async (
+    workspace: TurnWorkspace,
+    conflicts: readonly string[],
+    path: string,
+  ): Promise<{ ok: true; path: string } | { ok: false; reason: string }> => {
+    const refused = (why: string) => ({
+      ok: false as const,
+      reason: `${path.slice(0, 200)} cannot be written: ${why}`,
+    });
+    const checked = normalizeWorkspacePath(path, { allowSecret: true });
+    if (!checked.ok) return refused(checked.reason.replace(/_/g, " "));
+    const wanted = checked.path.normalize("NFC");
+    const listed = conflicts.find((file) => file.normalize("NFC") === wanted);
+    if (listed === undefined) {
+      return refused(`not one of the conflicting files (${conflicts.join(", ") || "none"})`);
+    }
+    const strict = normalizeWorkspacePath(listed);
+    if (!strict.ok && !(await isTracked(workspace.root, listed, worktreeGit(git, workspace)))) {
+      return refused(strict.reason.replace(/_/g, " "));
+    }
+    return { ok: true, path: listed };
+  };
+
+  const scopedPath = (
+    workspace: TurnWorkspace,
+    scope: WriteScope,
+    path: string,
+  ): Promise<{ ok: true; path: string } | { ok: false; reason: string }> =>
+    "conflicts" in scope
+      ? conflictPath(workspace, scope.conflicts, path)
+      : Promise.resolve(guardedPath(scope as readonly string[], path));
+
+  const write: Workspaces["write"] = async (workspace, scope, path, content) => {
+    const checked = await scopedPath(workspace, scope, path);
     if (!checked.ok) return checked;
     const written = await writeConfinedFile(workspace.root, checked.path, content);
     if (!written.ok) {
@@ -576,8 +621,8 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
     return { ok: true, path: checked.path, bytes: written.bytes, created: written.created };
   };
 
-  const edit: Workspaces["edit"] = async (workspace, surface, path, edits) => {
-    const checked = guardedPath(surface, path);
+  const edit: Workspaces["edit"] = async (workspace, scope, path, edits) => {
+    const checked = await scopedPath(workspace, scope, path);
     if (!checked.ok) return checked;
     const read = await readConfinedFile(workspace.root, checked.path, EDIT_MAX_BYTES);
     if (!read.ok) {

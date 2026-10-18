@@ -31,7 +31,7 @@ import {
   WorkflowView,
   workflowSettings,
 } from "./workflow-view.js";
-import type { TurnWorkspace, Workspaces } from "./worktrees.js";
+import type { TurnWorkspace, Workspaces, WriteScope } from "./worktrees.js";
 
 // The host side of the delegation tools (docs/modos-y-delegacion.md 3.4, 3.5, 3.6): one handler serves every agent
 // runtime, the FakeAgentRuntime option now and Pi's bridge tools in phase F2b, as plan-proposals.ts does for
@@ -324,7 +324,7 @@ export function createDelegationTools(deps: DelegationToolsDeps): DelegationTool
     if (tool === "write" || tool === "edit") {
       const valid = validateWorkspaceFileInput(tool, raw);
       if (!valid.ok) return refuse(window, `${tool} input: ${valid.errors.join("; ")}`);
-      let surface: readonly string[] = workspace.writeSurface;
+      let surface: WriteScope = workspace.writeSurface;
       if (task.role === "delegator") {
         const waiting = integration.pending(view.workflow.workflowId);
         if (waiting === null) {
@@ -333,7 +333,8 @@ export function createDelegationTools(deps: DelegationToolsDeps): DelegationTool
             `${tool} only resolves the conflicting files of a merge, and no merge waits for its conflicts`,
           );
         }
-        surface = waiting.files;
+        // Exactly the files git reported in conflict, as literal paths.
+        surface = { conflicts: waiting.files };
       }
       const reply =
         valid.tool === "write"
