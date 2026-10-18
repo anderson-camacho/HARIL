@@ -38,10 +38,51 @@ const EXTRA_CASES: readonly [string, string, boolean][] = [
   ["./src//a.ts", "src/a.ts", true],
   ["src/**/**/a.ts", "src/x/a.ts", true],
   ["src/**/a.ts", "src/a.ts", true],
-  ["src/**/a.ts", "src/x/b.ts", false],
+  // A literal path may be an existing folder: "src/x/b.ts" could hold "src/x/b.ts/a.ts".
+  ["src/**/a.ts", "src/x/b.ts", true],
+  ["src/**/a.ts", "src/x/b.*", false],
   ["**", "x", true],
   ["*/a.ts", "x/y/a.ts", false],
+  // A literal path that is a leading-segment prefix of the other names a folder that holds it.
+  ["src", "src/a.ts", true],
+  ["src/lib", "src/lib/deep/x.ts", true],
+  ["src/lib", "src/library/x.ts", false],
+  ["src/lib", "src/*/x.ts", true],
+  ["src/a.ts", "src/b.ts", false],
+  // Both sides are compared in NFC: a precomposed and a decomposed accent are the same name.
+  ["src/café.ts", "src/café.ts", true],
+  ["src/café/", "src/café/x.ts", true],
 ];
+
+describe("globsMayOverlap with oversized input", () => {
+  it("answers overlap, without throwing, for a pattern longer than the limit", () => {
+    const long = `src/${"a".repeat(6_000)}.ts`;
+    expect(globsMayOverlap(long, "lib/x.ts")).toBe(true);
+    expect(globsMayOverlap("lib/x.ts", long)).toBe(true);
+  });
+
+  it("answers overlap for a long run of wildcards, quickly", () => {
+    const stars = `src/${"*a".repeat(3_000)}`;
+    const started = Date.now();
+    expect(globsMayOverlap(stars, `src/${"*b".repeat(3_000)}`)).toBe(true);
+    expect(Date.now() - started).toBeLessThan(200);
+  });
+
+  it("answers overlap for very many segments", () => {
+    const deep = Array.from({ length: 2_000 }, (_, index) => `d${index}`).join("/");
+    expect(globsMayOverlap(deep, "other/x.ts")).toBe(true);
+    expect(globsMayOverlap(`${deep}/**`, "elsewhere/**")).toBe(true);
+  });
+
+  it("still decides patterns at the limit exactly, within a few milliseconds", () => {
+    const left = `src/${"*a".repeat(250)}`;
+    const right = `lib/${"*b".repeat(250)}`;
+    const started = Date.now();
+    expect(globsMayOverlap(left, right)).toBe(false);
+    expect(globsMayOverlap(left, `src/${"a*".repeat(250)}`)).toBe(true);
+    expect(Date.now() - started).toBeLessThan(200);
+  });
+});
 
 describe("globsMayOverlap", () => {
   it.each(S5_CASES)("S5: %s ~ %s is %s", (left, right, expected) => {
