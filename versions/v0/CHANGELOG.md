@@ -4,6 +4,79 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.13.0
+
+- **Fecha:** 2026-10-18
+- **Estado:** **El runtime de la delegación en tres capas, con agentes simulados.** `haril workflow start` encola un workflow y el runtime lo corre: varios agentes a la vez sin pasar ningún límite, el orquestador delega, cada delegador asigna pasos, cada ejecutor tiene su auditor, los rechazos se relanzan y escalan como mucho una vez cada uno, quien delegó vuelve con los resultados de sus hijos sin gastar nada mientras espera, y un auditor final cierra el workflow. Tras una caída, el runtime sigue sin repetir trabajo. Los agentes son los simulados (`fake:*`); las herramientas del puente para los agentes reales de Pi llegan en F2b (fase F2a de la delegación, ADR-0021).
+
+### Añadido
+
+- **Bucle concurrente** (`apps/haril/src/runtime/run-loop.ts`): un registro de intentos vivos; el bucle se despierta cuando uno termina, en cada sondeo o con un aviso, y cierra cada intento en la vuelta siguiente. Las tareas sueltas siguen en su carril de una en una, como antes. Los turnos de los workflows en marcha arrancan según `selectClaims` con los límites del workflow (por rol, hijos vivos por hilo, total de agentes, escritores y cerrojos de superficie), cada uno reclamado por separado y de forma atómica bajo la época del arrendamiento. Los límites salen de la instantánea del workflow y, para lo que no trae, de la opción `delegation` del runtime (la sección `delegation` de `haril.json` llega en F7).
+- **Canal agente ↔ host** (puerto `DelegationToolHandler` y entrada `DelegationTurnInput` en `@haril/core/ports`): un turno de workflow llama a `haril_delegate`, `haril_assign`, `haril_report`, `haril_verdict`, `haril_request_audit` y `haril_abort`; el host comprueba que la herramienta sea de su arquetipo, la entrada contra los contratos y la propuesta con `checkDelegation`, y responde `{ok: true, ...}` o `{ok: false, reason}` para que el agente corrija en el mismo turno. Un turno decide una sola vez: la misma llamada repetida da la misma respuesta y otra distinta se rechaza. Los agentes simulados usan este puerto ahora; el puente de Pi lo usará en F2b.
+- **Cierre de un turno en una transacción** (`Store.transaction`): la llamada aceptada se aplica cuando el turno termina, junto con el cierre de su run y su fila de consumo; una caída en medio no deja nada a medias y el turno se repite.
+- **Continuaciones:** al delegar o asignar, el runtime crea la continuación del que propone, con dependencias `settled` de sus hijos; corre aunque un hijo falle y recibe su memo, los resultados, los informes y los veredictos de sus hijos como datos.
+- **Auditoría y reproceso:** cada ejecutor tiene su auditor; su veredicto alimenta la máquina de reproceso (1 relanzamiento, 1 escalada). El estado del reproceso se deriva del almacén (`replayRework`), nunca solo de la memoria, así que un reinicio sigue con los mismos conteos. Un paso que depende de otro espera su aprobación, no solo su ejecución; un paso cuya auditoría falla del todo bloquea a sus dependientes. Tras una escalada, el delegador puede reformular el paso una vez y reasignar los pasos que quedaron bloqueados. El orquestador pide el auditor final con `haril_request_audit`; si lo rechaza, recibe los hallazgos en una continuación y puede corregir, dentro de `maxEscalationsPerTask`.
+- **Secciones del prompt** de cada turno: una sola sección de datos con lo que escribieron otros agentes (memo, resultados y veredictos de los hijos, el resultado que juzga un auditor, los veredictos de intentos anteriores, las tareas hermanas con su superficie de escritura), cada línea con `| ` y la misma regla de caracteres invisibles; después la capacidad (agentes vivos, límites que quedan, modelos y su cuota) y la herramienta que debe llamar su rol. Las herramientas de cada turno son las de su arquetipo.
+- **Consumo:** cada intento escribe su fila `agent_run` (modelo, capa, rol, dificultad, tokens, duración, resultado, veredicto) en la misma transacción que lo cierra, y cada `haril workflow start` escribe su orden; el workflow guarda esa orden y todas sus filas la nombran.
+- **CLI:** `haril workflow start <objetivo> --model <ref> [--autonomous | --stop-at <paradas>] [--agent <ref>]`, `haril workflow list`, `haril workflow show <id> [--json]` (árbol, o `WorkflowSnapshot v1`) y `haril workflow continue <id> [--remove-stop <parada>]`.
+- **Almacén:** `tasks.claimTask` reclama una tarea concreta; `claimNext` nunca da un turno de un workflow que no está en marcha y puede dejar todos los turnos al planificador de workflows; `workflows.list` filtra por estado. Migración `0010_delegation_runtime`: `delegations.payload` (la propuesta tal como llegó) y `workflows.order_id`.
+- **Eventos del runtime** `workflow.turn` (un turno cerrado y lo que hizo) y `workflow.state` (un workflow que espera al humano, terminó o falló), que `haril start` muestra.
+- **Agentes simulados dentro de `FakeAgentRuntime`:** `fake:orchestrate`, `fake:delegate`, `fake:execute` y `fake:audit` leen la entrada de su turno y llaman al host. El escenario va como texto visible en el objetivo: `[fake:parts=N]`, `[fake:steps=N]`, `[fake:seed=N]`, `[fake:mistake]` y `[fake:part-i/step-j=reject-once|reject-twice|stall-once]`.
+
+### Cambiado
+
+- Un workflow que espera al humano sigue aceptando turnos: un intento que termina mientras tanto deja lo que le sigue, que corre cuando el humano lo continúa. Un workflow terminado no acepta ninguno.
+- El tick que aplicaba la cola durante un intento desaparece: el bucle mismo se despierta en cada sondeo, renueva el arrendamiento y aplica la cola.
+- `haril usage log` y `haril usage summary` dejan fuera las filas de corridas simuladas salvo `--include-simulated`.
+- La vista del workflow muestra como hecho a un auditor que rechazó, y los turnos listos de un workflow en pausa como «waits until the workflow continues».
+
+### Corregido
+
+Hallazgos del verificador independiente sobre la 0.12.0 y la 0.11.0, cada uno con su prueba (ROJO y después VERDE salvo donde se indica):
+
+- **`usage verify`** leía las filas y la cabeza en lecturas separadas: un añadido de otra conexión en medio daba una falsa alarma. Ahora lee las dos cadenas y sus cabezas en una sola transacción de lectura. Además, el primer añadido deja una marca de «cadena empezada», así que borrar todas las filas junto con la cabeza se detecta.
+- **CSV:** una celda de texto que empieza por `=`, `+`, `-`, `@`, tabulador o retorno de carro empieza con un apóstrofo (inyección de fórmulas).
+- **Doble conteo:** `usage summary` y la vista `model_stats` contaban dos veces un run cuya tarea tenía dos auditorías; ahora unen un solo veredicto por tarea, el más nuevo (la migración `0009_model_stats_once` rehace la vista). `recordAudit` rechaza un segundo veredicto sobre el mismo turno y un veredicto de un turno auditor ya cerrado.
+- **Cuota:** cada ventana se valida por separado; una ventana inválida es «sin dato» solo para ella y la otra sigue aplicando (`{5h: NaN, semanal: 95}` ya no pasa, y `worstQuota` ya no descarta una cuenta al 99 %).
+- **Solape de globs:** un patrón con cualquier carácter fuera del ASCII imprimible se solapa con todo (`é` frente a `??`, `İ` frente a `?`); las letras ASCII se comparan sin mayúsculas; un par de superficies cuya comparación pasaría un presupuesto de trabajo responde «se solapan» al instante.
+- **Contrato de superficies:** se rechazan los espacios al principio o al final (`" ../x"`, `" /etc/passwd"`).
+- **Vista previa de órdenes:** censura las claves entre comillas (`{"password": "x"}`) y la credencial de una cabecera `Authorization: Basic|Bearer`, no solo la palabra del esquema.
+- **`bump-version`:** si falla un renombrado a mitad, restaura los archivos ya renombrados desde copias tomadas justo antes, borra temporales y copias, y sale con 1.
+- **Demo:** `--data-dir ""` cuenta como no dado (antes escribía `haril.db` en la carpeta actual) y una `--data-dir` que es la raíz de datos predeterminada se rechaza salvo `--allow-real-data-dir`; la ayuda lo dice.
+- **Detalles:** el comentario de `0007` ya no dice que la versión anterior sigue abriendo la base; `0008` copia en orden de `rowid` (y acepta la suma de comprobación de su primer texto, que construía el mismo esquema, para no rechazar bases de la 0.12.0); un enlace `settled` movido a un dependiente que ya esperaba al turno nuevo sigue siendo `settled`; una continuación despertada por un hijo fallido, cancelado o bloqueado recibe cuál fue y por qué; `check-version` ignora los encabezados dentro de bloques de código y exige el texto real de la entrada de arriba de la base.
+- Sin ROJO observable: el orden de copia de `0008` (SQLite ya copiaba en orden de `rowid` en la prueba; la prueba queda como guarda).
+
+### Valores provisionales
+
+Tomados de la propuesta de la especificación (sección 10.3) o decididos para esta fase:
+
+- P1: `haril workflow start` sin `--autonomous` ni `--stop-at` para en `after_plan`. P2: el auditor final tiene un presupuesto de 30 000 tokens. P3: 1 relanzamiento y 1 escalada. P11: los límites son una instantánea del inicio. L1: los auditores no cuentan como hijos vivos.
+- Sin catálogo de modelos (F6 y F7), cada hijo corre con el modelo del orquestador y un modelo propuesto debe ser ese.
+- Una llamada aceptada se aplica cuando el turno termina, en la transacción que lo cierra; nada se crea mientras el turno corre.
+- El turno de un auditor que rechaza termina fallido (es la compuerta de los dependientes del paso) y el de un delegador que informa `partial` o `failed`, también; el veredicto y el informe se guardan con el run.
+- Un auditor que termina sin veredicto cuenta como un intento fallido de su ejecutor; un intento sin progreso termina en su tiempo máximo (`attemptTimeoutMs`) y cuenta igual.
+- Una dependencia agregada por el Core al serializar superficies solapadas espera la aprobación, igual que un `dependsOn`.
+- Los agentes siguen al del orquestador: `fake:orchestrate` usa `fake:delegate`, `fake:execute` y `fake:audit`; otra referencia usa el nombre del arquetipo (F2b).
+- `haril_run` y `haril_merge` se rechazan hasta F8.
+- Un workflow sin nada pendiente, listo ni corriendo termina: completado si el auditor final aprobó, fallido (`stalled`) si no. Pasado `maxWorkflowWallMs` falla (`wall_time`).
+- Las filas de consumo de los agentes simulados usan los tokens que ellos mismos reportan; las de un agente real usarán el libro del Broker por tarea.
+
+### Aplazado
+
+- `haril workflow demo` sigue con su motor simulado: depende del tiempo virtual y del cierre por el vigilante (F3), así que pasarlo al runtime real ahora le quitaría casos.
+- F2b: herramientas del puente para los agentes reales de Pi, el carril real y la solo lectura forzada de esos agentes. F3: parada inmediata, estado `halted`, barrido de pids, el vigilante de 15 minutos y una salvaguarda para una capacidad que nunca se libera.
+- La cadena de hashes no detecta las últimas filas borradas junto con una reescritura coherente de la secuencia y el hash de la cabeza: cualquier cosa guardada en la base se puede reescribir también.
+
+### Verificación
+
+- `corepack pnpm run check`: salida 0 (Biome, tipos, capas, pureza, knip, compatibilidad y `check-version`).
+- `corepack pnpm test`: salida 0; Vitest 2039 pasan y 1 omitida, `node:test` 122 de 122.
+- `npm run build`: salida 0; `haril --version` muestra 0.13.0.
+- Pruebas nuevas de la delegación en el runtime (`apps/haril/tests/workflow-runtime.test.ts`), herméticas, con los agentes simulados y SQLite real: el árbol completo, los límites (picos de agentes vivos por rol, por hilo y de escritores, medidos en el runtime de agentes), un workflow de 75 agentes sin bloqueo mutuo, un rechazo con su relanzamiento y un dependiente que espera la aprobación, una escalada con su reformulación y la reasignación del paso que bloqueó, una continuación tras un hijo fallido, `after_plan` y `continue`, una caída a mitad con reinicio (sin turnos, propuestas, veredictos ni filas duplicados y con los conteos de reproceso conservados) y las tareas sueltas en su carril. Dos mutaciones a mano (quitar la compuerta de aprobación, quitar los límites por rol) hacen fallar sus pruebas.
+- CLI compilado con `HARIL_HOME` y `--data-dir` en una carpeta temporal: `workflow start` con un rechazo guionizado, `run` (para en `after_plan`), `workflow show` (orquestador esperando, delegadores en cola), `workflow continue`, `run` (completado), `workflow show` (17 agentes, «approved after 1 retry» en `e1`), `workflow show --json` (`WorkflowSnapshot v1` válido), `usage verify` («orders: 1 row, chain ok; usage_log: 17 rows, chain ok») y `usage summary --by role --include-simulated`. La carpeta de `HARIL_HOME` quedó vacía.
+
+---
+
 ## 0.12.0
 
 - **Fecha:** 2026-10-18

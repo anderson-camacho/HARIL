@@ -2,11 +2,12 @@
 
 ## Estado actual
 
-- **Versión actual:** 0.12.0.
-- **Estado:** **datos de la delegación en tres capas, registro de consumo y de órdenes, y demostración simulada (0.12.0)**, sobre el núcleo puro de la delegación (0.11.0), el modelo y nivel de razonamiento en la consola (0.10.0), la vista de orquestación con datos de ejemplo (0.9.0), la consola de HARIL sobre Pi (0.8.0), la demo en vivo de M4 (0.7.0) y el MVP cerrado en 0.6.0.
+- **Versión actual:** 0.13.0.
+- **Estado:** **runtime de la delegación en tres capas con agentes simulados (0.13.0)**, sobre los datos de la delegación, el registro de consumo y la demostración simulada (0.12.0), el núcleo puro de la delegación (0.11.0), el modelo y nivel de razonamiento en la consola (0.10.0), la vista de orquestación con datos de ejemplo (0.9.0), la consola de HARIL sobre Pi (0.8.0), la demo en vivo de M4 (0.7.0) y el MVP cerrado en 0.6.0.
+  - `haril workflow start` encola un workflow de tres capas y el runtime lo corre con varios agentes a la vez, sin pasar los límites: el orquestador delega, cada delegador asigna pasos, cada ejecutor tiene su auditor, los rechazos se relanzan y escalan como mucho una vez, las continuaciones corren aunque un hijo falle y un auditor final cierra el workflow. Tras una caída sigue sin repetir trabajo y con los mismos conteos de reproceso. `haril workflow list|show|continue` lo leen y liberan sus paradas. Los agentes de la delegación todavía son simulados (`fake:*`); los reales llegan en F2b.
   - `haril workflow demo` corre un árbol simulado de orquestador, delegadores, ejecutores y auditores con las reglas del Core y el almacén real, sobre un almacén temporal, y muestra el árbol, los totales y los picos de agentes vivos frente a cada límite. Las migraciones `0007` y `0008` guardan workflows, propuestas, veredictos y dependencias `settled`.
   - Cada orden y cada intento quedan en un registro de solo añadir con cadena de hashes: `haril usage log|summary|verify|export` lo lee, filtra por tiempo y tipo, y detecta una fila alterada a mano.
-  - El Core valida las propuestas de los agentes (límites por hilo y por workflow, profundidad, modelos, paradas), decide qué tareas arrancan sin pasar ningún límite ni solapar superficies de escritura, elige el modelo de cada agente (el fijado por el usuario nunca se sustituye; reglas de cuota 80/80/20 y «sin dato»), acota los reprocesos a 1 relanzamiento y 1 escalada y da el veredicto del vigilante de 15 minutos. Son funciones puras con sus contratos de herramientas; todavía no hay runtime que las use.
+  - El Core valida las propuestas de los agentes (límites por hilo y por workflow, profundidad, modelos, paradas), decide qué tareas arrancan sin pasar ningún límite ni solapar superficies de escritura, elige el modelo de cada agente (el fijado por el usuario nunca se sustituye; reglas de cuota 80/80/20 y «sin dato»), acota los reprocesos a 1 relanzamiento y 1 escalada y da el veredicto del vigilante de 15 minutos. Son funciones puras con sus contratos de herramientas, y el runtime de 0.13.0 las usa (el vigilante, desde F3).
   - Cada cambio entregado sube la versión: `scripts/bump-version.mjs` la sube en todos los archivos y `npm run check` (también en la CI) falla si falta la subida o la entrada del CHANGELOG.
   - La barra y las cabeceras muestran siempre el modelo y su nivel; un clic los cambia. Cada modelo de CLIProxyAPI ofrece solo los niveles que publica en su lista `?client_version=`, y el nivel llega al proveedor como `reasoning_effort`. El nivel se recuerda por modelo durante la sesión.
   - El módulo `ORCHESTRATION` muestra la maqueta aprobada de la delegación en tres capas, con clic y con teclado; sin motor de orquestación todavía, solo tiene datos con `/orchestration demo`, rotulados como de ejemplo.
@@ -39,4 +40,4 @@ Las versiones 0.x son preliminares: pueden cambiar sin compatibilidad hacia atr�
 
 Más reciente primero. Cada carpeta contiene el archivo de cambios de su versión mayor, con las versiones menores y de parche, la más nueva arriba.
 
-- [v0](v0/CHANGELOG.md): versiones 0.1.0 a 0.12.0.
+- [v0](v0/CHANGELOG.md): versiones 0.1.0 a 0.13.0.
