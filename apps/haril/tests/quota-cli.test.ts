@@ -170,7 +170,7 @@ describe("haril quota", () => {
     }
   });
 
-  it("refuses a key written in haril.json and a delegation key it does not read yet", async () => {
+  it("refuses a key written in haril.json and an unknown delegation key", async () => {
     const withKey = writeConfig({ delegation: { quota: { managementKey: "x" } } });
     const refused = harness();
     expect(
@@ -181,12 +181,12 @@ describe("haril quota", () => {
     ).toBe(2);
     expect(refused.err.join("\n")).toContain("/delegation/quota/managementKey");
 
-    const unknown = writeConfig({ delegation: { limits: {} } });
+    const unknown = writeConfig({ delegation: { limitz: {} } });
     const out = harness();
     expect(
       await run(["quota"], out.io, { ...sb.host, env: { ...sb.host.env, HARIL_CONFIG: unknown } }),
     ).toBe(2);
-    expect(out.err.join("\n")).toContain("/delegation/limits");
+    expect(out.err.join("\n")).toContain("/delegation/limitz: unknown key");
 
     const badUrl = writeConfig({ delegation: { quota: { managementBaseUrl: "ftp://x" } } });
     const url = harness();

@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { posix, win32 } from "node:path";
 import {
   envSecretRef,
+  HARIL_CONFIG_TOP_LEVEL_KEYS,
   isValidModelDescriptor,
   type ModelDescriptor,
   type SecretMaterial,
@@ -135,9 +136,9 @@ export function loadProviderConfig(
   };
 }
 
-// The top-level keys haril.json may hold: providers (the provider schema), ui (TUI-D14) and delegation (its quota part,
-// phase F6; delegation-section.ts). Anything else is refused.
-const TOP_LEVEL_KEYS: ReadonlySet<string> = new Set(["providers", "ui", "delegation"]);
+// The top-level keys haril.json may hold: providers (the provider schema), ui (TUI-D14) and delegation (phases F6 and
+// F7; delegation-section.ts). Anything else is refused. haril shell reads the same list from @haril/contracts.
+const TOP_LEVEL_KEYS: ReadonlySet<string> = new Set(HARIL_CONFIG_TOP_LEVEL_KEYS);
 const THEME_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const UI_KEYS: ReadonlySet<string> = new Set(["theme"]);
 

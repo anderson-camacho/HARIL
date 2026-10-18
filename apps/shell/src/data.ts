@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import {
+  delegationSectionErrors,
   envSecretRef,
+  HARIL_CONFIG_TOP_LEVEL_KEYS,
   type PlanTask,
   validateHarilConfig,
   validatePlanSchema,
@@ -334,17 +336,15 @@ function readProviders(
   } catch {
     return { source: "file", error: "the file is not valid JSON", rows: [] };
   }
-  // The same rules as the CLI (TUI-D14): ui is allowed, and a file without providers gives the built-in defaults.
+  // The same rules as the CLI (TUI-D14, phase F7): the same top-level keys, the delegation section checked by the same
+  // table (@haril/contracts), and a file without providers gives the built-in defaults.
   if (!isRecord(parsed))
     return { source: "file", error: "the file is not a JSON object", rows: [] };
-  const unknownKeys = Object.keys(parsed).filter((key) => key !== "providers" && key !== "ui");
-  if (unknownKeys.length > 0) {
-    return {
-      source: "file",
-      error: unknownKeys.map((key) => `/${key}: unknown key`).join("; "),
-      rows: [],
-    };
-  }
+  const problems = Object.keys(parsed)
+    .filter((key) => !HARIL_CONFIG_TOP_LEVEL_KEYS.includes(key))
+    .map((key) => `/${key}: unknown key`);
+  if ("delegation" in parsed) problems.push(...delegationSectionErrors(parsed.delegation));
+  if (problems.length > 0) return { source: "file", error: problems.join("; "), rows: [] };
   if (!("providers" in parsed)) return readProvidersDefaults(env, secrets);
   const checked = validateHarilConfig({ providers: parsed.providers });
   if (!checked.ok) return { source: "file", error: checked.errors.join("; "), rows: [] };

@@ -279,6 +279,46 @@ describe("providers and themes", () => {
     }
   });
 
+  it("keeps the provider panel with a valid delegation section, as the CLI does (phase F7)", () => {
+    mkdirSync(join(runtimeRoot, "config"), { recursive: true });
+    writeFileSync(
+      join(runtimeRoot, "config", "haril.json"),
+      JSON.stringify({
+        providers: [{ id: "cliproxy", baseUrl: "http://127.0.0.1:8317/v1" }],
+        delegation: {
+          limits: { maxActiveChildren: { orchestrator: 3 } },
+          context: { perLayer: { orchestrator: 400_000 } },
+        },
+      }),
+    );
+    const data = openShellData({ paths: paths(), env: {} });
+    try {
+      const snapshot = data.load(undefined);
+      expect(snapshot.providers.error).toBeUndefined();
+      expect(snapshot.providers.rows.map((row) => row.id)).toEqual(["cliproxy"]);
+    } finally {
+      data.close();
+    }
+  });
+
+  it("names a problem of the delegation section with its JSON path, as the CLI does", () => {
+    mkdirSync(join(runtimeRoot, "config"), { recursive: true });
+    writeFileSync(
+      join(runtimeRoot, "config", "haril.json"),
+      JSON.stringify({ delegation: { limits: { maxAuditRetries: 2 }, extra: true } }),
+    );
+    const data = openShellData({ paths: paths(), env: {} });
+    try {
+      const error = data.load(undefined).providers.error ?? "";
+      expect(error).toContain(
+        "/delegation/limits/maxAuditRetries: must be a whole number from 0 to 1",
+      );
+      expect(error).toContain("/delegation/extra: unknown key");
+    } finally {
+      data.close();
+    }
+  });
+
   it("names an unknown top-level key as a config error", () => {
     mkdirSync(join(runtimeRoot, "config"), { recursive: true });
     writeFileSync(join(runtimeRoot, "config", "haril.json"), JSON.stringify({ bogus: 1 }));
