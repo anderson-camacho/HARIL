@@ -6,18 +6,17 @@ import type { WorkflowState } from "@haril/contracts";
 // single prompt, and a stuck model could answer "still working". The answer comes from objective facts gathered by an
 // adapter (the Broker's ledger, run and tool events, child state changes and, from F8, worktree files).
 
+// Residual entities are always cancelled at once: that is the user's rule (R-D14), so it is not a policy knob.
 export interface WatchdogPolicy {
   readonly intervalMs: number;
   // Evaluations in a row without progress before an idle entity is closed (1 closes on the first one).
   readonly idleStrikesToClose: number;
-  readonly closeResidualImmediately: boolean;
 }
 
-// P16: every 15 minutes; one evaluation without progress closes; residuals are closed at once.
+// P16: every 15 minutes; one evaluation without progress closes.
 export const DEFAULT_WATCHDOG_POLICY: WatchdogPolicy = Object.freeze({
   intervalMs: 900_000,
   idleStrikesToClose: 1,
-  closeResidualImmediately: true,
 });
 
 export interface LivenessEvidence {
@@ -40,7 +39,8 @@ export interface LivenessEvidence {
   // A model request is in flight. A reasoning model may think for minutes without emitting a token; the Broker
   // already cuts a stream after 120 s of silence, so an open request is a live one, not an idle one.
   readonly modelRequestOpen: boolean;
-  // For the workflow: tasks running or ready.
+  // For the workflow and for a thread (over its subtree): tasks running or ready. A ready task counts even when a limit
+  // holds it back (role, writer, surface, workflow cap): that thread is waiting for capacity, not idle.
   readonly liveWork: number;
   // Evaluations in a row without progress before this one.
   readonly idleStrikes: number;
@@ -81,7 +81,8 @@ function progressSignals(evidence: LivenessEvidence): ProgressSignal[] {
   if (after(evidence.lastChildChangeAt, evidence.windowStart)) signals.push("child_change");
   if (after(evidence.lastFileChangeAt, evidence.windowStart)) signals.push("file_change");
   if (evidence.modelRequestOpen) signals.push("model_request_open");
-  if (evidence.kind === "workflow" && evidence.liveWork > 0) signals.push("live_work");
+  // A single attempt is judged by its own progress; its parent thread is the one that waits for its siblings.
+  if (evidence.kind !== "attempt" && evidence.liveWork > 0) signals.push("live_work");
   return signals;
 }
 
@@ -92,15 +93,13 @@ export function evaluateLiveness(
 ): LivenessDecision {
   const recheck = now + policy.intervalMs;
   if (TERMINAL.includes(evidence.workflowState) || evidence.parentTerminal) {
-    return policy.closeResidualImmediately
-      ? { verdict: "residual", action: "cancel", nextCheckAt: null, idleStrikes: 0, signals: [] }
-      : {
-          verdict: "residual",
-          action: "continue",
-          nextCheckAt: recheck,
-          idleStrikes: 0,
-          signals: [],
-        };
+    return {
+      verdict: "residual",
+      action: "cancel",
+      nextCheckAt: null,
+      idleStrikes: 0,
+      signals: [],
+    };
   }
   if (evidence.awaitingHuman) {
     return {

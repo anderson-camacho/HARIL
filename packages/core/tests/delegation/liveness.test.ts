@@ -4,6 +4,7 @@ import {
   evaluateLiveness,
   isCheckDue,
   type LivenessEvidence,
+  type WatchdogPolicy,
 } from "../../src/delegation/index.js";
 
 // The 15-minute watchdog (docs/modos-y-delegacion.md 3.16, reading L2): code asks "are you still working?" with
@@ -103,12 +104,17 @@ describe("evaluateLiveness", () => {
     ).toBe("residual");
   });
 
-  it("keeps a residual entity when residuals are not closed at once", () => {
-    const policy = { ...DEFAULT_WATCHDOG_POLICY, closeResidualImmediately: false };
+  // The user's hard rule: a residual task is closed at once, and no policy can keep it.
+  it("cancels a residual entity whatever the policy says", () => {
+    const policy = {
+      ...DEFAULT_WATCHDOG_POLICY,
+      closeResidualImmediately: false,
+      idleStrikesToClose: 5,
+    } as WatchdogPolicy;
     expect(evaluateLiveness(evidence({ parentTerminal: true }), NOW, policy)).toMatchObject({
       verdict: "residual",
-      action: "continue",
-      nextCheckAt: NOW + 15 * MINUTE,
+      action: "cancel",
+      nextCheckAt: null,
     });
   });
 
@@ -148,6 +154,24 @@ describe("evaluateLiveness", () => {
     expect(evaluateLiveness(childMoved, NOW, DEFAULT_WATCHDOG_POLICY).verdict).toBe("active");
   });
 
+  // A thread whose children are ready but held back by a limit (role, writer, surface, workflow cap) is waiting for
+  // capacity, not idle: it continues and is checked again in 15 minutes.
+  it("never closes a thread whose subtree has live work, even when the limits hold it back", () => {
+    const waiting = evidence({ kind: "thread", liveWork: 4 });
+    expect(evaluateLiveness(waiting, NOW, DEFAULT_WATCHDOG_POLICY)).toEqual({
+      verdict: "active",
+      action: "continue",
+      nextCheckAt: NOW + 15 * MINUTE,
+      idleStrikes: 0,
+      signals: ["live_work"],
+    });
+  });
+
+  it("does not count live work for a single attempt, which is judged by its own progress", () => {
+    const attempt = evidence({ kind: "attempt", liveWork: 4 });
+    expect(evaluateLiveness(attempt, NOW, DEFAULT_WATCHDOG_POLICY).verdict).toBe("idle");
+  });
+
   it("waits for idleStrikesToClose evaluations without progress, and progress resets the count", () => {
     const policy = { ...DEFAULT_WATCHDOG_POLICY, idleStrikesToClose: 2 };
     expect(evaluateLiveness(evidence(), NOW, policy)).toEqual({
@@ -179,7 +203,6 @@ describe("DEFAULT_WATCHDOG_POLICY (P16)", () => {
     expect(DEFAULT_WATCHDOG_POLICY).toEqual({
       intervalMs: 900_000,
       idleStrikesToClose: 1,
-      closeResidualImmediately: true,
     });
   });
 });
