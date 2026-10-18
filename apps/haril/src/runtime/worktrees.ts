@@ -27,7 +27,7 @@ import {
   mergeInProgress,
   pathsChangedSince,
   removeWorktree,
-  resetBranchTo,
+  restoreBranch,
   worktreeIdentity,
 } from "@haril/git";
 import { readConfinedFile, writeConfinedFile } from "@haril/os";
@@ -64,6 +64,13 @@ import type { Task, WorkflowView } from "./workflow-view.js";
 // pointer file: a command run in the worktree could rewrite that file to point at the main repository. After each turn
 // the pointer file must still hold the bytes git wrote; if not, the turn fails, its changes are discarded, the file is
 // put back and the event worktree.tampered says so. An executor's commit also checks that HEAD is the step's branch.
+// A branch HARIL owns only ever holds commits HARIL verified. An executor's branch has a verified commit, recorded in the
+// store (verifiedSha): where the step started, then each commit the end of a successful turn checked. Every turn of the
+// step, its auditor's too, starts there: a HEAD a command moved in a turn whose end never ran (a crash) is put back
+// first. A turn that does not succeed, or that was tampered with, puts the branch back there, so a commit a command made
+// never survives into a retry; an auditor's turn always does. A turn that holds the integration lock keeps its own
+// verified commit of the integration branch, where it started and then each merge HARIL made in it: a command's commit
+// on that branch is dropped before a merge and at the turn's end. Each putting back is the event worktree.restored.
 
 export interface WorkspaceSettings {
   // The folder that holds every worktree (the data directory's worktrees folder).
@@ -95,7 +102,9 @@ export interface TurnWorkspace {
   // The worktree's own git folder, found from the main repository, and the bytes of its .git pointer file.
   readonly gitDir: string;
   readonly pointer: string;
-  // The commit the worktree held when the turn started: what the turn added is checked against it.
+  // The branch's verified commit when the turn started (the step's last verified commit for an executor and an auditor;
+  // the integration branch's commit as the turn found it otherwise): what the turn added is checked against it, and a
+  // turn that does not succeed puts the branch back on it.
   readonly startHead: string;
 }
 
@@ -161,6 +170,15 @@ function executorBranchOf(workflowId: string, view: WorkflowView, threadId: stri
 
 function isWritingWorkflow(view: WorkflowView): boolean {
   return view.workflow.baseBranch !== null && view.workflow.baseSha !== null;
+}
+
+// The turns that use the integration worktree under the workflow's integration lock: the delegators and the final
+// auditor. Only they run commands there; the other turns in it only read.
+function holdsIntegrationLock(view: WorkflowView, task: Task): boolean {
+  return (
+    task.role === "delegator" ||
+    (task.role === "auditor" && view.task(task.parentTaskId)?.role !== "executor")
+  );
 }
 
 // Applies Pi's edit shape to a text: each oldText must appear exactly once in the original, the regions must not
@@ -238,6 +256,19 @@ export interface Workspaces {
   ): Promise<HostCommandResult>;
   // Runs `work` alone among the mutating git operations of the repository.
   withRepository<T>(repo: string, work: () => Promise<T>): Promise<T>;
+  // The commit the turn's branch must hold now: where the turn started, moved on by each merge HARIL made in it.
+  verifiedHead(workspace: TurnWorkspace): string;
+  // A merge HARIL made in the turn (haril_merge, haril_merge_continue): its commit becomes the branch's verified head.
+  recordMerge(workspace: TurnWorkspace, sha: string): void;
+  // Puts the turn's branch back on its verified head when a command moved it, and leaves the worktree clean. The caller
+  // already runs inside withRepository. Answers whether the branch had moved.
+  putBack(
+    store: Store,
+    epoch: number,
+    view: WorkflowView,
+    task: Task,
+    workspace: TurnWorkspace,
+  ): Promise<boolean>;
   // Removes an executor's worktree and deletes its branch once its work is merged.
   retireExecutor(store: Store, epoch: number, record: WorktreeRecord, repo: string): Promise<void>;
   // Removes the worktrees of workflows that ended (not those in `busy`); the integration branch stays when it holds work.
@@ -262,8 +293,71 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
     return next;
   };
 
+  // Each turn's verified commit of its branch once a merge HARIL made moved it on from startHead (phase F8, 0.20.1).
+  const turnHeads = new WeakMap<TurnWorkspace, string>();
+  const verifiedOf = (workspace: TurnWorkspace): string =>
+    turnHeads.get(workspace) ?? workspace.startHead;
+
   const runAbort = async (path: string, options: GitOptions): Promise<void> => {
     if (await mergeInProgress(path, options)) await abortMerge(path, options);
+  };
+
+  // Puts a worktree's branch back on `verified` when HEAD names another branch (or none) or another commit: a command
+  // checked out, committed, reset or deleted it. Records worktree.restored; throws when git could not put it back.
+  const restoreIfMoved = async (
+    store: Store,
+    epoch: number,
+    view: WorkflowView,
+    task: Task,
+    target: { readonly root: string; readonly branch: string; readonly worktreeId: string },
+    own: GitOptions,
+    verified: string,
+  ): Promise<boolean> => {
+    const branch = await headBranch(target.root, own);
+    const head = await headCommit(target.root, own);
+    if (branch === target.branch && head === verified) return false;
+    const restored = await restoreBranch(target.root, target.branch, verified, own);
+    store.events.append({
+      aggregateType: "task",
+      aggregateId: task.taskId,
+      type: "worktree.restored",
+      actorKind: "system",
+      actorId: `runtime:${epoch}`,
+      payload: {
+        workflowId: view.workflow.workflowId,
+        worktreeId: target.worktreeId,
+        branch: target.branch,
+        // What HEAD named and held before: the branch (null when detached or deleted) and its commit.
+        fromBranch: branch ?? null,
+        fromSha: head ?? null,
+        toSha: verified,
+        restored,
+      },
+      projectId: view.workflow.projectId,
+      taskId: task.taskId,
+    });
+    if (!restored) {
+      throw new Error(
+        `the branch ${target.branch} could not be put back on its verified commit ${verified.slice(0, 12)}`,
+      );
+    }
+    return true;
+  };
+
+  const putBack: Workspaces["putBack"] = async (store, epoch, view, task, workspace) => {
+    const own = worktreeGit(git, workspace);
+    const moved = await restoreIfMoved(
+      store,
+      epoch,
+      view,
+      task,
+      workspace,
+      own,
+      verifiedOf(workspace),
+    );
+    // restoreBranch already left the worktree clean.
+    if (!moved) await discardChanges(workspace.root, own);
+    return moved;
   };
 
   // The identity of a worktree HARIL made: its own git folder and its .git pointer file, from the main repository, and
@@ -359,10 +453,26 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
       if (!result.ok) return result;
       const found = await identify(repo, path);
       identity = found;
-      // A recorded worktree got its predecessors' work before it was recorded. One made but never recorded (a crash
-      // between the add and the record) gets it now: each predecessor commit its HEAD does not hold yet is merged.
-      if (known !== undefined) return result;
       const own: GitOptions = { ...git, gitDir: found.gitDir, workTree: path };
+      // A recorded worktree got its predecessors' work before it was recorded. Its next turn starts from the step's last
+      // verified commit: a HEAD a command moved in a turn whose end never ran is put back first. A record from before
+      // 0.20.1 has none: its recorded head, else HEAD as found.
+      if (known !== undefined) {
+        const verified = known.verifiedSha ?? known.headSha ?? found.startHead;
+        await restoreIfMoved(
+          store,
+          epoch,
+          view,
+          task,
+          { root: path, branch, worktreeId: known.worktreeId },
+          own,
+          verified,
+        );
+        identity = { ...found, startHead: verified };
+        return result;
+      }
+      // One made but never recorded (a crash between the add and the record) gets it now: each predecessor commit its
+      // HEAD does not hold yet is merged.
       if (result.reused) await runAbort(path, own);
       // P13: a new step that waits for others starts with their approved work merged into its own branch.
       for (const thread of predecessors(view, task)) {
@@ -407,6 +517,9 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
       branch,
       baseSha,
     });
+    // A new step's first verified commit: where it starts, its predecessors' work merged.
+    if (known === undefined)
+      store.worktrees.setVerified(epoch, record.worktreeId, identity.startHead);
     return {
       kind: "executor",
       worktreeId: record.worktreeId,
@@ -425,9 +538,6 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
     const repo = repoOf(store, view);
     if (repo === undefined) throw new Error("the workflow's project is not registered");
     if (task.role === "executor") return ensureExecutor(store, epoch, view, task, repo);
-    const holdsLock =
-      task.role === "delegator" ||
-      (task.role === "auditor" && view.task(task.parentTaskId)?.role !== "executor");
     if (task.role === "auditor") {
       const subject = view.task(task.parentTaskId);
       if (subject?.role === "executor") {
@@ -436,6 +546,14 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
           .find((item) => item.threadId === subject.threadId);
         if (record === undefined)
           throw new Error("the step's worktree is gone; there is nothing to audit");
+        const found = await identify(repo, record.path);
+        // The auditor judges the step's last verified commit, never what a command added after it.
+        const verified = record.verifiedSha ?? record.headSha ?? found.startHead;
+        const own: GitOptions = { ...git, gitDir: found.gitDir, workTree: record.path };
+        const target = { root: record.path, branch: record.branch, worktreeId: record.worktreeId };
+        await withRepository(repo, () =>
+          restoreIfMoved(store, epoch, view, task, target, own, verified),
+        );
         return {
           kind: "audit",
           worktreeId: record.worktreeId,
@@ -445,12 +563,13 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
           repo,
           workflowId: view.workflow.workflowId,
           writeSurface: [],
-          ...(await identify(repo, record.path)),
+          ...found,
+          startHead: verified,
         };
       }
     }
     const integration = await ensureIntegration(store, epoch, view, repo);
-    if (holdsLock) {
+    if (holdsIntegrationLock(view, task)) {
       // A turn that holds the integration lock starts clean: a merge a crashed runtime left half done is given up, and
       // nothing uncommitted stays (every merge a delegator finished is a commit).
       const own = worktreeGit(git, integration);
@@ -477,6 +596,13 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
         `the step's worktree is on ${head === undefined ? "no branch" : `the branch ${head}`}, not ${workspace.branch}; nothing was committed`,
       );
     }
+    // The branch still holds the commit the turn started from: a command that reset or rewrote it below that commit
+    // leaves nothing committed.
+    if ((await isAncestor(workspace.root, workspace.startHead, "HEAD", own)) !== true) {
+      throw new Error(
+        `the step's branch no longer holds the commit its turn started from (${workspace.startHead.slice(0, 12)}): a command reset or rewrote it; nothing was committed`,
+      );
+    }
     const changed = await changedPaths(workspace.root, own);
     if (changed === undefined) throw new Error("git status failed in the step's worktree");
     const inside = changed.filter((path) =>
@@ -493,27 +619,39 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
         ? ["(git could not list the changes)"]
         : gained.filter((path) => !pathMatchesSurface(path, workspace.writeSurface, SURFACE_MATCH));
     if (outside.length > 0) {
-      await resetBranchTo(workspace.root, workspace.startHead, own);
-      await discardChanges(workspace.root, own);
+      // Silent here: the event worktree.outside_surface says it.
+      await restoreBranch(workspace.root, workspace.branch, workspace.startHead, own);
       throw new OutsideSurface(
         `the turn's commits reach outside its write surface (${outside.slice(0, 5).join(", ")}${outside.length > 5 ? ", ..." : ""}); the branch was put back`,
       );
     }
     await discardChanges(workspace.root, own);
     const tip = await headCommit(workspace.root, own);
-    if (tip !== undefined && tip !== workspace.startHead) {
-      store.worktrees.setHead(epoch, workspace.worktreeId, tip);
+    if (tip !== undefined) {
+      // Checked: the step's next turn starts here.
+      store.worktrees.setVerified(epoch, workspace.worktreeId, tip);
+      if (tip !== workspace.startHead) store.worktrees.setHead(epoch, workspace.worktreeId, tip);
     }
     return committed.sha;
   };
 
   const finish: Workspaces["finish"] = async (store, epoch, view, task, workspace, outcome) => {
     const own = worktreeGit(git, workspace);
+    // The branches a turn's end puts back on their verified commit: an executor's and an auditor's (the step's branch),
+    // and the integration branch of a turn that holds the integration lock. The other turns in the integration worktree
+    // run no command and share it with the lock's holder: they only clean up.
+    const guarded = workspace.kind !== "integration" || holdsIntegrationLock(view, task);
+    const restoreGuarded = async (): Promise<void> => {
+      if (guarded) {
+        await restoreIfMoved(store, epoch, view, task, workspace, own, verifiedOf(workspace));
+      }
+    };
     return withRepository(workspace.repo, async () => {
       // Before any git run: the .git pointer file must still be the one git wrote. A rewritten one fails the turn.
       const pointer = await checkPointer(workspace.root, workspace.pointer);
       if (pointer !== "intact") {
         await runAbort(workspace.root, own);
+        await restoreGuarded();
         await discardChanges(workspace.root, own);
         store.events.append({
           aggregateType: "task",
@@ -538,7 +676,9 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
         };
       }
       if (workspace.kind === "executor") {
+        // A turn that did not succeed commits nothing: a commit a command made goes too, so its retry starts clean.
         if (outcome.status !== "succeeded") {
+          await restoreGuarded();
           await discardChanges(workspace.root, own);
           return outcome;
         }
@@ -546,6 +686,7 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
           await commitExecutor(store, epoch, view, task, workspace);
           return outcome;
         } catch (error) {
+          await restoreGuarded();
           await discardChanges(workspace.root, own);
           const message = error instanceof Error ? error.message : String(error);
           if (error instanceof OutsideSurface) {
@@ -568,8 +709,10 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
           return { status: "failed", code: "workspace.commit_failed", message };
         }
       }
-      // Everyone else leaves nothing behind: a merge left waiting is given up, and what commands changed is discarded.
+      // Everyone else leaves nothing behind: a merge left waiting is given up, what commands changed is discarded, and a
+      // commit or a branch move a command made is undone (the merges HARIL made in the turn stay).
       await runAbort(workspace.root, own);
+      await restoreGuarded();
       await discardChanges(workspace.root, own);
       return outcome;
     });
@@ -725,6 +868,11 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
     edit,
     run,
     withRepository,
+    verifiedHead: verifiedOf,
+    recordMerge: (workspace, sha) => {
+      turnHeads.set(workspace, sha);
+    },
+    putBack,
     retireExecutor,
     sweep,
   };

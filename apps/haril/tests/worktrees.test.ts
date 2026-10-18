@@ -100,25 +100,42 @@ function gitIn(cwd: string, ...args: string[]): string {
 }
 
 // What finish needs from the store, the view and the task, recorded for the assertions.
-function turnFakes() {
+function turnFakes(role: "executor" | "auditor" | "delegator" = "executor") {
   const events: { type: string; payload: unknown }[] = [];
   const heads: string[] = [];
+  const verified: string[] = [];
   const store = {
     events: { append: (event: { type: string; payload: unknown }) => events.push(event) },
-    worktrees: { setHead: (_epoch: number, _id: string, sha: string) => heads.push(sha) },
+    worktrees: {
+      setHead: (_epoch: number, _id: string, sha: string) => heads.push(sha),
+      setVerified: (_epoch: number, _id: string, sha: string) => verified.push(sha),
+    },
   } as unknown as Store;
   const view = {
     label: () => "part-1/s1",
     workflow: { workflowId: "wf", projectId: "p1" },
+    task: () => (role === "auditor" ? { role: "executor", threadId: "th0" } : undefined),
   } as unknown as WorkflowView;
   const task = {
+    role,
     taskId: "t1",
     threadId: "th1",
+    parentTaskId: "t0",
     attempt: 1,
     goal: "Change the button",
   } as unknown as Task;
-  return { store, view, task, events, heads };
+  return { store, view, task, events, heads, verified };
 }
+
+// What a command run in the worktree can do: commit a file onto whatever branch HEAD names there.
+function commitByCommand(cwd: string, file: string): string {
+  writeFileSync(join(cwd, file), `committed by a command ${Math.random()}\n`);
+  gitIn(cwd, "add", file);
+  gitIn(cwd, "commit", "--quiet", "-m", `sneaked ${file}`);
+  return gitIn(cwd, "rev-parse", "HEAD");
+}
+
+const FAILED: AgentOutcome = { status: "failed", code: "agent.exit", message: "the agent failed" };
 
 const SUCCEEDED: AgentOutcome = { status: "succeeded", summary: "done" };
 
@@ -290,6 +307,189 @@ describe.skipIf(!HAS_GIT)("the end of an executor's turn", () => {
     expect(outcome).toMatchObject({ status: "failed", code: "workspace.commit_failed" });
     expect(gitIn(repo, "rev-parse", "elsewhere")).toBe(gitIn(repo, "rev-parse", "main"));
     expect(fakes.heads).toEqual([]);
+    // HEAD names the step's branch again, on the commit the turn started from; the other branch was not moved.
+    expect(gitIn(tree, "symbolic-ref", "--short", "HEAD")).toBe("haril/wf/step/s1");
+    expect(gitIn(tree, "rev-parse", "HEAD")).toBe(ws.startHead);
+  });
+
+  it("puts the branch back when a command committed during an attempt that failed", async () => {
+    const ws = workspace();
+    const host = workspaces();
+    const fakes = turnFakes();
+    const mainBefore = gitIn(repo, "rev-parse", "main");
+    commitByCommand(tree, "outside.txt");
+    expect(
+      await host.write(ws, ws.writeSurface, "src/button.ts", "export const color = 'blue';\n"),
+    ).toMatchObject({ ok: true });
+    expect(await host.finish(fakes.store, 1, fakes.view, fakes.task, ws, FAILED)).toEqual(FAILED);
+    expect(gitIn(repo, "rev-parse", "haril/wf/step/s1")).toBe(ws.startHead);
+    expect(gitIn(repo, "rev-parse", "main")).toBe(mainBefore);
+    expect(existsSync(join(tree, "outside.txt"))).toBe(false);
+    expect(gitIn(tree, "status", "--porcelain")).toBe("");
+    expect(fakes.events.map((event) => event.type)).toEqual(["worktree.restored"]);
+    expect(fakes.heads).toEqual([]);
+    expect(fakes.verified).toEqual([]);
+  });
+
+  it("puts the branch back when the turn was tampered with, after a command's commit", async () => {
+    const ws = workspace();
+    const host = workspaces();
+    const fakes = turnFakes();
+    commitByCommand(tree, "outside.txt");
+    rmSync(join(tree, ".git"));
+    writeFileSync(join(tree, ".git"), `gitdir: ${join(repo, ".git")}\n`);
+    const outcome = await host.finish(fakes.store, 1, fakes.view, fakes.task, ws, SUCCEEDED);
+    expect(outcome).toMatchObject({ status: "failed", code: "workspace.tampered" });
+    expect(gitIn(repo, "rev-parse", "haril/wf/step/s1")).toBe(ws.startHead);
+    expect(existsSync(join(tree, "outside.txt"))).toBe(false);
+    expect(fakes.events.map((event) => event.type)).toEqual([
+      "worktree.restored",
+      "worktree.tampered",
+    ]);
+  });
+
+  it("refuses a success whose branch no longer holds the step's verified commit", async () => {
+    // A commit of an earlier verified turn, then a command that reset the branch below it.
+    writeFileSync(join(tree, "src", "button.ts"), "export const color = 'green';\n");
+    gitIn(tree, "commit", "--quiet", "-am", "an earlier verified turn");
+    const ws = workspace();
+    const host = workspaces();
+    const fakes = turnFakes();
+    gitIn(tree, "reset", "--quiet", "--hard", "main");
+    expect(
+      await host.write(ws, ws.writeSurface, "src/button.ts", "export const color = 'blue';\n"),
+    ).toMatchObject({ ok: true });
+    const outcome = await host.finish(fakes.store, 1, fakes.view, fakes.task, ws, SUCCEEDED);
+    expect(outcome).toMatchObject({ status: "failed", code: "workspace.commit_failed" });
+    expect(gitIn(repo, "rev-parse", "haril/wf/step/s1")).toBe(ws.startHead);
+    expect(readFileSync(join(tree, "src", "button.ts"), "utf8")).toContain("'green'");
+    expect(fakes.verified).toEqual([]);
+  });
+
+  it("records the commit it verified, where the step's next turn starts", async () => {
+    const ws = workspace();
+    const host = workspaces();
+    const fakes = turnFakes();
+    expect(
+      await host.write(ws, ws.writeSurface, "src/button.ts", "export const color = 'blue';\n"),
+    ).toMatchObject({ ok: true });
+    expect(await host.finish(fakes.store, 1, fakes.view, fakes.task, ws, SUCCEEDED)).toEqual(
+      SUCCEEDED,
+    );
+    expect(fakes.verified).toEqual([gitIn(repo, "rev-parse", "haril/wf/step/s1")]);
+  });
+});
+
+describe.skipIf(!HAS_GIT)(
+  "the commits a command makes in an auditor's or a delegator's turn",
+  () => {
+    it("an auditor's turn leaves the step's branch on its verified commit", async () => {
+      const ws = { ...workspace(), kind: "audit" as const, writeSurface: [] };
+      const host = workspaces();
+      const fakes = turnFakes("auditor");
+      commitByCommand(tree, "src/button.ts");
+      expect(await host.finish(fakes.store, 1, fakes.view, fakes.task, ws, SUCCEEDED)).toEqual(
+        SUCCEEDED,
+      );
+      expect(gitIn(repo, "rev-parse", "haril/wf/step/s1")).toBe(ws.startHead);
+      expect(readFileSync(join(tree, "src", "button.ts"), "utf8")).toContain("'red'");
+      expect(fakes.events.map((event) => event.type)).toEqual(["worktree.restored"]);
+    });
+
+    it("a delegator's turn keeps the merges HARIL made and drops a command's commits", async () => {
+      // The step worktree stands in for the integration worktree here.
+      const ws = { ...workspace(), kind: "integration" as const, writeSurface: [] };
+      const host = workspaces();
+      const fakes = turnFakes("delegator");
+      // A merge HARIL made in the turn (a commit stands for it), then a command's commit on top.
+      const merge = commitByCommand(tree, "merged.txt");
+      host.recordMerge(ws, merge);
+      expect(host.verifiedHead(ws)).toBe(merge);
+      commitByCommand(tree, "sneaked.txt");
+      expect(await host.finish(fakes.store, 1, fakes.view, fakes.task, ws, SUCCEEDED)).toEqual(
+        SUCCEEDED,
+      );
+      expect(gitIn(repo, "rev-parse", "haril/wf/step/s1")).toBe(merge);
+      expect(existsSync(join(tree, "merged.txt"))).toBe(true);
+      expect(existsSync(join(tree, "sneaked.txt"))).toBe(false);
+      expect(fakes.events.map((event) => event.type)).toEqual(["worktree.restored"]);
+    });
+  },
+);
+
+describe.skipIf(!HAS_GIT)("a step's next turn after a crash", () => {
+  it("starts from the step's verified commit, never from a HEAD a command moved", async () => {
+    const host = workspaces();
+    const base = gitIn(repo, "rev-parse", "main");
+    const events: { type: string }[] = [];
+    const records = new Map<string, Record<string, unknown>>();
+    const store = {
+      projects: { list: () => [{ projectId: "p1", rootPath: repo }] },
+      events: { append: (event: { type: string }) => events.push(event) },
+      worktrees: {
+        list: () => [...records.values()],
+        record: (_epoch: number, input: Record<string, unknown>) => {
+          const id = `w-${String(input.kind)}-${String(input.threadId)}`;
+          const known = records.get(id);
+          if (known !== undefined) return known;
+          const created: Record<string, unknown> = {
+            ...input,
+            worktreeId: id,
+            headSha: null,
+            verifiedSha: null,
+            mergedAt: null,
+            state: "active",
+          };
+          records.set(id, created);
+          return created;
+        },
+        setVerified: (_epoch: number, id: string, sha: string) => {
+          const known = records.get(id);
+          if (known !== undefined) known.verifiedSha = sha;
+        },
+      },
+    } as unknown as Store;
+    const executor = {
+      role: "executor",
+      taskId: "t-e",
+      threadId: "th-e",
+      parentTaskId: "t-d",
+      dependsOn: [],
+      surfaceWrite: ["src/button.ts"],
+      attempt: 1,
+      goal: "Change the button",
+    } as unknown as Task;
+    const auditor = {
+      role: "auditor",
+      taskId: "t-a",
+      threadId: "th-a",
+      parentTaskId: "t-e",
+    } as unknown as Task;
+    const view = {
+      workflow: { workflowId: "wf3", projectId: "p1", baseBranch: "main", baseSha: base },
+      turns: () => [{ localId: "s1" }],
+      parentThreadId: () => null,
+      label: () => "s1",
+      task: (taskId: string) => (taskId === "t-e" ? executor : undefined),
+    } as unknown as WorkflowView;
+    const first = await host.prepare(store, 1, view, executor);
+    if (first === null) throw new Error("no step worktree");
+    expect(first.startHead).toBe(base);
+    expect([...records.values()][0]?.verifiedSha).toBe(base);
+    // An attempt whose runtime crashed: a command committed outside the surface, and the turn's end never ran.
+    commitByCommand(first.root, "outside.txt");
+    const again = await host.prepare(store, 1, view, executor);
+    expect(again?.startHead).toBe(base);
+    expect(gitIn(repo, "rev-parse", first.branch)).toBe(base);
+    expect(existsSync(join(first.root, "outside.txt"))).toBe(false);
+    // The same for the step's auditor: it audits the verified commit, not what a command added.
+    commitByCommand(first.root, "audit.txt");
+    const audit = await host.prepare(store, 1, view, auditor);
+    expect(audit?.startHead).toBe(base);
+    expect(gitIn(repo, "rev-parse", first.branch)).toBe(base);
+    expect(existsSync(join(first.root, "audit.txt"))).toBe(false);
+    expect(events.map((event) => event.type)).toEqual(["worktree.restored", "worktree.restored"]);
+    expect(gitIn(repo, "rev-parse", "main")).toBe(base);
   });
 });
 

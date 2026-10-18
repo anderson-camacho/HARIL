@@ -21,6 +21,11 @@ export interface WorktreeRecord {
   // The last commit HARIL recorded on the branch: an executor's committed work, or the integration's last merge. null
   // while the branch holds nothing beyond its base.
   readonly headSha: string | null;
+  // An executor branch's last commit HARIL verified: where the step started (the base commit, with its predecessors'
+  // work merged), then each commit the end of a successful turn checked. Every turn of the step starts there and a turn
+  // that does not succeed puts the branch back there, so a commit a command made never survives into a retry. null for
+  // the integration worktree and for a record made before 0.20.1 (migration 0016).
+  readonly verifiedSha: string | null;
   // An executor branch merged into the integration branch: when, and the merge commit.
   readonly mergedAt: number | null;
   readonly mergeSha: string | null;
@@ -49,6 +54,7 @@ export interface WorktreesPort {
   // removed and made anew keeps its record). store.not_found for an unknown workflow.
   record(epoch: number, input: RecordWorktreeInput): WorktreeRecord;
   setHead(epoch: number, worktreeId: string, headSha: string): void;
+  setVerified(epoch: number, worktreeId: string, verifiedSha: string): void;
   markMerged(epoch: number, worktreeId: string, mergeSha: string): void;
   markRemoved(epoch: number, worktreeId: string): void;
   get(worktreeId: string): WorktreeRecord | undefined;

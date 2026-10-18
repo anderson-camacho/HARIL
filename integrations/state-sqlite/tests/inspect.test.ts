@@ -35,7 +35,7 @@ describe("inspectStore (read-only)", () => {
     }).close();
     const report = inspectStore({ dataDir: dir });
     expect(report.initialized).toBe(true);
-    expect(report.schemaVersion).toBe(15);
+    expect(report.schemaVersion).toBe(16);
     expect(report.error).toBeUndefined();
     expect(report.gates.every((gate) => gate.status !== "error")).toBe(true);
   });

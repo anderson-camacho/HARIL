@@ -5,6 +5,7 @@ import {
   abortMerge,
   finishMerge,
   type GitOptions,
+  headCommit,
   isAncestor,
   mergeBranch,
   mergeCheck,
@@ -26,7 +27,9 @@ import {
 //      then go away); a conflict comes back as data: the conflicting files, left with their markers;
 //   4. the delegator resolves those files with its own write and edit (confined to them), then haril_merge_continue
 //      commits the resolution, refused while a marker remains; haril_merge_abort gives the merge up.
-// The base branch is never touched and nothing is pushed: the integration branch is the result the user reviews.
+// The base branch is never touched and nothing is pushed: the integration branch is the result the user reviews. Only
+// HARIL's merges stay on it: each one moves the turn's verified commit (Workspaces.recordMerge), a commit a command made
+// is dropped before a merge, and the merge waiting for its conflicts is given up when the branch moved under it.
 
 interface PendingMerge {
   readonly localId: string;
@@ -158,6 +161,9 @@ export function createIntegration(): Integration {
           "a merge is already in progress in the integration worktree; call haril_merge_abort first",
         );
       }
+      // A commit a command made on the integration branch never rides into a merge: the branch goes back to the turn's
+      // verified commit first.
+      await context.workspaces.putBack(store, context.epoch, view, context.task, workspace);
       if ((await isAncestor(workspace.repo, record.branch, workspace.branch, git)) === true) {
         await recordMerged(context, record, record.headSha as string);
         return { ok: true, localId, conflicts: [], note: "already merged" };
@@ -169,6 +175,7 @@ export function createIntegration(): Integration {
       const result = await mergeBranch(workspace.root, record.branch, message, own);
       if (!result.ok) return refuse(`the merge of "${localId}" failed: ${result.detail}`);
       if (result.merged) {
+        context.workspaces.recordMerge(workspace, result.sha);
         await recordMerged(context, record, result.sha);
         return { ok: true, localId, commit: result.sha, conflicts: [] };
       }
@@ -196,6 +203,15 @@ export function createIntegration(): Integration {
     const waiting = pending.get(view.workflow.workflowId);
     if (waiting === undefined) return Promise.resolve(refuse("no merge waits for its conflicts"));
     return context.workspaces.withRepository(workspace.repo, async () => {
+      // The merge waits on the turn's verified commit. A command that committed, reset or finished the merge itself in
+      // the meantime moved the branch: it goes back, and the merge with it.
+      if ((await headCommit(workspace.root, own)) !== context.workspaces.verifiedHead(workspace)) {
+        pending.delete(view.workflow.workflowId);
+        await context.workspaces.putBack(store, context.epoch, view, context.task, workspace);
+        return refuse(
+          `the integration branch moved while the merge of "${waiting.localId}" waited for its conflicts (a command committed or reset it): it was put back on its last verified commit and the merge was given up; call haril_merge again`,
+        );
+      }
       const message = `haril: merge ${waiting.localId} into the integration branch, conflicts resolved by the delegator`;
       const finished = await finishMerge(workspace.root, waiting.files, message, own);
       if (!finished.ok) {
@@ -206,6 +222,7 @@ export function createIntegration(): Integration {
         );
       }
       pending.delete(view.workflow.workflowId);
+      context.workspaces.recordMerge(workspace, finished.sha);
       const record = store.worktrees.get(waiting.worktreeId);
       if (record !== undefined) await recordMerged(context, record, finished.sha);
       return { ok: true, localId: waiting.localId, commit: finished.sha };

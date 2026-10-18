@@ -119,6 +119,24 @@ describe("store.worktrees", () => {
     });
   });
 
+  it("records an executor branch's last verified commit apart from its head (migration 0016)", () => {
+    const record = store.worktrees.record(epoch, { workflowId, ...executor("t1") });
+    expect(record.verifiedSha).toBeNull();
+    store.worktrees.setVerified(epoch, record.worktreeId, "d".repeat(40));
+    expect(store.worktrees.get(record.worktreeId)).toMatchObject({
+      verifiedSha: "d".repeat(40),
+      headSha: null,
+    });
+    store.worktrees.setVerified(epoch, record.worktreeId, "e".repeat(40));
+    expect(store.worktrees.list({ workflowId })[0]?.verifiedSha).toBe("e".repeat(40));
+    expect(() => store.worktrees.setVerified(epoch + 1, record.worktreeId, "f".repeat(40))).toThrow(
+      expect.objectContaining({ code: "store.fenced" }),
+    );
+    expect(() => store.worktrees.setVerified(epoch, "nope", "f".repeat(40))).toThrow(
+      expect.objectContaining({ code: "store.not_found" }),
+    );
+  });
+
   it("refuses a write from a stale epoch and a worktree of an unknown workflow", () => {
     expect(
       (() => {

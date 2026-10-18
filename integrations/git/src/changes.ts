@@ -1,4 +1,4 @@
-import { detailOf, type GitOptions, recordsOf, runGit } from "./run.js";
+import { detailOf, type GitOptions, isSafeBranchName, recordsOf, runGit } from "./run.js";
 
 // What an executor's turn changed in its worktree, and its commit (docs/modos-y-delegacion.md 3.10, phase F8). The host
 // commits only the changed paths inside the step's write surface (the Core decides which), then discards everything else
@@ -75,14 +75,28 @@ export async function pathsChangedSince(
   return result.ok ? [...new Set(recordsOf(result.stdout))] : undefined;
 }
 
-// Moves the worktree's branch back to `sha`, dropping the commits after it and every change.
-export async function resetBranchTo(
+// Puts a worktree's branch back on `sha`: HEAD names `branch` again (a command may have checked out another branch,
+// detached HEAD or deleted the branch), the branch points at `sha`, and the worktree holds exactly that commit (tracked
+// changes reset, untracked files removed, a merge in progress dropped). No other branch moves, whatever HEAD named
+// before: HEAD is pointed at `branch` first, and only then reset. True once git shows HEAD on `branch` at `sha`.
+export async function restoreBranch(
   worktree: string,
+  branch: string,
   sha: string,
   options: GitOptions = {},
 ): Promise<boolean> {
-  if (!/^[0-9a-f]{7,64}$/.test(sha)) return false;
-  return (await runGit(worktree, ["reset", "--quiet", "--hard", sha], options)).ok;
+  if (!isSafeBranchName(branch) || !/^[0-9a-f]{40,64}$/.test(sha)) return false;
+  const pointed = await runGit(worktree, ["symbolic-ref", "HEAD", `refs/heads/${branch}`], options);
+  if (!pointed.ok) return false;
+  const reset = await runGit(worktree, ["reset", "--quiet", "--hard", sha], options);
+  const clean = await runGit(worktree, ["clean", "-d", "--force", "--quiet"], options);
+  if (!reset.ok || !clean.ok) return false;
+  const head = await runGit(
+    worktree,
+    ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
+    options,
+  );
+  return head.ok && head.stdout.trim() === sha;
 }
 
 // Whether the repository tracks `path` (in the worktree's index: a conflicted file of a merge counts).

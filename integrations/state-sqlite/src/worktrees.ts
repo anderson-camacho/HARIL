@@ -10,7 +10,7 @@ import type {
 } from "@haril/core/ports";
 import { StoreError } from "./errors.js";
 
-// The worktrees table (docs/modos-y-delegacion.md 3.10, phase F8; migration 0014): the runtime records each git worktree
+// The worktrees table (docs/modos-y-delegacion.md 3.10, phase F8; migrations 0014 and 0016): the runtime records each git worktree
 // it makes for a workflow that writes, and what happens to its branch. The store only records: git runs in the runtime.
 // Each write is one transaction fenced by the runtime epoch, with an event that carries ids and branch names only.
 
@@ -24,7 +24,7 @@ interface WorktreesFacetOptions {
 }
 
 const COLUMNS =
-  "worktree_id AS worktreeId, workflow_id AS workflowId, kind, thread_id AS threadId, path, branch, base_sha AS baseSha, head_sha AS headSha, merged_at AS mergedAt, merge_sha AS mergeSha, state, created_at AS createdAt, removed_at AS removedAt";
+  "worktree_id AS worktreeId, workflow_id AS workflowId, kind, thread_id AS threadId, path, branch, base_sha AS baseSha, head_sha AS headSha, verified_sha AS verifiedSha, merged_at AS mergedAt, merge_sha AS mergeSha, state, created_at AS createdAt, removed_at AS removedAt";
 
 export function createWorktreesFacet(options: WorktreesFacetOptions): WorktreesPort {
   const { db, clock, ids, transaction, appendEvent, assertActiveEpoch } = options;
@@ -115,6 +115,15 @@ export function createWorktreesFacet(options: WorktreesFacetOptions): WorktreesP
         require(worktreeId);
         db.prepare("UPDATE worktrees SET head_sha = ? WHERE worktree_id = ?").run(
           headSha,
+          worktreeId,
+        );
+      }),
+    setVerified: (epoch, worktreeId, verifiedSha) =>
+      transaction(() => {
+        assertActiveEpoch(epoch);
+        require(worktreeId);
+        db.prepare("UPDATE worktrees SET verified_sha = ? WHERE worktree_id = ?").run(
+          verifiedSha,
           worktreeId,
         );
       }),

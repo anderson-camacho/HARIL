@@ -220,6 +220,48 @@ function onlyWorkflow(store: Store) {
   return workflow;
 }
 
+function roleOf(store: Store, taskId: string): string | undefined {
+  return store.workflows
+    .tasks(onlyWorkflow(store).workflowId)
+    .find((task) => task.taskId === taskId)?.role;
+}
+
+// What a command run through haril_run can do in its worktree (N0: it runs with the user's rights): commit a file onto
+// whatever branch HEAD names there, and, with "tamper", rewrite the worktree's .git file afterwards.
+const SNEAK_SCRIPT = `import { execFileSync } from "node:child_process";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
+const git = (...args) =>
+  execFileSync("git", ["-c", "user.name=cmd", "-c", "user.email=cmd@haril.invalid", "-c", "commit.gpgsign=false",
+    "-c", "core.hooksPath=" + (process.platform === "win32" ? "NUL" : "/dev/null"), ...args], { stdio: "ignore" });
+writeFileSync("sneaked.txt", "sneaked " + process.pid + " " + Date.now() + "\\n");
+git("add", "sneaked.txt");
+git("commit", "--quiet", "--no-verify", "-m", "sneaked in by a command");
+if (process.argv[2] === "tamper") {
+  const pointer = readFileSync(".git", "utf8");
+  rmSync(".git");
+  writeFileSync(".git", pointer + "\\n");
+}
+`;
+
+// The scripts commands run, committed on main so every worktree holds them.
+function commitScripts(): void {
+  writeFileSync(join(repo, "sneak.mjs"), SNEAK_SCRIPT);
+  git("add", ".");
+  git("commit", "--quiet", "-m", "the scripts a command runs");
+}
+
+// Runs `command args` through the host for the calling turn, as an agent's haril_run would, and checks it ran.
+async function runCommand(
+  call: DelegationToolHandler,
+  context: Parameters<DelegationToolHandler>[0],
+  args: readonly string[],
+): Promise<void> {
+  const ran = await call(context, "haril_run", { command: "node", args });
+  if (!ran.ok || ran.exitCode !== 0) {
+    throw new Error(`node ${args.join(" ")} did not run: ${JSON.stringify(ran).slice(0, 400)}`);
+  }
+}
+
 // Each scenario runs a whole workflow with real git: several seconds, more under the load of the full suite.
 describe.skipIf(!HAS_GIT)("a workflow that writes in parallel", () => {
   it("writes disjoint files at once, overlapping ones in sequence, and leaves an integration branch", async () => {
@@ -400,5 +442,81 @@ describe.skipIf(!HAS_GIT)("a workflow that writes in parallel", () => {
     expect(git("log", "--format=%s", integration)).toContain("conflicts resolved by the delegator");
     const merged = store.events.list().filter((event) => event.type === "worktree.merged");
     expect(merged).toHaveLength(2);
+  }, 120_000);
+
+  it.each([
+    ["fails", ["sneak.mjs"]],
+    ["is tampered with", ["sneak.mjs", "tamper"]],
+  ])(
+    "drops a command's commit when the executor's attempt %s, so its retry starts from the verified commit",
+    async (how, args) => {
+      commitScripts();
+      const store = open();
+      startWorkflow(store, "Write the part [fake:parts=1] [fake:steps=1]");
+      let sneaked = false;
+      // The executor's first attempt runs a command that commits outside its surface; then that attempt fails, or its
+      // command also rewrote the .git file. The retry writes as usual.
+      const wrap =
+        (call: DelegationToolHandler): DelegationToolHandler =>
+        (context, tool, input) => {
+          if (tool !== "write" || sneaked || roleOf(store, context.taskId) !== "executor") {
+            return call(context, tool, input);
+          }
+          sneaked = true;
+          return (async () => {
+            await runCommand(call, context, args);
+            const reply = await call(context, tool, input);
+            if (how === "fails") throw new Error("the attempt fails after its command");
+            return reply;
+          })();
+        };
+      await run(store, { allow: ["node sneak.mjs", "node sneak.mjs tamper"], wrap });
+      const workflow = onlyWorkflow(store);
+      expect(sneaked).toBe(true);
+      expect(workflow.state).toBe("completed");
+      const integration = integrationBranchOf(workflow.workflowId);
+      expect(git("show", `${integration}:src/part-1/shared.ts`)).toBe("part-1/step-1 attempt 2");
+      expect(git("ls-tree", "-r", "--name-only", integration)).not.toContain("sneaked.txt");
+      expect(git("log", "--format=%s", integration)).not.toContain("sneaked in by a command");
+      expect(store.events.list().some((event) => event.type === "worktree.restored")).toBe(true);
+    },
+    120_000,
+  );
+
+  it("undoes the commits an auditor's and a delegator's commands make, and keeps HARIL's merges", async () => {
+    commitScripts();
+    const store = open();
+    // The auditor runs the command in the step's worktree; the delegator runs it before its merge and before its report.
+    startWorkflow(store, "Write the part [fake:parts=1] [fake:steps=1] [fake:run=node sneak.mjs]");
+    const sneakedBy: string[] = [];
+    const wrap =
+      (call: DelegationToolHandler): DelegationToolHandler =>
+      (context, tool, input) => {
+        const delegator = roleOf(store, context.taskId) === "delegator";
+        if (!delegator || (tool !== "haril_merge" && tool !== "haril_report")) {
+          return call(context, tool, input);
+        }
+        return (async () => {
+          await runCommand(call, context, ["sneak.mjs"]);
+          sneakedBy.push(tool);
+          return await call(context, tool, input);
+        })();
+      };
+    await run(store, { allow: ["node sneak.mjs"], wrap });
+    const workflow = onlyWorkflow(store);
+    expect(sneakedBy).toEqual(["haril_merge", "haril_report"]);
+    expect(workflow.state).toBe("completed");
+    const integration = integrationBranchOf(workflow.workflowId);
+    // The step's work came in through HARIL's merge; no command's commit did.
+    expect(git("show", `${integration}:src/part-1/shared.ts`)).toBe("part-1/step-1 attempt 1");
+    expect(git("log", "--merges", "--format=%s", integration)).toContain(
+      "into the integration branch",
+    );
+    expect(git("ls-tree", "-r", "--name-only", integration)).not.toContain("sneaked.txt");
+    expect(git("log", "--format=%s", integration)).not.toContain("sneaked in by a command");
+    // Put back: after the auditor's command, before the delegator's merge and at the end of its turn.
+    const restored = store.events.list().filter((event) => event.type === "worktree.restored");
+    expect(restored.length).toBeGreaterThanOrEqual(3);
+    expect(git("rev-parse", "main")).toBe(workflow.baseSha);
   }, 120_000);
 });

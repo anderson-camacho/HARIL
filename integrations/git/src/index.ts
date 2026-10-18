@@ -8,7 +8,7 @@ export {
   discardChanges,
   isTracked,
   pathsChangedSince,
-  resetBranchTo,
+  restoreBranch,
 } from "./changes.js";
 export {
   abortMerge,
