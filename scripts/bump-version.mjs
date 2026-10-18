@@ -7,9 +7,18 @@
 // endings are kept per file. No network, no git: check-version.mjs verifies the result.
 // Writes are all or nothing as far as the filesystem allows: every new content is computed first, written to a
 // temporary file next to its target, and only then are the temporary files renamed over their targets. A failure
-// before the renames removes the temporary files and leaves the tree untouched.
+// before the renames removes the temporary files and leaves the tree untouched; a failure during the renames restores
+// the renamed targets from backups taken just before, so the tree also ends as it was.
 
-import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  constants,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -115,10 +124,15 @@ const REAL_FS = {
   writeTemp: (path, content) => writeFileSync(path, content, { encoding: "utf8", flag: "wx" }),
   rename: (from, to) => renameSync(from, to),
   remove: (path) => rmSync(path, { force: true }),
+  backup: (from, to) => copyFileSync(from, to, constants.COPYFILE_EXCL),
+  exists: (path) => existsSync(path),
 };
 
 // Every [relative path, document] pair, through temporary files renamed at the end. Throws with the tree untouched when
-// a temporary file cannot be written.
+// a temporary file cannot be written. Before the renames, every existing target is copied to a backup next to it; when
+// a rename fails, the targets already renamed are restored from their backups (a target that did not exist is removed)
+// and every temporary file and backup is deleted, so the tree ends exactly as before. Only a failed restore leaves its
+// backup in place, and the error names it.
 function writeAll(root, writes, fs) {
   const staged = [];
   try {
@@ -126,25 +140,60 @@ function writeAll(root, writes, fs) {
       const target = join(root, path);
       mkdirSync(dirname(target), { recursive: true });
       const temp = `${target}.bump-${process.pid}.tmp`;
-      staged.push({ temp, target });
+      const backup = `${target}.bump-${process.pid}.bak`;
+      staged.push({ temp, target, backup, existed: fs.exists(target), backedUp: false });
       fs.writeTemp(temp, serializeDocument(document));
     }
+    for (const item of staged) {
+      if (!item.existed) continue;
+      fs.backup(item.target, item.backup);
+      item.backedUp = true;
+    }
   } catch (error) {
-    for (const { temp } of staged) fs.remove(temp);
+    for (const { temp, backup, backedUp } of staged) {
+      fs.remove(temp);
+      if (backedUp) fs.remove(backup);
+    }
     throw error;
   }
-  staged.forEach(({ temp, target }, index) => {
-    try {
+  let renamed = 0;
+  try {
+    for (const { temp, target } of staged) {
       fs.rename(temp, target);
-    } catch (error) {
-      const left = staged.slice(index).map((item) => item.temp);
-      const failure = new Error(
-        `renaming ${target} failed after ${index} of ${staged.length} files (${error.message}); the new contents wait in ${left.join(", ")}`,
-      );
-      failure.partial = true;
-      throw failure;
+      renamed += 1;
     }
+  } catch (error) {
+    const kept = rollBack(staged, renamed, fs);
+    const failure = new Error(
+      kept.length === 0
+        ? `renaming ${staged[renamed].target} failed after ${renamed} of ${staged.length} files (${error.message}); the ${renamed} renamed files were restored; nothing changed`
+        : `renaming ${staged[renamed].target} failed after ${renamed} of ${staged.length} files (${error.message}), and restoring failed too; the old contents are kept in ${kept.join(", ")}`,
+    );
+    failure.partial = true;
+    throw failure;
+  }
+  for (const { backup, backedUp } of staged) if (backedUp) fs.remove(backup);
+}
+
+// Puts back the first `renamed` targets and deletes every temporary file and backup. Returns the backups it could not
+// restore, which stay on disk.
+function rollBack(staged, renamed, fs) {
+  const kept = [];
+  staged.forEach((item, index) => {
+    fs.remove(item.temp);
+    if (index < renamed) {
+      try {
+        if (item.existed) fs.rename(item.backup, item.target);
+        else fs.remove(item.target);
+        return;
+      } catch {
+        kept.push(item.backup);
+        return;
+      }
+    }
+    if (item.backedUp) fs.remove(item.backup);
   });
+  return kept;
 }
 
 export function main(

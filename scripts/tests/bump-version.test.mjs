@@ -213,3 +213,48 @@ function listFiles(root, relative = "") {
     return entry.isDirectory() ? listFiles(root, path) : [path];
   });
 }
+
+test("a rename that fails midway restores every renamed file and leaves no temporary file or backup", () => {
+  const { root, cleanup } = sandbox();
+  try {
+    writeVersionTree(root, "0.10.0");
+    const paths = [
+      "package.json",
+      "apps/haril/package.json",
+      "apps/bootstrap/package.json",
+      "apps/shell/package.json",
+      "apps/haril/src/version.ts",
+      "README.md",
+      "versions/README.md",
+      "versions/v0/CHANGELOG.md",
+    ];
+    const before = Object.fromEntries(paths.map((path) => [path, readAt(root, path)]));
+    let renames = 0;
+    const io = capture();
+    const code = main(["minor"], {
+      root,
+      today: "2026-10-18",
+      ...io,
+      fs: {
+        rename: (from, to) => {
+          if (from.includes(".bump-") && from.endsWith(".tmp")) {
+            renames += 1;
+            if (renames === 3) {
+              const error = new Error("EPERM: operation not permitted (injected)");
+              error.code = "EPERM";
+              throw error;
+            }
+          }
+          renameSync(from, to);
+        },
+      },
+    });
+    assert.equal(code, 1, io.text());
+    assert.match(io.err.join("\n"), /EPERM.*\(injected\).*restored; nothing changed/);
+    for (const path of paths) assert.equal(readAt(root, path), before[path], path);
+    const leftovers = listFiles(root).filter((path) => path.includes(".bump-"));
+    assert.deepEqual(leftovers, []);
+  } finally {
+    cleanup();
+  }
+});
