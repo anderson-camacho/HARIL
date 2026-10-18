@@ -307,4 +307,55 @@ describe("haril workflow tail", () => {
     stopWorkflow(store, workflowId);
     expect(await done).toBe(0);
   });
+
+  it("reads the last lines of a run before it follows the node's next run", async () => {
+    const store = open();
+    const { workflowId, runId } = claimedOrchestrator(store);
+    const file = sessionFile(runId);
+    writeFileSync(
+      file,
+      `${JSON.stringify(ENTRIES[0])}
+${JSON.stringify(ENTRIES[1])}
+`,
+    );
+    const lines: TailJson[] = [];
+    const host: HostInfo = { ...sb.host, signals: new EventEmitter() };
+    const io = {
+      out: (line: string) => lines.push(JSON.parse(line) as TailJson),
+      err: () => undefined,
+      readFile: () => "",
+    };
+    const done = Promise.resolve(
+      run(
+        ["workflow", "tail", workflowId, "o1", "--follow", "--json", "--interval-ms", "30"],
+        io,
+        host,
+      ),
+    );
+    await until(() => lines.length === 3, "the first run's two entries", 5000);
+    // In one step of the tail: the attempt writes its last reply and ends, and the turn runs again (a new run).
+    appendFileSync(
+      file,
+      `${JSON.stringify(ENTRIES[5])}
+`,
+    );
+    const second = withLease(store, (epoch) => {
+      const [task] = store.workflows.tasks(workflowId);
+      store.runs.cancel(runId, "shutdown");
+      return store.tasks.claimTask(epoch, task?.taskId ?? "");
+    });
+    expect(second).toBeDefined();
+    await until(
+      () => lines.filter((line) => line.kind === "run").length === 2,
+      "the second run's line",
+      5000,
+    );
+    const runLines = lines.map((line, index) => [line.kind, index] as const);
+    const secondRun = runLines.filter(([kind]) => kind === "run")[1]?.[1] ?? -1;
+    const tokens = runLines.find(([kind]) => kind === "tokens")?.[1] ?? -1;
+    expect(tokens).toBeGreaterThan(0);
+    expect(tokens).toBeLessThan(secondRun);
+    stopWorkflow(store, workflowId);
+    expect(await done).toBe(0);
+  });
 });

@@ -433,7 +433,12 @@ class NodeTail {
   // Reads what was added; `final` reads a last line that has no newline yet.
   step(final: boolean): void {
     const found = nodeRun(this.store, this.workflowId, this.node);
-    if (found !== undefined && found.runId !== this.runId) this.switchTo(found);
+    if (found !== undefined && found.runId !== this.runId) {
+      // The run it read may have written its last lines since the previous step (a failed attempt's final reply):
+      // they are read to the end before the next run's.
+      this.drain();
+      this.switchTo(found);
+    }
     if (this.runId === undefined) return;
     if (this.reader === undefined) {
       const file = sessionFileOf(this.dataDir, this.runId);
@@ -444,6 +449,17 @@ class NodeTail {
       this.reader = new SessionReader(file);
     }
     for (const line of this.reader.read(final)) this.print(line);
+  }
+
+  // Everything left in the current run's session, its unfinished last line included.
+  private drain(): void {
+    if (this.runId === undefined) return;
+    if (this.reader === undefined) {
+      const file = sessionFileOf(this.dataDir, this.runId);
+      if (file === undefined) return;
+      this.reader = new SessionReader(file);
+    }
+    for (const line of this.reader.read(true)) this.print(line);
   }
 
   private switchTo(found: NodeRun): void {
