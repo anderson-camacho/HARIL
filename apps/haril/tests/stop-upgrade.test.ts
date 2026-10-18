@@ -40,6 +40,8 @@ class HungAgents implements AgentRuntime {
   readonly killed: string[] = [];
   readonly aborted: string[] = [];
   readonly kills: (() => Promise<void>)[] = [];
+  // Ends an agent from outside the runtime, as the CLI's kill of an unresponsive runtime's agent does: Pi exits.
+  readonly exits = new Map<string, () => void>();
 
   async start(spec: { readonly runId: string; readonly allowedTools: readonly string[] }) {
     let settle: (outcome: AgentOutcome) => void = () => undefined;
@@ -71,6 +73,10 @@ class HungAgents implements AgentRuntime {
       },
     };
     this.kills.push(handle.kill as () => Promise<void>);
+    this.exits.set(spec.runId, () => {
+      settle({ status: "failed", code: "pi_exited", message: "Pi exited before agent_settled" });
+      exit();
+    });
     return { ok: true as const, value: handle };
   }
 }
@@ -201,5 +207,81 @@ describe("an emergency stop after a graceful one", () => {
     expect(Date.now() - stoppedAt).toBeLessThan(BUDGET_MS);
     expect(agents.killed).toHaveLength(1);
     expect(taskState(store, "Timed out")).toBe("cancelled");
+  });
+});
+
+// The unresponsive path (3.14): the CLI killed the agents of a runtime that had not applied its stop yet. When the
+// runtime wakes, those attempts have settled as failed (Pi exited) and the stop is still queued: the stop applies first,
+// so the attempts end cancelled and never consume an attempt.
+describe("agents killed before their stop was applied", () => {
+  it("end cancelled, not failed, and charge no attempt (haril stop --now)", async () => {
+    run(
+      ["task", "add", "Hung", "--agent", "fake:slow:600000", "--max-attempts", "2"],
+      harness().io,
+      sb.host,
+    );
+    const store = open();
+    const agents = new HungAgents();
+    const runtime = startRuntime(store, agents);
+    await until(() => taskState(store, "Hung") === "running", "the task running");
+    const [runId] = [...agents.exits.keys()];
+
+    enqueueStop(store, { mode: "now" });
+    agents.exits.get(runId as string)?.();
+    const result = await within(runtime.done, BUDGET_MS);
+    expect(result).not.toBe("timed out");
+    const task = store.tasks.list().find((item) => item.goal === "Hung");
+    expect(task?.state).toBe("cancelled");
+    expect(store.tasks.get(task?.taskId ?? "")).toMatchObject({ attemptsUsed: 0 });
+    expect(runtime.events.some((event) => event.type === "task.retrying")).toBe(false);
+    expect(runtime.events.some((event) => event.type === "task.failed")).toBe(false);
+  });
+
+  it("end cancelled for a workflow stop too: the turn is not charged as failed", async () => {
+    const store = open();
+    const projectId = store.projects.list()[0]?.projectId as string;
+    store.commands.enqueue({
+      type: "workflow.start",
+      projectId,
+      args: {
+        goal: "Read the notes",
+        model: "fake/high-model",
+        agent: "fake:orchestrate",
+        autonomy: { mode: "autonomous", stops: [] },
+        budgetTokens: 50_000,
+        timeoutMs: 600_000,
+      },
+      idempotencyKey: "wf-1",
+      requestHash: "wf-1",
+    });
+    const agents = new HungAgents();
+    const runtime = startRuntime(store, agents);
+    await until(() => agents.exits.size === 1, "the orchestrator turn running");
+    const [workflow] = store.workflows.list();
+    const [runId] = [...agents.exits.keys()];
+
+    const key = randomUUID();
+    store.commands.enqueue({
+      type: "workflow.stop",
+      projectId,
+      args: { workflowId: workflow?.workflowId },
+      idempotencyKey: key,
+      requestHash: key,
+    });
+    agents.exits.get(runId as string)?.();
+    await until(
+      () => store.workflows.get(workflow?.workflowId ?? "")?.state === "stopped",
+      "the workflow stopped",
+    );
+    await until(
+      () => runtime.events.some((event) => event.type === "task.cancelled"),
+      "the turn cancelled",
+    );
+    const turns = store.workflows.tasks(workflow?.workflowId ?? "");
+    expect(turns.map((turn) => turn.state)).toEqual(["cancelled"]);
+    expect(store.tasks.get(turns[0]?.taskId ?? "")).toMatchObject({ attemptsUsed: 0 });
+    expect(runtime.events.some((event) => event.type === "workflow.turn")).toBe(false);
+    enqueueStop(store, { mode: "now" });
+    expect(await within(runtime.done, BUDGET_MS)).not.toBe("timed out");
   });
 });

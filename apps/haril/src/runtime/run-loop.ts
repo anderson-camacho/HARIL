@@ -375,6 +375,12 @@ async function serve(
   };
   for (;;) {
     beat();
+    // 3.14: a stop queued while attempts settled applies before they close. The agents it was meant to end (killed by
+    // the CLI while this runtime did not answer) then end cancelled, never as failed attempts that consume a retry.
+    const early =
+      done.length > 0 && stopQueued(store)
+        ? applyQueuedCommands(store, epoch, emit, shutdown, live)
+        : 0;
     // The attempts that settled since the last turn close first, oldest first, so what they free or create is seen below.
     for (let attempt = done.shift(); attempt !== undefined; attempt = done.shift()) {
       live.delete(attempt.runId);
@@ -387,7 +393,7 @@ async function serve(
     const standaloneBusy = [...live.values()].some((attempt) => attempt.workflow === null);
     // Decisions first: a granted plan is queued in this turn and applied by the queue step right after it (LD-T3).
     const decided = standaloneBusy ? 0 : applyDecidedApprovals(store, epoch, emit);
-    const applied = decided + applyQueuedCommands(store, epoch, emit, shutdown, live);
+    const applied = early + decided + applyQueuedCommands(store, epoch, emit, shutdown, live);
     if (shutdown.requested) {
       // ARCH 4.2: each attempt in flight was aborted when the stop was requested; the lease goes once they all closed.
       // A nudge ends the wait too, so an emergency stop queued meanwhile is applied at once (3.14).
@@ -772,6 +778,12 @@ function applyQueuedCommands(
     next = store.commands.applyNext(epoch);
   }
   return applied;
+}
+
+function stopQueued(store: Store): boolean {
+  return store.commands
+    .listQueued()
+    .some((command) => command.type === RUNTIME_STOP || command.type === WORKFLOW_STOP);
 }
 
 function actOnStop(
