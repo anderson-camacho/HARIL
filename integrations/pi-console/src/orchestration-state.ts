@@ -31,7 +31,7 @@ export type LogFilter = (typeof LOG_FILTERS)[number];
 // Lines the live view keeps for one node: the newest ones.
 const LIVE_LINES = 500;
 
-export interface LiveLines {
+interface LiveLines {
   readonly nodeId: string | undefined;
   readonly lines: readonly TailLine[];
 }

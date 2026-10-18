@@ -29,7 +29,7 @@ const NOT_INITIALIZED =
   "store not initialized (run haril project init <path> --name <name> --yes first)";
 const NEWLINE = 0x0a;
 
-export type TailKind =
+type TailKind =
   | "run"
   | "note"
   | "session"
