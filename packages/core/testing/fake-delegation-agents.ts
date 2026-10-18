@@ -15,7 +15,8 @@ import type {
 // give the same tool call and the same cost (tokens and duration), so a simulated workflow is reproducible and a test
 // can assert its result. They make the calls a real agent would make through the bridge (haril_delegate, haril_assign,
 // haril_report, haril_verdict, haril_request_audit, haril_abort), and every call passes the tool contracts. The haril
-// workflow demo drives them; phase F2 runs them inside FakeAgentRuntime.
+// workflow demo drives them directly; the runtime runs them inside FakeAgentRuntime (phase F2), where they read their
+// turn input and call the host's delegation tools.
 //
 // A scripted scenario travels as visible data, the way a real agent's behavior follows its prompt: the orchestrator
 // writes "[demo:step-<n>=<behavior>]" into a part's description, the delegator copies "[demo:<behavior>]" into that
@@ -138,6 +139,8 @@ export type OrchestrateTurn =
       readonly previousRejection: readonly string[];
       // Propose a model that does not exist on the first call, so the refusal and the correction show.
       readonly makeMistake?: boolean;
+      // Where the scripted behaviors land ("part-<i>/step-<j>"); absent draws them from the seed (demoScenario).
+      readonly scenario?: ReadonlyMap<string, DemoBehavior>;
     }
   | {
       readonly kind: "continuation";
@@ -167,7 +170,8 @@ export function fakeOrchestrate(turn: OrchestrateTurn): {
   readonly cost: FakeTurnCost;
 } {
   if (turn.kind === "plan") {
-    const scenario = demoScenario(turn.seed, turn.delegators, turn.executorsPerDelegator);
+    const scenario =
+      turn.scenario ?? demoScenario(turn.seed, turn.delegators, turn.executorsPerDelegator);
     const mistake = turn.makeMistake === true && turn.previousRejection.length === 0;
     const delegations: Delegation[] = [];
     for (let part = 1; part <= turn.delegators; part++) {
@@ -238,9 +242,10 @@ export function fakeOrchestrate(turn: OrchestrateTurn): {
 
 // --- fake:delegate -------------------------------------------------------------------------------------------------
 
+// blocked: the step never ran because a step it depends on failed or was escalated.
 export interface ExecutorOutcome {
   readonly localId: string;
-  readonly status: "done" | "failed" | "escalated";
+  readonly status: "done" | "failed" | "escalated" | "blocked";
 }
 
 export type DelegateTurn =
@@ -336,8 +341,11 @@ export function fakeDelegate(turn: DelegateTurn): {
       ),
     };
   }
+  // An escalated step is reformulated once; a blocked step is reassigned with it, so it runs after the new attempt.
   const reformulate = turn.children.filter(
-    (child) => child.status === "escalated" && !turn.reformulated.includes(child.localId),
+    (child) =>
+      (child.status === "escalated" || child.status === "blocked") &&
+      !turn.reformulated.includes(child.localId),
   );
   const cost = costFor(
     turn.seed,
@@ -480,4 +488,45 @@ export function fakeAudit(turn: AuditTurn): {
     },
     cost,
   };
+}
+
+// Whether a fake executor's result meets its criteria: fakeExecute ends a complete result with this text.
+const COMPLETE_SUFFIX = ": done, test passing";
+
+export function fakeResultIsComplete(text: string | null): boolean {
+  return text?.endsWith(COMPLETE_SUFFIX) === true;
+}
+
+// The scenario a workflow's goal asks the fake agents for, as visible directives in the goal:
+//   [fake:parts=<n>] [fake:steps=<n>]   delegators, and executors per delegator (default 2 and 2);
+//   [fake:seed=<n>]                     the seed of the costs, and of the scripted behaviors when none is named;
+//   [fake:mistake]                      the orchestrator first proposes a model that does not exist;
+//   [fake:part-<i>/step-<j>=<behavior>] a behavior (reject-once, reject-twice, stall-once) at that step.
+// Without a named behavior and without a seed, every step passes at once.
+export interface FakeScenario {
+  readonly parts: number;
+  readonly steps: number;
+  readonly seed: number;
+  readonly mistake: boolean;
+  readonly scenario: ReadonlyMap<string, DemoBehavior>;
+}
+
+export function fakeScenarioOf(goal: string): FakeScenario {
+  const number = (name: string, fallback: number, max: number): number => {
+    const match = new RegExp(`\\[fake:${name}=(\\d{1,10})\\]`).exec(goal);
+    const value = match === null ? fallback : Number(match[1]);
+    return Math.min(Math.max(value, 1), max);
+  };
+  const parts = number("parts", 2, 10);
+  const steps = number("steps", 2, 10);
+  const seeded = /\[fake:seed=\d+\]/.test(goal);
+  const seed = number("seed", 1, 2 ** 31 - 1);
+  const named = new Map<string, DemoBehavior>();
+  for (const match of goal.matchAll(
+    /\[fake:(part-\d+\/step-\d+)=(reject-once|reject-twice|stall-once)\]/g,
+  )) {
+    named.set(match[1] as string, match[2] as DemoBehavior);
+  }
+  const scenario = named.size > 0 || !seeded ? named : demoScenario(seed, parts, steps);
+  return { parts, steps, seed, mistake: goal.includes("[fake:mistake]"), scenario };
 }

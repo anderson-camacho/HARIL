@@ -100,3 +100,46 @@ export function checkVerdict(verdict: VerdictInput): VerdictCheck {
       "a rejection needs at least one reason with ok: false that names the acceptance criterion it found unmet",
   };
 }
+
+// The rework machine with the workflow's agent cap: a relaunch creates two agents (the executor's next turn and its
+// auditor), so when the cap leaves no room for them the rejection fails the node instead, and nothing is spent.
+export function decideRework(
+  state: ReworkState,
+  event: ReworkEvent,
+  limits: ReworkLimits,
+  canRelaunch: boolean,
+): ReworkStep {
+  const step = stepRework(state, event, limits);
+  if (step.action === "retry" && !canRelaunch) {
+    return { state: { ...state, phase: "failed" }, action: "fail" };
+  }
+  return step;
+}
+
+// One turn of an executor thread as the store records it: whether a proposal created it (the thread's first turn, or
+// the delegator's reformulation) or a relaunch did, and how its attempt ended: its auditor's verdict, "failed" for an
+// attempt that failed or an auditor that ended without a verdict, null while it has not ended.
+export interface ReworkTurn {
+  readonly byProposal: boolean;
+  readonly outcome: "approved" | "rejected" | "failed" | null;
+}
+
+// The rework state of an executor thread, replayed from its turns in creation order (3.8: persisted in the store, never
+// only in memory, so a restart continues with the same counts). A rejection or a failure that no relaunch followed was
+// a relaunch the agent cap refused (decideRework), which failed the node.
+export function replayRework(turns: readonly ReworkTurn[], limits: ReworkLimits): ReworkState {
+  let state = INITIAL_REWORK;
+  turns.forEach((turn, index) => {
+    if (index > 0 && turn.byProposal)
+      state = stepRework(state, { type: "reformulated" }, limits).state;
+    if (turn.outcome === null) return;
+    const event: ReworkEvent =
+      turn.outcome === "failed"
+        ? { type: "attempt_failed" }
+        : { type: "verdict", approved: turn.outcome === "approved" };
+    const next = turns[index + 1];
+    const relaunched = next !== undefined && !next.byProposal;
+    state = decideRework(state, event, limits, relaunched).state;
+  });
+  return state;
+}

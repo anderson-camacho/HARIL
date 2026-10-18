@@ -3,6 +3,7 @@
 export * from "./agent-runtime.js";
 export * from "./clock.js";
 export * from "./delegation.js";
+export * from "./delegation-channel.js";
 export * from "./memory.js";
 export * from "./result.js";
 export * from "./secret-store.js";

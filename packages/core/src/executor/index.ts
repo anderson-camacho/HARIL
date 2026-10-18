@@ -1,10 +1,12 @@
 // Executor rules (M1-T5): the AgentSpec built from a claimed task, the handshake check that runs
 // before any prompt is sent, and the mapping of an agent outcome to the run completion. Pure.
 import type { TaskKind } from "@haril/contracts";
+import { archetypeTools } from "../delegation/archetypes.js";
 import { READ_ONLY_AGENT_REFS } from "../domain/plan-graph.js";
 import type {
   AgentOutcome,
   AgentSpec,
+  DelegationTurnInput,
   DependencyResult,
   HarilError,
   JsonObject,
@@ -12,6 +14,7 @@ import type {
   Result,
   RunCompletion,
 } from "../ports/index.js";
+import { delegationPrompt } from "./delegation-prompt.js";
 import { dependencyResultsSection } from "./dependency-results.js";
 import { promptDataBudget } from "./prompt-data.js";
 import { rejectedAttemptSection } from "./rejected-attempt.js";
@@ -47,6 +50,8 @@ export interface ExecutableTask {
   // The newest attempt its acceptance checks rejected, from its claim (MC-T2). It reaches the prompt of a real
   // agent only.
   readonly rejectedAttempt?: RejectedAttempt | null;
+  // A turn of a workflow (3.4): what the host tells it. Its prompt and tools then follow its archetype.
+  readonly delegation?: DelegationTurnInput;
 }
 
 // Agent references served by a real runtime (Pi through the Broker, M2-D6). Every other reference keeps the
@@ -67,6 +72,7 @@ export interface RunIdentity {
 // agent (a planner's, or a read-only analyst's, LD-T7c). A simulated agent's prompt reaches no model, so it gets neither
 // the data sections nor instructions.
 export function buildAgentSpec(task: ExecutableTask, run: RunIdentity): AgentSpec {
+  if (task.delegation !== undefined) return workflowTurnSpec(task, task.delegation, run);
   const planning = task.kind === "plan";
   const reads = task.surfaceRead ?? [];
   const instructions = planning
@@ -93,6 +99,30 @@ export function buildAgentSpec(task: ExecutableTask, run: RunIdentity): AgentSpe
     allowedTools: planning ? [...PLAN_ALLOWED_TOOLS] : [...M1_ALLOWED_TOOLS],
     prompt,
     timeoutMs: task.timeoutMs,
+    ...(task.projectId === undefined ? {} : { projectId: task.projectId }),
+    ...(task.model ? { model: task.model } : {}),
+    ...(task.maxTokens === undefined ? {} : { maxTokens: task.maxTokens }),
+    ...(task.kind === undefined ? {} : { kind: task.kind }),
+  };
+}
+
+// A workflow turn (3.4): the tools of its archetype (read-only until writing arrives in F8) and the prompt of
+// delegation-prompt.ts, with the turn input kept for an agent that reads it as data. Data sections are rendered for every
+// agent, simulated or real, so the fake lane carries the same prompt the real lane will.
+function workflowTurnSpec(
+  task: ExecutableTask,
+  delegation: DelegationTurnInput,
+  run: RunIdentity,
+): AgentSpec {
+  return {
+    runId: run.runId,
+    taskId: task.taskId,
+    attempt: run.attempt,
+    agentRef: task.agentRef,
+    allowedTools: [...archetypeTools(delegation.role, { writes: false })],
+    prompt: delegationPrompt(task, delegation),
+    timeoutMs: task.timeoutMs,
+    delegation,
     ...(task.projectId === undefined ? {} : { projectId: task.projectId }),
     ...(task.model ? { model: task.model } : {}),
     ...(task.maxTokens === undefined ? {} : { maxTokens: task.maxTokens }),
@@ -259,6 +289,7 @@ function resultOf(outcome: Extract<AgentOutcome, { status: "succeeded" }>): Json
   return { summary: outcome.summary };
 }
 
+export { DELEGATION_DATA_END } from "./delegation-prompt.js";
 export * from "./dependency-results.js";
 export { PROMPT_DATA_MAX_BYTES, promptDataBudget } from "./prompt-data.js";
 export * from "./rejected-attempt.js";

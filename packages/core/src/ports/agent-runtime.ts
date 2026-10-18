@@ -1,5 +1,6 @@
 // Minimal AgentRuntime port for M1 (agent-runtime contract, ARCH 5.1). The real adapter (Pi) arrives in M2.
 import type { TaskKind } from "@haril/contracts";
+import type { DelegationTurnInput } from "./delegation-channel.js";
 import type { HarilError, Result } from "./result.js";
 
 // The host side of haril_propose_plan (LD-T4, ARCH 9.4). An agent runtime calls it with the run it serves and the
@@ -34,6 +35,8 @@ export interface AgentSpec {
   readonly maxTokens?: number;
   // The kind of the task (LD-T4). A plan task is answered by proposing a plan through haril_propose_plan.
   readonly kind?: TaskKind;
+  // A turn of a workflow (3.4): what the host told it, as data. Its prompt carries the same, rendered.
+  readonly delegation?: DelegationTurnInput;
 }
 
 export interface AgentHello {
@@ -49,6 +52,8 @@ export type AgentOutcome =
       // Real agents (M2-T6): the requested model and the adapter warnings, kept in the run result.
       readonly model?: string;
       readonly warnings?: readonly string[];
+      // Tokens the run reported itself (a fake agent); a real agent's come from the Broker's ledger. null: not reported.
+      readonly usage?: { readonly tokensIn: number | null; readonly tokensOut: number | null };
     }
   | { readonly status: "failed"; readonly code: string; readonly message: string }
   | { readonly status: "timed_out" }
