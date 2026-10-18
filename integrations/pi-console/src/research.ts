@@ -3,7 +3,8 @@ import { join, sep } from "node:path";
 
 // haril_save_research (docs/modos-y-delegacion.md 7.3 point 8, P18): the one write CONSULT and PLAN allow, asked for
 // by the user. The model gives a title and Markdown content, never a path: the console writes
-// <project root>/docs/investigacion/<YYYY-MM-DD>-<slug>.md. Only .md; never over an existing file (the name takes a
+// <project root>/<research folder>/<YYYY-MM-DD>-<slug>.md, the folder being haril.json's delegation.research.folder
+// (phase F7), else docs/investigacion; a folder that is absolute, names a drive or climbs with ".." is refused. Only .md; never over an existing file (the name takes a
 // suffix, and the write itself refuses an existing file); at most 200 KB; a title with a path separator, "..", a drive,
 // an absolute path or a control character is refused, not cleaned; and a research folder that resolves outside the
 // project (a symlink or junction) is refused. It cannot edit or delete anything.
@@ -68,11 +69,25 @@ function inside(root: string, path: string): boolean {
 
 // Writes the research file and returns where. Throws an Error that says why it refused, which becomes the tool's
 // failed result.
+// A configured research folder: relative, inside the project, without "..". Undefined when it is not one.
+function folderOf(folder: string): string | undefined {
+  const trimmed = folder.trim();
+  if (trimmed === "" || /^[\\/]/.test(trimmed) || /^[A-Za-z]:/.test(trimmed)) return undefined;
+  const parts = trimmed.split(/[\\/]/).filter((part) => part !== "");
+  if (parts.length === 0 || parts.some((part) => part === "." || part === "..")) return undefined;
+  return join(...parts);
+}
+
 export function saveResearch(
   root: string,
   input: { readonly title: unknown; readonly content: unknown },
   now: Date = new Date(),
+  folder?: string,
 ): SavedResearch {
+  const researchDir = folder === undefined ? RESEARCH_DIR : folderOf(folder);
+  if (researchDir === undefined) {
+    throw new Error(`refused: the research folder ${folder} is not a folder inside the project`);
+  }
   const problem = titleProblem(input.title);
   if (problem !== undefined) throw new Error(`refused: ${problem}`);
   const content = input.content;
@@ -85,12 +100,12 @@ export function saveResearch(
   if (bytes > RESEARCH_MAX_BYTES) {
     throw new Error(`refused: the content is ${bytes} bytes; a research file holds at most 200 KB`);
   }
-  const dir = join(root, RESEARCH_DIR);
+  const dir = join(root, researchDir);
   mkdirSync(dir, { recursive: true });
   const realRoot = realpathSync(root);
   const realDir = realpathSync(dir);
   if (!inside(realRoot, realDir)) {
-    throw new Error(`refused: the research folder ${RESEARCH_DIR} resolves outside the project`);
+    throw new Error(`refused: the research folder ${researchDir} resolves outside the project`);
   }
   const base = `${localDay(now)}-${researchSlug(input.title as string)}`;
   for (let attempt = 1; attempt <= SUFFIX_MAX; attempt++) {
@@ -99,7 +114,7 @@ export function saveResearch(
     try {
       // wx: the write fails when the file exists, so nothing is ever overwritten, even in a race.
       writeFileSync(path, content, { encoding: "utf8", flag: "wx" });
-      return { path, relative: join(RESEARCH_DIR, name), bytes };
+      return { path, relative: join(researchDir, name), bytes };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     }

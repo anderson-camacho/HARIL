@@ -5,7 +5,7 @@
 // into one file next to the bridge.
 
 import { createChatLog } from "./chat-log.js";
-import { cliAvailable, NOT_LAUNCHED, runHaril } from "./cli.js";
+import { cliAvailable, NOT_LAUNCHED, runHaril, runHarilJson } from "./cli.js";
 import { type CommandHost, chooseMode, delegationHost, registerCommands } from "./commands.js";
 import {
   DASHBOARD_AREAS,
@@ -162,6 +162,15 @@ export default function harilConsole(pi: ConsolePi): void {
   // for the first tool call. Research files go under the bound project's root, else the folder Pi opened in.
   const modes = installModes(pi, {
     researchRoot: () => session?.project?.rootPath ?? session?.cwd ?? process.cwd(),
+    // P18: haril.json names the research folder (delegation.research.folder); without haril, docs/investigacion.
+    researchFolder: async () => {
+      if (!cliAvailable()) return undefined;
+      const read = await runHarilJson(["config", "get", "delegation.research.folder", "--json"], {
+        timeoutMs: 10_000,
+      });
+      const value = (read as { value?: unknown } | undefined)?.value;
+      return typeof value === "string" ? value : undefined;
+    },
     now: () => Date.now(),
     redraw,
   });

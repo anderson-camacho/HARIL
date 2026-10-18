@@ -41,6 +41,8 @@ const PLAN_ENTRY = "haril-plan";
 export interface ModeHost {
   // The folder research files go under: the bound project's root, else the folder Pi opened in.
   researchRoot(): string;
+  // haril.json's research folder inside that root (delegation.research.folder, P18), when it names one.
+  researchFolder?(): Promise<string | undefined>;
   now(): number;
   redraw(): void;
 }
@@ -280,7 +282,7 @@ export function installModes(pi: ConsolePi, host: ModeHost): ModeController {
     name: RESEARCH_TOOL,
     label: "Save research",
     description:
-      "Save a Markdown research document in the project's research folder (docs/investigacion). Use it only when the user asks for a research document. Give a short title and the Markdown content; the file name is chosen for you and an existing file is never overwritten.",
+      "Save a Markdown research document in the project's research folder (docs/investigacion unless haril.json names another). Use it only when the user asks for a research document. Give a short title and the Markdown content; the file name is chosen for you and an existing file is never overwritten.",
     promptSnippet: `${RESEARCH_TOOL}: save a Markdown research document the user asked for`,
     parameters: {
       type: "object",
@@ -297,10 +299,12 @@ export function installModes(pi: ConsolePi, host: ModeHost): ModeController {
       if (state.mode !== "consult" && state.mode !== "plan") {
         throw new Error(`refused: ${RESEARCH_TOOL} works only in CONSULT and PLAN mode`);
       }
+      const folder = await host.researchFolder?.();
       const saved = saveResearch(
         host.researchRoot(),
         { title: params.title, content: params.content },
         new Date(host.now()),
+        folder,
       );
       if (trace !== undefined) trace = traceResearch(trace, saved.relative);
       return {
