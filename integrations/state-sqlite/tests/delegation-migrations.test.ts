@@ -83,7 +83,7 @@ function columns(db: DatabaseSync, table: string): string[] {
 }
 
 describe("migrations 0007 and 0008 on a fresh database", () => {
-  it("reach schema 8 with the delegation tables, the model_stats view and the new task columns", () => {
+  it("reach the current schema with the delegation tables, the model_stats view and the new task columns", () => {
     const store = openStore({
       dataDir: dir,
       clock: fixedClock(),
@@ -91,7 +91,7 @@ describe("migrations 0007 and 0008 on a fresh database", () => {
       rules: testRules,
     });
     try {
-      expect(store.info().schemaVersion).toBe(8);
+      expect(store.info().schemaVersion).toBe(9);
     } finally {
       store.close();
     }
@@ -120,6 +120,7 @@ describe("migrations 0007 and 0008 on a fresh database", () => {
       expect(kinds).toEqual([
         { version: 7, name: "delegation", kind: "additive" },
         { version: 8, name: "settled_deps", kind: "incompatible" },
+        { version: 9, name: "model_stats_once", kind: "additive" },
       ]);
     } finally {
       db.close();
@@ -174,7 +175,7 @@ describe("migrations 0007 and 0008 on a database at schema 6", () => {
       rules: testRules,
     });
     try {
-      expect(store.info().schemaVersion).toBe(8);
+      expect(store.info().schemaVersion).toBe(9);
       expect(store.tasks.get("t-b")).toMatchObject({
         goal: "B",
         state: "pending",

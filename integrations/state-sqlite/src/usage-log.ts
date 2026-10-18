@@ -391,7 +391,8 @@ export function createUsageLogFacet(options: UsageLogFacetOptions): UsageLogPort
     summary(groupBy: UsageGroupBy, filter?: UsageFilter): readonly UsageSummaryRow[] {
       const where = usageWhere(filter, "u");
       const key = GROUP_KEYS[groupBy];
-      // approved and rejected count the executor runs whose task an auditor judged (the model_stats rule).
+      // approved and rejected count the executor runs whose task an auditor judged (the model_stats rule). One verdict per
+      // subject task, the newest, so a task judged twice never counts its run twice.
       const rows = db
         .prepare(
           `SELECT ${key} AS key, COUNT(*) AS rows,
@@ -402,7 +403,12 @@ export function createUsageLogFacet(options: UsageLogFacetOptions): UsageLogPort
              SUM(CASE WHEN u.role = 'executor' AND a.verdict = 'approved' THEN 1 ELSE 0 END) AS approved,
              SUM(CASE WHEN u.role = 'executor' AND a.verdict = 'rejected' THEN 1 ELSE 0 END) AS rejected
            FROM usage_log u
-           LEFT JOIN audits a ON a.subject_task_id = u.task_id AND a.scope = 'task'
+           LEFT JOIN (
+             SELECT a1.subject_task_id AS subject_task_id, a1.verdict AS verdict
+             FROM audits a1
+             WHERE a1.scope = 'task'
+               AND a1.rowid = (SELECT MAX(a2.rowid) FROM audits a2 WHERE a2.scope = 'task' AND a2.subject_task_id = a1.subject_task_id)
+           ) a ON a.subject_task_id = u.task_id
            ${where.sql}
            GROUP BY 1
            ORDER BY (key IS NULL), key`,

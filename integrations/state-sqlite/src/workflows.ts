@@ -69,6 +69,7 @@ const ROLE_SHAPE: Readonly<Record<DelegationRole, { layer: 1 | 2 | 3; kind: stri
 const DEFAULT_AUTONOMY: WorkflowAutonomy = { mode: "stops", stops: ["after_plan"] };
 const DEFAULT_TIMEOUT_MS = 3_600_000;
 const TERMINAL = new Set(["completed", "failed", "stopped"]);
+const TERMINAL_TASK = new Set(["completed", "failed", "cancelled"]);
 
 const WORKFLOW_COLUMNS =
   "workflow_id AS workflowId, project_id AS projectId, root_task_id AS rootTaskId, goal, state, autonomy, limits, orchestrator_model AS orchestratorModel, agents_created AS agentsCreated, stop_reason AS stopReason, base_branch AS baseBranch, base_sha AS baseSha, simulated, created_at AS createdAt, ended_at AS endedAt";
@@ -565,6 +566,22 @@ export function createWorkflowsFacet(options: WorkflowsFacetOptions): {
       }
       if (findAudit("auditor_task_id", input.auditorTaskId) !== undefined) {
         throw conflict(`auditor turn ${input.auditorTaskId} already gave its verdict`);
+      }
+      // A verdict comes from an auditor turn that has not closed yet: its run records it before the turn ends.
+      const auditorState = (
+        db.prepare("SELECT state FROM tasks WHERE task_id = ?").get(input.auditorTaskId) as
+          | { state: string }
+          | undefined
+      )?.state;
+      if (auditorState !== undefined && TERMINAL_TASK.has(auditorState)) {
+        throw conflict(
+          `auditor turn ${input.auditorTaskId} is ${auditorState}; a closed turn gives no verdict`,
+        );
+      }
+      // One task-scope verdict per executor turn: a relaunch is a new turn with its own auditor (3.8), so a second
+      // verdict on the same turn would count its run twice.
+      if (input.scope === "task" && findAudit("subject_task_id", input.subjectTaskId as string)) {
+        throw conflict(`executor turn ${input.subjectTaskId} was already audited`);
       }
       const auditId = ids.next();
       db.prepare(

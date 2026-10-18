@@ -559,6 +559,54 @@ describe("store.workflows.recordAudit", () => {
     expect(eventTypes()).toContain("audit.escalated");
   });
 
+  it("refuses a second verdict on one executor turn, and a verdict from a closed auditor turn", () => {
+    const { workflowId, executor, auditor } = audited();
+    const second = store.workflows.applyTurns(epoch, {
+      workflowId,
+      turns: [
+        turn({
+          key: "a1b",
+          role: "auditor",
+          layer: 3,
+          kind: "verify",
+          parentTaskId: executor,
+          localId: null,
+        }),
+      ],
+    }).taskIds.a1b as string;
+    const verdict = {
+      workflowId,
+      subjectTaskId: executor,
+      scope: "task" as const,
+      verdict: "approved" as const,
+      reasons: [],
+      reworkAction: "accept" as const,
+    };
+    store.workflows.recordAudit(epoch, { ...verdict, auditorTaskId: auditor });
+    const twice = caught(() =>
+      store.workflows.recordAudit(epoch, { ...verdict, auditorTaskId: second }),
+    );
+    expect(twice.code).toBe("store.conflict");
+    expect(twice.message).toMatch(/already audited/);
+
+    const { workflowId: other, finalAuditor } = audited();
+    const runId = claim(finalAuditor);
+    store.runs.complete({ runId, outcome: "succeeded", result: { verdict: "approved" } });
+    const closed = caught(() =>
+      store.workflows.recordAudit(epoch, {
+        workflowId: other,
+        subjectTaskId: null,
+        auditorTaskId: finalAuditor,
+        scope: "workflow",
+        verdict: "approved",
+        reasons: [],
+        reworkAction: "accept",
+      }),
+    );
+    expect(closed.code).toBe("store.conflict");
+    expect(closed.message).toMatch(/closed turn/);
+  });
+
   it("refuses an auditor turn that is not an auditor, or a subject that is not an executor", () => {
     const { workflowId, d1, executor, auditor } = audited();
     for (const [subjectTaskId, auditorTaskId] of [

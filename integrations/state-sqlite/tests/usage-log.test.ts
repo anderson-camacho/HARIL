@@ -284,6 +284,43 @@ describe("store.usageLog reads", () => {
   });
 });
 
+describe("audited runs in the summary and in model_stats", () => {
+  it("counts a run once when its task has two task-scope audits (an older database)", () => {
+    store.usageLog.appendUsage(run({ runId: "r-1", taskId: "task-1" }));
+    // Two verdicts on one subject, as a release before the one-verdict rule could leave them.
+    byHand((db) => {
+      db.exec("PRAGMA foreign_keys = OFF");
+      const insert = db.prepare(
+        "INSERT INTO audits (audit_id, workflow_id, subject_task_id, auditor_task_id, scope, verdict, reasons, rework_action, created_at) VALUES (?, 'wf-1', 'task-1', ?, 'task', ?, '[]', ?, ?)",
+      );
+      insert.run("audit-1", "auditor-1", "rejected", "retry", clock.now());
+      insert.run("audit-2", "auditor-2", "approved", "accept", clock.now() + 1);
+    });
+    expect(store.usageLog.summary("role")).toEqual([
+      expect.objectContaining({
+        key: "executor",
+        rows: 1,
+        tokensIn: 1200,
+        tokensOut: 300,
+        durationMs: 60_000,
+        approved: 1,
+        rejected: 0,
+      }),
+    ]);
+    byHand((db) => {
+      expect(db.prepare("SELECT * FROM model_stats").all()).toEqual([
+        expect.objectContaining({
+          model: "fake/fast-model",
+          runs: 1,
+          approved: 1,
+          rejected: 0,
+          tokens_in: 1200,
+        }),
+      ]);
+    });
+  });
+});
+
 describe("store.usageLog.verify", () => {
   function fill(): void {
     for (let index = 1; index <= 5; index++) {
