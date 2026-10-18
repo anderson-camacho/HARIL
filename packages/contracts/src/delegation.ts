@@ -64,12 +64,14 @@ export type CheckpointRequest = Static<typeof CheckpointRequestSchema>;
 
 const NonEmptyText = Type.String({ minLength: 1 });
 
-// A surface glob is relative to the worktree: no absolute path (a leading "/" or "\", a drive letter, a UNC share) and
-// no ".." segment. Its length and the number of globs in a list are bounded, so the overlap check of 3.10 always runs
-// on small input; globsMayOverlap also answers "overlap" on anything longer.
+// A surface glob is relative to the worktree: no absolute path (a leading "/" or "\", a drive letter, a UNC share), no
+// ".." segment, and no leading or trailing whitespace (which would hide a parent segment or an absolute path from the
+// other two rules: " ../x"). Its length and the number of globs in a list are bounded, so the overlap check of 3.10
+// always runs on small input; globsMayOverlap also answers "overlap" on anything longer.
 export const GLOB_MAX_LENGTH = 512;
 export const SURFACE_MAX_ITEMS = 64;
-export const GLOB_PATTERN = "^(?![A-Za-z]:)(?![/\\\\])(?!(?:.*[/\\\\])?\\.\\.(?:[/\\\\]|$)).+$";
+export const GLOB_PATTERN =
+  "^(?!\\s)(?![\\s\\S]*\\s$)(?![A-Za-z]:)(?![/\\\\])(?!(?:.*[/\\\\])?\\.\\.(?:[/\\\\]|$)).+$";
 const GlobSchema = Type.String({ minLength: 1, maxLength: GLOB_MAX_LENGTH, pattern: GLOB_PATTERN });
 const SurfaceSchema = Type.Array(GlobSchema, { maxItems: SURFACE_MAX_ITEMS });
 // The parent's model preference; the Core validates it (3.11). Absent or null means "let the table choose".

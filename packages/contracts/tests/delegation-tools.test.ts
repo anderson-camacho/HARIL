@@ -196,6 +196,12 @@ describe("validateDelegationToolInput: haril_assign", () => {
       "src\\..\\x.ts",
       "src/..",
       "..",
+      // Leading or trailing whitespace would hide a parent segment or an absolute path from the checks above.
+      " ../x",
+      " /etc/passwd",
+      "\tC:/x.ts",
+      "src/a.ts ",
+      "src/a.ts\n",
     ]) {
       for (const files of [
         { write: [glob], read: [] },
