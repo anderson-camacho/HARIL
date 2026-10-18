@@ -1,5 +1,13 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -482,5 +490,24 @@ describe.skipIf(!HAS_GIT)("worktrees, commits and merges", () => {
       await addWorktree(project, { path: tree, branch: "haril/wf/task/gone", base }, { env }),
     ).toEqual({ ok: true, reused: false });
     expect(existsSync(join(tree, "readme.txt"))).toBe(true);
+  });
+
+  it("recreates a deleted worktree's folder whose path git spells another way (a link, a Windows short name)", async () => {
+    const project = repo("project");
+    const base = git(project, "rev-parse", "main");
+    // git records a worktree by its real path; HARIL may name it through a link, or through an 8.3 short name such as
+    // the RUNNER~1 of a CI runner's temporary folder. Once the folder is gone, nothing resolves the two to one path.
+    const real = join(root, "real");
+    mkdirSync(real);
+    const link = join(root, "link");
+    symlinkSync(real, link, process.platform === "win32" ? "junction" : "dir");
+    const tree = join(link, "gone");
+    await addWorktree(project, { path: tree, branch: "haril/wf/task/linked", base }, { env });
+    rmSync(join(real, "gone"), { recursive: true, force: true });
+    expect(
+      await addWorktree(project, { path: tree, branch: "haril/wf/task/linked", base }, { env }),
+    ).toEqual({ ok: true, reused: false });
+    expect(existsSync(join(tree, "readme.txt"))).toBe(true);
+    expect(git(project, "worktree", "list", "--porcelain").match(/^worktree /gm)).toHaveLength(2);
   });
 });

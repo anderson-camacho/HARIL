@@ -1,8 +1,15 @@
 import { existsSync, realpathSync } from "node:fs";
 import { lstat, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { branchCommit } from "./repository.js";
-import { detailOf, type GitOptions, isSafeBranchName, linesOf, runGit } from "./run.js";
+import {
+  detailOf,
+  type GitOptions,
+  type GitResult,
+  isSafeBranchName,
+  linesOf,
+  runGit,
+} from "./run.js";
 
 // One git worktree per executor (docs/modos-y-delegacion.md 3.10.2, spike S4): `git worktree add -b <branch> <path>
 // <base>` from the commit the workflow fixed, never from another branch (P13). Creation is idempotent, so a runtime that
@@ -43,15 +50,30 @@ export interface RemoveOptions extends GitOptions {
   readonly retryDelayMs?: number;
 }
 
+// A path as the file system names it: links resolved and, on Windows, 8.3 short names (C:\Users\RUNNER~1) expanded. A
+// path that does not exist (a worktree folder deleted behind git's back) is resolved through its deepest existing
+// folder, so it still compares equal to the real path git recorded for it.
+function realPath(path: string): string {
+  let current = resolve(path);
+  const missing: string[] = [];
+  for (;;) {
+    try {
+      const real = realpathSync.native(current);
+      return missing.length === 0 ? real : join(real, ...missing.reverse());
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) return resolve(path);
+      missing.push(basename(current));
+      current = parent;
+    }
+  }
+}
+
 function samePath(left: string, right: string): boolean {
   const canonical = (path: string): string => {
-    let real: string;
-    try {
-      real = realpathSync.native(path);
-    } catch {
-      real = resolve(path);
-    }
-    const normalized = real.replace(/[\\/]+$/, "").replace(/\\/g, "/");
+    const normalized = realPath(path)
+      .replace(/[\\/]+$/, "")
+      .replace(/\\/g, "/");
     return process.platform === "win32" ? normalized.toLowerCase() : normalized;
   };
   return canonical(left) === canonical(right);
@@ -182,14 +204,44 @@ export async function addWorktree(
     await rm(worktree.path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(
       () => undefined,
     );
-    await runGit(root, ["worktree", "prune"], options);
+    await runGit(root, ["worktree", "prune", "--expire", "now"], options);
   }
   const exists = (await branchCommit(root, worktree.branch, options)) !== undefined;
   const args = exists
     ? ["worktree", "add", "--quiet", worktree.path, worktree.branch]
     : ["worktree", "add", "--quiet", "-b", worktree.branch, worktree.path, worktree.base];
   const added = await runGit(root, args, options);
-  return added.ok ? { ok: true, reused: false } : { ok: false, detail: detailOf(added) };
+  if (added.ok) return { ok: true, reused: false };
+  // git still holds a record of this path whose folder is gone (it spelled the path in a way the check above did not
+  // match): that record is pruned and the add tried once more. Never `add -f`, which would also take a branch checked
+  // out elsewhere. Told by git's message or, whatever its language, by a listed entry for the path with no folder.
+  if (
+    !existsSync(worktree.path) &&
+    (await registeredButMissing(root, worktree.path, added, options))
+  ) {
+    await runGit(root, ["worktree", "prune", "--expire", "now"], options);
+    const again = await runGit(root, args, options);
+    if (again.ok) return { ok: true, reused: false };
+    return { ok: false, detail: detailOf(again) };
+  }
+  return { ok: false, detail: detailOf(added) };
+}
+
+// Whether a failed `git worktree add` met a record of `path` whose folder is missing: git said so, or its list holds a
+// prunable entry for that path.
+async function registeredButMissing(
+  root: string,
+  path: string,
+  failed: GitResult,
+  options: GitOptions,
+): Promise<boolean> {
+  if (/missing but already registered worktree/i.test(failed.stderr)) return true;
+  const listed = await listWorktrees(root, options);
+  return (
+    listed?.some(
+      (entry) => samePath(entry.path, path) && (entry.prunable || !existsSync(entry.path)),
+    ) ?? false
+  );
 }
 
 function sleep(ms: number): Promise<void> {
