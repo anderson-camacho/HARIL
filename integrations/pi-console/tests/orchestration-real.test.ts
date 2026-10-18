@@ -256,3 +256,23 @@ describe("relative times on real data", () => {
     expect(state.clock).toBe(NOW);
   });
 });
+
+describe("the live buffer on a node change", () => {
+  it("starts over when the selection moves, so X then Y then X never shows X's lines twice", () => {
+    const lines = Array.from(
+      { length: 16 },
+      (_, index): TailLine => ({ at: NOW + index, kind: "assistant", text: `line ${index}` }),
+    );
+    let state = select(real("snapshot-completed.json"), "e1");
+    state = reduceOrchestration(state, { type: "toggle-live" }).state;
+    state = reduceOrchestration(state, { type: "tail", nodeId: "e1", lines }).state;
+    expect(state.live.lines).toHaveLength(16);
+    state = reduceOrchestration(state, { type: "move", delta: 1 }).state;
+    expect(state.live.lines).toHaveLength(0);
+    state = select(state, "e1");
+    expect(state.live.lines).toHaveLength(0);
+    // The new tail child prints the whole session again.
+    state = reduceOrchestration(state, { type: "tail", nodeId: "e1", lines }).state;
+    expect(state.live.lines).toHaveLength(16);
+  });
+});

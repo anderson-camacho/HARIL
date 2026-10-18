@@ -186,7 +186,10 @@ export function createWorkflowFeed(
   let watch: { readonly id: string; readonly stream: HarilStream } | undefined;
   // The workflows whose watch ended after it showed them ended: their last snapshot is final.
   const finished = new Set<string>();
-  let tail: { readonly key: string; readonly stream: HarilStream } | undefined;
+  // The live view's tail child. Each child has its own id: a line is taken only from the current child, so a child
+  // replaced (another node, or the same node again) that still flushes buffered lines adds nothing.
+  let tail: { readonly key: string; readonly id: number; readonly stream: HarilStream } | undefined;
+  let tailSeq = 0;
 
   const startWatch = (id: string): void => {
     watch?.stream.close();
@@ -274,18 +277,19 @@ export function createWorkflowFeed(
       tail?.stream.close();
       tail = undefined;
       if (target === undefined || key === undefined) return;
+      const id = ++tailSeq;
       const stream = cli.stream(
         ["workflow", "tail", target.workflowId, target.nodeId, "--follow", "--json"],
         {
           cwd: host.cwd(),
           onLine: (line) => {
-            if (closed || tail?.key !== key) return;
+            if (closed || tail?.id !== id) return;
             const parsed = parseTailLine(line);
             if (parsed !== undefined) host.onTail(target.nodeId, [parsed]);
           },
         },
       );
-      if (stream !== undefined) tail = { key, stream };
+      if (stream !== undefined) tail = { key, id, stream };
     },
     close() {
       if (closed) return;

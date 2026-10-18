@@ -381,7 +381,14 @@ function move(state: OrchestrationState, delta: number): OrchestrationState {
   if (list.length === 0) return state;
   const current = list.findIndex((node) => node.id === selectedNode(state)?.id);
   const next = list[clamp((current < 0 ? 0 : current) + delta, 0, list.length - 1)];
-  return { ...state, selectedNodeId: next?.id ?? state.selectedNodeId };
+  return selectNode(state, next?.id ?? state.selectedNodeId);
+}
+
+// Another node's lines never mix with this one's: a change of node empties the live buffer, and the console starts the
+// new node's tail (which prints its session from the start). The same node keeps its lines.
+function selectNode(state: OrchestrationState, id: string | undefined): OrchestrationState {
+  const changed = id !== selectedNode(state)?.id;
+  return { ...state, selectedNodeId: id, ...(changed ? { live: NO_LIVE_LINES } : {}) };
 }
 
 function done(state: OrchestrationState, effect?: OrchestrationEffect): OrchestrationTransition {
@@ -402,7 +409,7 @@ export function reduceOrchestration(
     case "move":
       return done(move(state, action.delta));
     case "select-node":
-      return done({ ...state, selectedNodeId: action.id, detail: true });
+      return done({ ...selectNode(state, action.id), detail: true });
     case "select-row":
       if (state.view === "quota") {
         const last = Math.max(0, (state.snapshot?.quota.length ?? 0) - 1);

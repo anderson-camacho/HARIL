@@ -159,6 +159,47 @@ describe("the workflow feed", () => {
     expect(cli.calls().filter((item) => item.args[1] === "tail")).toHaveLength(2);
   });
 
+  it("takes tail lines only from the current tail child, never from one it already replaced", () => {
+    const children: { args: readonly string[]; onLine: (line: string) => void; closed: boolean }[] =
+      [];
+    const scripted = createWorkflowFeed(
+      {
+        cwd: () => undefined,
+        projectSlug: () => "notes",
+        onWorkflows: () => undefined,
+        onSnapshot: () => undefined,
+        onTail: (nodeId, lines) => tails.push({ nodeId, lines }),
+      },
+      {
+        listJson: async () => [],
+        stream: (args, options) => {
+          const child = { args, onLine: options.onLine, closed: false };
+          children.push(child);
+          return {
+            get running() {
+              return !child.closed;
+            },
+            close: () => {
+              child.closed = true;
+            },
+          };
+        },
+      },
+    );
+    const line = JSON.stringify({ at: 1, kind: "assistant", text: "hello" });
+    scripted.follow({ workflowId: WORKFLOW_ID, nodeId: "e1" });
+    scripted.follow({ workflowId: WORKFLOW_ID, nodeId: "e2" });
+    scripted.follow({ workflowId: WORKFLOW_ID, nodeId: "e1" });
+    expect(children).toHaveLength(3);
+    // The first e1 child was closed, but its buffered lines still arrive: they belong to no current tail.
+    children[0]?.onLine(line);
+    children[1]?.onLine(line);
+    expect(tails).toEqual([]);
+    children[2]?.onLine(line);
+    expect(tails).toEqual([{ nodeId: "e1", lines: [{ at: 1, kind: "assistant", text: "hello" }] }]);
+    scripted.close();
+  });
+
   it("ends its children when it closes, and reports nothing after", async () => {
     cli.answer("workflow list", { stdout: JSON.stringify([listed(WORKFLOW_ID, "running", 1)]) });
     cli.answer("workflow watch", { stdout: `${completedText}\n`, delayMs: 3000 });
