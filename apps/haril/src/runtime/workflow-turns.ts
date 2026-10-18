@@ -251,13 +251,15 @@ export interface CommitResult {
   readonly workflowReason: string | null;
 }
 
+// A fake agent reports its tokens; a real agent's come from the Broker's ledger, for this run only: a turn rerun after a
+// recovery or a retry spent on the same task, and its earlier run already has its own row.
 function tokensOf(
   store: Store,
-  taskId: string,
+  runId: string,
   outcome: AgentOutcome,
 ): { tokensIn: number | null; tokensOut: number | null } {
   if (outcome.status === "succeeded" && outcome.usage !== undefined) return outcome.usage;
-  const ledger = store.budgets.usageSummary({ taskId });
+  const ledger = store.budgets.usageSummary({ runId });
   return ledger === null
     ? { tokensIn: null, tokensOut: null }
     : { tokensIn: ledger.inputTokens, tokensOut: ledger.outputTokens };
@@ -294,7 +296,7 @@ export function commitWorkflowAttempt(
   store.transaction(() => {
     for (const write of plan.before) write();
     store.runs.complete(plan.completion);
-    const tokens = tokensOf(store, task.taskId, outcome);
+    const tokens = tokensOf(store, attempt.claimed.runId, outcome);
     store.usageLog.appendUsage({
       kind: "agent_run",
       orderId: view.workflow.orderId,

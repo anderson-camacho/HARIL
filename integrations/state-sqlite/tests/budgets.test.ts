@@ -332,4 +332,83 @@ describe("budgets.usageSummary", () => {
     });
     expect(store.budgets.usageSummary({ projectId: "other" })).toBeNull();
   });
+
+  it("counts one run's commits once with a runId filter, so a rerun of the task is not counted twice", () => {
+    // A task with two attempts: the first run fails after spending, the rerun spends again on the same task budget.
+    store.commands.enqueue({
+      type: "task.create",
+      projectId,
+      args: {
+        goal: "rerun",
+        dependsOn: [],
+        agent: "fake:succeed",
+        maxAttempts: 2,
+        timeoutMs: 1000,
+      },
+      idempotencyKey: "k-rerun",
+      requestHash: "h-rerun",
+    });
+    store.commands.applyNext(epoch);
+    store.tasks.promote();
+    const first = store.tasks.claimNext(epoch);
+    if (first === undefined) throw new Error("no task to claim");
+    const project = store.budgets.ensure({
+      scopeType: "project",
+      scopeId: projectId,
+      projectId,
+      hardLimit: 1000,
+    }).budgetId;
+    const task = store.budgets.ensure({
+      scopeType: "task",
+      scopeId: first.taskId,
+      projectId,
+      hardLimit: 1000,
+    }).budgetId;
+    const spend = (runId: string, key: string, input: number, output: number): void => {
+      const reserved = store.budgets.reserve({
+        budgetIds: [project, task],
+        amount: 50,
+        idempotencyKey: key,
+        runId,
+        taskId: first.taskId,
+        routeId: "route-a",
+      });
+      if (!reserved.ok) throw new Error("reservation refused");
+      store.budgets.commit({
+        reservationId: reserved.reservationId,
+        usage: { inputTokens: input, outputTokens: output },
+        upperBound: 50,
+        modelRequested: "m1",
+        modelServed: "m1",
+      });
+    };
+    spend(first.runId, "first-1", 10, 1);
+    spend(first.runId, "first-2", 20, 2);
+    store.runs.complete({
+      runId: first.runId,
+      outcome: "failed",
+      error: { code: "provider_error", message: "lost" },
+      endCause: "exit",
+    });
+    const rerun = store.tasks.claimNext(epoch);
+    if (rerun === undefined || rerun.taskId !== first.taskId) throw new Error("no rerun");
+    spend(rerun.runId, "rerun-1", 7, 3);
+
+    expect(store.budgets.usageSummary({ runId: rerun.runId })).toEqual({
+      inputTokens: 7,
+      outputTokens: 3,
+      settled: 1,
+      unreconciled: 0,
+    });
+    expect(store.budgets.usageSummary({ runId: first.runId })).toMatchObject({
+      inputTokens: 30,
+      outputTokens: 3,
+      settled: 2,
+    });
+    expect(store.budgets.usageSummary({ taskId: first.taskId })).toMatchObject({
+      inputTokens: 37,
+      outputTokens: 6,
+    });
+    expect(store.budgets.usageSummary({ runId: "no-such-run" })).toBeNull();
+  });
 });

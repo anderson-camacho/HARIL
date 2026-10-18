@@ -516,6 +516,8 @@ export type ReleaseStatus = "released" | "already_settled" | "unknown_reservatio
 export interface UsageSummaryFilter {
   readonly projectId?: string;
   readonly taskId?: string;
+  // One attempt's own spend: a rerun of the task (after a recovery or a retry) has its own run and is not counted here.
+  readonly runId?: string;
 }
 
 // Settled token totals from the ledger; `unreconciled` counts commits that charged an upper bound.

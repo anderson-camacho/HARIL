@@ -324,8 +324,9 @@ export function createBudgetFacets(options: BudgetFacetOptions): BudgetFacets {
 
     usageSummary(filter?: UsageSummaryFilter): UsageSummary | null {
       // Counted once per reservation, on the budget of the scope: the task budget when a task is named,
-      // otherwise the project budget (every broker reservation holds one).
+      // otherwise the project budget (every broker reservation holds one). A run filter keeps that run's commits only.
       const taskId = filter?.taskId ?? null;
+      const runId = filter?.runId ?? null;
       const row = db
         .prepare(
           `SELECT COALESCE(SUM(l.tokens_input), 0) AS inputTokens,
@@ -334,7 +335,8 @@ export function createBudgetFacets(options: BudgetFacetOptions): BudgetFacets {
                   COALESCE(SUM(l.unreconciled), 0) AS unreconciled
            FROM budget_ledger l JOIN budgets b ON b.budget_id = l.budget_id
            WHERE l.kind = 'commit' AND b.scope_type = ?
-             AND (? IS NULL OR b.scope_id = ?) AND (? IS NULL OR b.project_id = ?)`,
+             AND (? IS NULL OR b.scope_id = ?) AND (? IS NULL OR b.project_id = ?)
+             AND (? IS NULL OR l.run_id = ?)`,
         )
         .get(
           taskId === null ? "project" : "task",
@@ -342,6 +344,8 @@ export function createBudgetFacets(options: BudgetFacetOptions): BudgetFacets {
           taskId,
           filter?.projectId ?? null,
           filter?.projectId ?? null,
+          runId,
+          runId,
         ) as unknown as UsageSummary;
       return row.settled === 0 ? null : row;
     },
