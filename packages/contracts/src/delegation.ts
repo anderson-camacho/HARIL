@@ -63,7 +63,15 @@ export const CheckpointRequestSchema = Type.Union([
 export type CheckpointRequest = Static<typeof CheckpointRequestSchema>;
 
 const NonEmptyText = Type.String({ minLength: 1 });
-const GlobSchema = Type.String({ minLength: 1 });
+
+// A surface glob is relative to the worktree: no absolute path (a leading "/" or "\", a drive letter, a UNC share) and
+// no ".." segment. Its length and the number of globs in a list are bounded, so the overlap check of 3.10 always runs
+// on small input; globsMayOverlap also answers "overlap" on anything longer.
+export const GLOB_MAX_LENGTH = 512;
+export const SURFACE_MAX_ITEMS = 64;
+export const GLOB_PATTERN = "^(?![A-Za-z]:)(?![/\\\\])(?!(?:.*[/\\\\])?\\.\\.(?:[/\\\\]|$)).+$";
+const GlobSchema = Type.String({ minLength: 1, maxLength: GLOB_MAX_LENGTH, pattern: GLOB_PATTERN });
+const SurfaceSchema = Type.Array(GlobSchema, { maxItems: SURFACE_MAX_ITEMS });
 // The parent's model preference; the Core validates it (3.11). Absent or null means "let the table choose".
 const ModelPreferenceSchema = Type.Optional(
   Type.Union([Type.String({ minLength: 1 }), Type.Null()]),
@@ -113,7 +121,7 @@ export const AssignmentSchema = Type.Object(
     goal: NonEmptyText,
     instructions: NonEmptyText,
     files: Type.Object(
-      { write: Type.Array(GlobSchema), read: Type.Array(GlobSchema) },
+      { write: SurfaceSchema, read: SurfaceSchema },
       { additionalProperties: false },
     ),
     tests: Type.String(),

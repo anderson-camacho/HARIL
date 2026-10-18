@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   DELEGATION_TOOL_NAMES,
   DIFFICULTIES,
+  GLOB_MAX_LENGTH,
   isDelegationToolName,
   isStop,
   MEMO_MAX_LENGTH,
+  SURFACE_MAX_ITEMS,
   validateDelegationToolInput,
 } from "../src/index.js";
 
@@ -180,6 +182,51 @@ describe("validateDelegationToolInput: haril_assign", () => {
       const input = { ...assignInput, assignments: [broken] };
       expect(validateDelegationToolInput("haril_assign", input).ok).toBe(false);
     }
+  });
+
+  it("refuses absolute paths and parent segments in a surface", () => {
+    for (const glob of [
+      "/etc/passwd",
+      "\\\\server\\share\\x.ts",
+      "C:/Users/x.ts",
+      "c:\\repo\\x.ts",
+      "D:relative.ts",
+      "../outside.ts",
+      "src/../../outside.ts",
+      "src\\..\\x.ts",
+      "src/..",
+      "..",
+    ]) {
+      for (const files of [
+        { write: [glob], read: [] },
+        { write: [], read: [glob] },
+      ]) {
+        const input = { ...assignInput, assignments: [{ ...assignment, files }] };
+        expect(validateDelegationToolInput("haril_assign", input).ok, glob).toBe(false);
+      }
+    }
+    const fine = { write: ["src/..hidden/x.ts", "src/a..b.ts", "./src/**"], read: [".config/x"] };
+    const input = { ...assignInput, assignments: [{ ...assignment, files: fine }] };
+    expect(validateDelegationToolInput("haril_assign", input).ok).toBe(true);
+  });
+
+  it("bounds the length of a glob and the number of globs in a surface", () => {
+    const long = `src/${"a".repeat(GLOB_MAX_LENGTH - 4)}`;
+    const tooLong = `${long}b`;
+    const atLimit = { write: [long], read: [] };
+    const overLength = { write: [tooLong], read: [] };
+    const many = Array.from({ length: SURFACE_MAX_ITEMS }, (_, index) => `src/f${index}.ts`);
+    const overCount = { write: [...many, "src/extra.ts"], read: [] };
+    const check = (files: { write: string[]; read: string[] }) =>
+      validateDelegationToolInput("haril_assign", {
+        ...assignInput,
+        assignments: [{ ...assignment, files }],
+      }).ok;
+    expect(check(atLimit)).toBe(true);
+    expect(check(overLength)).toBe(false);
+    expect(check({ write: many, read: many })).toBe(true);
+    expect(check(overCount)).toBe(false);
+    expect(check({ write: [], read: [...many, "src/extra.ts"] })).toBe(false);
   });
 
   it("accepts an empty write surface for a read-only executor", () => {
