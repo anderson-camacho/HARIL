@@ -15,12 +15,16 @@ import {
 import type { AgentRuntime, AgentSpec, Clock, Store } from "@haril/core/ports";
 import { FakeAgentRuntime } from "@haril/core/testing";
 import { openStore } from "@haril/state-sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDelegationTools } from "../src/runtime/delegation-tools.js";
 import { runUntilIdle } from "../src/runtime/run-loop.js";
 import { createShutdown } from "../src/runtime/shutdown.js";
 import { createWorkspaces, integrationBranchOf } from "../src/runtime/worktrees.js";
 import { makeSandbox, type Sandbox } from "./helpers.js";
+
+// Real git and real processes: under the load of the full suite one test can take several seconds, so this file gives
+// its tests and hooks a minute instead of the suite's 15 s (a hang still fails it).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 
 // Parallel writes end to end (docs/modos-y-delegacion.md 3.10, phase F8), hermetic: a temporary git repository as the
 // project, the fake workflow agents inside FakeAgentRuntime, the real SQLite store and the real concurrent loop. Each

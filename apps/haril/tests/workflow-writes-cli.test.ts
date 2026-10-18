@@ -2,9 +2,13 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { validateWorkflowSnapshot, type WorkflowSnapshot } from "@haril/contracts";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { run } from "../src/cli.js";
 import { type Harness, harness, makeSandbox, parseJson, type Sandbox } from "./helpers.js";
+
+// Real git and real processes: under the load of the full suite one test can take several seconds, so this file gives
+// its tests and hooks a minute instead of the suite's 15 s (a hang still fails it).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 
 // `haril workflow start` on a git project (phase F8, docs/modos-y-delegacion.md 3.10): the workflow fixes its base
 // branch and commit and writes in worktrees; `haril run` runs it with the fake workflow agents, and `haril workflow show`

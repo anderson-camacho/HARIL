@@ -2,7 +2,7 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   abortMerge,
   addWorktree,
@@ -23,6 +23,10 @@ import {
   removeWorktree,
   unmergedPaths,
 } from "../src/index.js";
+
+// Real git and real processes: under the load of the full suite one test can take several seconds, so this file gives
+// its tests and hooks a minute instead of the suite's 15 s (a hang still fails it).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 
 // The git side of parallel writes (docs/modos-y-delegacion.md 3.10, spike S4 in ADR-0021), on temporary repositories:
 // the base branch a workflow starts from, one worktree and branch per executor created from it (with long paths), the

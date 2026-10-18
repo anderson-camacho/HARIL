@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   allowedCommand,
   cleanEnvironment,
@@ -9,6 +9,10 @@ import {
   resolveProgram,
   runHostCommand,
 } from "../src/runtime/host-commands.js";
+
+// Real git and real processes: under the load of the full suite one test can take several seconds, so this file gives
+// its tests and hooks a minute instead of the suite's 15 s (a hang still fails it).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 
 // haril_run (docs/modos-y-delegacion.md 3.10.5 and section 8; phase F8): a command of the allow list, run by the host
 // in the agent's worktree as argv (never a shell), with a clean environment that carries no key, a time limit and an

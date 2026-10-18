@@ -11,8 +11,12 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { addWorktree } from "@haril/git";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyEdits, createWorkspaces, type TurnWorkspace } from "../src/runtime/worktrees.js";
+
+// Real git and real processes: under the load of the full suite one test can take several seconds, so this file gives
+// its tests and hooks a minute instead of the suite's 15 s (a hang still fails it).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 
 // The host side of an executor's write and edit (docs/modos-y-delegacion.md 3.10.5 and section 8; phase F8): the
 // Core's lexical PathGuard, then the filesystem check, on a real worktree. Inside the declared surface a file is written;
