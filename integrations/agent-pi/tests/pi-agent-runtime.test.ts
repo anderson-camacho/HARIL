@@ -528,9 +528,13 @@ describe("createPiAgentRuntime lifecycle", () => {
     expect(plain.process?.boot).toBeUndefined();
   });
 
+  // What this proves is that kill skips the grace period (60 s here), so the bound is set against the grace period, far
+  // above what a loaded machine adds to taskkill: the 2 s budget of the emergency stop (spec 9.2) is measured end to end
+  // in the sequential test:stop lane (emergency-stop-processes.test.ts), where no parallel suite loads the machine.
   it("kill ends a hung Pi at once, without the grace period, and its tree with it (3.14)", async () => {
+    const graceMs = 60_000;
     const h = harness();
-    const handle = await startHandle(h.runtime("hang_with_tool", { timings: { graceMs: 30_000 } }));
+    const handle = await startHandle(h.runtime("hang_with_tool", { timings: { graceMs } }));
     await handle.prompt("go");
     const pidFile = join(h.runsDir, "run-1", "fake-tool.pid");
     await until(() => existsSync(pidFile), "the tool command started");
@@ -540,14 +544,14 @@ describe("createPiAgentRuntime lifecycle", () => {
     const started = Date.now();
     await handle.kill?.();
     expect(await handle.settled).toEqual({ status: "aborted" });
-    expect(Date.now() - started).toBeLessThan(2000);
+    expect(Date.now() - started).toBeLessThan(graceMs / 6);
     expect(alive(pi)).toBe(false);
-    await until(() => !alive(tool), "the tool command killed with Pi", 2000);
+    await until(() => !alive(tool), "the tool command killed with Pi", graceMs / 6);
     // A second kill, and a dispose after it, change nothing.
     await handle.kill?.();
     await handle.dispose();
     expect(await handle.settled).toEqual({ status: "aborted" });
-  });
+  }, 30_000);
 
   it("kills through the host's verified tree kill, never a tree walked by parent pid alone (3.14)", async () => {
     const h = harness();
