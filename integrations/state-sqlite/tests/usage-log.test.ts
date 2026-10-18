@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import type { AppendUsageInput, Store } from "@haril/core/ports";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openStore } from "../src/index.js";
+import { createUsageLogFacet } from "../src/usage-log.js";
 import {
   type ManualClock,
   makeTempDir,
@@ -370,5 +371,65 @@ describe("store.usageLog.verify", () => {
     store = openStore({ dataDir: dir, clock, ids: sequentialIds("again"), rules: testRules });
     store.usageLog.appendUsage(run({ runId: "r-after" }));
     expect(store.usageLog.verify()).toMatchObject({ ok: true, usage: { rows: 6 } });
+  });
+
+  it("finds a chain whose every row and head were deleted, through the started marker", () => {
+    fill();
+    byHand((db) => {
+      db.exec("DROP TRIGGER usage_log_no_delete");
+      db.exec("DELETE FROM usage_log");
+      db.exec("DELETE FROM meta WHERE key = 'usage_log.head'");
+    });
+    expect(store.usageLog.verify().usage).toMatchObject({
+      ok: false,
+      rows: 0,
+      firstBroken: { reason: "head_mismatch" },
+    });
+  });
+
+  it("reads the chains and their heads in one snapshot: an append from another connection in between is no alarm", () => {
+    fill();
+    // A second store on the same file appends while verify() is between its row reads and its head read.
+    const other = openStore({ dataDir: dir, clock, ids: sequentialIds("other"), rules: testRules });
+    const db = new DatabaseSync(join(dir, "haril.db"));
+    try {
+      let appended = 0;
+      const racing = new Proxy(db, {
+        get(target, property) {
+          if (property === "prepare") {
+            return (sql: string) => {
+              if (sql.includes("FROM meta WHERE key") && appended < 2) {
+                appended += 1;
+                other.usageLog.appendUsage(run({ runId: `race-${appended}` }));
+                other.usageLog.appendOrder({
+                  mode: "cli",
+                  source: "cli",
+                  text: "x",
+                  preview: null,
+                });
+              }
+              return target.prepare(sql);
+            };
+          }
+          // Native getters (isTransaction) need the real connection as their receiver.
+          const value = Reflect.get(target, property, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      const facet = createUsageLogFacet({
+        db: racing,
+        clock,
+        ids: sequentialIds("verify"),
+        rules: testRules,
+        transaction: (work) => work(),
+      });
+      expect(facet.verify()).toMatchObject({ ok: true, usage: { rows: 5 }, orders: { rows: 5 } });
+      expect(appended).toBeGreaterThan(0);
+      // The rows appended meanwhile are verified by the next call.
+      expect(facet.verify()).toMatchObject({ ok: true, usage: { rows: 7 } });
+    } finally {
+      db.close();
+      other.close();
+    }
   });
 });

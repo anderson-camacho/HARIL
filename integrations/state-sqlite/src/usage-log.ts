@@ -22,10 +22,14 @@ import { StoreError } from "./errors.js";
 // The orders and usage logs (docs/modos-y-delegacion.md 4.5): append-only tables (triggers refuse UPDATE and DELETE)
 // with one hash chain per table. Each append runs in BEGIN IMMEDIATE: it reads the newest row, numbers the new one
 // seq + 1, hashes sha256(prev_hash + canonicalJson(row without hash)) over the exact column values it stores, and
-// records the new head (seq and hash) in meta, all in one transaction. verify() recomputes every hash in seq order and
-// compares the newest row with the recorded head, so a changed row, a deleted row and deleted newest rows are all found.
-// A row forged with recomputed hashes and a rewritten head is not detectable this way; the chain proves the log was
-// not edited by hand without care, which is the case of 4.5. P14: no lease is needed.
+// records the new head (seq and hash) in meta, all in one transaction. The first append of a chain also leaves a
+// "started" marker in meta that no code removes, so a chain whose rows and head were both deleted is still found.
+// verify() reads both chains and their heads inside one read transaction (a consistent snapshot, so an append from
+// another connection in the middle never looks like tampering), recomputes every hash in seq order and compares the
+// newest row with the recorded head, so a changed row, a deleted row and deleted newest rows are all found. A row
+// forged with recomputed hashes, or newest rows deleted together with a consistent rewrite of the head's seq and hash,
+// is not detectable this way (anything stored in the database can be rewritten too); the chain proves the log was not
+// edited by hand without care, which is the case of 4.5. P14: no lease is needed.
 
 interface UsageLogFacetOptions {
   readonly db: DatabaseSync;
@@ -102,6 +106,8 @@ interface Chain {
   readonly idColumn: string;
   readonly columns: readonly string[];
   readonly headKey: string;
+  // Set by the first append and never removed: the chain has started, so it must have a head.
+  readonly startedKey: string;
 }
 
 const ORDERS: Chain = {
@@ -109,12 +115,14 @@ const ORDERS: Chain = {
   idColumn: "order_id",
   columns: ORDER_COLUMNS,
   headKey: "orders.head",
+  startedKey: "orders.started",
 };
 const USAGE: Chain = {
   table: "usage_log",
   idColumn: "usage_id",
   columns: USAGE_COLUMNS,
   headKey: "usage_log.head",
+  startedKey: "usage_log.started",
 };
 
 function sha256(text: string): string {
@@ -221,8 +229,33 @@ export function createUsageLogFacet(options: UsageLogFacetOptions): UsageLogPort
     db.prepare(
       "INSERT INTO meta (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
     ).run(chain.headKey, JSON.stringify({ seq: row.seq, hash: row.hash }), clock.now());
+    // A chain that already had rows before the marker existed gets it on its next append.
+    db.prepare("INSERT OR IGNORE INTO meta (key, value, updated_at) VALUES (?, ?, ?)").run(
+      chain.startedKey,
+      JSON.stringify({ seq: row.seq, at: row.ts }),
+      clock.now(),
+    );
     return row;
   };
+
+  // Runs reads in one read transaction, so they all see the same snapshot of the database. Inside a transaction the
+  // caller already opened, they join it.
+  const snapshot = <T>(work: () => T): T => {
+    if (db.isTransaction) return work();
+    db.exec("BEGIN");
+    try {
+      const value = work();
+      db.exec("COMMIT");
+      return value;
+    } catch (error) {
+      if (db.isTransaction) db.exec("ROLLBACK");
+      throw error;
+    }
+  };
+
+  const metaValue = (key: string): string | undefined =>
+    (db.prepare("SELECT value FROM meta WHERE key = ?").get(key) as { value: string } | undefined)
+      ?.value;
 
   const byKey = (chain: Chain, key: string | null | undefined): Row | undefined => {
     if (key === null || key === undefined) return undefined;
@@ -250,16 +283,16 @@ export function createUsageLogFacet(options: UsageLogFacetOptions): UsageLogPort
       previous = String(row.hash);
       expectedSeq += 1;
     }
-    const recorded = db.prepare("SELECT value FROM meta WHERE key = ?").get(chain.headKey) as
-      | { value: string }
-      | undefined;
+    const recorded = metaValue(chain.headKey);
     if (recorded !== undefined) {
-      const expected = JSON.parse(recorded.value) as { seq: number; hash: string };
-      if (expected.seq !== rows.length || expected.hash !== previous) {
-        return broken(expected.seq, null, "head_mismatch");
+      const expected = JSON.parse(recorded) as { seq?: unknown; hash?: unknown };
+      const seq = typeof expected.seq === "number" ? expected.seq : -1;
+      if (seq !== rows.length || expected.hash !== previous) {
+        return broken(seq, null, "head_mismatch");
       }
-    } else if (rows.length > 0) {
-      return broken(rows.length, null, "head_mismatch");
+    } else if (rows.length > 0 || metaValue(chain.startedKey) !== undefined) {
+      // No head, yet rows exist or the chain has started: the head was deleted, with or without the rows.
+      return broken(Math.max(rows.length, 1), null, "head_mismatch");
     }
     return { table: chain.table, rows: rows.length, ok: true, firstBroken: null };
   };
@@ -379,9 +412,11 @@ export function createUsageLogFacet(options: UsageLogFacetOptions): UsageLogPort
     },
 
     verify(): UsageVerification {
-      const orders = verifyChain(ORDERS);
-      const usage = verifyChain(USAGE);
-      return { ok: orders.ok && usage.ok, orders, usage };
+      return snapshot(() => {
+        const orders = verifyChain(ORDERS);
+        const usage = verifyChain(USAGE);
+        return { ok: orders.ok && usage.ok, orders, usage };
+      });
     },
   };
 }
