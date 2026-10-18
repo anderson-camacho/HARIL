@@ -71,7 +71,8 @@ interface ProjectWriter extends HeldSurface {
   readonly workflowId: string;
 }
 
-// The running writers of every writing workflow, by project.
+// The writers in flight of every writing workflow that has not ended, by project: a workflow that waits for the human (or
+// any state but completed, failed and stopped) may still have attempts running, and their surfaces stay held.
 function runningWriters(
   store: Store,
   workflows: readonly WorkflowRecord[],
@@ -103,7 +104,15 @@ export function claimWorkflowTurns(
 ): WorkflowClaim[] {
   const claims: WorkflowClaim[] = [];
   const running = [...store.workflows.list({ state: "running" })].reverse();
-  const writers = runningWriters(store, running);
+  const unended = store.workflows
+    .list()
+    .filter(
+      (workflow) =>
+        workflow.state !== "completed" &&
+        workflow.state !== "failed" &&
+        workflow.state !== "stopped",
+    );
+  const writers = runningWriters(store, unended);
   for (const workflow of running) {
     const view = WorkflowView.load(store, workflow.workflowId);
     if (view === undefined) continue;
