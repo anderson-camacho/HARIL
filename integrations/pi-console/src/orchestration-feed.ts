@@ -148,7 +148,18 @@ export interface WorkflowFeedHost {
   onWorkflows(rows: readonly WorkflowChoice[]): void;
   onSnapshot(snapshot: WorkflowSnapshot): void;
   onTail(nodeId: string, lines: readonly TailLine[]): void;
+  // A tail child died and a new one starts: the node's lines start over (the new child prints the session again).
+  onTailReset?(nodeId: string): void;
+  // The tail child kept dying: the live feed ended.
+  onTailEnded?(nodeId: string): void;
 }
+
+export interface WorkflowFeedOptions {
+  // The waits before each restart of a tail child that died; one restart per entry, then the live feed ends.
+  readonly tailRetryDelaysMs?: readonly number[];
+}
+
+const TAIL_RETRY_DELAYS_MS: readonly number[] = [500, 1_000, 2_000];
 
 // How the feed reaches the CLI; tests and the console use the real one.
 export interface WorkflowFeedCli {
@@ -178,7 +189,9 @@ export interface WorkflowFeed {
 export function createWorkflowFeed(
   host: WorkflowFeedHost,
   cli: WorkflowFeedCli = REAL_CLI,
+  options: WorkflowFeedOptions = {},
 ): WorkflowFeed {
+  const retryDelays = options.tailRetryDelaysMs ?? TAIL_RETRY_DELAYS_MS;
   let closed = false;
   let picked: string | undefined;
   let listing: Promise<void> | undefined;
@@ -190,6 +203,44 @@ export function createWorkflowFeed(
   // replaced (another node, or the same node again) that still flushes buffered lines adds nothing.
   let tail: { readonly key: string; readonly id: number; readonly stream: HarilStream } | undefined;
   let tailSeq = 0;
+  let tailRetry: ReturnType<typeof setTimeout> | undefined;
+
+  // Starts the tail child of a node. A child that exits with a failure (or that could not start) is started again after
+  // a short wait, a bounded number of times; then the live feed is said to have ended. A child that exits with 0 printed
+  // the whole session of a workflow that ended: it is not started again.
+  const startTail = (
+    target: { readonly workflowId: string; readonly nodeId: string },
+    key: string,
+    attempt: number,
+  ): void => {
+    const id = ++tailSeq;
+    const stream = cli.stream(
+      ["workflow", "tail", target.workflowId, target.nodeId, "--follow", "--json"],
+      {
+        cwd: host.cwd(),
+        onLine: (line) => {
+          if (closed || tail?.id !== id) return;
+          const parsed = parseTailLine(line);
+          if (parsed !== undefined) host.onTail(target.nodeId, [parsed]);
+        },
+        onExit: (code) => {
+          if (closed || tail?.id !== id || code === 0) return;
+          const delay = retryDelays[attempt];
+          if (delay === undefined) {
+            host.onTailEnded?.(target.nodeId);
+            return;
+          }
+          tailRetry = setTimeout(() => {
+            tailRetry = undefined;
+            if (closed || tail?.id !== id) return;
+            host.onTailReset?.(target.nodeId);
+            startTail(target, key, attempt + 1);
+          }, delay);
+        },
+      },
+    );
+    if (stream !== undefined) tail = { key, id, stream };
+  };
 
   const startWatch = (id: string): void => {
     watch?.stream.close();
@@ -274,26 +325,18 @@ export function createWorkflowFeed(
       const key = target === undefined ? undefined : `${target.workflowId}\u0000${target.nodeId}`;
       // The same node again: its tail runs, or it printed the whole session and ended (its workflow ended).
       if (key === tail?.key) return;
+      if (tailRetry !== undefined) clearTimeout(tailRetry);
+      tailRetry = undefined;
       tail?.stream.close();
       tail = undefined;
       if (target === undefined || key === undefined) return;
-      const id = ++tailSeq;
-      const stream = cli.stream(
-        ["workflow", "tail", target.workflowId, target.nodeId, "--follow", "--json"],
-        {
-          cwd: host.cwd(),
-          onLine: (line) => {
-            if (closed || tail?.id !== id) return;
-            const parsed = parseTailLine(line);
-            if (parsed !== undefined) host.onTail(target.nodeId, [parsed]);
-          },
-        },
-      );
-      if (stream !== undefined) tail = { key, id, stream };
+      startTail(target, key, 0);
     },
     close() {
       if (closed) return;
       closed = true;
+      if (tailRetry !== undefined) clearTimeout(tailRetry);
+      tailRetry = undefined;
       watch?.stream.close();
       tail?.stream.close();
       watch = undefined;

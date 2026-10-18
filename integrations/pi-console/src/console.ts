@@ -404,6 +404,14 @@ export default function harilConsole(pi: ConsolePi): void {
           orchestrate(current, { type: "tail", nodeId, lines });
           redraw();
         },
+        onTailReset: (nodeId) => {
+          orchestrate(current, { type: "tail-reset", nodeId });
+          redraw();
+        },
+        onTailEnded: (nodeId) => {
+          orchestrate(current, { type: "tail-ended", nodeId });
+          redraw();
+        },
       }),
       orchestrationDemo: () => current.orchestration.demo,
       toggleOrchestrationDemo() {

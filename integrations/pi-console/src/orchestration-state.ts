@@ -34,9 +34,11 @@ const LIVE_LINES = 500;
 interface LiveLines {
   readonly nodeId: string | undefined;
   readonly lines: readonly TailLine[];
+  // The node's tail child kept dying and was not started again: the live feed ended.
+  readonly ended: boolean;
 }
 
-const NO_LIVE_LINES: LiveLines = { nodeId: undefined, lines: [] };
+const NO_LIVE_LINES: LiveLines = { nodeId: undefined, lines: [], ended: false };
 
 export interface OrchestrationState {
   // What the view draws: the demo's sample data while the demo is on, else the real snapshot (or none).
@@ -101,6 +103,8 @@ export type OrchestrationAction =
   | { readonly type: "real-snapshot"; readonly snapshot: WorkflowSnapshot; readonly now: number }
   | { readonly type: "workflows"; readonly rows: readonly WorkflowChoice[] }
   | { readonly type: "tail"; readonly nodeId: string; readonly lines: readonly TailLine[] }
+  | { readonly type: "tail-reset"; readonly nodeId: string }
+  | { readonly type: "tail-ended"; readonly nodeId: string }
   // The console's status timer: the real view's relative times (last progress, next check) move on with no new
   // snapshot, since haril workflow watch prints only when the workflow changed.
   | { readonly type: "tick"; readonly now: number }
@@ -345,7 +349,10 @@ function takeTail(
   lines: readonly TailLine[],
 ): OrchestrationState {
   const previous = state.live.nodeId === nodeId ? state.live.lines : [];
-  return { ...state, live: { nodeId, lines: [...previous, ...lines].slice(-LIVE_LINES) } };
+  return {
+    ...state,
+    live: { nodeId, lines: [...previous, ...lines].slice(-LIVE_LINES), ended: false },
+  };
 }
 
 // Turning the demo off brings back the real snapshot that waited, if any, drawn at the current time.
@@ -468,6 +475,17 @@ export function reduceOrchestration(
       );
     case "tail":
       return done(takeTail(state, action.nodeId, action.lines));
+    case "tail-reset":
+      return done({ ...state, live: { nodeId: action.nodeId, lines: [], ended: false } });
+    case "tail-ended":
+      return done({
+        ...state,
+        live: {
+          nodeId: action.nodeId,
+          lines: state.live.nodeId === action.nodeId ? state.live.lines : [],
+          ended: true,
+        },
+      });
     case "tick":
       // The demo keeps its own fixed clock (its sample times are drawn relative to it).
       return done(

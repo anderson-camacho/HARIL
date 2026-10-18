@@ -276,3 +276,23 @@ describe("the live buffer on a node change", () => {
     expect(state.live.lines).toHaveLength(16);
   });
 });
+
+describe("a live feed that ended", () => {
+  it("says so in the live view", () => {
+    let state = select(real("snapshot-completed.json"), "e1");
+    state = reduceOrchestration(state, { type: "toggle-live" }).state;
+    state = reduceOrchestration(state, {
+      type: "tail",
+      nodeId: "e1",
+      lines: [{ at: NOW, kind: "assistant", text: "partial work" }],
+    }).state;
+    state = reduceOrchestration(state, { type: "tail-ended", nodeId: "e1" }).state;
+    const drawn = text(renderLiveView(state, 120, 30, UNICODE_GLYPHS));
+    expect(drawn).toContain("partial work");
+    expect(drawn).toContain("Live feed ended");
+    // A restart starts the node's lines over, since the new child prints the session from its start.
+    state = reduceOrchestration(state, { type: "tail-reset", nodeId: "e1" }).state;
+    expect(state.live.lines).toEqual([]);
+    expect(text(renderLiveView(state, 120, 30, UNICODE_GLYPHS))).not.toContain("Live feed ended");
+  });
+});

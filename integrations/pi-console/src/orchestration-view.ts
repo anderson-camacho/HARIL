@@ -49,6 +49,8 @@ export const DEMO_LABEL = "DEMO · sample data, not real";
 export const EMPTY_MESSAGE = "No workflows yet. Use /delegate to start one.";
 const EMPTY_DEMO_HINT = "Press D (or click Demo) to see the view with sample data.";
 const LIVE_NOTHING = "Nothing live to show: this view lists no agent right now.";
+const LIVE_FEED_ENDED =
+  "Live feed ended: haril workflow tail kept stopping and was not started again (L twice starts it over).";
 export const LIVE_NO_CONTENT =
   "Content not available: no Pi session has been read for this agent yet (a simulated agent keeps none).";
 const LABEL_WIDTH = 11;
@@ -970,9 +972,10 @@ function realLiveView(
     [{ text: "Activity (Pi session)", tone: "teal" }],
   ];
   const lines = state.live.nodeId === node.id ? state.live.lines : [];
+  const ended = state.live.nodeId === node.id && state.live.ended;
   const indent = 20;
   const activity: Seg[][] =
-    lines.length === 0
+    lines.length === 0 && !ended
       ? wrap(LIVE_NO_CONTENT, Math.max(1, width - 2)).map((part): Seg[] => [
           { text: `  ${part}`, tone: "muted" },
         ])
@@ -989,6 +992,10 @@ function realLiveView(
             { text: ` ${part}`, tone: line.kind === "error" ? "error" : "text" },
           ]);
         });
+  if (ended) {
+    for (const part of wrap(LIVE_FEED_ENDED, Math.max(1, width - 2)))
+      activity.push([{ text: `  ${part}`, tone: "error" }]);
+  }
   const room = Math.max(0, height - canvas.lines.length - 1);
   const headShown = head.slice(0, room);
   for (const line of headShown) canvas.push(compose(line, width));

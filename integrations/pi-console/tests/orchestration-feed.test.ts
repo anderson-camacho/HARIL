@@ -200,6 +200,79 @@ describe("the workflow feed", () => {
     scripted.close();
   });
 
+  it("restarts a tail child that died, a bounded number of times, then says the live feed ended", async () => {
+    const children: { onExit?: (code: number | null) => void; closed: boolean }[] = [];
+    const resets: string[] = [];
+    const ended: string[] = [];
+    const scripted = createWorkflowFeed(
+      {
+        cwd: () => undefined,
+        projectSlug: () => "notes",
+        onWorkflows: () => undefined,
+        onSnapshot: () => undefined,
+        onTail: (nodeId, lines) => tails.push({ nodeId, lines }),
+        onTailReset: (nodeId) => resets.push(nodeId),
+        onTailEnded: (nodeId) => ended.push(nodeId),
+      },
+      {
+        listJson: async () => [],
+        stream: (_args, options) => {
+          const child = { onExit: options.onExit, closed: false };
+          children.push(child);
+          return {
+            get running() {
+              return !child.closed;
+            },
+            close: () => {
+              child.closed = true;
+            },
+          };
+        },
+      },
+      { tailRetryDelaysMs: [0, 0] },
+    );
+    scripted.follow({ workflowId: WORKFLOW_ID, nodeId: "e1" });
+    children[0]?.onExit?.(1);
+    await waitFor(() => children.length === 2, "the first restart");
+    expect(resets).toEqual(["e1"]);
+    children[1]?.onExit?.(null);
+    await waitFor(() => children.length === 3, "the second restart");
+    children[2]?.onExit?.(1);
+    await waitFor(() => ended.length === 1, "the end of the live feed");
+    expect(ended).toEqual(["e1"]);
+    expect(children).toHaveLength(3);
+    scripted.close();
+  });
+
+  it("never restarts a tail that ended normally (its workflow ended and it printed everything)", async () => {
+    const children: { onExit?: (code: number | null) => void }[] = [];
+    const ended: string[] = [];
+    const scripted = createWorkflowFeed(
+      {
+        cwd: () => undefined,
+        projectSlug: () => "notes",
+        onWorkflows: () => undefined,
+        onSnapshot: () => undefined,
+        onTail: () => undefined,
+        onTailEnded: (nodeId) => ended.push(nodeId),
+      },
+      {
+        listJson: async () => [],
+        stream: (_args, options) => {
+          children.push({ onExit: options.onExit });
+          return { running: true, close: () => undefined };
+        },
+      },
+      { tailRetryDelaysMs: [0, 0] },
+    );
+    scripted.follow({ workflowId: WORKFLOW_ID, nodeId: "e1" });
+    children[0]?.onExit?.(0);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(children).toHaveLength(1);
+    expect(ended).toEqual([]);
+    scripted.close();
+  });
+
   it("ends its children when it closes, and reports nothing after", async () => {
     cli.answer("workflow list", { stdout: JSON.stringify([listed(WORKFLOW_ID, "running", 1)]) });
     cli.answer("workflow watch", { stdout: `${completedText}\n`, delayMs: 3000 });
