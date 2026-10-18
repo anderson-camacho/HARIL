@@ -13,13 +13,31 @@ export interface ConsoleTheme {
   bold(text: string): string;
 }
 
+export interface ConsoleMouseEvent {
+  readonly type: "press" | "release" | "move" | "drag" | "click" | "wheel";
+  readonly button: "left" | "middle" | "right" | "none";
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+  readonly shift: boolean;
+  readonly alt: boolean;
+  readonly ctrl: boolean;
+  readonly wheelDelta?: number;
+}
+
 interface ConsoleComponent {
   render(width: number): string[];
+  handleInput?(data: string): void;
+  handleMouse?(
+    event: ConsoleMouseEvent,
+  ): { handled?: boolean; render?: boolean; focus?: boolean } | undefined;
   invalidate(): void;
   dispose?(): void;
 }
 
 export interface ConsoleTui {
+  readonly terminal: { readonly columns: number; readonly rows: number };
   requestRender(force?: boolean): void;
 }
 
@@ -56,6 +74,22 @@ export interface SessionEntry {
 }
 
 interface ConsoleUi {
+  select(title: string, options: string[]): Promise<string | undefined>;
+  confirm(title: string, message: string): Promise<boolean>;
+  input(title: string, placeholder?: string): Promise<string | undefined>;
+  custom<T>(
+    factory: (
+      tui: ConsoleTui,
+      theme: ConsoleTheme,
+      keybindings: unknown,
+      done: (result: T) => void,
+    ) => ConsoleComponent,
+    options?: {
+      overlay?: boolean;
+      overlayOptions?: { width?: number | string; maxHeight?: number | string };
+    },
+  ): Promise<T>;
+  setEditorText(text: string): void;
   notify(message: string, type?: "info" | "warning" | "error"): void;
   setFooter(
     factory:
@@ -74,6 +108,7 @@ interface ConsoleUi {
 
 interface ConsoleToolInfo {
   readonly name: string;
+  readonly description: string;
   readonly exposure: string;
 }
 
@@ -171,7 +206,11 @@ export interface ConsolePi {
   getAllTools(): ConsoleToolInfo[];
   getCommands(): ConsoleCommandInfo[];
   getMcpServers(): ConsoleMcpServer[];
-  registerShortcut(shortcut: string, options: { description?: string; handler(ctx: ConsoleContext): void }): void;
+  setActiveTools(toolNames: string[]): void;
+  registerShortcut(
+    shortcut: string,
+    options: { description?: string; handler(ctx: ConsoleContext): void },
+  ): void;
   // Sets the session's model without changing the configured default; false without auth for its provider.
   setModel(model: PiModel): Promise<boolean>;
 }

@@ -105,11 +105,17 @@ export async function consoleCommand(
       : { HARIL_HOME: resolve(cwd, dataDirFor(host, dataDir)) }),
     ...(config === undefined ? {} : { HARIL_CONFIG: resolve(cwd, config) }),
   };
-  return runPi(runtime.node.path, [runtime.pi.cliPath, "-e", extension], {
-    cwd,
-    env,
-    io,
-  });
+  // Pi 1.2.0 captures normalized mouse input in fullscreen mode; passing the mode explicitly overrides a saved
+  // per-user setting for this HARIL process only and does not edit that setting.
+  return runPi(
+    runtime.node.path,
+    [runtime.pi.cliPath, "--tui-mode", "fullscreen", "-e", extension],
+    {
+      cwd,
+      env,
+      io,
+    },
+  );
 }
 
 // Pi inherits the terminal; its exit code is this command's. Ctrl+C belongs to Pi while it runs, so this process

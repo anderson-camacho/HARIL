@@ -6,7 +6,17 @@
 
 import { cliAvailable } from "./cli.js";
 import { type CommandHost, registerCommands } from "./commands.js";
-import { DASHBOARD_AREAS, type DashboardArea, renderDashboard, renderHeader, type DashboardFacts } from "./dashboard.js";
+import {
+  DASHBOARD_AREAS,
+  type DashboardArea,
+  type DashboardFacts,
+  renderDashboardLayout,
+  renderFooterNavigation,
+  renderHeaderLayout,
+} from "./dashboard.js";
+import { openDashboardActionMenu, runDashboardAction } from "./dashboard-actions.js";
+import type { DashboardAction } from "./dashboard-controls.js";
+import { type DashboardData, emptyDashboardData, loadDashboardData } from "./dashboard-data.js";
 import {
   harilRef,
   type ModelRegistration,
@@ -16,6 +26,7 @@ import {
 import type {
   AgentMessage,
   ConsoleContext,
+  ConsoleMouseEvent,
   ConsolePi,
   ConsoleTui,
   PiModel,
@@ -44,10 +55,37 @@ interface Session extends CommandHost {
   registration: ModelRegistration | undefined;
   cost: number;
   runtimeAlive: boolean | undefined;
+  runtimeStatusAvailable: boolean;
   timer: ReturnType<typeof setInterval> | undefined;
   refreshing: Promise<void> | undefined;
   // A refresh asked for while one runs: that one reads once more before it settles, so no caller sees stale state.
   refreshAgain: boolean;
+  dashboardData: DashboardData;
+  dashboardLoading: boolean;
+  dashboardRefresh: Promise<void> | undefined;
+  runtime(): string;
+  runtimeAvailable(): boolean;
+  modelRef(): string | undefined;
+  tools(): { readonly name: string; readonly active: boolean }[];
+  tasks(): readonly {
+    readonly taskId: string;
+    readonly state: string;
+    readonly goal: string;
+    readonly agent: string;
+    readonly model: string | null;
+  }[];
+  approvals(): readonly PendingApproval[];
+  approvalsAvailable(): boolean;
+  events(): DashboardData["events"];
+  methodologies(): readonly string[];
+  methodologyEntries(): DashboardData["methodologyEntries"];
+  methodologiesAvailable(): boolean;
+  methodologyError(): string | undefined;
+  memorySummary(): string;
+  reload(): Promise<void>;
+  refreshStatus(): Promise<void>;
+  output(title: string, lines: readonly string[]): void;
+  details(): { readonly title: string; readonly lines: readonly string[] };
   closed: boolean;
 }
 
@@ -103,7 +141,7 @@ export default function harilConsole(pi: ConsolePi): void {
       level,
       contextPercent: usage === undefined ? undefined : usage.percent,
       cost: current.cost,
-      pending: current.pending.length,
+      pending: current.pendingAvailable ? current.pending.length : undefined,
       runtime: runtimeState(current),
       cwd: current.cwd,
       branch,
@@ -112,7 +150,10 @@ export default function harilConsole(pi: ConsolePi): void {
   }
 
   function dashboardFacts(current: Session): DashboardFacts {
-    const usage = current.model === undefined ? undefined : safely(() => current.ctx.getContextUsage(), undefined);
+    const usage =
+      current.model === undefined
+        ? undefined
+        : safely(() => current.ctx.getContextUsage(), undefined);
     const allTools = safely(() => pi.getAllTools(), []);
     const active = new Set(safely(() => pi.getActiveTools(), []));
     const commands = safely(() => pi.getCommands(), []);
@@ -122,17 +163,62 @@ export default function harilConsole(pi: ConsolePi): void {
       cwd: current.cwd,
       branch: current.branch,
       model: current.model?.id ?? "no model selected",
-      thinking: current.model?.reasoning === true ? safely(() => pi.getThinkingLevel(), "unknown") : "n/a",
+      providers: [
+        ...new Set(
+          safely(() => current.ctx.modelRegistry.getAll(), []).map((model) => model.provider),
+        ),
+      ].sort(),
+      thinking:
+        current.model?.reasoning === true ? safely(() => pi.getThinkingLevel(), "unknown") : "n/a",
       runtime: runtimeState(current),
+      runtimeAvailable: current.runtimeStatusAvailable && current.dashboardData.runtimeAvailable,
       pending: current.pendingAvailable ? current.pending.length : undefined,
-      context: usage === undefined ? "unavailable" : `${usage.percent === null ? "?" : Math.round(usage.percent)}%`,
+      context:
+        usage === undefined
+          ? "unavailable"
+          : `${usage.percent === null ? "?" : Math.round(usage.percent)}%`,
       cost: `$${current.cost.toFixed(3)}`,
       activeTools: [...active],
-      tools: allTools.map((tool) => ({ name: tool.name, active: active.has(tool.name) })),
+      tools: allTools.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        active: active.has(tool.name),
+      })),
       commands: commands.map((command) => command.name).sort(),
       mcpServers: servers.map((server) => server.name).sort(),
       extensionStatuses: current.extensionStatuses,
+      memory: current.dashboardData.memorySummary,
+      data: current.dashboardData,
+      loading: current.dashboardLoading,
     };
+  }
+
+  async function refreshDashboard(current: Session): Promise<void> {
+    if (current.dashboardRefresh !== undefined) return current.dashboardRefresh;
+    current.dashboardLoading = true;
+    redraw();
+    current.dashboardRefresh = loadDashboardData(current.project?.slug)
+      .then((data) => {
+        if (!current.closed && current.project?.slug === data.projectSlug) {
+          if (data.approvalsAvailable) {
+            current.pending = data.approvals;
+            current.pendingAvailable = true;
+            current.dashboardData = data;
+          } else {
+            current.dashboardData = { ...data, approvals: current.pending };
+          }
+        }
+      })
+      .finally(() => {
+        current.dashboardLoading = false;
+        current.dashboardRefresh = undefined;
+        redraw();
+      });
+    return current.dashboardRefresh;
+  }
+
+  function openDashboardAction(current: Session, action: DashboardAction): void {
+    void runDashboardAction(action, current.ctx, pi, current);
   }
 
   // The light timer runs only while there is something to follow, and never keeps Pi alive.
@@ -164,11 +250,41 @@ export default function harilConsole(pi: ConsolePi): void {
       registration: undefined,
       cost: safely(() => sessionCost(ctx.sessionManager.getEntries()), 0),
       runtimeAlive: undefined,
+      runtimeStatusAvailable: false,
       timer: undefined,
       refreshing: undefined,
       refreshAgain: false,
+      dashboardData: emptyDashboardData(),
+      dashboardLoading: false,
+      dashboardRefresh: undefined,
       closed: false,
       harilModelRef: () => harilRef(current.model, current.registration),
+      modelRef: () => harilRef(current.model, current.registration),
+      runtime: () => runtimeState(current),
+      runtimeAvailable: () =>
+        current.runtimeStatusAvailable && current.dashboardData.runtimeAvailable,
+      tools: () => {
+        const active = new Set(safely(() => pi.getActiveTools(), []));
+        return safely(() => pi.getAllTools(), []).map((tool) => ({
+          name: tool.name,
+          active: active.has(tool.name),
+        }));
+      },
+      tasks: () => current.dashboardData.tasks,
+      approvals: () => current.dashboardData.approvals,
+      approvalsAvailable: () => current.dashboardData.approvalsAvailable,
+      events: () => current.dashboardData.events,
+      methodologies: () => current.dashboardData.methodologies,
+      methodologyEntries: () => current.dashboardData.methodologyEntries,
+      methodologiesAvailable: () => current.dashboardData.methodologiesAvailable,
+      methodologyError: () =>
+        current.dashboardData.errors.find((error) => error.startsWith("Methodologies:")),
+      memorySummary: () => current.dashboardData.memorySummary,
+      details: () => dashboardDetails(current, current.area ?? "everywhere"),
+      reload: () => refreshDashboard(current),
+      refreshStatus: () => current.refresh(),
+      output: (title, lines) => current.showOutput(title, lines),
+      openActions: (actionCtx) => openDashboardActionMenu(actionCtx, pi, current),
       showOutput(title, lines) {
         if (!ctx.hasUI) return;
         if (ctx.mode !== "tui") {
@@ -186,14 +302,58 @@ export default function harilConsole(pi: ConsolePi): void {
       openArea(area) {
         current.area = area;
         if (!ctx.hasUI || ctx.mode !== "tui") return;
-        ctx.ui.setWidget("haril-dashboard", (_tui, theme) => ({
-          render: (width) => renderDashboard(area, dashboardFacts(current), width, theme),
-          invalidate() {},
-        }), { placement: "aboveEditor" });
+        if (
+          current.dashboardData.projectSlug !== current.project?.slug ||
+          current.dashboardData.loadedAt === undefined ||
+          Date.now() - current.dashboardData.loadedAt > 15_000
+        ) {
+          void refreshDashboard(current);
+        }
+        ctx.ui.setWidget(
+          "haril-dashboard",
+          (tui, theme) => {
+            let layout = renderDashboardLayout(
+              area,
+              dashboardFacts(current),
+              80,
+              theme,
+              tui.terminal.rows,
+            );
+            return {
+              render(width) {
+                layout = renderDashboardLayout(
+                  area,
+                  dashboardFacts(current),
+                  width,
+                  theme,
+                  tui.terminal.rows,
+                );
+                return layout.lines;
+              },
+              handleMouse(event: ConsoleMouseEvent) {
+                if (event.type !== "click" || event.button !== "left") return undefined;
+                const hit = layout.controlHits.find(
+                  (item) => item.row === event.y && event.x >= item.start && event.x < item.end,
+                );
+                if (hit === undefined) return undefined;
+                openDashboardAction(current, hit.action);
+                return { handled: true, render: true };
+              },
+              invalidate() {},
+            };
+          },
+          { placement: "aboveEditor" },
+        );
         redraw();
       },
       async rebind() {
         current.project = await findProject(current.cwd);
+        current.runtimeStatusAvailable = false;
+        current.dashboardData = emptyDashboardData(current.project?.slug);
+        if (current.area !== undefined) {
+          await current.dashboardRefresh;
+          await refreshDashboard(current);
+        }
         redraw();
       },
       refresh() {
@@ -208,6 +368,7 @@ export default function harilConsole(pi: ConsolePi): void {
             const status = await readStatus(current.project?.slug);
             if (current.closed) return;
             current.runtimeAlive = status.runtimeAlive;
+            current.runtimeStatusAvailable = status.runtimeAlive !== undefined;
             current.pendingAvailable = status.pending !== undefined;
             if (status.pending !== undefined) current.pending = status.pending;
           } while (current.refreshAgain);
@@ -226,30 +387,188 @@ export default function harilConsole(pi: ConsolePi): void {
     const { ctx } = current;
     if (!ctx.hasUI || ctx.mode !== "tui") return;
     const version = process.env[VERSION_ENV];
-    ctx.ui.setHeader((_tui, theme) => ({
-      render: (width) => renderHeader(
-        version === "" ? undefined : version,
-        width,
-        dashboardFacts(current),
-        current.area,
-        theme,
-      ),
+    let headerLayout: ReturnType<typeof renderHeaderLayout> = { lines: [], tabHits: [] };
+    ctx.ui.setHeader((tui, theme) => ({
+      render(width) {
+        headerLayout = renderHeaderLayout(
+          version === "" ? undefined : version,
+          width,
+          dashboardFacts(current),
+          current.area,
+          theme,
+          tui.terminal.rows,
+        );
+        return headerLayout.lines;
+      },
+      handleMouse(event: ConsoleMouseEvent) {
+        if (event.type !== "click" || event.button !== "left") return undefined;
+        const hit = headerLayout.tabHits.find(
+          (item) => item.row === event.y && event.x >= item.start && event.x < item.end,
+        );
+        if (hit === undefined) return undefined;
+        current.openArea(hit.area);
+        return { handled: true, render: true };
+      },
       invalidate() {},
     }));
     ctx.ui.setFooter((tui, theme, footerData) => {
       current.tui = tui;
       const unsubscribe = footerData.onBranchChange(() => tui.requestRender());
+      let navigation = renderFooterNavigation(80, current.area, theme);
       return {
         render(width) {
           const statuses = [...footerData.getExtensionStatuses().values()];
           current.branch = footerData.getGitBranch();
           current.extensionStatuses = statuses;
-          return renderBar(facts(current, statuses, footerData.getGitBranch()), width, theme);
+          navigation = renderFooterNavigation(width, current.area, theme);
+          return [
+            ...renderBar(facts(current, statuses, footerData.getGitBranch()), width, theme),
+            ...navigation.lines,
+          ];
+        },
+        handleMouse(event: ConsoleMouseEvent) {
+          if (event.type !== "click" || event.button !== "left") return undefined;
+          const hit = navigation.tabHits.find(
+            (item) => item.row === event.y && event.x >= item.start && event.x < item.end,
+          );
+          if (hit === undefined) return undefined;
+          current.openArea(hit.area);
+          return { handled: true, render: true };
         },
         invalidate() {},
         dispose: unsubscribe,
       };
     });
+  }
+
+  function dashboardDetails(
+    current: Session,
+    area: DashboardArea,
+  ): { title: string; lines: string[] } {
+    const data = current.dashboardData;
+    const facts = dashboardFacts(current);
+    const lines: string[] = [];
+    if (data.errors.length)
+      lines.push("DATA WARNINGS", ...data.errors.map((error) => `! ${error}`), "");
+    switch (area) {
+      case "agents":
+        lines.push(
+          `Pi model: ${facts.model} · thinking ${facts.thinking}`,
+          "Observed agents in task records:",
+        );
+        lines.push(
+          ...(data.tasks.length
+            ? data.tasks.map(
+                (task) => `${task.agent} · ${task.state} · ${task.taskId} · ${task.goal}`,
+              )
+            : ["No task agent records."]),
+        );
+        lines.push("A separate HARIL agent-profile registry is not available.");
+        break;
+      case "orchestration":
+        lines.push(
+          "PENDING APPROVALS",
+          ...(data.approvalsAvailable && data.approvals.length
+            ? data.approvals.map(
+                (row) => `${row.approvalId} · ${row.tasks} tasks · ${row.model ?? "no model"}`,
+              )
+            : [
+                data.approvalsAvailable
+                  ? "No pending approvals."
+                  : "Approval list unavailable; refresh before treating it as empty.",
+              ]),
+          "PROJECT TASKS",
+        );
+        lines.push(
+          ...(data.tasks.length
+            ? data.tasks.map(
+                (task) => `${task.taskId} · ${task.state} · ${task.agent} · ${task.goal}`,
+              )
+            : ["No task records."]),
+          "QUEUED COMMANDS",
+          ...(data.queued.length ? data.queued : ["No queued commands reported."]),
+          "EVENTS",
+        );
+        lines.push(
+          ...(data.events.length
+            ? data.events.map(
+                (event) =>
+                  `#${event.seq} ${event.time} · ${event.type} · ${event.aggregateType}:${event.aggregateId}`,
+              )
+            : ["No events reported."]),
+        );
+        break;
+      case "automation":
+        lines.push(
+          data.projectSlug === undefined
+            ? "No project is bound to this folder; register it before queue or runtime actions."
+            : `Project: ${facts.project}`,
+          `Runtime: ${facts.runtime}`,
+          current.runtimeStatusAvailable && data.runtimeAvailable
+            ? "Runtime lease status is represented by valid HARIL status JSON."
+            : (data.errors.find((error) => error.startsWith("Project status:")) ??
+                "Runtime lease status has not been confirmed; refresh to retry."),
+          "Queued project work:",
+          ...(data.projectSlug === undefined
+            ? ["Unavailable until a project is registered."]
+            : data.queued.length
+              ? data.queued
+              : ["No queued commands reported."]),
+          "No scheduled automation registry or scheduler API is available.",
+        );
+        break;
+      case "tools":
+        lines.push(
+          ...(facts.tools.length
+            ? facts.tools.map(
+                (tool) =>
+                  `${tool.active ? "ACTIVE" : "OFF"} · ${tool.name}${tool.description ? ` — ${tool.description}` : ""}`,
+              )
+            : ["Pi reports no configured tools."]),
+        );
+        break;
+      case "workflows":
+        lines.push(
+          "GLOBAL HARIL METHODOLOGIES",
+          ...(!data.methodologiesAvailable
+            ? [
+                data.errors.find((error) => error.startsWith("Methodologies:")) ??
+                  "Registry unavailable; refresh to retry.",
+              ]
+            : data.methodologyEntries.length
+              ? data.methodologyEntries.map(
+                  (entry) => `${entry.id} · v${entry.version} · ${entry.summary}`,
+                )
+              : ["The local registry returned no methodologies; this CLI has no import command."]),
+          "Select Browse methodologies to read a complete bundled definition.",
+          "Task add accepts no methodology selector; browsing does not execute the definition.",
+          "PI COMMANDS REPORTED",
+        );
+        lines.push(
+          ...(facts.commands.length
+            ? facts.commands.map((command) => `/${command}`)
+            : ["No command list available."]),
+          "Native Pi slash commands remain separate and available.",
+        );
+        break;
+      case "everywhere":
+        lines.push(
+          `Project: ${facts.project}`,
+          `Workspace: ${facts.cwd}`,
+          `Git: ${facts.branch === undefined ? "unavailable" : (facts.branch ?? "not a Git repository")}`,
+          `Session: ${facts.model} · ${facts.thinking} · context ${facts.context} · cost ${facts.cost}`,
+          `Providers (${facts.providers.length}):`,
+          ...(facts.providers.length ? facts.providers : ["None reported"]),
+          `Memory: ${facts.memory}`,
+          `MCP servers (${facts.mcpServers.length}):`,
+          ...(facts.mcpServers.length ? facts.mcpServers : ["None reported"]),
+          "Extension statuses:",
+          ...(facts.extensionStatuses.length ? facts.extensionStatuses : ["No status reported"]),
+          `Runtime: ${facts.runtime} · pending approvals: ${facts.pending === undefined ? "unavailable" : facts.pending}`,
+        );
+        break;
+    }
+    return { title: `${area.toUpperCase()} details · ${facts.project}`, lines };
   }
 
   // HARIL's models join Pi's catalog once `haril models` answers; the bar and /goal follow. On a start, Pi chose its
@@ -280,6 +599,7 @@ export default function harilConsole(pi: ConsolePi): void {
     const current = openSession(ctx);
     session = current;
     installUi(current);
+    current.openArea("agents");
     if (!cliAvailable()) return;
     // The project, the HARIL state and the models arrive after the first frame: the bar shows the folder until then.
     void current.rebind().then(() => current.refresh());

@@ -1,9 +1,9 @@
 import { cliAvailable, NOT_LAUNCHED, runHaril, type StartedRuntime, startRuntime } from "./cli.js";
+import { DASHBOARD_AREAS, type DashboardArea } from "./dashboard.js";
 import type { AutocompleteItem, ConsoleContext, ConsolePi } from "./pi-types.js";
 import { type BoundProject, folderName } from "./project.js";
 import { type PendingApproval, readPending, readRuntimeAlive } from "./status.js";
 import { plainText } from "./text.js";
-import { DASHBOARD_AREAS, type DashboardArea } from "./dashboard.js";
 
 // The HARIL commands of the console. Each one runs the `haril` CLI (cli.ts) on the project of the folder Pi opened
 // in, so the CLI's validation and the store's rules decide, exactly as in a terminal. A multi-line answer is shown
@@ -22,6 +22,7 @@ export interface CommandHost {
   readonly cwd: string;
   readonly project: BoundProject | undefined;
   readonly pending: readonly PendingApproval[];
+  readonly area: DashboardArea | undefined;
   started: StartedRuntime | undefined;
   // The current Pi model as a HARIL reference (<provider>/<model>) when a HARIL provider serves it.
   harilModelRef(): string | undefined;
@@ -32,6 +33,8 @@ export interface CommandHost {
   rebind(): Promise<void>;
   // Reads the pending plans and the runtime again and redraws the bar.
   refresh(): Promise<void>;
+  reload(): Promise<void>;
+  openActions(ctx: ConsoleContext): Promise<void>;
 }
 
 interface CommandSpec {
@@ -196,13 +199,10 @@ const COMMANDS: readonly CommandSpec[] = [
   {
     name: "haril",
     usage: "/haril",
-    description: "List the HARIL commands",
+    description: "Open the HARIL console action menu",
     local: true,
-    async run(_args, host) {
-      host.showOutput(
-        "haril",
-        COMMANDS.map((command) => `${command.usage.padEnd(16)} ${command.description}`),
-      );
+    async run(_args, host, ctx) {
+      await host.openActions(ctx);
     },
   },
   {
@@ -354,6 +354,7 @@ export function registerCommands(pi: ConsolePi, host: () => CommandHost | undefi
           await command.run(args, current, ctx);
         } finally {
           await current.refresh();
+          if (current.area !== undefined) await current.reload();
         }
       },
     });
@@ -368,16 +369,13 @@ export function registerCommands(pi: ConsolePi, host: () => CommandHost | undefi
 
 // Pi binds runtime actions after extension factories have registered their listeners. Read its command list only
 // from session_start, when getCommands is initialized, before adding aliases that could shadow other extensions.
-export function registerDashboardCommands(
-  pi: ConsolePi,
-  host: () => CommandHost | undefined,
-): void {
+function registerDashboardCommands(pi: ConsolePi, host: () => CommandHost | undefined): void {
   const registeredCommands = new Set(pi.getCommands().map((command) => command.name));
   for (const area of DASHBOARD_AREAS) {
     if (registeredCommands.has(area)) continue;
     pi.registerCommand(area, {
       description: `HARIL: open the ${area.toUpperCase()} dashboard`,
-      handler(_args, ctx) {
+      async handler(_args, ctx) {
         const current = host();
         if (current === undefined) return;
         current.openArea(area);

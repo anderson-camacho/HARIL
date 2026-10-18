@@ -18,7 +18,7 @@ export interface BarFacts {
   // undefined without a model; null while Pi does not know the tokens (right after a compaction).
   readonly contextPercent: number | null | undefined;
   readonly cost: number;
-  readonly pending: number;
+  readonly pending: number | undefined;
   readonly runtime: RuntimeState;
   readonly cwd: string;
   readonly branch: string | null;
@@ -90,7 +90,9 @@ function rightParts(facts: BarFacts): Map<RightPart, Part[]> {
   const parts = new Map<RightPart, Part[]>();
   if (facts.contextPercent !== undefined) parts.set("context", gauge(facts.contextPercent));
   parts.set("cost", [{ text: `$${facts.cost.toFixed(3)}`, tone: MAIN }]);
-  if (facts.pending > 0) parts.set("pending", [{ text: `${facts.pending} pending`, tone: MAIN }]);
+  if (facts.pending === undefined) parts.set("pending", [{ text: "approvals ?", tone: "warning" }]);
+  else if (facts.pending > 0)
+    parts.set("pending", [{ text: `${facts.pending} pending`, tone: MAIN }]);
   parts.set("runtime", [
     { text: "runtime ", tone: MAIN },
     { text: facts.runtime, tone: facts.runtime === "running" ? "success" : MAIN },

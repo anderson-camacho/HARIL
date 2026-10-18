@@ -216,13 +216,34 @@ La extensión solo llama a la CLI `haril`, sin shell: el estado sigue en `haril.
 | Izquierda | `◆ HARIL ◇ <proyecto o carpeta> ◇ <modelo> · <nivel>`. Sin proyecto registrado sale el nombre de la carpeta; el nivel solo con un modelo que razona |
 | Derecha | `ctx <medidor> <pct>% ◇ $<coste> ◇ <N pending> ◇ runtime <estado>`: contexto usado, coste de la sesión según Pi, planes por aprobar (solo si hay) y runtime (`running`, `starting`, `idle` o `unknown`). Si la terminal es estrecha, cede primero el coste, luego el runtime, los planes y, al final, el medidor |
 | Segunda línea | La carpeta, su rama de git y los estados que ponen otras extensiones de Pi |
-| Cabecera | Al abrir: `◆ HARIL <versión> · Many minds. One flow. · /haril for commands` |
+| Cabecera | Panel HARIL en cian/teal con acentos amarillos, marca tipográfica y arte neural de terminal; en terminales amplias incluye una tarjeta con datos observados. Los clics usan eventos de mouse Pi en modo fullscreen. |
 
-Los comandos de HARIL no chocan con ninguno de Pi y trabajan sobre el proyecto de la carpeta actual: el registrado cuya raíz es esa carpeta o su antecesora más cercana. Una respuesta de varias líneas se muestra sobre el editor hasta el siguiente mensaje; una de una línea, como aviso.
+La composición amplia aparece desde 120×40 y muestra el arte y la tarjeta de estado en dos columnas. En terminales menores se usa una cabecera compacta para conservar espacio para el historial y el editor. Las seis áreas permanecen seleccionables desde la fila fija del pie, aunque la cabecera haya salido del área visible; también funcionan `Ctrl+Shift+1..6` y los comandos slash. Pi expone dimensiones reales de la terminal para elegir el modo, sin depender de variables `COLUMNS` simuladas. La interfaz usa color verdadero cuando está disponible, admite `PI_TRUE_COLOR=0` para color de 256 tonos y respeta `NO_COLOR` y `TERM=dumb`.
+
+Para compilar la extensión en el repositorio, ejecuta `npm run build:console`. Para abrir el ejecutable local ya compilado desde la raíz del repositorio:
+
+```powershell
+node D:\github\haril\apps\haril\dist\haril.mjs console
+```
+
+El arte es dibujo de caracteres generado por la consola y no una imagen embebida; por ello conserva compatibilidad entre terminales, pero no reproduce píxeles ni texturas de una imagen rasterizada.
+
+Los comandos de HARIL no chocan con ninguno de Pi y trabajan sobre el proyecto de la carpeta actual: el registrado cuya raíz es esa carpeta o su antecesora más cercana. Una respuesta de varias líneas se muestra sobre el editor hasta el siguiente mensaje; una de una línea, como aviso. Haz clic en una pestaña para abrir su área; `Ctrl+Shift+1..6` y `/agents`, `/orchestration`, `/automation`, `/tools`, `/workflows` y `/everywhere` son alternativas de teclado. `/haril` abre el menú de acciones y las acciones con efectos piden confirmación.
+
+| Área | Datos y acciones reales |
+|---|---|
+| `AGENTS` | Modelo Pi y agentes observados en tareas del proyecto. No existe un catálogo HARIL de perfiles. |
+| `ORCHESTRATION` | Tareas, cola, aprobaciones y eventos del proyecto. Las decisiones requieren selección y confirmación; un runtime activo puede aplicar una aprobación. |
+| `AUTOMATION` | Estado del runtime con su disponibilidad, cola del proyecto y controles reales. Ejecutar/iniciar solo aparece con proyecto enlazado y lease confirmado como inactivo; detener solo si se confirma en marcha. El lease es compartido por la raíz de datos. No existe API de horarios programados. |
+| `TOOLS` | Herramientas Pi configuradas y activas; permite alternar su activación para esta sesión. |
+| `WORKFLOWS` | Catálogo global de metodologías incluso sin proyecto: seleccionar una abre su definición completa desplazable. `project init` permite vincular una metodología al registrar un proyecto, pero `task add` no acepta una metodología y navegarla no la ejecuta. Los comandos nativos de Pi siguen separados y disponibles. |
+| `EVERYWHERE` | Proyecto, carpeta, rama, sesión, runtime, salud de memoria, MCP y extensiones sin mostrar credenciales. |
+
+Las vistas cargan JSON local de HARIL al abrirse o al refrescarse, no en cada render. Si la carpeta no está enlazada, `AGENTS`, `ORCHESTRATION` y `AUTOMATION` muestran **Register this folder**; el menú `/haril` también ofrece ese acceso. Se pide un nombre y una metodología real del catálogo, se muestra el preview exacto de `project init` y solo una confirmación explícita aplica `--yes`. Cancelar no escribe ni registra nada. Las listas de tareas/aprobaciones/eventos se limitan al proyecto enlazado; al cambiar de proyecto se descarta el snapshot anterior. En runtime desconocido, actualizar vuelve a consultar el estado y se ocultan las acciones de ejecutar/iniciar/detener hasta confirmarlo. Los horarios recurrentes, la importación de metodologías y el selector de metodología para `task add` no existen en el backend.
 
 | Comando | Acción |
 |---|---|
-| `/haril` | Lista los comandos de HARIL |
+| `/haril` | Abre el menú de áreas y acciones de HARIL |
 | `/init [nombre]` | Registra la carpeta actual como proyecto (`haril project init --yes`) |
 | `/goal <texto>` | Pide un plan para el objetivo: encola una tarea de plan para `planner` con el modelo actual si lo sirve un proveedor de HARIL; si no, con `HARIL_DEFAULT_MODEL`; si no, con `fake:plan`, y lo avisa. El plan espera tu aprobación |
 | `/plans` | Los planes que esperan aprobación (`haril approvals`) |
@@ -232,11 +253,13 @@ Los comandos de HARIL no chocan con ninguno de Pi y trabajan sobre el proyecto d
 | `/task <id>` | Una tarea con su resultado, error y tokens (`haril task show`) |
 | `/events` | Los últimos 20 eventos del proyecto |
 
-Después de `/goal` y de `/approve`, si ningún runtime está en marcha, la consola arranca `haril start --started-by shell` en segundo plano, como `haril shell`: sin ventana, con su salida en `logs\runtime-<fecha>.log` y saliendo solo tras 120 s sin trabajo. El avance se sigue con `/tasks`, `/task` y `/events`; la vista En vivo y los paneles son de `haril shell`.
+Después de `/goal` y de `/approve`, si ningún runtime está en marcha, la consola arranca `haril start --started-by shell` en segundo plano, como `haril shell`: sin ventana, con su salida en `logs\runtime-<fecha>.log` y saliendo solo tras 120 s sin trabajo. El avance se sigue con `/tasks`, `/task` y `/events`; la vista En vivo sigue siendo de `haril shell`.
 
 **Modelos.** Los proveedores de `haril.json` (por defecto `cliproxy`) aparecen en `/model` de Pi como `haril-<id>`, con los modelos que devuelve `haril models`. La clave no se escribe en ningún archivo ni pasa por la extensión ni por la línea de comandos: Pi lee por sí mismo la variable que nombra `keyEnv` (por ejemplo `HARIL_CLIPROXYAPI_KEY`). Un proveedor cuya variable no está definida, o que no responde, no se registra y la consola lo avisa al abrir. HARIL no sabe cuánto cobra un proveedor, así que el coste de la barra es cero con sus modelos. `/login` conecta los proveedores propios de Pi; los de `haril.json` usan su variable `keyEnv`.
 
 **Dónde vive la configuración de Pi.** En `agent\` dentro de la raíz del runtime (`%LOCALAPPDATA%\HARIL\agent` en Windows): sus ajustes, accesos y sesiones de HARIL no se mezclan con `~\.pi` ni con `~\.gentle-shell`, que HARIL nunca toca. Salvo que ya estén definidas, la consola arranca Pi con `PI_SKIP_VERSION_CHECK=1` y `PI_TELEMETRY=0`.
+
+El lanzador selecciona `--tui-mode fullscreen` para habilitar los eventos de mouse documentados por Pi 1.2.0. Es un argumento solo para ese proceso: no cambia `agent\settings.json` ni la configuración personal. El terminal debe soportar SGR mouse; si no, los atajos, comandos y el menú `/haril` siguen disponibles.
 
 `haril shell` sigue abriendo la interfaz anterior, descrita a continuación, ya sin la caja Taxis.
 
