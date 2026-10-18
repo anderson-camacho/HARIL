@@ -1,6 +1,6 @@
 import { existsSync, realpathSync } from "node:fs";
-import { rm } from "node:fs/promises";
-import { resolve } from "node:path";
+import { lstat, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { branchCommit } from "./repository.js";
 import { detailOf, type GitOptions, isSafeBranchName, linesOf, runGit } from "./run.js";
 
@@ -55,6 +55,68 @@ function samePath(left: string, right: string): boolean {
     return process.platform === "win32" ? normalized.toLowerCase() : normalized;
   };
   return canonical(left) === canonical(right);
+}
+
+export interface WorktreeIdentity {
+  // The worktree's own git folder (<repository>/.git/worktrees/<name>).
+  readonly gitDir: string;
+  // The bytes of the worktree's .git pointer file ("gitdir: <gitDir>"), as git wrote them.
+  readonly pointer: string;
+}
+
+// A linked worktree's own git folder, found from the main repository: the admin folder whose gitdir file names this
+// worktree's .git. It is never read from the worktree's .git pointer file, which a command run in the worktree could
+// rewrite; that file is only checked to point there, and its bytes kept so later runs can tell it changed. Undefined when
+// the repository knows no such worktree or the pointer file is not a plain file pointing there.
+export async function worktreeIdentity(
+  root: string,
+  path: string,
+  options: GitOptions = {},
+): Promise<WorktreeIdentity | undefined> {
+  // The main repository's own folder, whatever worktree options came with the call.
+  const { gitDir: _gitDir, workTree: _workTree, ...repository } = options;
+  const common = await runGit(
+    root,
+    ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    repository,
+  );
+  if (!common.ok) return undefined;
+  const admin = join(common.stdout.trim(), "worktrees");
+  const names = await readdir(admin).catch(() => [] as string[]);
+  for (const name of names) {
+    const back = await readFile(join(admin, name, "gitdir"), "utf8").catch(() => undefined);
+    if (back === undefined || !samePath(dirname(back.trim()), path)) continue;
+    const gitDir = join(admin, name);
+    const pointerPath = join(path, ".git");
+    const stats = await lstat(pointerPath).catch(() => undefined);
+    if (stats === undefined || !stats.isFile()) return undefined;
+    const pointer = await readFile(pointerPath, "utf8").catch(() => undefined);
+    const target = /^gitdir: (.+?)\s*$/.exec(pointer ?? "")?.[1];
+    if (pointer === undefined || target === undefined) return undefined;
+    return samePath(resolve(path, target), gitDir) ? { gitDir, pointer } : undefined;
+  }
+  return undefined;
+}
+
+// Whether the worktree's .git pointer file still holds exactly `pointer`. When it does not, it is put back (a link or a
+// folder in its place is removed first) and the answer is "restored", or "unrestorable" when that failed.
+export async function checkPointer(
+  path: string,
+  pointer: string,
+): Promise<"intact" | "restored" | "unrestorable"> {
+  const pointerPath = join(path, ".git");
+  const stats = await lstat(pointerPath).catch(() => undefined);
+  if (stats?.isFile() === true) {
+    const current = await readFile(pointerPath, "utf8").catch(() => undefined);
+    if (current === pointer) return "intact";
+  }
+  try {
+    if (stats !== undefined) await rm(pointerPath, { recursive: true, force: true });
+    await writeFile(pointerPath, pointer, { encoding: "utf8", flag: "wx" });
+    return "restored";
+  } catch {
+    return "unrestorable";
+  }
 }
 
 // Every worktree of the repository, the main one first, from `git worktree list --porcelain`; undefined when git fails.

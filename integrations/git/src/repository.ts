@@ -123,6 +123,16 @@ export async function detectBaseBranch(
   };
 }
 
+// The branch a worktree's HEAD names (its symbolic ref, short), or undefined for a detached HEAD or a failure.
+export async function headBranch(
+  cwd: string,
+  options: GitOptions = {},
+): Promise<string | undefined> {
+  const result = await runGit(cwd, ["symbolic-ref", "--quiet", "HEAD"], options);
+  const ref = result.stdout.trim();
+  return result.ok && ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : undefined;
+}
+
 // The commit checked out in a worktree, or undefined.
 export async function headCommit(
   cwd: string,

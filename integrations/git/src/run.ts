@@ -19,6 +19,11 @@ export interface GitOptions {
   // The environment git starts from, less the repository variables. Defaults to this process's.
   readonly env?: NodeJS.ProcessEnv;
   readonly timeoutMs?: number;
+  // A linked worktree's own git folder and its work tree, both absolute. Given together, every run names them
+  // (--git-dir, --work-tree), so git never reads the worktree's .git pointer file, which a command in the worktree could
+  // rewrite to point at another repository.
+  readonly gitDir?: string;
+  readonly workTree?: string;
 }
 
 export interface GitResult {
@@ -78,6 +83,12 @@ function gitEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return env;
 }
 
+function targetOf(options: GitOptions): string[] {
+  return options.gitDir !== undefined && options.workTree !== undefined
+    ? [`--git-dir=${options.gitDir}`, `--work-tree=${options.workTree}`]
+    : [];
+}
+
 // Runs `git -C <cwd> <args>` and resolves with its result; never throws.
 export function runGit(
   cwd: string,
@@ -88,7 +99,7 @@ export function runGit(
     try {
       const child = execFile(
         options.program ?? "git",
-        [...SETTINGS, "-C", cwd, ...args],
+        [...SETTINGS, "-C", cwd, ...targetOf(options), ...args],
         {
           encoding: "utf8",
           timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,

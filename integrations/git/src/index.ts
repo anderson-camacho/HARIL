@@ -19,6 +19,7 @@ export {
   type BaseBranch,
   branchCommit,
   detectBaseBranch,
+  headBranch,
   headCommit,
   inspectRepository,
   isAncestor,
@@ -29,6 +30,7 @@ export { type GitStatus, type ReadGitStatusOptions, readGitStatus } from "./stat
 export {
   addWorktree,
   branchesUnder,
+  checkPointer,
   deleteBranch,
   listWorktrees,
   type NewWorktree,
@@ -36,5 +38,7 @@ export {
   removeWorktree,
   WORKTREE_PATH_MAX_LENGTH,
   type WorktreeEntry,
+  type WorktreeIdentity,
   type WorktreeResult,
+  worktreeIdentity,
 } from "./worktrees.js";

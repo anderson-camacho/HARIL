@@ -10,8 +10,10 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { addWorktree } from "@haril/git";
+import type { AgentOutcome, Store } from "@haril/core/ports";
+import { addWorktree, worktreeIdentity } from "@haril/git";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Task, WorkflowView } from "../src/runtime/workflow-view.js";
 import { applyEdits, createWorkspaces, type TurnWorkspace } from "../src/runtime/worktrees.js";
 
 // Real git and real processes: under the load of the full suite one test can take several seconds, so this file gives
@@ -29,6 +31,7 @@ let repo: string;
 let tree: string;
 let outside: string;
 let env: NodeJS.ProcessEnv;
+let identity: { gitDir: string; pointer: string };
 
 beforeEach(async () => {
   base = mkdtempSync(join(tmpdir(), "haril-ws-"));
@@ -63,6 +66,9 @@ beforeEach(async () => {
   git("add", ".");
   git("commit", "--quiet", "-m", "first");
   await addWorktree(repo, { path: tree, branch: "haril/wf/step/s1", base: "main" }, { env });
+  const found = await worktreeIdentity(repo, tree, { env });
+  if (found === undefined) throw new Error("the test worktree has no identity");
+  identity = found;
 });
 
 afterEach(() => {
@@ -79,8 +85,41 @@ function workspace(): TurnWorkspace {
     repo,
     workflowId: "wf",
     writeSurface: ["src/button.ts", "tests/**"],
+    gitDir: identity.gitDir,
+    pointer: identity.pointer,
   };
 }
+
+function gitIn(cwd: string, ...args: string[]): string {
+  return execFileSync(
+    "git",
+    ["-c", "user.name=t", "-c", "user.email=t@haril.invalid", "-C", cwd, ...args],
+    { env, windowsHide: true, encoding: "utf8" },
+  ).trim();
+}
+
+// What finish needs from the store, the view and the task, recorded for the assertions.
+function turnFakes() {
+  const events: { type: string; payload: unknown }[] = [];
+  const heads: string[] = [];
+  const store = {
+    events: { append: (event: { type: string; payload: unknown }) => events.push(event) },
+    worktrees: { setHead: (_epoch: number, _id: string, sha: string) => heads.push(sha) },
+  } as unknown as Store;
+  const view = {
+    label: () => "part-1/s1",
+    workflow: { workflowId: "wf", projectId: "p1" },
+  } as unknown as WorkflowView;
+  const task = {
+    taskId: "t1",
+    threadId: "th1",
+    attempt: 1,
+    goal: "Change the button",
+  } as unknown as Task;
+  return { store, view, task, events, heads };
+}
+
+const SUCCEEDED: AgentOutcome = { status: "succeeded", summary: "done" };
 
 const workspaces = () =>
   createWorkspaces({
@@ -152,6 +191,64 @@ describe.skipIf(!HAS_GIT)("an executor's write and edit", () => {
     expect(
       await host.edit(ws, ws.writeSurface, "src/missing.ts", [{ oldText: "a", newText: "b" }]),
     ).toMatchObject({ ok: false });
+  });
+});
+
+describe.skipIf(!HAS_GIT)("the end of an executor's turn", () => {
+  it("commits the surface onto the step's branch through the worktree's own git folder", async () => {
+    const ws = workspace();
+    const host = workspaces();
+    const fakes = turnFakes();
+    const mainBefore = gitIn(repo, "rev-parse", "main");
+    expect(
+      await host.write(ws, ws.writeSurface, "src/button.ts", "export const color = 'blue';\n"),
+    ).toMatchObject({ ok: true });
+    expect(await host.finish(fakes.store, 1, fakes.view, fakes.task, ws, SUCCEEDED)).toEqual(
+      SUCCEEDED,
+    );
+    expect(gitIn(repo, "show", "haril/wf/step/s1:src/button.ts")).toBe(
+      "export const color = 'blue';",
+    );
+    expect(gitIn(repo, "rev-parse", "main")).toBe(mainBefore);
+    expect(fakes.heads).toEqual([gitIn(repo, "rev-parse", "haril/wf/step/s1")]);
+  });
+
+  it("fails the turn when the .git pointer file was rewritten, restores it, and main never moves", async () => {
+    const ws = workspace();
+    const host = workspaces();
+    const fakes = turnFakes();
+    const mainBefore = gitIn(repo, "rev-parse", "main");
+    const stepBefore = gitIn(repo, "rev-parse", "haril/wf/step/s1");
+    expect(
+      await host.write(ws, ws.writeSurface, "src/button.ts", "export const color = 'blue';\n"),
+    ).toMatchObject({ ok: true });
+    // What a command could do: point the worktree at the main repository, so a plain git commit would land on main.
+    // (git marks the file hidden on Windows, where only a new file can take its place.)
+    rmSync(join(tree, ".git"));
+    writeFileSync(join(tree, ".git"), `gitdir: ${join(repo, ".git")}\n`);
+    const outcome = await host.finish(fakes.store, 1, fakes.view, fakes.task, ws, SUCCEEDED);
+    expect(outcome).toMatchObject({ status: "failed", code: "workspace.tampered" });
+    expect(gitIn(repo, "rev-parse", "main")).toBe(mainBefore);
+    expect(gitIn(repo, "rev-parse", "haril/wf/step/s1")).toBe(stepBefore);
+    expect(readFileSync(join(tree, ".git"), "utf8")).toBe(identity.pointer);
+    expect(fakes.events.map((event) => event.type)).toEqual(["worktree.tampered"]);
+    // The change was discarded with the worktree's own git folder, not main's.
+    expect(readFileSync(join(tree, "src", "button.ts"), "utf8")).toContain("'red'");
+    expect(gitIn(repo, "status", "--porcelain")).toBe("");
+  });
+
+  it("refuses to commit when the worktree's HEAD is not the step's branch", async () => {
+    const ws = workspace();
+    const host = workspaces();
+    const fakes = turnFakes();
+    gitIn(tree, "checkout", "--quiet", "-b", "elsewhere");
+    expect(
+      await host.write(ws, ws.writeSurface, "src/button.ts", "export const color = 'blue';\n"),
+    ).toMatchObject({ ok: true });
+    const outcome = await host.finish(fakes.store, 1, fakes.view, fakes.task, ws, SUCCEEDED);
+    expect(outcome).toMatchObject({ status: "failed", code: "workspace.commit_failed" });
+    expect(gitIn(repo, "rev-parse", "elsewhere")).toBe(gitIn(repo, "rev-parse", "main"));
+    expect(fakes.heads).toEqual([]);
   });
 });
 

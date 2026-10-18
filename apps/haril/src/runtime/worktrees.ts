@@ -8,13 +8,16 @@ import {
   abortMerge,
   addWorktree,
   changedPaths,
+  checkPointer,
   commitPaths,
   deleteBranch,
   discardChanges,
   type GitOptions,
+  headBranch,
   mergeBranch,
   mergeInProgress,
   removeWorktree,
+  worktreeIdentity,
 } from "@haril/git";
 import { readConfinedFile, writeConfinedFile } from "@haril/os";
 import {
@@ -41,7 +44,11 @@ import type { Task, WorkflowView } from "./workflow-view.js";
 //     the workflow ends, by the startup sweep or by the run loop. The integration branch stays for the user to review;
 //     HARIL never merges it into the base branch and never pushes.
 // Every mutating git operation on one repository runs one at a time (a lock per repository), so two worktrees are never
-// added or removed at once.
+// added or removed at once. Every git run on a worktree names the worktree's own git folder and its work tree
+// (--git-dir, --work-tree), taken from the main repository when the worktree is opened, never from the worktree's .git
+// pointer file: a command run in the worktree could rewrite that file to point at the main repository. After each turn
+// the pointer file must still hold the bytes git wrote; if not, the turn fails, its changes are discarded, the file is
+// put back and the event worktree.tampered says so. An executor's commit also checks that HEAD is the step's branch.
 
 export interface WorkspaceSettings {
   // The folder that holds every worktree (the data directory's worktrees folder).
@@ -70,6 +77,14 @@ export interface TurnWorkspace {
   readonly workflowId: string;
   // An executor's write surface (its files.write globs); empty for every other turn.
   readonly writeSurface: readonly string[];
+  // The worktree's own git folder, found from the main repository, and the bytes of its .git pointer file.
+  readonly gitDir: string;
+  readonly pointer: string;
+}
+
+// How git runs on a turn's worktree: its own git folder and work tree, named on every run.
+export function worktreeGit(git: GitOptions, workspace: TurnWorkspace): GitOptions {
+  return { ...git, gitDir: workspace.gitDir, workTree: workspace.root };
 }
 
 export type WorkspaceReply =
@@ -210,8 +225,22 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
     return next;
   };
 
-  const runAbort = async (path: string): Promise<void> => {
-    if (await mergeInProgress(path, git)) await abortMerge(path, git);
+  const runAbort = async (path: string, options: GitOptions): Promise<void> => {
+    if (await mergeInProgress(path, options)) await abortMerge(path, options);
+  };
+
+  // The identity of a worktree HARIL made: its own git folder and its .git pointer file, from the main repository.
+  const identify = async (
+    repo: string,
+    path: string,
+  ): Promise<{ gitDir: string; pointer: string }> => {
+    const identity = await worktreeIdentity(repo, path, git);
+    if (identity === undefined) {
+      throw new Error(
+        "the worktree's .git file does not point at its repository's own folder for it",
+      );
+    }
+    return identity;
   };
 
   const repoOf = (store: Store, view: WorkflowView): string | undefined =>
@@ -235,6 +264,7 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
       addWorktree(repo, { path, branch, base: baseSha }, git),
     );
     if (!added.ok) throw new Error(`the integration worktree could not be made: ${added.detail}`);
+    const identity = await identify(repo, path);
     const record = store.worktrees.record(epoch, {
       workflowId,
       kind: "integration",
@@ -252,6 +282,7 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
       repo,
       workflowId,
       writeSurface: [],
+      ...identity,
     };
   };
 
@@ -282,9 +313,13 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
     const known = store.worktrees
       .list({ workflowId, kind: "executor" })
       .find((record) => record.threadId === task.threadId);
+    let identity: { gitDir: string; pointer: string } | undefined;
     const added = await withRepository(repo, async () => {
       const result = await addWorktree(repo, { path, branch, base: baseSha }, git);
-      if (!result.ok || result.reused || known !== undefined) return result;
+      if (!result.ok) return result;
+      identity = await identify(repo, path);
+      if (result.reused || known !== undefined) return result;
+      const own: GitOptions = { ...git, gitDir: identity.gitDir, workTree: path };
       // P13: a new step that waits for others starts with their approved work merged into its own branch.
       for (const thread of predecessors(view, task)) {
         const record = store.worktrees
@@ -296,11 +331,11 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
           path,
           record.headSha,
           `haril: start ${label(view.label(task.threadId))} from ${label(view.label(thread))}`,
-          git,
+          own,
         );
         if (!merged.ok || !merged.merged) {
           // Two predecessors that conflict: the step starts from what merged cleanly, and its prompt carries the rest.
-          await runAbort(path);
+          await runAbort(path, own);
           store.events.append({
             aggregateType: "workflow",
             aggregateId: workflowId,
@@ -315,6 +350,7 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
       return result;
     });
     if (!added.ok) throw new Error(`the step's worktree could not be made: ${added.detail}`);
+    if (identity === undefined) throw new Error("the step's worktree has no identity");
     const record = store.worktrees.record(epoch, {
       workflowId,
       kind: "executor",
@@ -332,6 +368,7 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
       repo,
       workflowId,
       writeSurface: task.surfaceWrite,
+      ...identity,
     };
   };
 
@@ -360,6 +397,7 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
           repo,
           workflowId: view.workflow.workflowId,
           writeSurface: [],
+          ...(await identify(repo, record.path)),
         };
       }
     }
@@ -367,9 +405,10 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
     if (holdsLock) {
       // A turn that holds the integration lock starts clean: a merge a crashed runtime left half done is given up, and
       // nothing uncommitted stays (every merge a delegator finished is a commit).
+      const own = worktreeGit(git, integration);
       await withRepository(repo, async () => {
-        await runAbort(integration.root);
-        await discardChanges(integration.root, git);
+        await runAbort(integration.root, own);
+        await discardChanges(integration.root, own);
       });
     }
     return integration;
@@ -382,30 +421,66 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
     task: Task,
     workspace: TurnWorkspace,
   ): Promise<string | null> => {
-    const changed = await changedPaths(workspace.root, git);
+    const own = worktreeGit(git, workspace);
+    // The commit goes onto the step's branch only: a command that checked out another branch leaves nothing committed.
+    const head = await headBranch(workspace.root, own);
+    if (head !== workspace.branch) {
+      throw new Error(
+        `the step's worktree is on ${head === undefined ? "no branch" : `the branch ${head}`}, not ${workspace.branch}; nothing was committed`,
+      );
+    }
+    const changed = await changedPaths(workspace.root, own);
     if (changed === undefined) throw new Error("git status failed in the step's worktree");
     const inside = changed.filter((path) => pathMatchesSurface(path, workspace.writeSurface));
     const message = `haril: ${label(view.label(task.threadId))} attempt ${task.attempt}\n\n${label(task.goal)}`;
-    const committed = await commitPaths(workspace.root, inside, message, git);
+    const committed = await commitPaths(workspace.root, inside, message, own);
     if (!committed.ok)
       throw new Error(`the step's work could not be committed: ${committed.detail}`);
-    await discardChanges(workspace.root, git);
+    await discardChanges(workspace.root, own);
     if (committed.sha !== null) store.worktrees.setHead(epoch, workspace.worktreeId, committed.sha);
     return committed.sha;
   };
 
   const finish: Workspaces["finish"] = async (store, epoch, view, task, workspace, outcome) => {
+    const own = worktreeGit(git, workspace);
     return withRepository(workspace.repo, async () => {
+      // Before any git run: the .git pointer file must still be the one git wrote. A rewritten one fails the turn.
+      const pointer = await checkPointer(workspace.root, workspace.pointer);
+      if (pointer !== "intact") {
+        await runAbort(workspace.root, own);
+        await discardChanges(workspace.root, own);
+        store.events.append({
+          aggregateType: "task",
+          aggregateId: task.taskId,
+          type: "worktree.tampered",
+          actorKind: "system",
+          actorId: `runtime:${epoch}`,
+          payload: {
+            workflowId: view.workflow.workflowId,
+            worktreeId: workspace.worktreeId,
+            branch: workspace.branch,
+            restored: pointer === "restored",
+          },
+          projectId: view.workflow.projectId,
+          taskId: task.taskId,
+        });
+        return {
+          status: "failed",
+          code: "workspace.tampered",
+          message:
+            "the worktree's .git file was changed during the turn; its work was discarded and nothing was committed",
+        };
+      }
       if (workspace.kind === "executor") {
         if (outcome.status !== "succeeded") {
-          await discardChanges(workspace.root, git);
+          await discardChanges(workspace.root, own);
           return outcome;
         }
         try {
           await commitExecutor(store, epoch, view, task, workspace);
           return outcome;
         } catch (error) {
-          await discardChanges(workspace.root, git);
+          await discardChanges(workspace.root, own);
           return {
             status: "failed",
             code: "workspace.commit_failed",
@@ -414,8 +489,8 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
         }
       }
       // Everyone else leaves nothing behind: a merge left waiting is given up, and what commands changed is discarded.
-      await runAbort(workspace.root);
-      await discardChanges(workspace.root, git);
+      await runAbort(workspace.root, own);
+      await discardChanges(workspace.root, own);
       return outcome;
     });
   };

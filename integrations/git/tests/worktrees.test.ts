@@ -7,12 +7,14 @@ import {
   abortMerge,
   addWorktree,
   changedPaths,
+  checkPointer,
   commitPaths,
   deleteBranch,
   detectBaseBranch,
   discardChanges,
   finishMerge,
   hasConflictMarkers,
+  headBranch,
   headCommit,
   inspectRepository,
   isAncestor,
@@ -22,6 +24,7 @@ import {
   mergeInProgress,
   removeWorktree,
   unmergedPaths,
+  worktreeIdentity,
 } from "../src/index.js";
 
 // Real git and real processes: under the load of the full suite one test can take several seconds, so this file gives
@@ -222,6 +225,25 @@ describe.skipIf(!HAS_GIT)("worktrees, commits and merges", () => {
     expect(
       await addWorktree(project, { path: tree, branch: "haril/wf/task/long", base }, { env }),
     ).toMatchObject({ ok: false, detail: expect.stringContaining("too long") });
+  });
+
+  it("finds a worktree's own git folder from the repository, and runs git there whatever its .git file says", async () => {
+    const project = repo("project");
+    const base = git(project, "rev-parse", "main");
+    const tree = join(root, "wt-id");
+    await addWorktree(project, { path: tree, branch: "haril/wf/step/id", base }, { env });
+    const identity = await worktreeIdentity(project, tree, { env });
+    expect(identity?.gitDir).toContain("worktrees");
+    expect(identity?.pointer).toBe(readFileSync(join(tree, ".git"), "utf8"));
+    const own = { env, gitDir: identity?.gitDir as string, workTree: tree };
+    // A rewritten pointer: the identity no longer accepts it, git with the own folder still sees the step's branch.
+    rmSync(join(tree, ".git"));
+    writeFileSync(join(tree, ".git"), `gitdir: ${join(project, ".git")}`);
+    expect(await worktreeIdentity(project, tree, { env })).toBeUndefined();
+    expect(await headBranch(tree, own)).toBe("haril/wf/step/id");
+    expect(await checkPointer(tree, identity?.pointer as string)).toBe("restored");
+    expect(await checkPointer(tree, identity?.pointer as string)).toBe("intact");
+    expect(await worktreeIdentity(project, tree, { env })).toEqual(identity);
   });
 
   it("commits only the paths it is given and discards the rest", async () => {

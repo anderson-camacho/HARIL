@@ -11,7 +11,12 @@ import {
   mergeInProgress,
 } from "@haril/git";
 import type { Task, WorkflowView } from "./workflow-view.js";
-import type { TurnWorkspace, WorkspaceReply, Workspaces } from "./worktrees.js";
+import {
+  type TurnWorkspace,
+  type WorkspaceReply,
+  type Workspaces,
+  worktreeGit,
+} from "./worktrees.js";
 
 // Integration by the delegator (docs/modos-y-delegacion.md 3.10.3, R-D13, P12; phase F8). In its continuation, a
 // delegator merges each approved step into the workflow's integration branch with haril_merge {localId}. The host:
@@ -112,6 +117,8 @@ export function createIntegration(): Integration {
   const merge: Integration["merge"] = (context, localId) => {
     const { store, view, workspace, limits } = context;
     const git = context.git ?? context.workspaces.settings.git ?? {};
+    // The integration worktree's own git folder, named on every run there.
+    const own = worktreeGit(git, workspace);
     const workflowId = view.workflow.workflowId;
     if (workspace.kind !== "integration") {
       return Promise.resolve(refuse("haril_merge runs only in the integration worktree"));
@@ -146,7 +153,7 @@ export function createIntegration(): Integration {
       );
     }
     return context.workspaces.withRepository(workspace.repo, async () => {
-      if (await mergeInProgress(workspace.root, git)) {
+      if (await mergeInProgress(workspace.root, own)) {
         return refuse(
           "a merge is already in progress in the integration worktree; call haril_merge_abort first",
         );
@@ -159,7 +166,7 @@ export function createIntegration(): Integration {
       if (!check.ok)
         return refuse(`the merge of "${localId}" could not be checked: ${check.detail}`);
       const message = `haril: merge ${visibleText(view.label(thread)).slice(0, 120)} into the integration branch`;
-      const result = await mergeBranch(workspace.root, record.branch, message, git);
+      const result = await mergeBranch(workspace.root, record.branch, message, own);
       if (!result.ok) return refuse(`the merge of "${localId}" failed: ${result.detail}`);
       if (result.merged) {
         await recordMerged(context, record, result.sha);
@@ -184,11 +191,13 @@ export function createIntegration(): Integration {
   const mergeContinue: Integration["mergeContinue"] = (context) => {
     const { store, view, workspace } = context;
     const git = context.git ?? context.workspaces.settings.git ?? {};
+    // The integration worktree's own git folder, named on every run there.
+    const own = worktreeGit(git, workspace);
     const waiting = pending.get(view.workflow.workflowId);
     if (waiting === undefined) return Promise.resolve(refuse("no merge waits for its conflicts"));
     return context.workspaces.withRepository(workspace.repo, async () => {
       const message = `haril: merge ${waiting.localId} into the integration branch, conflicts resolved by the delegator`;
-      const finished = await finishMerge(workspace.root, waiting.files, message, git);
+      const finished = await finishMerge(workspace.root, waiting.files, message, own);
       if (!finished.ok) {
         return refuse(
           finished.unresolved.length > 0
@@ -206,15 +215,17 @@ export function createIntegration(): Integration {
   const mergeAbort: Integration["mergeAbort"] = (context) => {
     const { view, workspace } = context;
     const git = context.git ?? context.workspaces.settings.git ?? {};
+    // The integration worktree's own git folder, named on every run there.
+    const own = worktreeGit(git, workspace);
     return context.workspaces.withRepository(workspace.repo, async () => {
       const waiting = pending.get(view.workflow.workflowId);
       pending.delete(view.workflow.workflowId);
-      if (!(await mergeInProgress(workspace.root, git))) {
+      if (!(await mergeInProgress(workspace.root, own))) {
         return waiting === undefined
           ? refuse("no merge is in progress")
           : { ok: true, aborted: waiting.localId };
       }
-      const aborted = await abortMerge(workspace.root, git);
+      const aborted = await abortMerge(workspace.root, own);
       return aborted
         ? { ok: true, aborted: waiting?.localId ?? null }
         : refuse("git merge --abort failed");
