@@ -6,7 +6,9 @@
 //     checkVerdict) and answers { ok: true, ... } or { ok: false, reason }, and with a reason the agent corrects its
 //     call in the same turn. Nothing is created while the turn runs: the accepted call is applied when the turn ends,
 //     in the same transaction that closes it, so a crash never leaves half of it. The fake agent runtime calls the
-//     handler directly; phase F2b wires Pi's bridge tools to the same handler.
+//     handler directly; phase F2b wires Pi's bridge tools to the same handler. Phase F8 adds the workspace tools of a
+//     turn that writes in a git worktree (write, edit, haril_run, haril_merge, haril_merge_continue, haril_merge_abort):
+//     the host does them inside the worktree and answers once they are done.
 import type { DelegationToolReply, Difficulty } from "@haril/contracts";
 import type { DelegationRole } from "./delegation.js";
 
@@ -96,6 +98,26 @@ export interface DelegationCapacity {
 
 export type DelegationTurnKind = "first" | "continuation" | "relaunch" | "reformulation";
 
+// A turn of a workflow that writes in git worktrees (phase F8, docs/modos-y-delegacion.md 3.10): which branch its tools
+// work on and what it may do there. Every name in it comes from the host (branches, the allow list) or from git (the
+// conflicting files of a merge), never from an agent's text.
+export interface DelegationWorkspaceView {
+  // executor: the step's own branch and worktree; audit: the executor's branch it judges, read-only; integration: the
+  // workflow's integration branch (a delegator, the final auditor and the turns that only read).
+  readonly kind: "executor" | "audit" | "integration";
+  readonly branch: string;
+  // The branch every worktree of the workflow starts from (P13), as the workflow fixed it.
+  readonly baseBranch: string;
+  // The globs an executor may write (its files.write); empty for every other turn.
+  readonly writeSurface: readonly string[];
+  // The commands haril_run accepts, as the allow list spells them.
+  readonly commands: readonly string[];
+  // A delegator: its approved steps whose branch holds work not merged into the integration branch yet, by local id.
+  readonly unmerged: readonly string[];
+  // A delegator: the merge left waiting for its conflicts, if any.
+  readonly conflict: { readonly localId: string; readonly files: readonly string[] } | null;
+}
+
 export interface DelegationTurnInput {
   readonly workflowId: string;
   readonly workflowGoal: string;
@@ -125,6 +147,8 @@ export interface DelegationTurnInput {
   readonly finalAudit: DelegationVerdictView | null;
   readonly siblings: readonly DelegationSibling[];
   readonly capacity: DelegationCapacity;
+  // A turn of a workflow that writes (phase F8); absent or null for a read-only workflow.
+  readonly workspace?: DelegationWorkspaceView | null;
 }
 
 // The run a tool call comes from: only a workflow turn the runtime opened may call, and only for itself.
@@ -136,9 +160,11 @@ export interface DelegationToolContext {
 
 export type DelegationToolResult = DelegationToolReply<Readonly<Record<string, unknown>>>;
 
-// The tool name and its input come from the agent: both are untrusted and checked by the handler.
+// The tool name and its input come from the agent: both are untrusted and checked by the handler. A deciding call is
+// answered at once; a workspace tool (write, edit, haril_run, haril_merge and its continue and abort, phase F8) is
+// answered when the host finished it, so its reply is a promise.
 export type DelegationToolHandler = (
   context: DelegationToolContext,
   tool: string,
   input: unknown,
-) => DelegationToolResult;
+) => DelegationToolResult | Promise<DelegationToolResult>;

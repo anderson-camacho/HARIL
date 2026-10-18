@@ -667,7 +667,7 @@ class PiRun implements PiAgentHandle {
       return;
     }
     if (message.op === DELEGATION_CALL_OP) {
-      this.onDelegationCall(id, message.tool, message.input);
+      await this.onDelegationCall(id, message.tool, message.input);
       return;
     }
     if (message.op !== "read") {
@@ -745,8 +745,13 @@ class PiRun implements PiAgentHandle {
 
   // A delegation tool (phase F2b): the call goes to the host's handler untouched, with the run's own context, only for a
   // tool this run was offered; the handler checks it and its typed reply goes back, a refusal with its reason, so the
-  // agent can fix the call in the same turn. A host failure is a fixed reason, never the host's error.
-  private onDelegationCall(id: string | number, tool: unknown, input: unknown): void {
+  // agent can fix the call in the same turn. A host failure is a fixed reason, never the host's error. A workspace tool
+  // (phase F8) is answered once the host finished it.
+  private async onDelegationCall(
+    id: string | number,
+    tool: unknown,
+    input: unknown,
+  ): Promise<void> {
     const name = typeof tool === "string" ? tool : "";
     const body = JSON.stringify(input) ?? "";
     const fingerprint = {
@@ -768,7 +773,11 @@ class PiRun implements PiAgentHandle {
     }
     let result: DelegationToolResult;
     try {
-      result = handler({ projectId, taskId: this.spec.taskId, runId: this.runId }, name, input);
+      result = await handler(
+        { projectId, taskId: this.spec.taskId, runId: this.runId },
+        name,
+        input,
+      );
     } catch {
       result = { ok: false, reason: "the call could not be recorded" };
     }

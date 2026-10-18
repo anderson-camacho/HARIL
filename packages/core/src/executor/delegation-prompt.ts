@@ -8,12 +8,13 @@
 // and for the planners their limits and the budgets their children need (phase F2b: a real model has nothing else to go
 // on). Pure.
 import type { DelegationArchetype } from "../delegation/archetypes.js";
-import { archetypeTools } from "../delegation/archetypes.js";
+import { archetypeTools, isDecidingTool } from "../delegation/archetypes.js";
 import { visibleText } from "../domain/visible-text.js";
 import type {
   DelegationChildOutcome,
   DelegationTurnInput,
   DelegationVerdictView,
+  DelegationWorkspaceView,
 } from "../ports/index.js";
 import { LINE_PREFIX, linesCost, prefixedText, promptDataBudget } from "./prompt-data.js";
 
@@ -173,6 +174,9 @@ const DELEGATE_SHAPE =
   'haril_delegate with {"schemaVersion": 1, "memo": "a note to your future self, at most 2000 characters", "delegations": [...]}; each delegation has "localId", "goal" (one sentence), "description" (the detail the goal lacks), "difficulty" (trivial, easy, medium, hard or expert), "difficultyReason", "dependsOn" (localIds it waits for; none means it may run in parallel), "priority" (0 to 9), "acceptanceCriteria" (in words; the auditors judge against them), "model" (null lets the table choose) and "budget" {"maxTokens": n}';
 const ASSIGN_SHAPE =
   'haril_assign with {"schemaVersion": 1, "memo": "a note to your future self", "assignments": [...]}; each assignment has "localId", "goal", "instructions" (the exact method), "files" {"write": [], "read": [globs]} (executors are read-only until writing arrives: leave "write" empty), "tests", "acceptanceCriteria", "difficulty", "difficultyReason", "dependsOn" (a step that depends on another starts once the other is approved), "model" (null lets the table choose) and "budget" {"maxTokens": n}';
+// A delegator of a workflow that writes (phase F8): each executor writes in its own git worktree, inside its write globs.
+const ASSIGN_WRITE_SHAPE =
+  'haril_assign with {"schemaVersion": 1, "memo": "a note to your future self", "assignments": [...]}; each assignment has "localId", "goal", "instructions" (the exact change: what to create or edit, where, how), "files" {"write": [the globs the step may write], "read": [globs]} (relative to the project root; the step can write nothing outside its write globs, and steps whose write globs may overlap run one after the other), "tests" (which test to add or run, and how), "acceptanceCriteria", "difficulty", "difficultyReason", "dependsOn" (a step that depends on another starts once the other is approved, and its branch starts with that work), "model" (null lets the table choose) and "budget" {"maxTokens": n}';
 const VERDICT_SHAPE =
   'haril_verdict once with {"approved": true or false, "reasons": [{"criterion": "...", "ok": true or false, "evidence": "..."}]}, one reason per criterion; a rejection needs at least one reason with "ok": false. Judge against the criteria, not your taste';
 const DATA_RULE =
@@ -193,15 +197,71 @@ function listed(names: readonly string[], last = "and"): string {
   return `${names.slice(0, -1).join(", ")} ${last} ${names[names.length - 1]}`;
 }
 
-// The tools this role is offered (archetypeTools, the single source the bridge and the handshake also read), what read
-// does, and that nothing writes or runs: a workflow agent is read-only until writing arrives (F8).
-function toolsLine(role: DelegationArchetype): string {
-  return `Your tools: ${listed(archetypeTools(role, { writes: false }))}. read takes a file path relative to the project root and returns the file's text; it reads only inside the project. You cannot write files or run commands.`;
+// The tools this role is offered (archetypeTools, the single source the bridge and the handshake also read) and what
+// read does. A turn of a read-only workflow writes nothing and runs nothing; a turn of a workflow that writes (F8) works
+// in a git worktree, and workspaceLines says what its other tools do there.
+function toolsLine(role: DelegationArchetype, workspace: DelegationWorkspaceView | null): string {
+  const tools = listed(archetypeTools(role, { writes: workspace !== null }));
+  if (workspace === null) {
+    return `Your tools: ${tools}. read takes a file path relative to the project root and returns the file's text; it reads only inside the project. You cannot write files or run commands.`;
+  }
+  return visibleText(
+    `Your tools: ${tools}. read takes a file path relative to the project root and returns the file's text; it reads your worktree, a checkout of the branch ${workspace.branch} (from ${workspace.baseBranch}).`,
+  );
+}
+
+function commandsText(workspace: DelegationWorkspaceView): string {
+  return workspace.commands.length === 0
+    ? "no command is allowed in this project"
+    : `the allowed commands are ${workspace.commands.join("; ")}`;
+}
+
+const RUN_LINE =
+  'haril_run {"command": "npm", "args": ["test"]} runs one allowed command (the program and its arguments, never a shell line) in your worktree and answers its exit code and the end of its output';
+
+// What a turn's workspace tools do in its own worktree (phase F8). Every name here comes from the host or from git.
+function workspaceLines(input: DelegationTurnInput): string[] {
+  const workspace = input.workspace ?? null;
+  if (workspace === null) return [];
+  if (workspace.kind === "executor") {
+    return [
+      visibleText(
+        `write {"path": "...", "content": "..."} creates or replaces a whole file, and edit {"path": "...", "edits": [{"oldText": "...", "newText": "..."}]} replaces exact text (each oldText must appear once); both write only inside your write surface: ${workspace.writeSurface.join(", ") || "nothing"}. Paths are relative to the project root; .git, .haril and secret files are refused.`,
+      ),
+      visibleText(`${RUN_LINE}; ${commandsText(workspace)}.`),
+    ];
+  }
+  if (workspace.kind === "audit" || input.role === "auditor") {
+    return [
+      visibleText(
+        `${RUN_LINE} (for example the tests); ${commandsText(workspace)}. You cannot write: anything a command changes there is discarded after your turn.`,
+      ),
+    ];
+  }
+  if (input.role !== "delegator") return [];
+  const lines = [
+    visibleText(
+      `${RUN_LINE}; ${commandsText(workspace)}. haril_merge {"localId": "step-1"} merges one of your approved steps into ${workspace.branch}; when the merge conflicts, its reply lists the conflicting files: fix each one with edit or write (keep the intent of both sides and remove every conflict marker), then call haril_merge_continue {} to commit the resolution, or haril_merge_abort {} to give the merge up. write and edit only resolve the conflicting files of a merge. None of these is a deciding call.`,
+    ),
+  ];
+  if (workspace.unmerged.length > 0) {
+    lines.push(
+      visibleText(`Approved steps whose work is not merged yet: ${workspace.unmerged.join(", ")}.`),
+    );
+  }
+  if (workspace.conflict !== null) {
+    lines.push(
+      visibleText(
+        `The merge of ${workspace.conflict.localId} waits for its conflicts: ${workspace.conflict.files.join(", ")}.`,
+      ),
+    );
+  }
+  return lines;
 }
 
 // The rule of the roles that decide their turn with a call (3.5): one accepted call, a refusal is corrected in the turn.
 function decidingLine(role: DelegationArchetype): string {
-  const deciding = archetypeTools(role, { writes: false }).filter((tool) => tool !== "read");
+  const deciding = archetypeTools(role, { writes: false }).filter((tool) => isDecidingTool(tool));
   return `A turn makes exactly one accepted deciding call (${listed(deciding, "or")}). If the tool refuses a call, read its reason, fix the call and make it again in this turn; a refused call does not count. Once a call is accepted, end your turn with a short final message: any other deciding call in the same turn is refused.`;
 }
 
@@ -229,17 +289,40 @@ function jobLines(input: DelegationTurnInput): string[] {
       return [
         `Your delegators finished; their reports are in the data above. If something is missing, delegate it with ${DELEGATE_SHAPE}. When nothing is pending, call haril_request_audit {"summary": "...", "outstanding": [what is still open]} and a final auditor judges the whole workflow from the reports and your summary. To end the workflow as failed, call haril_abort {"reason": "..."}.`,
       ];
-    case "delegator":
+    case "delegator": {
+      const writes = (input.workspace ?? null) !== null;
       if (input.turnKind === "first") {
         return [
-          `You are a delegator, layer 2: you split your part into steps, one executor each; you do not do the steps yourself, though you may read files to plan them. Call ${ASSIGN_SHAPE}. Write acceptance criteria an auditor can check from the executor's answer and the files. Each executor gets its own auditor, which judges it against its acceptanceCriteria. You run again, with their outcomes, once the auditors finish.`,
+          writes
+            ? `You are a delegator, layer 2: you split your part into steps, one executor each; you do not do the steps yourself, though you may read files to plan them. Each executor makes its change and its tests in its own git worktree, starting from the base branch. Call ${ASSIGN_WRITE_SHAPE}. Write acceptance criteria an auditor can check from the changed files and the tests. Each executor gets its own auditor, which judges it against its acceptanceCriteria. You run again, with their outcomes, once the auditors finish, and then you merge the approved steps.`
+            : `You are a delegator, layer 2: you split your part into steps, one executor each; you do not do the steps yourself, though you may read files to plan them. Call ${ASSIGN_SHAPE}. Write acceptance criteria an auditor can check from the executor's answer and the files. Each executor gets its own auditor, which judges it against its acceptanceCriteria. You run again, with their outcomes, once the auditors finish.`,
         ];
       }
       return [
         "Your executors finished; their outcomes and verdicts are in the data above.",
+        ...(writes
+          ? [
+              "Integrate first: merge each approved step into the integration branch with haril_merge, resolve any conflict, and run the allowed tests there with haril_run when one is allowed. haril_report with status done is refused while the work of an approved step is not merged.",
+            ]
+          : []),
         `An escalated step was rejected twice: reformulate it once by calling haril_assign with the same localId, or leave it failed. A blocked step never ran because a step it depends on failed or was escalated: reassign it with the same localId if it should still run. A step can be reassigned once. Otherwise close your part: call haril_report with {"status": "done", "partial" or "failed", "summary": "...", "issues": [...]}; the summary carries the facts your part found, since it is what your orchestrator reads.`,
       ];
+    }
     case "executor":
+      if ((input.workspace ?? null) !== null) {
+        return [
+          [
+            "You are an executor, layer 3: you do this one step and its tests in your own git worktree. Read what you need, make the change with write and edit inside your write surface, and run its tests with haril_run when a test command is allowed.",
+            "Your final message is your result: say what you changed, in which files, and what the tests answered. What you wrote is committed to your branch when your turn ends; the auditor reads it there.",
+            input.previousVerdicts.length > 0
+              ? "An earlier attempt was rejected; the verdicts in the data above say why, and your worktree still holds that attempt's work."
+              : "",
+            "An auditor judges your work against the acceptance criteria.",
+          ]
+            .filter((part) => part !== "")
+            .join(" "),
+        ];
+      }
       return [
         [
           "You are an executor, layer 3: you do this one step. Read the files it names and answer what it asks.",
@@ -258,13 +341,19 @@ function jobLines(input: DelegationTurnInput): string[] {
             `You are the final auditor, layer 3: you judge, you do not redo the work. Judge whether the workflow's goal is met from the delegators' reports and the orchestrator's audit request in the data above; an item it lists as outstanding is not met unless a report shows it done. Read a file when you must check a claim, then call ${VERDICT_SHAPE}.`,
           ]
         : [
-            `You are the auditor of one step, layer 3: you judge, you do not redo the work. Judge the result in the data above against each acceptance criterion; read the files you need to check what it claims, then call ${VERDICT_SHAPE}.`,
+            (input.workspace ?? null) !== null
+              ? `You are the auditor of one step, layer 3: you judge, you do not redo the work. Your worktree holds the step's committed work: read the files it changed and run its tests with haril_run when a test command is allowed, judge it against each acceptance criterion, then call ${VERDICT_SHAPE}.`
+              : `You are the auditor of one step, layer 3: you judge, you do not redo the work. Judge the result in the data above against each acceptance criterion; read the files you need to check what it claims, then call ${VERDICT_SHAPE}.`,
           ];
   }
 }
 
 function roleInstructions(input: DelegationTurnInput): string[] {
-  const lines = [...jobLines(input), toolsLine(input.role)];
+  const lines = [
+    ...jobLines(input),
+    toolsLine(input.role, input.workspace ?? null),
+    ...workspaceLines(input),
+  ];
   if (input.role !== "executor") lines.push(decidingLine(input.role));
   lines.push(DATA_RULE);
   if (input.role === "executor" || input.role === "delegator") lines.push(SIBLINGS_RULE);

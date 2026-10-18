@@ -151,9 +151,9 @@ describe("the delegation tools of a workflow turn", () => {
     expect(store.workflows.list()[0]?.agentsCreated).toBe(1);
   });
 
-  it("decides a turn once: the same call again is the same answer, any other call is refused", () => {
+  it("decides a turn once: the same call again is the same answer, any other call is refused", async () => {
     const { context, close } = openOrchestratorTurn();
-    expect(tools.call(context, "haril_delegate", delegate()).ok).toBe(true);
+    expect((await tools.call(context, "haril_delegate", delegate())).ok).toBe(true);
     expect(tools.call(context, "haril_delegate", delegate())).toMatchObject({
       ok: true,
       replay: true,
@@ -164,7 +164,7 @@ describe("the delegation tools of a workflow turn", () => {
     });
     expect(close().action?.tool).toBe("haril_delegate");
     // A closed window takes no call.
-    expect(tools.call(context, "haril_delegate", delegate()).ok).toBe(false);
+    expect((await tools.call(context, "haril_delegate", delegate())).ok).toBe(false);
   });
 
   it("refuses a call once the workflow stopped running", () => {

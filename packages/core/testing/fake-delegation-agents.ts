@@ -256,6 +256,9 @@ export type DelegateTurn =
       readonly seed: number;
       readonly partId: string;
       readonly executors: number;
+      // A file step 1 of every part also writes ([fake:common=<path>]): the parts' first steps then overlap, so they run
+      // one after the other, and the second merge into the integration branch conflicts (phase F8).
+      readonly commonFile?: string | null;
     }
   | {
       readonly kind: "continuation";
@@ -313,14 +316,12 @@ export function fakeDelegate(turn: DelegateTurn): {
       ]
         .join(" ")
         .trim();
+      const common = step === 1 && turn.commonFile ? [turn.commonFile] : [];
       assignments.push(
-        stepAssignment(
-          turn.partId,
-          turn.goal,
-          step,
-          instructions,
-          writeSurfaceOf(turn.partId, step),
-        ),
+        stepAssignment(turn.partId, turn.goal, step, instructions, [
+          ...writeSurfaceOf(turn.partId, step),
+          ...common,
+        ]),
       );
     }
     return {
@@ -501,7 +502,8 @@ export function fakeResultIsComplete(text: string | null): boolean {
 //   [fake:parts=<n>] [fake:steps=<n>]   delegators, and executors per delegator (default 2 and 2);
 //   [fake:seed=<n>]                     the seed of the costs, and of the scripted behaviors when none is named;
 //   [fake:mistake]                      the orchestrator first proposes a model that does not exist;
-//   [fake:part-<i>/step-<j>=<behavior>] a behavior (reject-once, reject-twice, stall-once) at that step.
+//   [fake:part-<i>/step-<j>=<behavior>] a behavior (reject-once, reject-twice, stall-once) at that step;
+//   [fake:common=<path>]                step 1 of every part also writes <path> (phase F8: a merge conflict).
 // Without a named behavior and without a seed, every step passes at once.
 export interface FakeScenario {
   readonly parts: number;
@@ -509,6 +511,7 @@ export interface FakeScenario {
   readonly seed: number;
   readonly mistake: boolean;
   readonly scenario: ReadonlyMap<string, DemoBehavior>;
+  readonly commonFile: string | null;
 }
 
 export function fakeScenarioOf(goal: string): FakeScenario {
@@ -528,5 +531,13 @@ export function fakeScenarioOf(goal: string): FakeScenario {
     named.set(match[1] as string, match[2] as DemoBehavior);
   }
   const scenario = named.size > 0 || !seeded ? named : demoScenario(seed, parts, steps);
-  return { parts, steps, seed, mistake: goal.includes("[fake:mistake]"), scenario };
+  const common = /\[fake:common=([A-Za-z0-9_./-]{1,200})\]/.exec(goal)?.[1] ?? null;
+  return {
+    parts,
+    steps,
+    seed,
+    mistake: goal.includes("[fake:mistake]"),
+    scenario,
+    commonFile: common,
+  };
 }

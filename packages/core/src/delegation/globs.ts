@@ -107,3 +107,39 @@ export function surfacesMayOverlap(left: readonly string[], right: readonly stri
   if (work > SURFACE_WORK_BUDGET) return true;
   return left.some((a) => right.some((b) => globsMayOverlap(a, b)));
 }
+
+// Whether a pattern matches one concrete path (phase F8: a write must fall inside its task's surface). Same syntax and
+// rules as the overlap check, with the opposite caution: when unsure the answer is "no match", so a write that cannot be
+// proved inside the surface is refused. A pattern with unsupported syntax or a non-ASCII character, or longer than
+// GLOB_MAX_LENGTH, matches nothing. `path` is a normalized relative path ("/" separators, no "." or ".." segment), as
+// checkWorkspacePath returns it.
+export function globMatches(glob: string, path: string): boolean {
+  if (glob.length > GLOB_MAX_LENGTH) return false;
+  try {
+    const pattern = segmentsOf(glob);
+    if (pattern === null) return false;
+    const segments = path
+      .split("/")
+      .filter((segment) => segment !== "")
+      .map((segment) => (NON_ASCII.test(segment) ? segment : segment.toLowerCase()));
+    if (segments.length === 0) return false;
+    return sequencesMeet(pattern, segments, "**", (a, b) => segmentMatches(a, b));
+  } catch {
+    return false;
+  }
+}
+
+// A single-segment pattern ("*", "?", literal characters) against one literal segment.
+function segmentMatches(pattern: string, segment: string): boolean {
+  return sequencesMeet(
+    Array.from(pattern),
+    Array.from(segment),
+    "*",
+    (a, b) => a === "?" || a === b,
+  );
+}
+
+// A path falls inside a surface when any of its patterns matches it; an empty surface (a read-only task) holds nothing.
+export function pathMatchesSurface(path: string, surface: readonly string[]): boolean {
+  return surface.some((glob) => globMatches(glob, path));
+}

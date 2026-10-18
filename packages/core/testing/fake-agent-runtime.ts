@@ -14,7 +14,11 @@ import type {
   Result,
 } from "../src/ports/index.js";
 import { type FakeTurnCost, isFakeDelegationAgentRef } from "./fake-delegation-agents.js";
-import { fakeWorkflowTurn, type WorkflowTurnResult } from "./fake-workflow-turn.js";
+import {
+  fakeWorkflowTurn,
+  fakeWritingTurn,
+  type WorkflowTurnResult,
+} from "./fake-workflow-turn.js";
 
 // Simulated agent (M1-D7). The behaviour is chosen by agentRef:
 //   fake:succeed (default), fake:fail, fake:slow:<ms>, fake:say:<text> (its final output is <text>, M3-T6a),
@@ -196,17 +200,31 @@ class FakeAgentHandle implements AgentHandle {
   }
 
   // A fake workflow turn: its calls go to the host at once; it settles after its drawn time (delegationDelayMs), or at
-  // its timeout when it stalls (no progress at all, for the watchdog of 3.16 or the timeout to end).
+  // its timeout when it stalls (no progress at all, for the watchdog of 3.16 or the timeout to end). A turn of a workflow
+  // that writes (phase F8) waits for the replies of its workspace tools first.
   private runWorkflowTurn(): void {
     const { options, spec } = this;
+    const failed = (error: unknown): void => {
+      const message = error instanceof Error ? error.message : String(error);
+      this.finish({ status: "failed", code: "fake.turn_failed", message });
+    };
+    if ((spec.delegation?.workspace ?? null) !== null) {
+      fakeWritingTurn(spec, options.delegationTools).then((turn) => this.settleTurn(turn), failed);
+      return;
+    }
     let turn: WorkflowTurnResult;
     try {
       turn = fakeWorkflowTurn(spec, options.delegationTools);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.finish({ status: "failed", code: "fake.turn_failed", message });
+      failed(error);
       return;
     }
+    this.settleTurn(turn);
+  }
+
+  private settleTurn(turn: WorkflowTurnResult): void {
+    const { options, spec } = this;
+    if (this.finished) return;
     if (turn === "stalled") {
       this.cancels.push(
         options.clock.schedule(spec.timeoutMs, () => this.finish({ status: "timed_out" })),

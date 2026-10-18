@@ -233,6 +233,50 @@ describe("selectClaims", () => {
     expect(deferredAs(result, "surface_conflict")).toEqual(["w2", "w4"]);
   });
 
+  it("waits for a write surface another workflow of the project holds, without counting it as a writer here", () => {
+    const result = selectClaims(
+      snapshot({
+        held: [{ writeSurface: ["src/theme.ts"] }],
+        ready: [
+          ready("w1", "executor", "d1", { writeSurface: ["src/**"] }),
+          ready("w2", "executor", "d2", { writeSurface: ["docs/**"] }),
+        ],
+      }),
+      limits({ maxConcurrent: { writers: 1 } }),
+    );
+    expect(claimed(result)).toEqual(["w2"]);
+    expect(deferredAs(result, "surface_conflict")).toEqual(["w1"]);
+  });
+
+  it("runs one holder of an exclusive lock at a time, live or chosen in the same call", () => {
+    const lock = { locks: ["integration:wf-1"] };
+    const busy = selectClaims(
+      snapshot({
+        running: [live("d1", "delegator", "o1", lock)],
+        ready: [ready("d2", "delegator", "o1", lock), ready("d3", "delegator", "o1")],
+      }),
+      DEFAULT_DELEGATION_LIMITS,
+    );
+    expect(claimed(busy)).toEqual(["d3"]);
+    expect(deferredAs(busy, "surface_conflict")).toEqual(["d2"]);
+    const free = selectClaims(
+      snapshot({
+        ready: [ready("d4", "delegator", "o1", lock), ready("fa", "auditor", "o1", lock)],
+      }),
+      DEFAULT_DELEGATION_LIMITS,
+    );
+    expect(claimed(free)).toEqual(["d4"]);
+    expect(deferredAs(free, "surface_conflict")).toEqual(["fa"]);
+    const elsewhere = selectClaims(
+      snapshot({
+        held: [{ writeSurface: [], locks: ["integration:wf-1"] }],
+        ready: [ready("d5", "delegator", "o1", lock)],
+      }),
+      DEFAULT_DELEGATION_LIMITS,
+    );
+    expect(deferredAs(elsewhere, "surface_conflict")).toEqual(["d5"]);
+  });
+
   it("never runs two turns of the same thread at once", () => {
     const result = selectClaims(
       snapshot({
