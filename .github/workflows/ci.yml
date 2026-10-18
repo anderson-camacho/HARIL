@@ -36,6 +36,11 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
       - name: Check (biome, tsc, layer/purity/forbidden scripts, knip, compat, version)
+        env:
+          # A pull request is the delivery, so it gets the full bump comparison. A push (work in progress on a feature
+          # branch, or main after a merge) checks only that the version strings and the CHANGELOG agree
+          # (scripts/check-version.mjs, HARIL_VERSION_CHECK).
+          HARIL_VERSION_CHECK: ${{ github.event_name == 'pull_request' && 'full' || 'consistency' }}
         run: pnpm run check
       - name: Test (vitest + node:test)
         run: pnpm test

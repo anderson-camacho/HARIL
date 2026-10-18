@@ -71,9 +71,8 @@ export function readDocument(root, relative) {
 }
 
 export function writeDocument(root, relative, document) {
-  const body = document.eol === "\r\n" ? document.text.replace(/\n/g, "\r\n") : document.text;
   mkdirSync(dirname(join(root, relative)), { recursive: true });
-  writeFileSync(join(root, relative), document.bom + body, "utf8");
+  writeFileSync(join(root, relative), serializeDocument(document), "utf8");
 }
 
 export function fileExists(root, relative) {
@@ -119,4 +118,16 @@ export function topChangelogEntry(text) {
   const rest = text.slice(start);
   const end = rest.search(/^(---\s*$|## )/m);
   return { version: heading[1], body: end === -1 ? rest : rest.slice(0, end) };
+}
+
+// Every entry heading of a changelog, newest first.
+export function changelogVersions(text) {
+  return [...text.matchAll(/^## (\S+)\s*$/gm)].map((match) => match[1]);
+}
+
+// A document as the text writeDocument would store, so a caller can write it elsewhere first (bump-version's temporary
+// files).
+export function serializeDocument(document) {
+  const body = document.eol === "\r\n" ? document.text.replace(/\n/g, "\r\n") : document.text;
+  return document.bom + body;
 }

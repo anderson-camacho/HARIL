@@ -5,16 +5,24 @@
 //
 // Always: every version string is equal, the top entry of versions/v<major>/CHANGELOG.md is the current version with
 // no TODO(bump-version) left, and versions/README.md names the current version.
-// When tracked public files changed against the base: the version is greater than the base's. Public means tracked
-// and outside docs/ and odd/, which stay local. The base is HARIL_VERSION_BASE when set, else the merge-base of HEAD
-// with origin/main. With no base (a fresh clone without a remote, or no git), only the consistency is checked and
-// the output says the bump comparison was skipped. Changes include uncommitted edits to tracked files.
+// When tracked public files changed against the base: the version is greater than the base's, and the base's top
+// changelog entry is still there below the new one (relabeling the old entry as the new version is not a bump). Public
+// means tracked and outside docs/ and odd/, which stay local; renames are not detected, so a file moved into docs/
+// counts as a public file removed. The base is HARIL_VERSION_BASE when set, else the merge-base of HEAD with
+// origin/main. With no base (a fresh clone without a remote, or no git), only the consistency is checked and the output
+// says the bump comparison was skipped; in CI (the CI environment variable is set) a missing base is a failure instead.
+// Changes include uncommitted edits to tracked files.
+//
+// HARIL_VERSION_CHECK selects the mode: "full" (the default) as above, or "consistency", which checks only that the
+// version strings, the CHANGELOG top entry and versions/README.md agree. CI uses "consistency" on push events, so a
+// work-in-progress push passes before its bump, and "full" on pull requests, which are the delivery (P21).
 
 import { execFileSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   changelogPath,
+  changelogVersions,
   compareVersions,
   fileExists,
   hasUnfilledPlaceholder,
@@ -119,27 +127,79 @@ function baseVersion(git, sha) {
   }
 }
 
+// The base's top changelog entry, when the base has one: a bump adds an entry above it and never relabels it.
+function baseTopEntry(git, sha, current) {
+  const [currentMajor] = parseVersion(current);
+  for (let major = currentMajor; major >= 0; major--) {
+    const log = git("show", `${sha}:${changelogPath(major)}`);
+    if (!log.ok) continue;
+    const top = topChangelogEntry(log.stdout.replace(/\r\n/g, "\n"));
+    if (top !== null && parseVersion(top.version) !== null) {
+      return { version: top.version, path: changelogPath(major) };
+    }
+  }
+  return null;
+}
+
+function keptEntryProblem(root, git, base, current) {
+  const top = baseTopEntry(git, base.sha, current);
+  if (top === null || top.version === current) {
+    return top === null
+      ? null
+      : `the ${top.version} entry of the base (top of ${top.path} at ${base.label}) is gone: it was relabeled as ${current}; add a new entry above it instead`;
+  }
+  const kept =
+    fileExists(root, top.path) &&
+    changelogVersions(readDocument(root, top.path).text).includes(top.version);
+  return kept
+    ? null
+    : `the ${top.version} entry of the base (top of ${top.path} at ${base.label}) is gone; keep it below the new ${current} entry`;
+}
+
+function isCi(env) {
+  const value = env.CI;
+  return value !== undefined && value !== "" && value !== "false" && value !== "0";
+}
+
 export function main(
   argv = [],
   { root = REPO_ROOT, env = process.env, stdout = console.log, stderr = console.error } = {},
 ) {
   if (argv.length > 0) {
     stderr(
-      "usage: check-version.mjs   (base: HARIL_VERSION_BASE, else merge-base with origin/main)",
+      "usage: check-version.mjs   (base: HARIL_VERSION_BASE, else merge-base with origin/main; mode: HARIL_VERSION_CHECK=full|consistency)",
     );
     return 2;
   }
   const { current, problems } = consistencyProblems(root);
+  const mode =
+    env.HARIL_VERSION_CHECK === undefined || env.HARIL_VERSION_CHECK === ""
+      ? "full"
+      : env.HARIL_VERSION_CHECK;
+  if (mode !== "full" && mode !== "consistency") {
+    problems.push(`HARIL_VERSION_CHECK must be "full" or "consistency", not "${mode}"`);
+  }
   const git = gitIn(root);
-  const base = resolveBase(git, env);
   let summary;
 
+  if (mode !== "full") {
+    summary = "consistency only (HARIL_VERSION_CHECK=consistency)";
+    return report(problems, current, summary, stdout, stderr);
+  }
+  const base = resolveBase(git, env);
   if (base.kind === "error") {
     problems.push(base.message);
   } else if (base.kind === "none") {
-    summary = `bump comparison skipped: ${base.why}`;
+    if (isCi(env)) {
+      problems.push(
+        `no base to compare with in CI (${base.why}); check out the full history with origin/main (fetch-depth: 0) or set HARIL_VERSION_BASE`,
+      );
+    } else {
+      summary = `bump comparison skipped: ${base.why}`;
+    }
   } else {
-    const diff = git("diff", "--name-only", "-z", base.sha, "--");
+    // --no-renames: a public file moved into docs/ or odd/ shows as removed, so it still needs a bump.
+    const diff = git("diff", "--name-only", "--no-renames", "-z", base.sha, "--");
     const changed = diff.stdout.split("\0").filter((path) => path !== "");
     const publicFiles = changed.filter((path) => !LOCAL_ONLY.some((dir) => path.startsWith(dir)));
     if (!diff.ok) {
@@ -154,11 +214,17 @@ export function main(
           `${publicFiles.length} public file(s) changed since ${base.label} without a version bump (still ${current}): ${sample}. Run "node scripts/bump-version.mjs minor" (or patch) and fill in the CHANGELOG entry.`,
         );
       } else {
+        const lost = keptEntryProblem(root, git, base, current);
+        if (lost !== null) problems.push(lost);
         summary = `${previous} -> ${current} since ${base.label}`;
       }
     }
   }
 
+  return report(problems, current, summary, stdout, stderr);
+}
+
+function report(problems, current, summary, stdout, stderr) {
   if (problems.length > 0) {
     for (const problem of problems) stderr(`check-version: ${problem}`);
     stderr(`check-version: ${problems.length} problem(s)`);

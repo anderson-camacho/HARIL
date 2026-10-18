@@ -249,3 +249,84 @@ test("rejects arguments it does not know", () => {
   assert.equal(main(["--fix"], { root: ".", env: {}, ...io }), 2);
   assert.match(io.err.join("\n"), /usage: check-version\.mjs/);
 });
+
+test("counts a public file moved into docs/ as a public change (no rename detection)", () => {
+  const repo = gitSandbox("0.10.0");
+  try {
+    writeAt(repo.root, "docs/README.md", "# Docs\n");
+    repo.git("mv", "src/code.ts", "docs/code.ts");
+    repo.commit("hide code in docs");
+    const result = check(repo.root, { HARIL_VERSION_BASE: repo.base });
+    assert.equal(result.code, 1, result.text);
+    assert.match(result.err, /without a version bump/);
+    assert.match(result.err, /src\/code\.ts/);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("fails when the base's top changelog entry was relabeled instead of kept below the new one", () => {
+  const repo = gitSandbox("0.10.0");
+  try {
+    writeAt(repo.root, "src/code.ts", "export const value = 2;\n");
+    // Every version string at 0.11.0, and the changelog's 0.10.0 entry renamed to 0.11.0 (no new entry above it).
+    writeVersionTree(repo.root, "0.11.0");
+    writeAt(repo.root, "src/code.ts", "export const value = 2;\n");
+    repo.commit("relabeled release");
+    const result = check(repo.root, { HARIL_VERSION_BASE: repo.base });
+    assert.equal(result.code, 1, result.text);
+    assert.match(result.err, /0\.10\.0 entry of the base .* is gone/);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("in CI, a missing base is a failure instead of a skipped comparison", () => {
+  const repo = gitSandbox("0.10.0");
+  try {
+    writeAt(repo.root, "src/code.ts", "export const value = 2;\n");
+    repo.commit("change code");
+    const result = check(repo.root, { CI: "true" });
+    assert.equal(result.code, 1, result.text);
+    assert.match(result.err, /no base to compare with in CI/);
+    assert.equal(check(repo.root, {}).code, 0);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("HARIL_VERSION_CHECK=consistency checks only the consistency, for pushes of work in progress", () => {
+  const repo = gitSandbox("0.10.0");
+  try {
+    writeAt(repo.root, "src/code.ts", "export const value = 2;\n");
+    repo.commit("work in progress");
+    const env = { HARIL_VERSION_CHECK: "consistency", HARIL_VERSION_BASE: repo.base };
+    const result = check(repo.root, env);
+    assert.equal(result.code, 0, result.text);
+    assert.match(result.out, /consistency only \(HARIL_VERSION_CHECK=consistency\)/);
+    assert.equal(check(repo.root, { HARIL_VERSION_CHECK: "consistency", CI: "true" }).code, 0);
+    assert.equal(
+      check(repo.root, { HARIL_VERSION_CHECK: "full", HARIL_VERSION_BASE: repo.base }).code,
+      1,
+    );
+    writeAt(
+      repo.root,
+      "apps/shell/package.json",
+      readAt(repo.root, "apps/shell/package.json").replace("0.10.0", "0.9.0"),
+    );
+    assert.equal(check(repo.root, env).code, 1);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("rejects an unknown HARIL_VERSION_CHECK mode", () => {
+  const repo = gitSandbox("0.10.0");
+  try {
+    const result = check(repo.root, { HARIL_VERSION_CHECK: "lenient" });
+    assert.equal(result.code, 1);
+    assert.match(result.err, /HARIL_VERSION_CHECK must be "full" or "consistency"/);
+  } finally {
+    repo.cleanup();
+  }
+});
