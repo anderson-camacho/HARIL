@@ -738,7 +738,10 @@ async function startWorkflowTurn(
       };
     }
   }
-  options.delegationTools?.attach(claimed.runId, workspace, context.epoch);
+  // The commands the turn runs through haril_run end with it: an aborted or killed attempt, the kill switch, or the
+  // turn's own end (phase F8).
+  const commands = new AbortController();
+  options.delegationTools?.attach(claimed.runId, workspace, context.epoch, commands.signal);
   const delegation = buildTurnInput(
     view,
     task,
@@ -770,14 +773,20 @@ async function startWorkflowTurn(
     { ...claimed, delegation, ...(workspace === null ? {} : { workspaceRoot: workspace.root }) },
     { runId: claimed.runId, attempt: claimed.attempt },
   );
-  const outcome = await runAttempt(
-    runtimeFor(options, claimed),
-    clock,
-    spec,
-    shutdown,
-    attempt,
-    context.hooks,
-  );
+  let outcome: AgentOutcome;
+  try {
+    outcome = await runAttempt(
+      runtimeFor(options, claimed),
+      clock,
+      spec,
+      shutdown,
+      attempt,
+      context.hooks,
+      () => commands.abort(),
+    );
+  } finally {
+    commands.abort();
+  }
   if (workspace === null || options.workspaces === undefined) return outcome;
   // The executor's surface changes are committed to its branch; every other turn leaves its worktree as it found it.
   try {
@@ -1145,15 +1154,21 @@ async function runAttempt(
   shutdown: Shutdown,
   attempt: LiveAttempt,
   hooks: AttemptHooks,
+  // Called when the attempt is aborted or killed: what the turn started beside its agent (its commands) ends too.
+  onStop: () => void = () => undefined,
 ): Promise<AgentOutcome> {
   const started = await agentRuntime.start(spec);
   if (!started.ok) {
     return { status: "failed", code: started.error.code, message: started.error.message };
   }
   const handle = started.value;
-  const kill = (): Promise<void> => (handle.kill === undefined ? handle.abort() : handle.kill());
+  const kill = (): Promise<void> => {
+    onStop();
+    return handle.kill === undefined ? handle.abort() : handle.kill();
+  };
   // A failed abort or kill call is covered by `settled` and by dispose below.
   attempt.abort = () => {
+    onStop();
     handle.abort().catch(() => undefined);
   };
   attempt.kill = () => {

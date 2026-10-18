@@ -18,7 +18,7 @@ import { openStore } from "@haril/state-sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDelegationTools } from "../src/runtime/delegation-tools.js";
 import { runUntilIdle } from "../src/runtime/run-loop.js";
-import { createShutdown } from "../src/runtime/shutdown.js";
+import { createShutdown, type Shutdown } from "../src/runtime/shutdown.js";
 import { createWorkspaces, integrationBranchOf } from "../src/runtime/worktrees.js";
 import { makeSandbox, type Sandbox } from "./helpers.js";
 
@@ -163,11 +163,18 @@ function tracked(inner: AgentRuntime, store: Store, log: WriterLog): AgentRuntim
   };
 }
 
-async function run(store: Store): Promise<WriterLog> {
+async function run(
+  store: Store,
+  setup: { readonly allow?: readonly string[]; readonly shutdown?: Shutdown } = {},
+): Promise<WriterLog> {
   const log: WriterLog = { peak: 0, overlaps: [] };
   const workspaces = createWorkspaces({
     root: join(sb.root, "wt"),
-    commands: { allow: ["node --version"], timeoutMs: 20_000, outputMaxBytes: 4_096 },
+    commands: {
+      allow: setup.allow ?? ["node --version"],
+      timeoutMs: 60_000,
+      outputMaxBytes: 4_096,
+    },
     git: { env },
     env,
   });
@@ -187,7 +194,7 @@ async function run(store: Store): Promise<WriterLog> {
     onEvent: () => undefined,
     idleExitMs: 0,
     pollMs: 20,
-    shutdown: createShutdown(),
+    shutdown: setup.shutdown ?? createShutdown(),
     delegationTools: tools,
     delegation: { limits: LIMITS },
     workspaces,
@@ -252,6 +259,36 @@ describe.skipIf(!HAS_GIT)("a workflow that writes in parallel", () => {
     expect(commands.every((event) => (event.payload as { exitCode: unknown }).exitCode === 0)).toBe(
       true,
     );
+    // Each command's process was recorded with its run, and marked gone once it ended.
+    expect(store.runs.processes({ endedSince: 0 }).length).toBe(commands.length);
+    expect(store.runs.processes({ unverified: true })).toEqual([]);
+  }, 120_000);
+
+  it("kills the command a turn runs when the runtime stops in an emergency", async () => {
+    writeFileSync(join(repo, "sleep.mjs"), "setTimeout(() => {}, 60000);");
+    git("add", ".");
+    git("commit", "--quiet", "-m", "a slow test");
+    const store = open();
+    startWorkflow(store, "Write the part [fake:parts=1] [fake:steps=1] [fake:run=node sleep.mjs]");
+    const shutdown = createShutdown();
+    // Once the auditor's command is recorded as running, the runtime is stopped at once.
+    const watcher = setInterval(() => {
+      if (store.runs.processes().length > 0) {
+        clearInterval(watcher);
+        shutdown.request("emergency");
+      }
+    }, 50);
+    const started = Date.now();
+    try {
+      await run(store, { allow: ["node sleep.mjs"], shutdown });
+    } finally {
+      clearInterval(watcher);
+    }
+    expect(shutdown.requested).toBe(true);
+    expect(Date.now() - started).toBeLessThan(45_000);
+    // The command was recorded with its run and verified gone: nothing is left for a sweep.
+    expect(store.runs.processes({ endedSince: 0 })).toHaveLength(1);
+    expect(store.runs.processes({ unverified: true })).toEqual([]);
   }, 120_000);
 
   it("lets a delegator resolve the conflict of two parts that wrote the same file", async () => {

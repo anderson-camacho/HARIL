@@ -74,8 +74,9 @@ export interface DelegationTools {
   readonly call: DelegationToolHandler;
   // Opens the window of one workflow turn; the returned function closes it and reports its decided call.
   open(attempt: TurnAttempt): () => TurnWindowReport;
-  // Gives an open window its git worktree once the run loop made it (phase F8), with the epoch of the runtime.
-  attach(runId: string, workspace: TurnWorkspace | null, epoch: number): void;
+  // Gives an open window its git worktree once the run loop made it (phase F8), with the epoch of the runtime and the
+  // turn's end: when it aborts, the commands the turn runs are killed.
+  attach(runId: string, workspace: TurnWorkspace | null, epoch: number, ended?: AbortSignal): void;
   // The delegators' merges (phase F8): the run loop forgets a merge whose turn ended, and the prompt names one waiting.
   readonly integration: Integration;
 }
@@ -87,6 +88,8 @@ interface Window {
   // The turn's git worktree and the runtime epoch its writes are fenced by (phase F8); null for a read-only turn.
   workspace: TurnWorkspace | null;
   epoch: number;
+  // The turn's end (phase F8): the commands it runs end with it.
+  ended: AbortSignal | undefined;
 }
 
 export interface DelegationToolsDeps {
@@ -353,7 +356,28 @@ export function createDelegationTools(deps: DelegationToolsDeps): DelegationTool
     if (tool === "haril_run") {
       const input = valid.input;
       const args = input.args ?? [];
-      const result = await workspaces.run(workspace, input.command, args);
+      const runId = window.attempt.runId;
+      // The command's process is recorded with the run, so a stop and the sweeps find it; it ends with the turn.
+      const result = await workspaces.run(workspace, input.command, args, {
+        ...(window.ended === undefined ? {} : { signal: window.ended }),
+        onSpawn: (child) => {
+          try {
+            store.runs.recordCommand(window.epoch, runId, child);
+          } catch {
+            // A command left unrecorded only leaves the sweeps blind to it.
+          }
+        },
+        onExit: (child) => {
+          try {
+            store.runs.markProcessesGone(
+              [{ runId, pid: child.pid, startedAt: child.startedAt }],
+              clock.now(),
+            );
+          } catch {
+            // Unmarked, the next sweep checks it once more.
+          }
+        },
+      });
       if (!result.ok) return refuse(window, result.reason);
       store.events.append({
         aggregateType: "task",
@@ -409,18 +433,26 @@ export function createDelegationTools(deps: DelegationToolsDeps): DelegationTool
       return check(window, tool, input);
     },
     open: (attempt) => {
-      const window: Window = { attempt, action: null, refusals: [], workspace: null, epoch: 0 };
+      const window: Window = {
+        attempt,
+        action: null,
+        refusals: [],
+        workspace: null,
+        epoch: 0,
+        ended: undefined,
+      };
       windows.set(attempt.runId, window);
       return () => {
         windows.delete(attempt.runId);
         return { action: window.action, refusals: [...window.refusals] };
       };
     },
-    attach: (runId, workspace, epoch) => {
+    attach: (runId, workspace, epoch, ended) => {
       const window = windows.get(runId);
       if (window === undefined) return;
       window.workspace = workspace;
       window.epoch = epoch;
+      window.ended = ended;
     },
     integration,
   };

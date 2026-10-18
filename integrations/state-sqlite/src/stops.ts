@@ -47,6 +47,7 @@ export interface StopsFacet {
   haltState(): HaltState;
   // Writes the pid and start time of a run in flight of this epoch; false when the run is not one.
   recordProcess(epoch: number, runId: string, process: AgentProcess): boolean;
+  recordCommand(epoch: number, runId: string, process: AgentProcess): boolean;
   processes(filter?: RecordedProcessFilter): RecordedProcess[];
   markProcessesGone(
     verified: readonly Pick<RecordedProcess, "runId" | "pid" | "startedAt">[],
@@ -277,32 +278,69 @@ export function createStopsFacet(options: StopsFacetOptions): StopsFacet {
     return Number(changed.changes) > 0;
   };
 
+  // A command a run started through haril_run (phase F8): recorded next to the run's agent, while the run is open.
+  const recordCommand = (epoch: number, runId: string, process: AgentProcess): boolean => {
+    const changed = db
+      .prepare(
+        `INSERT INTO run_commands (run_id, pid, started_at, start_ticks, boot_id, created_at)
+         SELECT run_id, ?, ?, ?, ?, ? FROM runs WHERE run_id = ? AND runtime_epoch = ? AND status IN ${OPEN_RUN}`,
+      )
+      .run(
+        process.pid,
+        process.startedAt,
+        process.boot?.ticks ?? null,
+        process.boot?.bootId ?? null,
+        process.startedAt,
+        runId,
+        epoch,
+      );
+    return Number(changed.changes) > 0;
+  };
+
+  // The agents' processes first, then the commands', each in the order they were recorded; the same run filter applies
+  // to both.
   const processes = (filter: RecordedProcessFilter = {}): RecordedProcess[] => {
     const excludeEpoch = filter.excludeEpoch ?? null;
+    const agentColumns =
+      "r.run_id AS runId, r.task_id AS taskId, r.project_id AS projectId, r.runtime_epoch AS runtimeEpoch, r.status AS runStatus, r.pid AS pid, r.pid_started_at AS startedAt, r.pid_start_ticks AS startTicks, r.pid_boot_id AS bootId";
+    const commandColumns =
+      "r.run_id AS runId, r.task_id AS taskId, r.project_id AS projectId, r.runtime_epoch AS runtimeEpoch, r.status AS runStatus, c.pid AS pid, c.started_at AS startedAt, c.start_ticks AS startTicks, c.boot_id AS bootId";
     if (filter.unverified === true) {
-      return db
+      const where = `NOT (r.status IN ${OPEN_RUN} AND ? IS NOT NULL AND r.runtime_epoch = ?)`;
+      const agents = db
         .prepare(
-          `SELECT run_id AS runId, task_id AS taskId, project_id AS projectId, runtime_epoch AS runtimeEpoch, status AS runStatus, pid, pid_started_at AS startedAt, pid_start_ticks AS startTicks, pid_boot_id AS bootId
-           FROM runs
-           WHERE pid IS NOT NULL AND pid_started_at IS NOT NULL AND pid_gone_at IS NULL
-             AND NOT (status IN ${OPEN_RUN} AND ? IS NOT NULL AND runtime_epoch = ?)
-           ORDER BY created_at, rowid`,
+          `SELECT ${agentColumns} FROM runs r
+           WHERE r.pid IS NOT NULL AND r.pid_started_at IS NOT NULL AND r.pid_gone_at IS NULL AND ${where}
+           ORDER BY r.created_at, r.rowid`,
         )
-        .all(excludeEpoch, excludeEpoch)
-        .map(toRecordedProcess);
+        .all(excludeEpoch, excludeEpoch);
+      const commands = db
+        .prepare(
+          `SELECT ${commandColumns} FROM run_commands c JOIN runs r ON r.run_id = c.run_id
+           WHERE c.gone_at IS NULL AND ${where}
+           ORDER BY c.command_id`,
+        )
+        .all(excludeEpoch, excludeEpoch);
+      return [...agents, ...commands].map(toRecordedProcess);
     }
     const endedSince = filter.endedSince ?? null;
-    return db
+    const where = `((r.status IN ${OPEN_RUN} AND (? IS NULL OR r.runtime_epoch <> ?))
+             OR (? IS NOT NULL AND r.ended_at IS NOT NULL AND r.ended_at >= ?))`;
+    const agents = db
       .prepare(
-        `SELECT run_id AS runId, task_id AS taskId, project_id AS projectId, runtime_epoch AS runtimeEpoch, status AS runStatus, pid, pid_started_at AS startedAt, pid_start_ticks AS startTicks, pid_boot_id AS bootId
-         FROM runs
-         WHERE pid IS NOT NULL AND pid_started_at IS NOT NULL
-           AND ((status IN ${OPEN_RUN} AND (? IS NULL OR runtime_epoch <> ?))
-             OR (? IS NOT NULL AND ended_at IS NOT NULL AND ended_at >= ?))
-         ORDER BY created_at, rowid`,
+        `SELECT ${agentColumns} FROM runs r
+         WHERE r.pid IS NOT NULL AND r.pid_started_at IS NOT NULL AND ${where}
+         ORDER BY r.created_at, r.rowid`,
       )
-      .all(excludeEpoch, excludeEpoch, endedSince, endedSince)
-      .map(toRecordedProcess);
+      .all(excludeEpoch, excludeEpoch, endedSince, endedSince);
+    const commands = db
+      .prepare(
+        `SELECT ${commandColumns} FROM run_commands c JOIN runs r ON r.run_id = c.run_id
+         WHERE ${where}
+         ORDER BY c.command_id`,
+      )
+      .all(excludeEpoch, excludeEpoch, endedSince, endedSince);
+    return [...agents, ...commands].map(toRecordedProcess);
   };
 
   const markProcessesGone = (
@@ -312,9 +350,13 @@ export function createStopsFacet(options: StopsFacetOptions): StopsFacet {
     const mark = db.prepare(
       "UPDATE runs SET pid_gone_at = ? WHERE run_id = ? AND pid = ? AND pid_started_at = ? AND pid_gone_at IS NULL",
     );
+    const markCommand = db.prepare(
+      "UPDATE run_commands SET gone_at = ? WHERE run_id = ? AND pid = ? AND started_at = ? AND gone_at IS NULL",
+    );
     let marked = 0;
     for (const record of verified) {
       marked += Number(mark.run(at, record.runId, record.pid, record.startedAt).changes);
+      marked += Number(markCommand.run(at, record.runId, record.pid, record.startedAt).changes);
     }
     return marked;
   };
@@ -348,6 +390,7 @@ export function createStopsFacet(options: StopsFacetOptions): StopsFacet {
     resume,
     haltState,
     recordProcess,
+    recordCommand,
     processes,
     markProcessesGone,
     activity,

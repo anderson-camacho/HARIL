@@ -21,6 +21,7 @@ import {
 } from "@haril/git";
 import { readConfinedFile, writeConfinedFile } from "@haril/os";
 import {
+  type HostCommandProcess,
   type HostCommandResult,
   type HostCommandSettings,
   runHostCommand,
@@ -85,6 +86,13 @@ export interface TurnWorkspace {
 // How git runs on a turn's worktree: its own git folder and work tree, named on every run.
 export function worktreeGit(git: GitOptions, workspace: TurnWorkspace): GitOptions {
   return { ...git, gitDir: workspace.gitDir, workTree: workspace.root };
+}
+
+export interface CommandHooks {
+  // The turn's end: an aborted turn kills the command's tree.
+  readonly signal?: AbortSignal;
+  readonly onSpawn?: (process: HostCommandProcess) => void;
+  readonly onExit?: (process: HostCommandProcess) => void;
 }
 
 export type WorkspaceReply =
@@ -194,10 +202,12 @@ export interface Workspaces {
     path: string,
     edits: EditInput["edits"],
   ): Promise<WorkspaceReply>;
+  // Runs an allowed command in the turn's worktree; `hooks` end it with the turn and report its process.
   run(
     workspace: TurnWorkspace,
     command: string,
     args: readonly string[],
+    hooks?: CommandHooks,
   ): Promise<HostCommandResult>;
   // Runs `work` alone among the mutating git operations of the repository.
   withRepository<T>(repo: string, work: () => Promise<T>): Promise<T>;
@@ -543,7 +553,7 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
     return { ok: true, path: checked.path, edits: edits.length };
   };
 
-  const run: Workspaces["run"] = (workspace, command, args) =>
+  const run: Workspaces["run"] = (workspace, command, args, hooks = {}) =>
     runHostCommand({
       command,
       args,
@@ -551,6 +561,9 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
       settings: settings.commands,
       ...(settings.env === undefined ? {} : { env: settings.env }),
       ...(settings.killTree === undefined ? {} : { killTree: settings.killTree }),
+      ...(hooks.signal === undefined ? {} : { signal: hooks.signal }),
+      ...(hooks.onSpawn === undefined ? {} : { onSpawn: hooks.onSpawn }),
+      ...(hooks.onExit === undefined ? {} : { onExit: hooks.onExit }),
     });
 
   const retireExecutor: Workspaces["retireExecutor"] = async (store, epoch, record, repo) => {

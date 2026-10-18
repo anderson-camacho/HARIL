@@ -17,6 +17,10 @@ import { delimiter, isAbsolute, join, win32 } from "node:path";
 //     temporary folders, the locale), plus CI=true and the switches that keep tools quiet. No key, token or other
 //     variable of the runtime reaches the command;
 //   - a time limit (the command's tree is killed when it passes) and an output limit (the end of each stream is kept);
+//   - the command's process is reported when it starts and when it ends (onSpawn, onExit), so the runtime records it like
+//     an agent's and a stop or a sweep can kill its verified tree; an aborted turn (signal) kills it at once;
+//   - the answer never waits on a process the command left behind: once the command exits (or is killed), its output
+//     streams get a short drain and are then closed, whatever still holds them;
 //   - the result comes back as data: the exit code, whether it timed out, the duration and the end of its output.
 // N0 (3.10.6): there is no sandbox. An allowed command such as `npm test` runs the project's own code with the user's
 // rights, and that code is what the agents wrote: a test script can do anything the user can. The allow list is the
@@ -278,6 +282,8 @@ export type HostCommandResult =
       readonly stderr: string;
       // Some output was left out: only the end of each stream came back.
       readonly truncated: boolean;
+      // The turn was aborted while the command ran: its tree was killed.
+      readonly aborted?: boolean;
     }
   | { readonly ok: false; readonly reason: string };
 
@@ -296,7 +302,21 @@ export interface HostCommandRequest {
     readonly pid: number;
     readonly startedAt: number;
   }) => Promise<void>;
+  // The turn's end: when it aborts, the command's tree is killed (and a command not started yet never starts).
+  readonly signal?: AbortSignal;
+  // The command's process once it started, and once it ended (the runtime records it and marks it gone).
+  readonly onSpawn?: (process: HostCommandProcess) => void;
+  readonly onExit?: (process: HostCommandProcess) => void;
 }
+
+export interface HostCommandProcess {
+  readonly pid: number;
+  readonly startedAt: number;
+}
+
+// How long the output streams may stay open after the command exited or was killed (a process it left behind may hold
+// them); then they are closed and the answer comes back.
+const DRAIN_MS = 1_500;
 
 // The end of a stream, kept within `max` bytes as chunks arrive.
 class Tail {
@@ -338,6 +358,9 @@ export function runHostCommand(request: HostCommandRequest): Promise<HostCommand
       reason: `"${[request.command, ...request.args].join(" ").slice(0, 200)}" is not in the allow list (allowed: ${allowed})`,
     });
   }
+  if (request.signal?.aborted === true) {
+    return Promise.resolve({ ok: false, reason: "the turn ended; the command was not started" });
+  }
   const env = cleanEnvironment(request.env ?? process.env, platform);
   const program = resolveProgram(request.command, env, platform);
   if (!program.ok) return Promise.resolve(program);
@@ -346,6 +369,7 @@ export function runHostCommand(request: HostCommandRequest): Promise<HostCommand
     const stdout = new Tail(settings.outputMaxBytes);
     const stderr = new Tail(settings.outputMaxBytes);
     let timedOut = false;
+    let aborted = false;
     let child: ReturnType<typeof spawn>;
     try {
       child = spawn(program.file, [...program.prefix, ...request.args], {
@@ -364,11 +388,29 @@ export function runHostCommand(request: HostCommandRequest): Promise<HostCommand
       return;
     }
     const spawnedAt = Date.now();
+    const pid = child.pid;
+    const spawned: HostCommandProcess | undefined =
+      pid === undefined ? undefined : { pid, startedAt: spawnedAt };
+    if (spawned !== undefined) {
+      try {
+        request.onSpawn?.(spawned);
+      } catch {
+        // An unrecorded command only leaves a stop blind to it; the command itself goes on.
+      }
+    }
     child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
     child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
-    const timer = setTimeout(() => {
-      timedOut = true;
-      const pid = child.pid;
+    let drain: NodeJS.Timeout | undefined;
+    // Closes the output streams after a short drain: a process the command left behind may still hold them open.
+    const closeStreamsSoon = (): void => {
+      if (drain !== undefined) return;
+      drain = setTimeout(() => {
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+      }, DRAIN_MS);
+      drain.unref?.();
+    };
+    const killTree = (): void => {
       const fallback = (): void => {
         try {
           if (pid !== undefined && platform !== "win32") process.kill(-pid, "SIGKILL");
@@ -377,32 +419,55 @@ export function runHostCommand(request: HostCommandRequest): Promise<HostCommand
           child.kill("SIGKILL");
         }
       };
-      if (pid !== undefined && request.killTree !== undefined) {
-        request.killTree({ pid, startedAt: spawnedAt }).then(() => child.kill("SIGKILL"), fallback);
+      if (spawned !== undefined && request.killTree !== undefined) {
+        request.killTree(spawned).then(() => child.kill("SIGKILL"), fallback);
       } else {
         fallback();
       }
+      closeStreamsSoon();
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killTree();
     }, settings.timeoutMs);
+    const onAbort = (): void => {
+      aborted = true;
+      killTree();
+    };
+    request.signal?.addEventListener("abort", onAbort, { once: true });
     let done = false;
     const finish = (result: HostCommandResult): void => {
       if (done) return;
       done = true;
       clearTimeout(timer);
+      if (drain !== undefined) clearTimeout(drain);
+      request.signal?.removeEventListener("abort", onAbort);
       resolve(result);
     };
     child.on("error", (error) => {
       finish({ ok: false, reason: `${request.command} could not start: ${error.message}` });
     });
+    child.on("exit", () => {
+      if (spawned !== undefined) {
+        try {
+          request.onExit?.(spawned);
+        } catch {
+          // Unmarked, the next sweep checks the process once more.
+        }
+      }
+      closeStreamsSoon();
+    });
     child.on("close", (code, signal) => {
       finish({
         ok: true,
-        exitCode: timedOut ? null : code,
+        exitCode: timedOut || aborted ? null : code,
         signal: signal ?? null,
         timedOut,
         durationMs: Date.now() - started,
         stdout: stdout.text(),
         stderr: stderr.text(),
         truncated: stdout.cut || stderr.cut,
+        ...(aborted ? { aborted: true } : {}),
       });
     });
   });

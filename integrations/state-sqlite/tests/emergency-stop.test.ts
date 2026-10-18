@@ -517,6 +517,35 @@ describe("recorded processes and run activity", () => {
     expect(store.runs.processes().map((item) => item.runId)).toEqual([live.runId]);
   });
 
+  it("records the commands a run started next to its agent, lists both and marks each gone on its own", () => {
+    const claimed = claim(addTask("Runs the tests"));
+    store.runs.recordProcess(epoch, claimed.runId, { pid: 500, startedAt: clock.now() });
+    store.runs.recordCommand(epoch, claimed.runId, { pid: 501, startedAt: clock.now() + 1 });
+    store.runs.recordCommand(epoch, claimed.runId, { pid: 502, startedAt: clock.now() + 2 });
+    const pids = (filter?: Parameters<typeof store.runs.processes>[0]) =>
+      store.runs.processes(filter).map((item) => item.pid);
+    expect(pids()).toEqual([500, 501, 502]);
+    expect(store.runs.processes()[1]).toMatchObject({
+      runId: claimed.runId,
+      runStatus: "running",
+      pid: 501,
+    });
+    expect(
+      store.runs.markProcessesGone(
+        [{ runId: claimed.runId, pid: 501, startedAt: clock.now() + 1 }],
+        clock.now(),
+      ),
+    ).toBe(1);
+    expect(pids({ unverified: true })).toEqual([500, 502]);
+    // A dead runtime's commands are orphans of the next one, like its agents.
+    clock.advance(120_000);
+    const next = acquire();
+    expect(pids({ unverified: true, excludeEpoch: next })).toEqual([500, 502]);
+    expect(
+      caught(() => store.runs.recordCommand(epoch, claimed.runId, { pid: 1, startedAt: 1 })).code,
+    ).toBe("store.fenced");
+  });
+
   it("refuses to record a process under another epoch", () => {
     const claimed = claim(addTask("Slow standalone"));
     store.runtime.release(epoch, true);

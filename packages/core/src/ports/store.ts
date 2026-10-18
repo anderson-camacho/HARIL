@@ -874,6 +874,9 @@ export interface Store {
     cancel(runId: string, reason: "shutdown" | CancelReason): CompletedRun;
     // Records the process that serves a running run of this epoch (3.14).
     recordProcess(epoch: number, runId: string, process: AgentProcess): void;
+    // Records a command a running run of this epoch started through haril_run (phase F8): the host runs it, outside the
+    // agent's process tree, so a stop and the sweeps find it here, listed with the run's processes.
+    recordCommand(epoch: number, runId: string, process: AgentProcess): void;
     // The processes runs recorded, as the filter selects them; with no filter, those of every open run.
     processes(filter?: RecordedProcessFilter): readonly RecordedProcess[];
     // Marks recorded processes verified gone (not running, or their pid now names another process). A mark names the

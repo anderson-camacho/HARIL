@@ -315,6 +315,11 @@ export class SqliteStore implements Store {
           this.assertActiveEpoch(epoch);
           this.stops.recordProcess(epoch, runId, process);
         }),
+      recordCommand: (epoch, runId, process) =>
+        this.inTransaction(() => {
+          this.assertActiveEpoch(epoch);
+          this.stops.recordCommand(epoch, runId, process);
+        }),
       processes: (filter) => this.stops.processes(filter),
       markProcessesGone: (verified, at) =>
         this.inTransaction(() => this.stops.markProcessesGone(verified, at)),

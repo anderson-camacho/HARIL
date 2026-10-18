@@ -1,6 +1,6 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { DEFAULT_COMMAND_ALLOW } from "@haril/contracts";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -34,6 +34,7 @@ beforeAll(() => {
       'if (mode === "sleep") setTimeout(() => console.log("woke"), 10000);',
       'if (mode === "flood") { process.stdout.write("x".repeat(100000)); process.stdout.write("END"); }',
       'if (mode === "fail") { console.error("boom"); process.exit(3); }',
+      'if (mode === "orphan") { const { spawn } = await import("node:child_process"); const c = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], { stdio: "inherit", detached: true }); console.log("orphan " + c.pid); c.unref(); }',
     ].join("\n"),
   );
 });
@@ -283,6 +284,63 @@ describe("runHostCommand", () => {
     if (!result.ok) return;
     expect(result.stdout.length).toBeLessThanOrEqual(1_000);
     expect(result.stdout.endsWith("END")).toBe(true);
+  });
+
+  it("says which process it started and when it ended, so a stop can find it", async () => {
+    const seen: string[] = [];
+    const result = await runHostCommand({
+      command: "node",
+      args: ["probe.mjs", "argv"],
+      cwd: dir,
+      settings: settings(),
+      env: { ...parentEnv(), PATH: `${nodeDir}${delimiter}${parentEnv().PATH ?? ""}` },
+      onSpawn: (child) => seen.push(`spawn ${child.pid > 0} ${child.startedAt > 0}`),
+      onExit: (child) => seen.push(`exit ${child.pid > 0}`),
+    });
+    expect(result).toMatchObject({ ok: true, exitCode: 0 });
+    expect(seen).toEqual(["spawn true true", "exit true"]);
+  });
+
+  it("kills the command when its turn is aborted", async () => {
+    const controller = new AbortController();
+    const started = Date.now();
+    const pending = runHostCommand({
+      command: "node",
+      args: ["probe.mjs", "sleep"],
+      cwd: dir,
+      settings: settings(),
+      env: { ...parentEnv(), PATH: `${nodeDir}${delimiter}${parentEnv().PATH ?? ""}` },
+      signal: controller.signal,
+    });
+    setTimeout(() => controller.abort(), 300);
+    const result = await pending;
+    expect(result).toMatchObject({ ok: true, exitCode: null, aborted: true });
+    expect(Date.now() - started).toBeLessThan(8_000);
+    // An aborted signal stops a command before it starts.
+    const late = await runHostCommand({
+      command: "node",
+      args: ["probe.mjs", "argv"],
+      cwd: dir,
+      settings: settings(),
+      env: { ...parentEnv(), PATH: `${nodeDir}${delimiter}${parentEnv().PATH ?? ""}` },
+      signal: controller.signal,
+    });
+    expect(late).toMatchObject({ ok: false });
+  });
+
+  it("answers once the command exits even when a process it left keeps its output open", async () => {
+    const started = Date.now();
+    const result = await run(["orphan"], { timeoutMs: 30_000 });
+    expect(result).toMatchObject({ ok: true, exitCode: 0, timedOut: false });
+    expect(Date.now() - started).toBeLessThan(15_000);
+    const orphan = result.ok ? Number(/orphan (\d+)/.exec(result.stdout)?.[1]) : Number.NaN;
+    if (Number.isInteger(orphan)) {
+      try {
+        process.kill(orphan, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+    }
   });
 
   it("refuses a command outside the allow list and says what is allowed", async () => {
