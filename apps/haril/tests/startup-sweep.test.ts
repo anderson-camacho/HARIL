@@ -6,9 +6,11 @@ import {
   checkAcceptance,
   checkPlanSubmission,
   checkTaskKind,
+  planProcessKills,
+  processStartWindow,
   type RunEvent,
 } from "@haril/core";
-import type { Clock, Store } from "@haril/core/ports";
+import type { BootStart, Clock, Store } from "@haril/core/ports";
 import { FakeAgentRuntime } from "@haril/core/testing";
 import { openStore } from "@haril/state-sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -44,6 +46,8 @@ const TREE_SCRIPT =
   "const g = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });" +
   "console.log(g.pid); setInterval(() => {}, 1000);";
 const HOUR = 3_600_000;
+// An hour of Linux /proc start ticks (USER_HZ 100).
+const HOUR_TICKS = 360_000;
 
 let sb: Sandbox;
 const stores: Store[] = [];
@@ -118,6 +122,31 @@ function crashedRuntime(store: Store): { epoch: number; runs: string[]; tasks: s
   return { epoch, runs, tasks };
 }
 
+// Each recorded process with the start the OS shows for its pid now (wall clock, and boot ticks on Linux), and what the
+// sweep's plan makes of it: the explanation a failed assertion carries.
+async function sweepDiagnostics(store: Store): Promise<string> {
+  const records = store.runs.processes({ unverified: true });
+  const pids = records.map((record) => record.pid);
+  const startTimes = await processControl.startTimes(pids);
+  if (startTimes === undefined) return "the OS's start times could not be read";
+  const boots = processControl.bootStarts?.(pids) ?? new Map<number, BootStart>();
+  const plan = planProcessKills(records, startTimes, processStartWindow(process.platform), boots);
+  const verdict = (record: (typeof records)[number]): string =>
+    plan.kill.includes(record)
+      ? "kill"
+      : plan.reused.includes(record)
+        ? "keep"
+        : plan.uncertain.includes(record)
+          ? "uncertain"
+          : "gone";
+  return records
+    .map(
+      (record) =>
+        `pid ${record.pid}: recorded ${record.startedAt} ${JSON.stringify(record.boot ?? null)}, observed ${String(startTimes.get(record.pid))} ${JSON.stringify(boots.get(record.pid) ?? null)}, plan ${verdict(record)}`,
+    )
+    .join("; ");
+}
+
 describe("the startup sweep", () => {
   it("kills the agent tree a dead runtime left, keeps a reused pid, then recovers and runs the orphaned tasks", async () => {
     const store = open();
@@ -125,15 +154,28 @@ describe("the startup sweep", () => {
     const orphan = await spawnTree();
     // The second run's pid now names a process that started an hour after the recorded one: a reused pid.
     const reused = await spawnTree();
+    // Recorded as a real run records them: on Linux with the boot ticks and the boot's id, which decide there (a start
+    // without them can only be compared by wall clock, and a mismatch then proves nothing: neither kill nor keep).
+    const boots = processControl.bootStarts?.([orphan.pid, reused.pid]);
+    const orphanBoot = boots?.get(orphan.pid);
+    const reusedBoot = boots?.get(reused.pid);
     store.runs.recordProcess(crashed.epoch, crashed.runs[0] as string, {
       pid: orphan.pid,
       startedAt: orphan.startedAt,
+      ...(orphanBoot === undefined ? {} : { boot: orphanBoot }),
     });
     store.runs.recordProcess(crashed.epoch, crashed.runs[1] as string, {
       pid: reused.pid,
       startedAt: reused.startedAt - HOUR,
+      ...(reusedBoot === undefined
+        ? {}
+        : {
+            boot: { bootId: reusedBoot.bootId, ticks: Math.max(0, reusedBoot.ticks - HOUR_TICKS) },
+          }),
     });
     await new Promise((resolve) => setTimeout(resolve, 10));
+    // What the sweep is about to see, so a failure explains itself: each recorded start next to the OS's, and the plan.
+    const diagnostics = await sweepDiagnostics(store);
 
     const events: RunEvent[] = [];
     const result = await runUntilIdle({
@@ -150,15 +192,21 @@ describe("the startup sweep", () => {
     });
 
     expect(result.kind).toBe("idle");
-    expect(alive(orphan.pid)).toBe(false);
+    const swept = JSON.stringify(events.find((event) => event.type === "runtime.swept") ?? null);
+    const why = `${diagnostics}; swept ${swept}`;
+    // A killed child of this test stays a zombie until Node reaps it: a moment is allowed for that, never more.
     const deadline = Date.now() + 2000;
-    while (alive(orphan.grandchild) && Date.now() < deadline) {
+    while ((alive(orphan.pid) || alive(orphan.grandchild)) && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
-    expect(alive(orphan.grandchild)).toBe(false);
-    expect(alive(reused.pid)).toBe(true);
-    expect(alive(reused.grandchild)).toBe(true);
-    expect(events.find((event) => event.type === "runtime.swept")).toEqual({
+    expect(alive(orphan.pid), why).toBe(false);
+    expect(alive(orphan.grandchild), why).toBe(false);
+    expect(alive(reused.pid), why).toBe(true);
+    expect(alive(reused.grandchild), why).toBe(true);
+    expect(
+      events.find((event) => event.type === "runtime.swept"),
+      why,
+    ).toEqual({
       type: "runtime.swept",
       killed: 1,
       kept: 1,
@@ -167,7 +215,7 @@ describe("the startup sweep", () => {
       .list()
       .filter((event) => event.type.startsWith("run.process_"))
       .map((event) => [event.type, event.runId, event.payload.pid]);
-    expect(audit).toEqual([
+    expect(audit, why).toEqual([
       ["run.process_killed", crashed.runs[0], orphan.pid],
       ["run.process_kept", crashed.runs[1], reused.pid],
     ]);
