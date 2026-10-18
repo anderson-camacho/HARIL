@@ -237,6 +237,8 @@ describe.skipIf(!HAS_GIT)("a workflow that writes in parallel", () => {
         .every((record) => record.mergedAt !== null),
     ).toBe(true);
     for (const record of worktrees) expect(existsSync(record.path), record.path).toBe(false);
+    // The workflow's folder of worktrees went with its last worktree.
+    expect(existsSync(dirname(worktrees[0]?.path ?? ""))).toBe(false);
     expect(git("branch", "--list", `haril/${workflow.workflowId}/step/*`)).toBe("");
     expect(git("worktree", "list", "--porcelain").match(/^worktree /gm)).toHaveLength(1);
 

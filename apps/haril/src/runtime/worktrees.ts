@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { join, resolve } from "node:path";
+import { rmdir } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import type { EditInput } from "@haril/contracts";
 import { checkWorkspacePath, pathMatchesSurface, visibleText } from "@haril/core";
 import type { AgentOutcome, Store, WorktreeRecord } from "@haril/core/ports";
@@ -518,6 +519,8 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
       if (!done) continue;
       store.worktrees.markRemoved(epoch, record.worktreeId);
       removed += 1;
+      // The workflow's folder goes with its last worktree (rmdir refuses a folder that still holds one).
+      await rmdir(dirname(record.path)).catch(() => undefined);
     }
     return removed;
   };
