@@ -34,14 +34,14 @@ beforeAll(() => {
       'if (mode === "sleep") setTimeout(() => console.log("woke"), 10000);',
       'if (mode === "flood") { process.stdout.write("x".repeat(100000)); process.stdout.write("END"); }',
       'if (mode === "fail") { console.error("boom"); process.exit(3); }',
-      'if (mode === "orphan") { const { spawn } = await import("node:child_process"); const c = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], { stdio: "inherit", detached: true }); console.log("orphan " + c.pid); c.unref(); }',
+      'if (mode === "orphan") { const { spawn } = await import("node:child_process"); const { tmpdir } = await import("node:os"); const c = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], { stdio: "inherit", detached: true, cwd: tmpdir() }); console.log("orphan " + c.pid); c.unref(); }',
     ].join("\n"),
   );
 });
 
 afterAll(() => {
   // A process a test left behind may hold the folder for a moment after its kill.
-  rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  rmSync(dir, { recursive: true, force: true, maxRetries: 50, retryDelay: 100 });
 });
 
 const parentEnv = (): NodeJS.ProcessEnv => ({

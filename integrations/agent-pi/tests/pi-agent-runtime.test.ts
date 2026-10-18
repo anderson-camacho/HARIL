@@ -80,7 +80,8 @@ afterEach(async () => {
     }
     await until(() => !alive(pid), `stray ${pid} gone`);
   }
-  rmSync(tmp, { recursive: true, force: true });
+  // A killed process may hold the folder for a moment after it is gone (Windows, under the full suite's load).
+  rmSync(tmp, { recursive: true, force: true, maxRetries: 50, retryDelay: 100 });
 });
 
 function alive(pid: number): boolean {
