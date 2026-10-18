@@ -44,6 +44,7 @@ import type { PlanAttemptReport, PlanProposals } from "./plan-proposals.js";
 import type { RealAgentReadiness, RealAgents } from "./real-agent.js";
 import { createShutdown, RUNTIME_STOP, type Shutdown } from "./shutdown.js";
 import { claimWorkflowTurns, settleWorkflows } from "./workflow-scheduler.js";
+import { summarizeWorkflows, type WorkflowTally } from "./workflow-summary.js";
 import { buildTurnInput, commitWorkflowAttempt } from "./workflow-turns.js";
 import { type DelegationOptions, WorkflowView, workflowSettings } from "./workflow-view.js";
 
@@ -115,11 +116,16 @@ export interface RunLoopOptions {
 }
 
 // memory: what a runtime that exits leaves for memory (MC-T4 fix): the tasks that wait for it and the queued writes,
-// which the next runtime resumes. memoryLeftLine says it.
+// which the next runtime resumes. memoryLeftLine says it. workflows: the workflow turns it closed and how the workflows
+// it moved ended (phase F2b).
 export type RunLoopResult =
   | { readonly kind: "busy"; readonly pid: number }
-  | { readonly kind: "idle"; readonly summary: RunSummary; readonly memory: MemoryLeft }
-  | { readonly kind: "stopped"; readonly summary: RunSummary; readonly memory: MemoryLeft };
+  | {
+      readonly kind: "idle" | "stopped";
+      readonly summary: RunSummary;
+      readonly workflows: WorkflowTally;
+      readonly memory: MemoryLeft;
+    };
 
 export async function runUntilIdle(options: RunLoopOptions): Promise<RunLoopResult> {
   const { store } = options;
@@ -176,7 +182,12 @@ export async function runUntilIdle(options: RunLoopOptions): Promise<RunLoopResu
     emitMemoryTick(await memory.start(), emit);
     // serve() releases the lease itself, cleanly, on idle and on a stop.
     const kind = await serve(options, shutdown, { epoch, beat, emit, setup, memory });
-    return { kind, summary: summarizeRun(events), memory: memoryLeftOf(store, memory.state) };
+    return {
+      kind,
+      summary: summarizeRun(events),
+      workflows: summarizeWorkflows(events),
+      memory: memoryLeftOf(store, memory.state),
+    };
   } finally {
     stopNotice();
     // The channel closes before the lease is released (ARCH 4.3). Its files are removed only while they still belong to

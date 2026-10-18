@@ -67,6 +67,10 @@ describe("haril workflow start, list, show and continue", () => {
       status: "queued",
     });
     expect(await invoke(["run"])).toBe(0);
+    // A workflow that waits for the human is neither completed nor failed: the run exits 0 and says it waits.
+    expect(h.out[h.out.length - 1]).toBe(
+      "done: 0 completed, 0 failed, 0 blocked; workflows: 1 turn, 0 completed, 0 failed, 1 waiting",
+    );
     const id = await workflowId();
     expect(await invoke(["workflow", "show", id])).toBe(0);
     const paused = h.out.join("\n");

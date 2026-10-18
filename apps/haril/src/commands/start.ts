@@ -9,6 +9,7 @@ import { createPlanProposals } from "../runtime/plan-proposals.js";
 import { createRealAgents } from "../runtime/real-agent.js";
 import { runUntilIdle } from "../runtime/run-loop.js";
 import { attachStopSignals, createShutdown } from "../runtime/shutdown.js";
+import { workflowExitCode, workflowSummaryText } from "../runtime/workflow-summary.js";
 import { dataDirFor, failureReasonText, openExisting } from "./common.js";
 
 // `haril start` (M1-T5, LD-T1): the foreground runtime. It applies the queue, runs the ready tasks and stays up for new
@@ -139,9 +140,19 @@ async function serve(
       return EXIT_ERROR;
     }
 
-    const exitCode = runExitCode(result.summary);
+    // A workflow that failed fails the run, as a failed task does (phase F2b).
+    const exitCode = Math.max(runExitCode(result.summary), workflowExitCode(result.workflows)) as
+      | 0
+      | 1;
     if (json) {
-      io.out(JSON.stringify({ ...result.summary, memory: result.memory, exitCode }));
+      io.out(
+        JSON.stringify({
+          ...result.summary,
+          workflows: result.workflows,
+          memory: result.memory,
+          exitCode,
+        }),
+      );
     } else {
       // MC-T4 fix: the tasks that wait for memory and the queued writes outlive this runtime; the next one resumes them.
       const memoryLeft = memoryLeftLine(result.memory);
@@ -150,7 +161,7 @@ async function serve(
         result.summary.skipped.length === 0 ? "" : `, ${result.summary.skipped.length} skipped`;
       const whose = mode === "start" ? ` (pid ${pid})` : "";
       io.out(
-        `done: ${result.summary.completed.length} completed, ${result.summary.failed.length} failed, ${result.summary.blocked.length} blocked${skipped}${whose}`,
+        `done: ${result.summary.completed.length} completed, ${result.summary.failed.length} failed, ${result.summary.blocked.length} blocked${skipped}${workflowSummaryText(result.workflows)}${whose}`,
       );
     }
     return exitCode;

@@ -75,6 +75,7 @@ async function turn(prompt) {
   await chat(prompt);
   const first = prompt.includes("(first).");
   if (tools.includes("haril_delegate")) {
+    if (prompt.includes("[abort]")) return call("haril_abort", { reason: "the notes folder is empty" });
     if (!first) return call("haril_request_audit", { summary: ${JSON.stringify(SUMMARY)}, outstanding: [] });
     return call("haril_delegate", {
       schemaVersion: 1,
@@ -224,6 +225,10 @@ describe("a workflow of real archetype agents (F2b)", () => {
       const output = ran.out.join("\n");
       expect(ran.code, output).toBe(0);
       expect(output).toMatch(/^workflow \S+ completed$/m);
+      // The summary counts the workflow's turns and how the workflow ended.
+      expect(ran.out[ran.out.length - 1]).toBe(
+        "done: 0 completed, 0 failed, 0 blocked; workflows: 9 turns, 1 completed, 0 failed",
+      );
 
       const tree = inspect((view, store) => {
         const labels = view.tasks.map((task) => `${view.label(task.threadId)}:${task.state}`);
@@ -288,6 +293,55 @@ describe("a workflow of real archetype agents (F2b)", () => {
           "tool.haril_verdict:ok",
         ].sort(),
       );
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "shows a failed workflow in the run summary and exits 1, as a failed task does",
+    async () => {
+      const started = await cli([
+        "workflow",
+        "start",
+        "Report the facts of the notes folder [abort]",
+        "--model",
+        "cliproxy/fake-model",
+        "--agent",
+        "orchestrator",
+        "--autonomous",
+      ]);
+      expect(started.code, started.err.join("\n")).toBe(0);
+
+      const ran = await cli(["run"], realHost());
+      expect(ran.code).toBe(1);
+      expect(ran.out.join("\n")).toMatch(
+        /^workflow \S+ failed: aborted: the notes folder is empty$/m,
+      );
+      expect(ran.out[ran.out.length - 1]).toBe(
+        "done: 0 completed, 0 failed, 0 blocked; workflows: 1 turn, 0 completed, 1 failed",
+      );
+
+      // --json carries the same tally and the exit code.
+      const again = await cli([
+        "workflow",
+        "start",
+        "Report again [abort]",
+        "--model",
+        "cliproxy/fake-model",
+        "--agent",
+        "orchestrator",
+        "--autonomous",
+      ]);
+      expect(again.code).toBe(0);
+      const json = await cli(["run", "--json"], realHost());
+      expect(json.code).toBe(1);
+      const summary = JSON.parse(json.out.join("\n")) as {
+        workflows: { turns: number; completed: string[]; failed: string[]; waiting: string[] };
+        exitCode: number;
+      };
+      expect(summary.exitCode).toBe(1);
+      expect(summary.workflows).toMatchObject({ turns: 1, completed: [], waiting: [] });
+      expect(summary.workflows.failed).toHaveLength(1);
     },
     TEST_TIMEOUT_MS,
   );
