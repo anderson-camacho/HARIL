@@ -159,6 +159,13 @@ describe("haril_save_research", () => {
   it("saves in CONSULT and the trace names the file", async () => {
     modes.switchTo("consult", ctx);
     await fake.fire("before_agent_start", { systemPrompt: "", messageType: "user" }, ctx);
+    await reply([
+      {
+        id: "c1",
+        name: "haril_save_research",
+        arguments: { title: "Runtime claims", content: "# x" },
+      },
+    ]);
     await toolCall("haril_save_research", { title: "Runtime claims", content: "# x" }, "c1");
     const result = await fake.tools
       .get("haril_save_research")
@@ -167,52 +174,75 @@ describe("haril_save_research", () => {
       /^saved docs[\\/]investigacion[\\/]\d{4}-\d{2}-\d{2}-runtime-claims\.md/,
     );
     expect(readdirSync(join(root, RESEARCH_DIR))).toHaveLength(1);
-    await fake.fire(
-      "tool_result",
-      {
-        toolCallId: "c1",
-        toolName: "haril_save_research",
-        input: {},
-        isError: false,
-        content: result?.content ?? [],
-      },
-      ctx,
-    );
+    await toolResult("c1", "haril_save_research", false, result?.content[0]?.text ?? "");
     await fake.fire("agent_end", { messages: [] }, ctx);
     const trace = fake.entries.find((entry) => entry.customType === "haril-trace");
     expect(JSON.stringify(trace?.data)).toMatch(/Research saved: docs.+runtime-claims\.md/);
   });
 });
 
+// A reply that asks for tool calls, as Pi reports it at message_end.
+async function reply(
+  calls: { id: string; name: string; arguments: Record<string, unknown> }[],
+  usage: Record<string, number> = { input: 0, output: 0 },
+): Promise<void> {
+  await fake.fire(
+    "message_end",
+    {
+      message: {
+        role: "assistant",
+        content: calls.map((call) => ({ type: "toolCall", ...call })),
+        usage,
+      },
+    },
+    ctx,
+  );
+}
+
+async function toolResult(
+  id: string,
+  toolName: string,
+  isError: boolean,
+  text: string,
+): Promise<void> {
+  await fake.fire(
+    "message_end",
+    {
+      message: {
+        role: "toolResult",
+        toolCallId: id,
+        toolName,
+        isError,
+        content: [{ type: "text", text }],
+      },
+    },
+    ctx,
+  );
+}
+
 describe("the CONSULT trace in the chat", () => {
   it("records each call, the blocked ones, the tokens and the time, then draws it", async () => {
     modes.switchTo("consult", ctx);
     await fake.fire("before_agent_start", { systemPrompt: "", messageType: "user" }, ctx);
+    await reply(
+      [
+        { id: "r1", name: "read", arguments: { path: "src/console.ts" } },
+        { id: "w1", name: "write", arguments: { path: "src/x.ts", content: "body" } },
+      ],
+      { input: 900, output: 120 },
+    );
     await toolCall("read", { path: "src/console.ts" }, "r1");
-    await fake.fire(
-      "tool_result",
-      {
-        toolCallId: "r1",
-        toolName: "read",
-        input: {},
-        isError: false,
-        content: [{ type: "text", text: "a\nb" }],
-      },
-      ctx,
-    );
-    await toolCall("write", { path: "src/x.ts", content: "body" }, "w1");
-    await fake.fire(
-      "message_end",
-      { message: { role: "assistant", usage: { input: 900, output: 120 } } },
-      ctx,
-    );
+    await toolResult("r1", "read", false, "a\nb");
+    const verdict = await toolCall("write", { path: "src/x.ts", content: "body" }, "w1");
+    await toolResult("w1", "write", true, verdict?.reason ?? "");
     now = 4_500;
     await fake.fire("agent_end", { messages: [] }, ctx);
     const entry = fake.entries.find((item) => item.customType === "haril-trace");
     const lines = (entry?.data as { lines: string[] } | undefined)?.lines ?? [];
     expect(lines[0]).toBe("◆ CONSULT trace · 2 tool calls · 1 blocked · 3.5 s");
     expect(lines.join("\n")).toContain("src/console.ts  →  ok · 2 lines");
-    expect(lines.join("\n")).toContain("blocked · CONSULT mode is read-only");
+    expect(lines.join("\n")).toContain("src/x.ts  →  blocked · CONSULT mode is read-only");
+    expect(lines.join("\n")).not.toContain("body");
     expect(lines.join("\n")).toContain("Tokens: 900 in · 120 out");
     const renderer = fake.renderers.get("haril-trace");
     const drawn = renderer?.(
@@ -221,6 +251,18 @@ describe("the CONSULT trace in the chat", () => {
       { fg: (_color, text) => text, bold: (text) => text },
     );
     expect(drawn?.render(200)[0]).toBe(lines[0]);
+  });
+
+  it("traces as blocked a call Pi refused before any guard, because the tool is not active", async () => {
+    modes.switchTo("consult", ctx);
+    await fake.fire("before_agent_start", { systemPrompt: "", messageType: "user" }, ctx);
+    await reply([{ id: "w2", name: "write", arguments: { path: "hacked.txt", content: "x" } }]);
+    await toolResult("w2", "write", true, "Tool write not found");
+    await fake.fire("agent_end", { messages: [] }, ctx);
+    const lines = (
+      fake.entries.find((item) => item.customType === "haril-trace")?.data as { lines: string[] }
+    ).lines;
+    expect(lines.join("\n")).toContain("hacked.txt  →  blocked · CONSULT mode is read-only");
   });
 
   it("leaves no trace in ACTION", async () => {

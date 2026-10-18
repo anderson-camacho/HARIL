@@ -82,6 +82,10 @@ interface MessageUsage {
 interface MessageContent {
   readonly type: string;
   readonly text?: string;
+  // A tool call in an assistant message (type "toolCall").
+  readonly id?: string;
+  readonly name?: string;
+  readonly arguments?: Readonly<Record<string, unknown>>;
 }
 
 // pi-ai's AssistantMessage, and the role of the other messages; only the members read here.
@@ -97,6 +101,10 @@ export interface AgentMessage {
   // When the request started (epoch milliseconds) and how long it took.
   readonly timestamp?: number;
   readonly durationMs?: number;
+  // A tool result message (role "toolResult").
+  readonly toolCallId?: string;
+  readonly toolName?: string;
+  readonly isError?: boolean;
 }
 
 export interface SessionEntry {

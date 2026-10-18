@@ -61,7 +61,12 @@ function usageRow(
   const cost = usage?.cost?.total;
   const startedAt = count(message.timestamp);
   const durationMs = count(message.durationMs);
-  const key = identifier(message.responseId) ?? (startedAt === null ? null : String(startedAt));
+  // The response id and the start time: some gateways reuse one response id for every reply.
+  const responseId = identifier(message.responseId);
+  const key =
+    responseId === null && startedAt === null
+      ? null
+      : [responseId, startedAt].filter((part) => part !== null).join(":");
   return {
     kind: "chat",
     mode: orderModeOf(mode),

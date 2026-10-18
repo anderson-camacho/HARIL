@@ -95,7 +95,7 @@ describe("the chat log", () => {
       endedAt: 4_500,
       durationMs: 3_500,
       outcome: "stop",
-      idempotencyKey: "session-fake-1:message:resp-1",
+      idempotencyKey: "session-fake-1:message:resp-1:1000",
     });
     expect(log.status()).toEqual({ recorded: 2, failed: 0, lastError: undefined });
   });

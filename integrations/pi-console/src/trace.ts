@@ -1,8 +1,9 @@
 import { plainText, truncate } from "./text.js";
 
 // The CONSULT trace (docs/modos-y-delegacion.md 7.3 point 7, R-U7): what the model did in one run and how, in short
-// form. The tool_call guard notes every call (and every blocked one), tool_result its outcome, message_end the tokens;
-// after agent_end the console draws it in the chat as a session entry the model never sees. It keeps what a call acted
+// form. Each reply's tool calls are noted when the reply ends (also a call Pi refuses before any guard runs, because the
+// tool is not active), the tool_call guard marks the calls it blocks, each tool result gives the outcome, and each reply
+// its tokens; after agent_end the console draws it in the chat as a session entry the model never sees. It keeps what a call acted
 // on (a path, a pattern, a title) and a short result (a line count, the first line of an error), never what a call
 // read or wrote.
 
@@ -122,6 +123,18 @@ export function traceToolCall(
   },
   blockedReason?: string,
 ): Trace {
+  // A call already noted (from the reply that asked for it) is only marked; a call no reply showed is added.
+  if (trace.calls.some((known) => known.id === call.toolCallId)) {
+    if (blockedReason === undefined) return trace;
+    return {
+      ...trace,
+      calls: trace.calls.map((known) =>
+        known.id === call.toolCallId
+          ? { ...known, status: "blocked", result: short(blockedReason, ERROR_MAX) }
+          : known,
+      ),
+    };
+  }
   const entry: TraceCall = {
     id: call.toolCallId,
     tool: plainText(call.toolName),

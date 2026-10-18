@@ -167,12 +167,6 @@ export function installModes(pi: ConsolePi, host: ModeHost): ModeController {
     return verdict;
   });
 
-  pi.on("tool_result", (event) => {
-    if (trace === undefined) return;
-    const current = trace;
-    trace = safely(() => traceToolResult(current, event), current);
-  });
-
   // 3. The mode reaches the model with each run, for that run only.
   pi.on("before_agent_start", (event) => {
     if (state.mode === "consult") trace = createTrace(host.now());
@@ -181,16 +175,54 @@ export function installModes(pi: ConsolePi, host: ModeHost): ModeController {
     return { systemPrompt: `${event.systemPrompt}\n\n${instruction}` };
   });
 
+  // The trace follows the messages: a reply's tool calls and tokens, then each tool result.
   pi.on("message_end", (event) => {
-    const message = event.message;
-    if (trace === undefined || message.role !== "assistant") return;
-    const usage = message.usage;
-    const reported = usage !== undefined && ((usage.input ?? 0) > 0 || (usage.output ?? 0) > 0);
-    trace = traceUsage(trace, {
-      tokensIn: reported ? (usage?.input ?? null) : null,
-      tokensOut: reported ? (usage?.output ?? null) : null,
-    });
+    if (trace === undefined) return;
+    const current = trace;
+    trace = safely(() => traceMessage(current, event.message), current);
   });
+
+  function traceMessage(current: Trace, message: AgentMessage): Trace {
+    let next = current;
+    if (message.role === "assistant") {
+      for (const part of Array.isArray(message.content) ? message.content : []) {
+        if (
+          part.type !== "toolCall" ||
+          typeof part.id !== "string" ||
+          typeof part.name !== "string"
+        )
+          continue;
+        next = traceToolCall(next, {
+          toolCallId: part.id,
+          toolName: part.name,
+          input: part.arguments ?? {},
+        });
+      }
+      const usage = message.usage;
+      const reported = usage !== undefined && ((usage.input ?? 0) > 0 || (usage.output ?? 0) > 0);
+      return traceUsage(next, {
+        tokensIn: reported ? (usage?.input ?? null) : null,
+        tokensOut: reported ? (usage?.output ?? null) : null,
+      });
+    }
+    if (message.role !== "toolResult" || typeof message.toolCallId !== "string") return next;
+    const toolName = message.toolName ?? "";
+    // Pi refuses a call to a tool that is not active before any guard runs (the first wall): in a read-only mode such a
+    // refusal is a block, and the trace says so.
+    const refused = message.isError === true ? checkToolCall(state.mode, toolName) : undefined;
+    if (refused !== undefined) {
+      return traceToolCall(
+        next,
+        { toolCallId: message.toolCallId, toolName, input: {} },
+        refused.reason,
+      );
+    }
+    return traceToolResult(next, {
+      toolCallId: message.toolCallId,
+      isError: message.isError === true,
+      content: Array.isArray(message.content) ? message.content : [],
+    });
+  }
 
   pi.on("agent_end", (event, ctx) => {
     if (trace !== undefined) {
