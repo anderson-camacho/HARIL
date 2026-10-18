@@ -10,6 +10,7 @@ import { metrics } from "./commands/metrics.js";
 import { models } from "./commands/models.js";
 import { plan } from "./commands/plan.js";
 import { project } from "./commands/project.js";
+import { resume } from "./commands/resume.js";
 import { shell } from "./commands/shell.js";
 import { runQueue, start } from "./commands/start.js";
 import { states } from "./commands/states.js";
@@ -73,8 +74,13 @@ const HELP_LINES = [
   "  haril start [--project <slug>] [--json] [--idle-exit-sec <n>]   stay up for new work: apply the queue, run the ready tasks, exit after n idle seconds (default 120)",
   "  haril run [--project <slug>] [--json]   apply the queue, run the ready tasks and exit as soon as nothing is claimable",
   "  haril stop                       ask the running runtime to stop: its in-flight run returns to ready, uncharged",
+  "  haril stop --now [--json]        emergency stop of every agent in every mode: kill every agent process (pid and",
+  "    start time checked), cancel the tasks in flight, stop every workflow, settle their budgets; the runtime exits",
+  "    and stays halted (it claims nothing) until haril resume; repeating it is harmless",
+  "  haril resume [--json]            lift the halt of haril stop --now; cancelled work stays cancelled",
   "  start and run exit 0 when idle or stopped with nothing failed, 1 when a task failed, was blocked or was skipped,",
-  "  2 when another runtime holds the lease; Ctrl+C or SIGTERM stops gracefully, and a second signal exits 130 at once",
+  "  2 when another runtime holds the lease; Ctrl+C or SIGTERM stops gracefully, and a second signal kills the agents",
+  "  in flight and exits 130",
   "  haril status [--project <slug>] [--json]   projects, tasks, queued commands and runtime",
   "  haril metrics [--project <slug>] [--json]   runs, retries and success rate from the event log",
   "  haril events [--project <slug>] [--task <id>] [--limit <n>] [--json]   the newest events, oldest first",
@@ -84,6 +90,7 @@ const HELP_LINES = [
   "    after the first plan unless --autonomous or --stop-at; --agent defaults to fake:orchestrate (simulated agents)",
   "  haril workflow list | show <workflowId> [--json]   workflows, and one workflow's tree (--json: WorkflowSnapshot v1)",
   "  haril workflow continue <workflowId> [--remove-stop <stop>]...   lift the stop a workflow waits at",
+  "  haril workflow stop <workflowId> [--json]   stop one workflow now: its turns cancelled, its agents killed",
   "  haril workflow demo [--seed <n>] [--delegators <n>] [--executors <n>] [--stop-at <stops>] [--json]",
   "    run a simulated three-layer workflow with fake agents on a temporary store and print its tree and totals;",
   "    --data-dir <path> keeps its rows there (the default data dir only with --allow-real-data-dir); no model is called",
@@ -99,7 +106,7 @@ const HELP_LINES = [
   "  haril help                       print this help",
 ];
 
-// `start` is the only asynchronous command, so the result is a promise only for it.
+// The commands that wait (start, run, stop --now, workflow stop and a few others) return a promise; the rest a number.
 export function run(
   argv: readonly string[],
   io: CliIo,
@@ -179,6 +186,8 @@ function dispatch(argv: readonly string[], io: CliIo, host: HostInfo): number | 
       return runQueue(rest, io, host);
     case "stop":
       return stop(rest, io, host);
+    case "resume":
+      return resume(rest, io, host);
     case "console":
       return consoleCommand(rest, io, host);
     case "shell":

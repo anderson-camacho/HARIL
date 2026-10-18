@@ -436,6 +436,7 @@ describe("recorded processes and run activity", () => {
     const own = {
       runId: claimed.runId,
       taskId,
+      projectId,
       runtimeEpoch: epoch,
       runStatus: "running",
       pid: 4242,

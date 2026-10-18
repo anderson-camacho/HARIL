@@ -66,9 +66,29 @@ export type RunEvent =
       readonly fix: string;
     }
   | {
-      // The runtime stops: "command" when runtime.stop was applied, "signal" for Ctrl+C or SIGTERM (ARCH 4.2).
+      // The runtime stops: "command" when runtime.stop was applied, "signal" for Ctrl+C or SIGTERM (ARCH 4.2),
+      // "emergency" for haril stop --now (3.14): every attempt in flight is killed and the runtime stays halted.
       readonly type: "runtime.stopping";
-      readonly reason: "command" | "signal";
+      readonly reason: "command" | "signal" | "emergency";
+    }
+  | {
+      // A task ended without a retry (3.14, 3.16): the human stopped it (user_stop) or the watchdog found that nobody
+      // will consume its result (residual). A running one had its process killed.
+      readonly type: "task.cancelled";
+      readonly taskId: string;
+      readonly goal: string;
+      readonly reason: "user_stop" | "residual";
+    }
+  | {
+      // An emergency stop left the runtime halted (3.14): it claims nothing until haril resume.
+      readonly type: "runtime.halted";
+    }
+  | {
+      // The startup sweep (3.14.5): agent processes a dead runtime left were killed, and recorded pids that now name
+      // another process were kept.
+      readonly type: "runtime.swept";
+      readonly killed: number;
+      readonly kept: number;
     }
   | {
       // A run cancelled by a stop returned its task to ready; no attempt was charged (ARCH 4.2, step 3).
@@ -118,6 +138,8 @@ export interface RunSummary {
   readonly blocked: readonly string[];
   // Tasks left ready because their real agent is not set up (M2-T6); the run then exits 1.
   readonly skipped: readonly string[];
+  // Tasks a stop or the watchdog cancelled (3.14, 3.16); a cancelled task does not fail the run.
+  readonly cancelled: readonly string[];
   readonly commandsApplied: number;
   readonly commandsRejected: number;
 }
@@ -127,6 +149,7 @@ export function summarizeRun(events: readonly RunEvent[]): RunSummary {
   const failed: string[] = [];
   const blocked: string[] = [];
   const skipped: string[] = [];
+  const cancelled: string[] = [];
   let commandsApplied = 0;
   let commandsRejected = 0;
   for (const event of events) {
@@ -149,11 +172,14 @@ export function summarizeRun(events: readonly RunEvent[]): RunSummary {
       case "task.skipped":
         skipped.push(event.taskId);
         break;
+      case "task.cancelled":
+        cancelled.push(event.taskId);
+        break;
       default:
         break;
     }
   }
-  return { completed, failed, blocked, skipped, commandsApplied, commandsRejected };
+  return { completed, failed, blocked, skipped, cancelled, commandsApplied, commandsRejected };
 }
 
 // M1-D2 / start: 0 when no task failed, was blocked or was skipped during the run, 1 otherwise.

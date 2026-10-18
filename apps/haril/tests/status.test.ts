@@ -32,6 +32,7 @@ interface StatusJson {
   taskList: unknown[];
   queuedCommands: { commandId: string; type: string; projectId: string | null; args: unknown }[];
   runtime: { status: string };
+  halted: { halted: boolean; since: number | null };
   memory: {
     provider: string;
     providerSource: string;
@@ -67,6 +68,7 @@ describe("haril status", () => {
     expect(Object.keys(status).sort()).toEqual(
       [
         "dataDir",
+        "halted",
         "initialized",
         "projects",
         "memory",
@@ -77,6 +79,8 @@ describe("haril status", () => {
       ].sort(),
     );
     expect(status.initialized).toBe(true);
+    // No emergency stop halted this runtime (3.14).
+    expect(status.halted).toEqual({ halted: false, since: null });
     expect(status.projects).toHaveLength(1);
     expect(status.projects[0]).toMatchObject({ slug: "demo", rootPath: projectRoot(sb, "demo") });
     expect(status.tasks.total).toBe(0);

@@ -259,7 +259,7 @@ export function createStopsFacet(options: StopsFacetOptions): StopsFacet {
     const endedSince = filter.endedSince ?? null;
     return db
       .prepare(
-        `SELECT run_id AS runId, task_id AS taskId, runtime_epoch AS runtimeEpoch, status AS runStatus, pid, pid_started_at AS startedAt
+        `SELECT run_id AS runId, task_id AS taskId, project_id AS projectId, runtime_epoch AS runtimeEpoch, status AS runStatus, pid, pid_started_at AS startedAt
          FROM runs
          WHERE pid IS NOT NULL AND pid_started_at IS NOT NULL
            AND ((status IN ${OPEN_RUN} AND (? IS NULL OR runtime_epoch <> ?))

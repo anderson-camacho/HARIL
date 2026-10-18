@@ -2,6 +2,7 @@ import type { WorkflowState } from "@haril/contracts";
 import { type DelegationArchetype, evaluateQuota } from "@haril/core";
 import type {
   AgentOutcome,
+  CancelReason,
   ClaimedTask,
   Clock,
   DelegationCapacity,
@@ -342,6 +343,50 @@ export function commitWorkflowAttempt(
     workflowState: workflow?.state ?? view.workflow.state,
     workflowReason: workflow?.stopReason ?? null,
   };
+}
+
+// A turn a stop or the watchdog cancelled (3.14, 3.16): the store already closed its run and cancelled its task, so only
+// its usage row is left to write: what it spent, from the Broker's ledger (its open calls were settled at their upper
+// bound when it was cancelled), and why it ended. One row per run, like every turn's.
+export function recordCancelledTurn(
+  deps: Pick<CommitDeps, "store" | "clock">,
+  attempt: WorkflowAttempt,
+  reason: CancelReason,
+): void {
+  const { store, clock } = deps;
+  const view = WorkflowView.load(store, attempt.workflowId);
+  const task = view?.task(attempt.claimed.taskId);
+  if (view === undefined || task === undefined) return;
+  const ledger = store.budgets.usageSummary({ runId: attempt.claimed.runId });
+  const now = clock.now();
+  store.usageLog.appendUsage({
+    kind: "agent_run",
+    orderId: view.workflow.orderId,
+    projectId: view.workflow.projectId,
+    workflowId: view.workflow.workflowId,
+    taskId: task.taskId,
+    runId: attempt.claimed.runId,
+    threadId: task.threadId,
+    layer: task.layer,
+    role: task.role,
+    mode: "delegacion",
+    provider: task.model?.split("/")[0] ?? null,
+    modelRequested: task.model,
+    modelServed: task.model,
+    modelPinned: task.modelPinned,
+    tokensIn: ledger?.inputTokens ?? null,
+    tokensOut: ledger?.outputTokens ?? null,
+    startedAt: attempt.startedAt,
+    endedAt: now,
+    durationMs: Math.max(0, now - attempt.startedAt),
+    difficultyEst: task.difficulty,
+    difficultyReason: task.difficultyReason,
+    outcome: `cancelled_${reason}`,
+    auditVerdict: null,
+    retries: task.role === "executor" ? (task.delegationId === null ? 1 : 0) : null,
+    simulated: task.agentRef.startsWith("fake:"),
+    idempotencyKey: `run:${attempt.claimed.runId}`,
+  });
 }
 
 function reachBudget(context: TurnContext): void {

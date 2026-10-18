@@ -20,13 +20,18 @@ import type {
   AgentHandle,
   AgentHello,
   AgentOutcome,
+  AgentProcess,
   AgentRuntime,
   AgentSpec,
+  AppliedCommand,
+  CancelReason,
   ClaimedTask,
   Clock,
+  ProcessControl,
   RecoveredTask,
   Store,
 } from "@haril/core/ports";
+import { createProcessControl } from "@haril/os";
 import { StoreError } from "@haril/state-sqlite";
 import { modelProblemOf } from "../providers.js";
 import { projectFileReader, verificationPayload } from "./acceptance.js";
@@ -41,11 +46,12 @@ import {
   type RuntimeMemory,
 } from "./memory.js";
 import type { PlanAttemptReport, PlanProposals } from "./plan-proposals.js";
+import { killRecordedProcesses, recordSweep } from "./processes.js";
 import type { RealAgentReadiness, RealAgents } from "./real-agent.js";
-import { createShutdown, RUNTIME_STOP, type Shutdown } from "./shutdown.js";
+import { createShutdown, type KillSwitch, RUNTIME_STOP, type Shutdown } from "./shutdown.js";
 import { claimWorkflowTurns, settleWorkflows } from "./workflow-scheduler.js";
 import { summarizeWorkflows, type WorkflowTally } from "./workflow-summary.js";
-import { buildTurnInput, commitWorkflowAttempt } from "./workflow-turns.js";
+import { buildTurnInput, commitWorkflowAttempt, recordCancelledTurn } from "./workflow-turns.js";
 import { type DelegationOptions, WorkflowView, workflowSettings } from "./workflow-view.js";
 
 // Runtime loop (M1-D6, LD-T1, phase F2): take the lease, apply the queue, run the ready tasks, and wait for new work for
@@ -59,6 +65,8 @@ import { type DelegationOptions, WorkflowView, workflowSettings } from "./workfl
 const LEASE_TTL_MS = 30_000;
 // The runtime checks its own queue at this interval. The no-polling rule (H6) binds clients, not the runtime.
 const POLL_MS = 1_000;
+// The command haril workflow stop enqueues (3.14): one workflow and its agents.
+const WORKFLOW_STOP = "workflow.stop";
 // The lease is renewed at this interval, not at every poll: a third of the TTL, and ten times fewer writes than polls,
 // so an idle runtime does not compete for the write lock with the CLI and the shell every second.
 const HEARTBEAT_MS = 10_000;
@@ -110,6 +118,11 @@ export interface RunLoopOptions {
   readonly delegationTools?: DelegationTools;
   // The limits and models of workflows (phase F2; haril.json's delegation section arrives in F7).
   readonly delegation?: DelegationOptions;
+  // Where each attempt's kill is registered once its agent started, for an exit that cannot wait for the ordered stop
+  // (a second signal, 3.14). Defaults to none.
+  readonly killSwitch?: KillSwitch;
+  // The OS process control of the startup sweep (3.14.5). Defaults to @haril/os.
+  readonly processControl?: ProcessControl;
   // Test seams: the lease TTL and the poll interval default to the production values.
   readonly leaseTtlMs?: number;
   readonly pollMs?: number;
@@ -156,6 +169,9 @@ export async function runUntilIdle(options: RunLoopOptions): Promise<RunLoopResu
       recordStartedByShell(store, grant.value.instanceId, options.pid, epoch);
     }
     channelOpen = await openChannel(options.control);
+    // 3.14.5: the agents a dead runtime left are killed first, while their runs still name them; a recorded pid is
+    // killed only while it still names the recorded process (pid and start time).
+    await sweepOrphanProcesses(store, epoch, options.processControl, emit);
     // M1-T7: attempts orphaned by a previous runtime go back to the queue before anything is claimed.
     for (const recovered of store.runtime.reconcile(epoch, MAX_INFRA_RESTARTS)) {
       emit(recoveryEvent(recovered));
@@ -181,7 +197,11 @@ export async function runUntilIdle(options: RunLoopOptions): Promise<RunLoopResu
     });
     emitMemoryTick(await memory.start(), emit);
     // serve() releases the lease itself, cleanly, on idle and on a stop.
-    const kind = await serve(options, shutdown, { epoch, beat, emit, setup, memory });
+    const hooks: AttemptHooks = {
+      recordProcess: (runId, process) => store.runs.recordProcess(epoch, runId, process),
+      ...(options.killSwitch === undefined ? {} : { killSwitch: options.killSwitch }),
+    };
+    const kind = await serve(options, shutdown, { epoch, beat, emit, setup, memory, hooks });
     return {
       kind,
       summary: summarizeRun(events),
@@ -197,6 +217,21 @@ export async function runUntilIdle(options: RunLoopOptions): Promise<RunLoopResu
     // released it, the epoch is no longer active and the store refuses the release, which is expected.
     releaseLease(store, epoch, false);
   }
+}
+
+// The startup sweep (3.14.5): the open runs of other epochs that recorded a process. With none, the OS is not asked.
+async function sweepOrphanProcesses(
+  store: Store,
+  epoch: number,
+  control: ProcessControl | undefined,
+  emit: (event: RunEvent) => void,
+): Promise<void> {
+  if (store.runs.processes({ excludeEpoch: epoch }).length === 0) return;
+  const report = await killRecordedProcesses(store, control ?? createProcessControl(), {
+    excludeEpoch: epoch,
+  });
+  recordSweep(store, report, "startup_sweep");
+  emit({ type: "runtime.swept", killed: report.killed.length, kept: report.kept.length });
 }
 
 // A channel that cannot open (its endpoint is taken, for instance) leaves the runtime working: the queue is still
@@ -218,16 +253,32 @@ interface ServeContext {
   readonly emit: (event: RunEvent) => void;
   readonly setup: RealAgentReadiness | undefined;
   readonly memory: MemoryService;
+  readonly hooks: AttemptHooks;
 }
 
-// One attempt in flight (3.9: the registry runId -> attempt). `abort` reaches its agent once it started; `settled`
-// holds its outcome once the agent run ended, and the loop closes it in its next turn.
+// What an attempt tells the loop once its agent started (3.14): its process, recorded on its run for the startup sweep,
+// and its kill, registered for a forced exit.
+interface AttemptHooks {
+  readonly recordProcess: (runId: string, process: AgentProcess) => void;
+  readonly killSwitch?: KillSwitch;
+}
+
+// Why the runtime ended an attempt before it settled on its own (3.14, 3.16): a stop or the watchdog's residual verdict
+// cancelled its task (the store already closed its run), or the watchdog closed it as idle (it commits as a failed
+// attempt).
+type EndedBy = CancelReason | "watchdog_idle";
+
+// One attempt in flight (3.9: the registry runId -> attempt). `abort` and `kill` reach its agent once it started (kill
+// without the grace period); `settled` holds its outcome once the agent run ended, and the loop closes it in its next
+// turn.
 interface LiveAttempt {
   readonly runId: string;
   readonly claimed: ClaimedTask;
   readonly workflow: LiveWorkflowTurn | null;
   abort: () => void;
+  kill: () => void;
   settled: AgentOutcome | null;
+  endedBy: EndedBy | null;
 }
 
 interface LiveWorkflowTurn {
@@ -275,19 +326,22 @@ async function serve(
     );
   };
   let idleSince = clock.now();
+  let haltTold = false;
   for (;;) {
     beat();
     // The attempts that settled since the last turn close first, oldest first, so what they free or create is seen below.
     for (let attempt = done.shift(); attempt !== undefined; attempt = done.shift()) {
       live.delete(attempt.runId);
-      if (attempt.workflow === null) closeStandalone(options, shutdown, context, attempt);
+      if (attempt.endedBy === "user_stop" || attempt.endedBy === "residual") {
+        closeCancelled(options, attempt);
+      } else if (attempt.workflow === null) closeStandalone(options, shutdown, context, attempt);
       else closeWorkflowTurn(options, shutdown, context, attempt, attempt.workflow);
     }
     // The standalone lane runs one attempt at a time, as before: decisions and memory wait while it is busy.
     const standaloneBusy = [...live.values()].some((attempt) => attempt.workflow === null);
     // Decisions first: a granted plan is queued in this turn and applied by the queue step right after it (LD-T3).
     const decided = standaloneBusy ? 0 : applyDecidedApprovals(store, epoch, emit);
-    const applied = decided + applyQueuedCommands(store, epoch, emit, shutdown);
+    const applied = decided + applyQueuedCommands(store, epoch, emit, shutdown, live);
     if (shutdown.requested) {
       // ARCH 4.2: each attempt in flight was aborted when the stop was requested; the lease goes once they all closed.
       if (live.size > 0) {
@@ -318,10 +372,16 @@ async function serve(
       emit({ type: "workflow.state", ...ended });
     }
 
+    // 3.14: an emergency stop left the runtime halted. It still applies commands (haril resume among them) and closes
+    // what was in flight, but it claims nothing; the store refuses the claims as well.
+    const halted = store.runtime.haltState().halted;
+    if (halted && !haltTold) emit({ type: "runtime.halted" });
+    haltTold = halted;
+
     // A real-agent task that cannot run yet is never claimed (M2-T6, restored by M3-T7): it stays ready and is
     // reported once as skipped, and the claim leaves it out.
-    const notRunnable = skipUnrunnableRealTasks(store, setup, reported, emit);
-    if (!standaloneBusy) {
+    const notRunnable = halted ? [] : skipUnrunnableRealTasks(store, setup, reported, emit);
+    if (!standaloneBusy && !halted) {
       const globalMissing = setup !== undefined && !setup.ok;
       const claimed = store.tasks.claimNext(
         epoch,
@@ -335,7 +395,10 @@ async function serve(
         );
       }
     }
-    for (const turn of claimWorkflowTurns(store, epoch, options.delegation, new Set(notRunnable))) {
+    const turns = halted
+      ? []
+      : claimWorkflowTurns(store, epoch, options.delegation, new Set(notRunnable));
+    for (const turn of turns) {
       const window = startWorkflowWindow(options, turn.claimed, turn.workflowId);
       launch(newAttempt(turn.claimed, window), (attempt) =>
         startWorkflowTurn(options, shutdown, context, attempt, turn.workflowId),
@@ -366,7 +429,32 @@ async function serve(
 }
 
 function newAttempt(claimed: ClaimedTask, workflow: LiveWorkflowTurn | null): LiveAttempt {
-  return { runId: claimed.runId, claimed, workflow, abort: () => undefined, settled: null };
+  return {
+    runId: claimed.runId,
+    claimed,
+    workflow,
+    abort: () => undefined,
+    kill: () => undefined,
+    settled: null,
+    endedBy: null,
+  };
+}
+
+// An attempt whose task a stop or the watchdog cancelled (3.14, 3.16): the store closed its run already, so nothing of
+// its outcome is committed. A workflow turn's decided call is dropped, and its run leaves one usage row: what it spent
+// until it was killed.
+function closeCancelled(options: RunLoopOptions, attempt: LiveAttempt): void {
+  if (attempt.workflow === null) return;
+  attempt.workflow.close();
+  recordCancelledTurn(
+    { store: options.store, clock: options.clock },
+    {
+      claimed: attempt.claimed,
+      workflowId: attempt.workflow.workflowId,
+      startedAt: attempt.workflow.startedAt,
+    },
+    attempt.endedBy === "residual" ? "residual" : "user_stop",
+  );
 }
 
 // The tasks memory moved: a blocked one is reported like any blocked task; a released one is ready again.
@@ -401,7 +489,7 @@ function startStandalone(
   attempt: LiveAttempt,
 ): Promise<AgentOutcome> {
   context.emit(claimedEvent(attempt.claimed));
-  return executePlannedAttempt(options, shutdown, context.emit, attempt);
+  return executePlannedAttempt(options, shutdown, context, attempt);
 }
 
 // Records the outcome of a standalone attempt. A stop that cancels the attempt returns the task to ready uncharged.
@@ -506,7 +594,14 @@ async function startWorkflowTurn(
     { ...claimed, delegation },
     { runId: claimed.runId, attempt: claimed.attempt },
   );
-  return await runAttempt(runtimeFor(options, claimed), clock, spec, shutdown, attempt);
+  return await runAttempt(
+    runtimeFor(options, claimed),
+    clock,
+    spec,
+    shutdown,
+    attempt,
+    context.hooks,
+  );
 }
 
 // Closes a workflow turn: its decided call, its run and its usage row in one transaction (workflow-turns.ts). A stop that
@@ -579,12 +674,15 @@ function closeWorkflowTurn(
   }
 }
 
-// Applies every queued command, oldest first. A runtime.stop that applies requests the ordered stop (ARCH 4.2).
+// Applies every queued command, oldest first. A runtime.stop that applies requests the ordered stop (ARCH 4.2); with
+// {mode: "now"} it requests the emergency stop (3.14), whose cancellations the store already made: every attempt in
+// flight is killed now. A workflow.stop kills the attempts of that workflow only, and the runtime goes on.
 function applyQueuedCommands(
   store: Store,
   epoch: number,
   emit: (event: RunEvent) => void,
   shutdown: Shutdown,
+  live: ReadonlyMap<string, LiveAttempt>,
 ): number {
   let applied = 0;
   for (let next = store.commands.applyNext(epoch); next !== undefined; ) {
@@ -604,10 +702,46 @@ function applyQueuedCommands(
             reason: next.reason ?? "",
           },
     );
-    if (next.type === RUNTIME_STOP && next.outcome === "applied") shutdown.request("command");
+    if (next.outcome === "applied") actOnStop(store, next, emit, shutdown, live);
     next = store.commands.applyNext(epoch);
   }
   return applied;
+}
+
+function actOnStop(
+  store: Store,
+  applied: AppliedCommand,
+  emit: (event: RunEvent) => void,
+  shutdown: Shutdown,
+  live: ReadonlyMap<string, LiveAttempt>,
+): void {
+  const emergency = applied.type === RUNTIME_STOP && applied.args.mode === "now";
+  if (applied.type === RUNTIME_STOP && !emergency) {
+    shutdown.request("command");
+    return;
+  }
+  if (!emergency && applied.type !== WORKFLOW_STOP) return;
+  const cancelled = new Set(applied.taskIds);
+  for (const attempt of live.values()) {
+    if (cancelled.has(attempt.claimed.taskId)) attempt.endedBy = "user_stop";
+  }
+  for (const workflowId of applied.workflowIds ?? []) {
+    emit({ type: "workflow.state", workflowId, state: "stopped", reason: "user_stop" });
+  }
+  for (const taskId of applied.taskIds) {
+    emit({
+      type: "task.cancelled",
+      taskId,
+      goal: store.tasks.get(taskId)?.goal ?? "",
+      reason: "user_stop",
+    });
+  }
+  if (emergency) {
+    // Every attempt's listener kills it (runAttempt), the ones that start meanwhile included.
+    shutdown.request("emergency");
+    return;
+  }
+  for (const attempt of live.values()) if (attempt.endedBy === "user_stop") attempt.kill();
 }
 
 function verifyAttempt(store: Store, claimed: ClaimedTask, outputText: string): Verification {
@@ -688,22 +822,22 @@ function recoveryEvent(recovered: RecoveredTask): RunEvent {
 async function executePlannedAttempt(
   options: RunLoopOptions,
   shutdown: Shutdown,
-  emit: (event: RunEvent) => void,
+  context: ServeContext,
   attempt: LiveAttempt,
 ): Promise<AgentOutcome> {
   const task = attempt.claimed;
   const spec = buildAgentSpec(task, { runId: task.runId, attempt: task.attempt });
   const runtime = runtimeFor(options, task);
   if (task.kind !== "plan")
-    return await runAttempt(runtime, options.clock, spec, shutdown, attempt);
+    return await runAttempt(runtime, options.clock, spec, shutdown, attempt, context.hooks);
   const close = options.planProposals?.open(
     { projectId: task.projectId, taskId: task.taskId, runId: task.runId, model: task.model },
-    (proposal) => emit({ type: "approval.requested", ...proposal }),
+    (proposal) => context.emit({ type: "approval.requested", ...proposal }),
   );
   let report: PlanAttemptReport = { proposed: false };
   let outcome: AgentOutcome;
   try {
-    outcome = await runAttempt(runtime, options.clock, spec, shutdown, attempt);
+    outcome = await runAttempt(runtime, options.clock, spec, shutdown, attempt, context.hooks);
   } finally {
     report = close?.() ?? report;
   }
@@ -717,30 +851,50 @@ function runtimeFor(options: RunLoopOptions, task: ClaimedTask): AgentRuntime {
 }
 
 // One attempt: start, handshake (before any prompt), prompt, settle within the timeout, dispose. A shutdown aborts the
-// run in flight; the handle settles it as aborted, and the race with `settled` keeps a handshake that never answers
-// from holding the stop. While it runs, the registry's entry can abort it (3.9).
+// run in flight (an emergency kills it, 3.14); the handle settles it as aborted, and the race with `settled` keeps a
+// handshake that never answers from holding the stop. While it runs, the registry's entry can abort or kill it (3.9).
+// Its process is recorded on its run as soon as it started, and its kill registered for a forced exit.
 async function runAttempt(
   agentRuntime: AgentRuntime,
   clock: Clock,
   spec: AgentSpec,
   shutdown: Shutdown,
   attempt: LiveAttempt,
+  hooks: AttemptHooks,
 ): Promise<AgentOutcome> {
   const started = await agentRuntime.start(spec);
   if (!started.ok) {
     return { status: "failed", code: started.error.code, message: started.error.message };
   }
   const handle = started.value;
-  // A failed abort call is covered by `settled` and by dispose below.
+  const kill = (): Promise<void> => (handle.kill === undefined ? handle.abort() : handle.kill());
+  // A failed abort or kill call is covered by `settled` and by dispose below.
   attempt.abort = () => {
     handle.abort().catch(() => undefined);
   };
-  const stopping = shutdown.onRequest(() => attempt.abort());
+  attempt.kill = () => {
+    kill().catch(() => undefined);
+  };
+  if (handle.process !== undefined) {
+    try {
+      hooks.recordProcess(spec.runId, handle.process);
+    } catch {
+      // A process left unrecorded only leaves the startup sweep blind to it; the attempt itself goes on.
+    }
+  }
+  const unregister = hooks.killSwitch?.register(spec.runId, kill) ?? (() => undefined);
+  // A stop or the watchdog may have ended the attempt while its agent was starting: it is killed now.
+  if (attempt.endedBy !== null) attempt.kill();
+  const stopping = shutdown.onRequest((reason) =>
+    reason === "emergency" ? attempt.kill() : attempt.abort(),
+  );
   try {
     return await Promise.race([drive(handle, spec, clock), handle.settled]);
   } finally {
     stopping();
+    unregister();
     attempt.abort = () => undefined;
+    attempt.kill = () => undefined;
     await handle.dispose();
   }
 }

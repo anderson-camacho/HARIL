@@ -1,4 +1,4 @@
-import type { AgentRuntime, Clock, Ids, Store } from "@haril/core/ports";
+import type { AgentRuntime, Clock, Ids, ProcessControl, Store } from "@haril/core/ports";
 import type { StoreInspection } from "@haril/state-sqlite";
 import type { ProviderEntry, ProviderListing } from "./providers.js";
 import type { SignalSource } from "./runtime/shutdown.js";
@@ -38,6 +38,11 @@ export interface HostInfo {
   readonly signals?: SignalSource;
   // Exit on a second signal; defaults to process.exit. Tests inject a spy.
   readonly forceExit?: (code: number) => void;
+  // The OS process control of the emergency stop and the startup sweep (3.14); defaults to @haril/os.
+  readonly processControl?: ProcessControl;
+  // How long haril stop --now waits for the runtime to apply the stop and exit before it kills the recorded agent
+  // processes itself (milliseconds); defaults to the value in commands/stop.ts.
+  readonly stopWaitMs?: number;
   // Provider probe used by `doctor` (M3-T7): defaults to the real catalog query of each provider. Tests that do
   // not exercise the network inject a fixed answer so they stay hermetic.
   readonly providerProbe?: (

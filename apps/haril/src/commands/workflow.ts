@@ -24,6 +24,7 @@ import { parseInstant } from "./usage-format.js";
 import { type DemoResult, runDemoWorkflow } from "./workflow-demo-run.js";
 import { workflowContinue, workflowList, workflowShow, workflowStart } from "./workflow-runs.js";
 import { buildWorkflowSnapshot, headerLines, treeLines } from "./workflow-snapshot.js";
+import { workflowStop } from "./workflow-stop.js";
 
 // `haril workflow demo` (docs/modos-y-delegacion.md 9, the F1 stop: "a demo command runs a simulated three-layer
 // tree and you see the result"). Section 6 names no demo command; it lives under `haril workflow`, where phase F2 adds
@@ -460,20 +461,26 @@ function renderText(
 }
 
 const WORKFLOW_USAGE = [
-  "usage: haril workflow start|list|show|continue|demo",
+  "usage: haril workflow start|list|show|continue|stop|demo",
   "  haril workflow start <goal> --model <ref> [--autonomous | --stop-at <stops>]   queue a three-layer workflow",
   "  haril workflow list | show <workflowId> [--json]                              read workflows (show: tree, or WorkflowSnapshot v1)",
   "  haril workflow continue <workflowId> [--remove-stop <stop>]...                lift the stop a workflow waits at",
+  "  haril workflow stop <workflowId> [--json]                                     stop one workflow and kill its agents now",
   USAGE,
 ].join("\n");
 
-export function workflow(args: readonly string[], io: CliIo, host: HostInfo): number {
+export function workflow(
+  args: readonly string[],
+  io: CliIo,
+  host: HostInfo,
+): number | Promise<number> {
   const [sub, ...rest] = args;
   if (sub === "demo") return demo(rest, io, host);
   if (sub === "start") return workflowStart(rest, io, host);
   if (sub === "list") return workflowList(rest, io, host);
   if (sub === "show") return workflowShow(rest, io, host);
   if (sub === "continue") return workflowContinue(rest, io, host);
+  if (sub === "stop") return workflowStop(rest, io, host);
   io.err(WORKFLOW_USAGE);
   return EXIT_USAGE;
 }

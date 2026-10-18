@@ -353,6 +353,7 @@ export interface CancelledTask {
 export interface RecordedProcess {
   readonly runId: string;
   readonly taskId: string;
+  readonly projectId: string;
   readonly runtimeEpoch: number;
   readonly runStatus: string;
   readonly pid: number;

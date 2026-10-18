@@ -8,13 +8,14 @@ import { memoryLeftLine } from "../runtime/memory.js";
 import { createPlanProposals } from "../runtime/plan-proposals.js";
 import { createRealAgents } from "../runtime/real-agent.js";
 import { runUntilIdle } from "../runtime/run-loop.js";
-import { attachStopSignals, createShutdown } from "../runtime/shutdown.js";
+import { attachStopSignals, createKillSwitch, createShutdown } from "../runtime/shutdown.js";
 import { workflowExitCode, workflowSummaryText } from "../runtime/workflow-summary.js";
 import { dataDirFor, failureReasonText, openExisting } from "./common.js";
 
 // `haril start` (M1-T5, LD-T1): the foreground runtime. It applies the queue, runs the ready tasks and stays up for new
 // work until --idle-exit-sec of nothing to do (ARCH 4.2). `haril run` is start until idle: it exits as soon as the
-// queue is empty. A runtime.stop, a first Ctrl+C or SIGTERM stops it in order; a second signal exits at once.
+// queue is empty. A runtime.stop, a first Ctrl+C or SIGTERM stops it in order; a second signal kills the agents in
+// flight and exits (3.14); haril stop --now kills them, cancels their tasks and leaves the runtime halted.
 // `--started-by shell` (LD-T6, ADR-0022) is how haril shell starts it: the same runtime, which also records
 // runtime.started_by_shell once it holds the lease, because the shell never writes the store.
 const IDLE_EXIT_SEC = 120;
@@ -89,12 +90,14 @@ async function serve(
   // The control channel (LD-T2): the runtime opens it after taking the lease, so subscribed shells and nudging CLIs
   // reach this runtime only while it holds the lease.
   const control = createControlServer({ dataDir });
-  // Ctrl+C and SIGTERM ask for the ordered stop; a second signal exits at once (ARCH 4.2).
+  // Ctrl+C and SIGTERM ask for the ordered stop; a second signal kills the agents in flight and exits (ARCH 4.2, 3.14).
   const shutdown = createShutdown();
+  const killSwitch = createKillSwitch();
   const detach = attachStopSignals(
     host.signals ?? process,
     shutdown,
     host.forceExit ?? ((code) => process.exit(code)),
+    killSwitch,
   );
   try {
     // M1-D6: the lease is per data root, so one runtime serves every project. --project only names one that exists.
@@ -129,6 +132,8 @@ async function serve(
       idleExitMs: idleExitSec * 1000,
       startedByShell: startedBy === STARTED_BY_SHELL,
       shutdown,
+      killSwitch,
+      ...(host.processControl === undefined ? {} : { processControl: host.processControl }),
       // LD-T7c: the goals of a plan's tasks are agent-written, so each line is shown as the terminal draws it.
       onEvent: (event) => {
         if (!json) io.out(visibleText(formatEvent(event)));
@@ -159,9 +164,13 @@ async function serve(
       if (memoryLeft !== undefined) io.out(memoryLeft);
       const skipped =
         result.summary.skipped.length === 0 ? "" : `, ${result.summary.skipped.length} skipped`;
+      const cancelled =
+        result.summary.cancelled.length === 0
+          ? ""
+          : `, ${result.summary.cancelled.length} cancelled`;
       const whose = mode === "start" ? ` (pid ${pid})` : "";
       io.out(
-        `done: ${result.summary.completed.length} completed, ${result.summary.failed.length} failed, ${result.summary.blocked.length} blocked${skipped}${workflowSummaryText(result.workflows)}${whose}`,
+        `done: ${result.summary.completed.length} completed, ${result.summary.failed.length} failed, ${result.summary.blocked.length} blocked${skipped}${cancelled}${workflowSummaryText(result.workflows)}${whose}`,
       );
     }
     return exitCode;
@@ -224,7 +233,17 @@ function formatEvent(event: RunEvent): string {
     case "task.skipped":
       return `skipped ${event.taskId} ${event.goal}: needs setup (${event.what}: ${event.fix})`;
     case "runtime.stopping":
-      return `stopping (${event.reason}): the in-flight run returns to ready`;
+      return event.reason === "emergency"
+        ? "stopping now (emergency stop): every agent process is killed; the runtime stays halted until haril resume"
+        : `stopping (${event.reason}): the in-flight run returns to ready`;
+    case "runtime.halted":
+      return "halted by an emergency stop: nothing is claimed until haril resume";
+    case "runtime.swept":
+      return `startup sweep: killed ${event.killed} agent ${event.killed === 1 ? "process" : "processes"} a stopped runtime left${event.kept === 0 ? "" : `; kept ${event.kept} whose pid now names another process`}`;
+    case "task.cancelled":
+      return event.reason === "user_stop"
+        ? `cancelled ${event.taskId} ${event.goal} (stopped by you; not retried)`
+        : `cancelled ${event.taskId} ${event.goal} (residual: nothing will use its result)`;
     case "task.returned":
       return `returned ${event.taskId} ${event.goal} to ready (stopped, no attempt charged)`;
     case "approval.applied":

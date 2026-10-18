@@ -351,8 +351,11 @@ function wrapHandle(
       });
       return final;
     }),
+    // The Pi process and its immediate kill reach the run loop (3.14): it records the process and kills on a stop.
+    ...(handle.process === undefined ? {} : { process: handle.process }),
     prompt: (text) => handle.prompt(text),
     abort: () => handle.abort(),
+    kill: () => (handle.kill === undefined ? handle.abort() : handle.kill()),
     dispose: async () => {
       try {
         await handle.dispose();
