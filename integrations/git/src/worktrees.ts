@@ -221,13 +221,14 @@ export async function removeWorktree(
   return { ok: false, detail: last === "" ? `${path} could not be removed` : last.slice(0, 300) };
 }
 
-// Deletes a local branch (git branch -D); false when git refuses (it is checked out somewhere, or it does not exist).
+// Deletes one of HARIL's local branches (git branch -D); false when git refuses (it is checked out somewhere, or it does
+// not exist) and for any branch outside haril/, which HARIL never deletes.
 export async function deleteBranch(
   root: string,
   branch: string,
   options: GitOptions = {},
 ): Promise<boolean> {
-  if (!isSafeBranchName(branch)) return false;
+  if (!isSafeBranchName(branch) || !branch.startsWith("haril/")) return false;
   return (await runGit(root, ["branch", "-D", "--", branch], options)).ok;
 }
 

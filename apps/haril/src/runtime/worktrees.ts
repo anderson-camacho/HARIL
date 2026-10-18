@@ -12,6 +12,7 @@ import type { AgentOutcome, Store, WorktreeRecord } from "@haril/core/ports";
 import {
   abortMerge,
   addWorktree,
+  branchCommit,
   changedPaths,
   checkPointer,
   commitPaths,
@@ -685,12 +686,12 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
           retries: SWEEP_REMOVE_RETRIES,
         });
         if (!result.ok) return false;
-        // An executor's branch goes once merged; an unmerged one stays, as it may hold work. The integration branch
-        // stays when it holds merges, for the user to review; an empty one goes.
-        const keep =
-          record.kind === "executor"
-            ? record.mergedAt === null && record.headSha !== null
-            : record.headSha !== null;
+        // Whether a branch holds work is git's answer, not the store's (a crash may have left a merge unrecorded): its
+        // tip differs from the base commit. An executor's branch goes once merged; an unmerged one with work stays. The
+        // integration branch stays when it holds work, for the user to review; an empty one goes.
+        const tip = await branchCommit(repo, record.branch, git);
+        const holdsWork = tip !== undefined && tip !== record.baseSha;
+        const keep = record.kind === "executor" ? record.mergedAt === null && holdsWork : holdsWork;
         if (!keep) await deleteBranch(repo, record.branch, git);
         return true;
       });

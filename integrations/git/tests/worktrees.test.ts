@@ -281,6 +281,17 @@ describe.skipIf(!HAS_GIT)("worktrees, commits and merges", () => {
     }
   });
 
+  it("deletes only HARIL's own branches", async () => {
+    const project = repo("project");
+    git(project, "branch", "feature");
+    git(project, "branch", "haril/wf/step/old");
+    expect(await deleteBranch(project, "feature", { env })).toBe(false);
+    expect(await deleteBranch(project, "main", { env })).toBe(false);
+    expect(git(project, "branch", "--list", "feature")).toContain("feature");
+    expect(await deleteBranch(project, "haril/wf/step/old", { env })).toBe(true);
+    expect(git(project, "branch", "--list", "haril/wf/step/old")).toBe("");
+  });
+
   it("refuses a worktree folder whose own path is too long for git on Windows", async () => {
     const project = repo("project");
     const base = git(project, "rev-parse", "main");

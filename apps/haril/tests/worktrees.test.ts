@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { AgentOutcome, Store } from "@haril/core/ports";
+import type { AgentOutcome, Store, WorktreeRecord } from "@haril/core/ports";
 import { addWorktree, worktreeIdentity } from "@haril/git";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Task, WorkflowView } from "../src/runtime/workflow-view.js";
@@ -334,6 +334,64 @@ describe.skipIf(!HAS_GIT)("a delegator resolving a merge's conflicting files", (
       ok: false,
       reason: expect.stringContaining("denied path"),
     });
+  });
+});
+
+describe.skipIf(!HAS_GIT)("the sweep of an ended workflow's worktrees", () => {
+  // A store that knows one completed workflow and the worktree records given, and remembers what was marked removed.
+  function sweepStore(records: Partial<WorktreeRecord>[]) {
+    const removed: string[] = [];
+    const store = {
+      worktrees: {
+        list: () => records,
+        markRemoved: (_epoch: number, id: string) => removed.push(id),
+      },
+      workflows: { get: () => ({ workflowId: "wf", state: "completed", projectId: "p1" }) },
+      projects: { list: () => [{ projectId: "p1", rootPath: repo }] },
+    } as unknown as Store;
+    return { store, removed };
+  }
+
+  it("keeps a branch that holds commits, whatever the store says, and deletes an empty one", async () => {
+    const base = gitIn(repo, "rev-parse", "main");
+    const integration = join(dirname(tree), "wt-integration");
+    await addWorktree(repo, { path: integration, branch: "haril/wf/integration", base }, { env });
+    writeFileSync(join(integration, "merged.txt"), "merged work\n");
+    gitIn(integration, "add", "merged.txt");
+    gitIn(integration, "commit", "--quiet", "-m", "a merge the store never heard of");
+    const empty = join(dirname(tree), "wt-empty");
+    await addWorktree(repo, { path: empty, branch: "haril/wf/step/empty", base }, { env });
+    const { store, removed } = sweepStore([
+      // A crash between markMerged and setHead: the store says the integration branch holds nothing.
+      {
+        worktreeId: "w-int",
+        workflowId: "wf",
+        kind: "integration",
+        path: integration,
+        branch: "haril/wf/integration",
+        baseSha: base,
+        headSha: null,
+        mergedAt: null,
+        state: "active",
+      },
+      {
+        worktreeId: "w-empty",
+        workflowId: "wf",
+        kind: "executor",
+        path: empty,
+        branch: "haril/wf/step/empty",
+        baseSha: base,
+        headSha: null,
+        mergedAt: null,
+        state: "active",
+      },
+    ]);
+    expect(await workspaces().sweep(store, 1)).toBe(2);
+    expect(removed.sort()).toEqual(["w-empty", "w-int"]);
+    expect(gitIn(repo, "branch", "--list", "haril/wf/integration")).toContain(
+      "haril/wf/integration",
+    );
+    expect(gitIn(repo, "branch", "--list", "haril/wf/step/empty")).toBe("");
   });
 });
 
