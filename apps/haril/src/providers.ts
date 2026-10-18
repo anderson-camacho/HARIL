@@ -11,6 +11,7 @@ import type { SecretStore } from "@haril/core/ports";
 import { createOpenAiCompatibleClient, ProviderError } from "@haril/gateway";
 import { EnvSecretStore } from "@haril/os";
 import type { HostInfo } from "./context.js";
+import { delegationSectionErrors } from "./delegation-section.js";
 import { runtimeRootFor } from "./runtime.js";
 
 // Providers of HARIL (M3-T7, ACE-06). They come from haril.json (HARIL_CONFIG, else <runtime root>/config/haril.json);
@@ -73,7 +74,8 @@ function isHttpUrl(text: string): boolean {
   }
 }
 
-function configPathFor(host: HostInfo): { path: string; explicit: boolean } {
+// Where haril.json is read: HARIL_CONFIG (explicit), else <runtime root>/config/haril.json.
+export function harilConfigPath(host: HostInfo): { path: string; explicit: boolean } {
   const env = host.env ?? {};
   const explicit = nonEmpty(env[CONFIG_ENV]);
   if (explicit !== undefined) return { path: explicit, explicit: true };
@@ -101,7 +103,7 @@ export function loadProviderConfig(
   secrets: SecretStore = secretStoreFor(host),
 ): ProviderLoad {
   const env = host.env ?? {};
-  const { path, explicit } = configPathFor(host);
+  const { path, explicit } = harilConfigPath(host);
   if (!existsSync(path)) {
     if (explicit)
       return { ok: false, path, errors: ["the file named by HARIL_CONFIG does not exist"] };
@@ -133,8 +135,9 @@ export function loadProviderConfig(
   };
 }
 
-// The top-level keys haril.json may hold: providers (the provider schema) and ui (TUI-D14). Anything else is refused.
-const TOP_LEVEL_KEYS: ReadonlySet<string> = new Set(["providers", "ui"]);
+// The top-level keys haril.json may hold: providers (the provider schema), ui (TUI-D14) and delegation (its quota part,
+// phase F6; delegation-section.ts). Anything else is refused.
+const TOP_LEVEL_KEYS: ReadonlySet<string> = new Set(["providers", "ui", "delegation"]);
 const THEME_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const UI_KEYS: ReadonlySet<string> = new Set(["theme"]);
 
@@ -152,6 +155,7 @@ function ownKeyErrors(value: Record<string, unknown>): string[] {
     if (key !== "apiKey" && !TOP_LEVEL_KEYS.has(key)) errors.push(`/${key}: unknown key`);
   }
   if ("ui" in value) errors.push(...uiErrors(value.ui));
+  if ("delegation" in value) errors.push(...delegationSectionErrors(value.delegation));
   return errors;
 }
 

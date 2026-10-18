@@ -11,6 +11,7 @@ import { metrics } from "./commands/metrics.js";
 import { models } from "./commands/models.js";
 import { plan } from "./commands/plan.js";
 import { project } from "./commands/project.js";
+import { quota } from "./commands/quota.js";
 import { resume } from "./commands/resume.js";
 import { shell } from "./commands/shell.js";
 import { runQueue, start } from "./commands/start.js";
@@ -58,6 +59,8 @@ const HELP_LINES = [
   "  haril --version | version        print the CLI version",
   "  haril doctor [--json] [--data-dir <path>]   check the runtime and the store",
   "  haril models [--json] [--provider <id>]   list the models of every provider as <provider>/<model> (haril.json)",
+  "  haril quota [--json] [--provider <id>]   5-hour and weekly quota of each account (CLIProxyAPI management API,",
+  "    key in CLIPROXYAPI_MANAGEMENT_KEY or delegation.quota.managementKeyEnv) and the model cooldowns; sin dato if unknown",
   "  haril states                     print the task states and legal transitions",
   "  haril plan validate <file> [--json]   validate a plan file",
   "  haril plan import <file> [--project <slug>] [--json]   queue a plan (applied by start)",
@@ -157,6 +160,8 @@ function dispatch(argv: readonly string[], io: CliIo, host: HostInfo): number | 
       return EXIT_OK;
     case "doctor":
       return doctor(rest, io, host);
+    case "quota":
+      return quota(rest, io, host);
     case "models":
       return models(rest, io, host);
     case "states":
