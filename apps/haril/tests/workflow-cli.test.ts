@@ -70,7 +70,9 @@ describe("haril workflow start, list, show and continue", () => {
     const id = await workflowId();
     expect(await invoke(["workflow", "show", id])).toBe(0);
     const paused = h.out.join("\n");
-    expect(paused).toMatch(new RegExp(`^workflow ${id} {2}awaiting_human`, "m"));
+    expect(paused).toMatch(
+      new RegExp(`^workflow ${id} {2}awaiting_human {2}\\(fake agents\\)$`, "m"),
+    );
     expect(paused).toMatch(/^o1 +orchestrator +waiting .* waits for its children$/m);
     expect(paused).toMatch(/^\+- d1 +delegator +queued .* waits until the workflow continues$/m);
     expect(paused).toMatch(/^stopped {4}at after_plan: continue it with haril workflow continue/m);

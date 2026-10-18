@@ -206,7 +206,13 @@ export function workflowShow(args: readonly string[], io: CliIo, host: HostInfo)
       io.out(JSON.stringify(snapshot));
       return EXIT_OK;
     }
-    const label = workflow.simulated ? "simulated" : (workflow.stopReason ?? "live");
+    // Which agents ran it: the demo's simulation, the fake workflow agents, or real ones.
+    const root = store.workflows.tasks(workflow.workflowId)[0];
+    const label = workflow.simulated
+      ? "simulated"
+      : root?.agentRef.startsWith("fake:") === true
+        ? "fake agents"
+        : "real agents";
     for (const line of [...headerLines(snapshot, label), "", ...treeLines(snapshot)]) io.out(line);
     const { totals } = snapshot;
     io.out("");
