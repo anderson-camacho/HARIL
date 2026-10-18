@@ -1,17 +1,22 @@
+import { join } from "node:path";
 import { type ControlServer, createControlServer } from "@haril/control";
 import { type RunEvent, runExitCode, visibleText } from "@haril/core";
+import { createProcessControl } from "@haril/os";
 import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_ERROR, EXIT_USAGE, type HostInfo } from "../context.js";
 import { agentRuntimeFor, clockFor } from "../host.js";
 import { createDelegationTools } from "../runtime/delegation-tools.js";
+import { DEFAULT_HOST_COMMAND_SETTINGS } from "../runtime/host-commands.js";
 import { createLiveModels } from "../runtime/live-models.js";
 import { memoryLeftLine } from "../runtime/memory.js";
 import { withStoreState } from "../runtime/model-context.js";
 import { createPlanProposals } from "../runtime/plan-proposals.js";
+import { killTrees } from "../runtime/processes.js";
 import { createRealAgents } from "../runtime/real-agent.js";
 import { runUntilIdle } from "../runtime/run-loop.js";
 import { attachStopSignals, createKillSwitch, createShutdown } from "../runtime/shutdown.js";
 import { workflowExitCode, workflowSummaryText } from "../runtime/workflow-summary.js";
+import { createWorkspaces } from "../runtime/worktrees.js";
 import { dataDirFor, failureReasonText, openExisting } from "./common.js";
 
 // `haril start` (M1-T5, LD-T1): the foreground runtime. It applies the queue, runs the ready tasks and stays up for new
@@ -83,11 +88,24 @@ async function serve(
   // delegation tools check a proposal against the same models the run loop decides with.
   const liveModels = createLiveModels({ host, store, clock: clockFor(host) });
   const delegation = liveModels.options;
+  // The git worktrees of workflows that write (phase F8): under the data directory, short hashed folders (git refuses a
+  // long worktree path on Windows). haril_run takes its commands from the allow list (provisional default until the
+  // delegation section's commands.allow, phase F7) and kills a command's tree through the verified tree kill.
+  const processControl = host.processControl ?? createProcessControl();
+  const workspaces = createWorkspaces({
+    root: join(dataDir, "worktrees"),
+    commands: DEFAULT_HOST_COMMAND_SETTINGS,
+    ...(host.env === undefined ? {} : { env: { ...process.env, ...host.env } }),
+    killTree: async (target) => {
+      await killTrees(processControl, [target]);
+    },
+  });
   // The host handler of the delegation tools (phase F2): the workflow turns of every lane call it.
   const delegationTools = createDelegationTools({
     store,
     clock: clockFor(host),
     options: withStoreState(store, delegation),
+    workspaces,
   });
   // The real lane (M2-T6): the analyst, the planner and the workflow archetypes in Pi through one Broker, closed when
   // the run ends. A real workflow turn's tool calls reach the same delegation tools as a fake one's (phase F2b).
@@ -144,6 +162,7 @@ async function serve(
       planProposals,
       delegationTools,
       delegation,
+      workspaces,
       control: channel,
       idleExitMs: idleExitSec * 1000,
       startedByShell: startedBy === STARTED_BY_SHELL,

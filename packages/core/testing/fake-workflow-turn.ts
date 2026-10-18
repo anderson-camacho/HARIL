@@ -352,6 +352,7 @@ function delegatorTurn(
       partId,
       executors: steps === null ? scenario.steps : Math.min(Number(steps[1]), 10),
       commonFile: scenario.commonFile,
+      ownFiles: scenario.ownFiles,
     });
     return succeeded(replyText(turn.call.tool, call(turn.call.tool, turn.call.input)), turn.cost);
   }

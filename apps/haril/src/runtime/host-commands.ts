@@ -60,8 +60,8 @@ export const DEFAULT_COMMAND_ALLOW: readonly string[] = Object.freeze([
   "cargo build",
 ]);
 
-export const DEFAULT_COMMAND_TIMEOUT_MS = 300_000;
-export const DEFAULT_COMMAND_OUTPUT_MAX_BYTES = 16_384;
+const DEFAULT_COMMAND_TIMEOUT_MS = 300_000;
+const DEFAULT_COMMAND_OUTPUT_MAX_BYTES = 16_384;
 
 export const DEFAULT_HOST_COMMAND_SETTINGS: HostCommandSettings = Object.freeze({
   allow: DEFAULT_COMMAND_ALLOW,
@@ -307,7 +307,10 @@ class Tail {
   private chunks: Buffer[] = [];
   private size = 0;
   cut = false;
-  constructor(private readonly max: number) {}
+  private readonly max: number;
+  constructor(max: number) {
+    this.max = max;
+  }
   push(chunk: Buffer): void {
     this.chunks.push(chunk);
     this.size += chunk.length;

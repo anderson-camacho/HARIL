@@ -118,17 +118,23 @@ describe("the delegation tools of a workflow turn", () => {
     expect(report.refusals).toHaveLength(3);
   });
 
-  it("refuses haril_run and haril_merge, which no agent is offered before writing arrives (F8)", () => {
+  it("refuses the workspace tools to the orchestrator: they are never its own (F8)", async () => {
     const { context, close } = openOrchestratorTurn();
-    expect(tools.call(context, "haril_run", { command: "pnpm" })).toMatchObject({
+    expect(await tools.call(context, "haril_run", { command: "pnpm" })).toMatchObject({
       ok: false,
       reason: "haril_run is not a tool of the orchestrator",
     });
-    expect(tools.call(context, "haril_merge", { taskId: "t" })).toMatchObject({
+    expect(await tools.call(context, "haril_merge", { localId: "step-1" })).toMatchObject({
       ok: false,
       reason: "haril_merge is not a tool of the orchestrator",
     });
-    expect(close().action).toBeNull();
+    expect(await tools.call(context, "write", { path: "a.ts", content: "x" })).toMatchObject({
+      ok: false,
+      reason: "write is not a tool of the orchestrator",
+    });
+    const report = close();
+    expect(report.action).toBeNull();
+    expect(report.refusals).toHaveLength(3);
   });
 
   it("checks a proposal with the Core rules and answers with the reason, so the agent can correct it", () => {

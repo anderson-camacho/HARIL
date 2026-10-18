@@ -1,6 +1,6 @@
 import type { WorkflowState } from "@haril/contracts";
-import { type ClaimCandidate, type LiveTask, selectClaims } from "@haril/core";
-import type { ClaimedTask, Clock, Store } from "@haril/core/ports";
+import { type ClaimCandidate, type HeldSurface, type LiveTask, selectClaims } from "@haril/core";
+import type { ClaimedTask, Clock, Store, WorkflowRecord } from "@haril/core/ports";
 import { checkLaunch } from "./model-launch.js";
 import { reachStop } from "./workflow-commit.js";
 import {
@@ -15,10 +15,29 @@ import {
 // selectClaims decides with the workflow's limits (simultaneous per role, live children per thread, the workflow's
 // agent cap, the writer limit and the surface locks), and each chosen turn is claimed on its own, atomically, with the
 // lease's epoch. A full limit never starts an extra process: the turn waits ready for the next free slot.
+//
+// Phase F8, a workflow that writes in git worktrees: its delegator turns and its final auditor hold the workflow's
+// integration lock (one of them at a time uses the integration worktree), and its writers also wait for the write
+// surfaces that writers of other writing workflows of the same project hold, so two tasks that may write the same file
+// never run at once, in one workflow or across workflows.
 
 export interface WorkflowClaim {
   readonly claimed: ClaimedTask;
   readonly workflowId: string;
+}
+
+function writes(workflow: WorkflowRecord): boolean {
+  return workflow.baseBranch !== null && workflow.baseSha !== null;
+}
+
+// The exclusive locks a turn holds while it runs: in a workflow that writes, a delegator turn and the final auditor work
+// in the integration worktree, one at a time.
+function locksOf(task: Task, view: WorkflowView): string[] {
+  if (!writes(view.workflow)) return [];
+  const integrates =
+    task.role === "delegator" ||
+    (task.role === "auditor" && view.task(task.parentTaskId)?.role !== "executor");
+  return integrates ? [`integration:${view.workflow.workflowId}`] : [];
 }
 
 function candidateOf(task: Task, view: WorkflowView): ClaimCandidate {
@@ -33,6 +52,7 @@ function candidateOf(task: Task, view: WorkflowView): ClaimCandidate {
     createdSeq: task.createdSeq,
     writeSurface: task.surfaceWrite,
     started: task.attempt > 0,
+    locks: locksOf(task, view),
   };
 }
 
@@ -43,7 +63,30 @@ function liveOf(task: Task, view: WorkflowView): LiveTask {
     parentThreadId: view.task(task.parentTaskId)?.threadId ?? null,
     archetype: task.role,
     writeSurface: task.surfaceWrite,
+    locks: locksOf(task, view),
   };
+}
+
+interface ProjectWriter extends HeldSurface {
+  readonly workflowId: string;
+}
+
+// The running writers of every writing workflow, by project.
+function runningWriters(
+  store: Store,
+  workflows: readonly WorkflowRecord[],
+): Map<string, ProjectWriter[]> {
+  const byProject = new Map<string, ProjectWriter[]>();
+  for (const workflow of workflows) {
+    if (!writes(workflow)) continue;
+    for (const task of store.workflows.tasks(workflow.workflowId)) {
+      if (task.state !== "running" || task.surfaceWrite.length === 0) continue;
+      const list = byProject.get(workflow.projectId) ?? [];
+      list.push({ workflowId: workflow.workflowId, writeSurface: task.surfaceWrite });
+      byProject.set(workflow.projectId, list);
+    }
+  }
+  return byProject;
 }
 
 // Claims the turns selectClaims starts now in every running workflow, oldest workflow first. `exclude` names ready
@@ -60,6 +103,7 @@ export function claimWorkflowTurns(
 ): WorkflowClaim[] {
   const claims: WorkflowClaim[] = [];
   const running = [...store.workflows.list({ state: "running" })].reverse();
+  const writers = runningWriters(store, running);
   for (const workflow of running) {
     const view = WorkflowView.load(store, workflow.workflowId);
     if (view === undefined) continue;
@@ -75,6 +119,11 @@ export function claimWorkflowTurns(
           .filter((task) => task.state === "running")
           .map((task) => liveOf(task, view)),
         tasksStarted: view.tasks.filter((task) => task.attempt > 0).length,
+        held: writes(workflow)
+          ? (writers.get(workflow.projectId) ?? []).filter(
+              (writer) => writer.workflowId !== workflow.workflowId,
+            )
+          : [],
       },
       limits,
     );
@@ -88,7 +137,14 @@ export function claimWorkflowTurns(
         break;
       }
       const claimed = store.tasks.claimTask(epoch, plan.taskId);
-      if (claimed !== undefined) claims.push({ claimed, workflowId: workflow.workflowId });
+      if (claimed === undefined) continue;
+      claims.push({ claimed, workflowId: workflow.workflowId });
+      // A writer started now holds its surface for the workflows scheduled after this one in the same pass.
+      if (writes(workflow) && task.surfaceWrite.length > 0) {
+        const list = writers.get(workflow.projectId) ?? [];
+        list.push({ workflowId: workflow.workflowId, writeSurface: task.surfaceWrite });
+        writers.set(workflow.projectId, list);
+      }
     }
   }
   return claims;
