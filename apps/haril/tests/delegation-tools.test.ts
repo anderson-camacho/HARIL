@@ -118,6 +118,19 @@ describe("the delegation tools of a workflow turn", () => {
     expect(report.refusals).toHaveLength(3);
   });
 
+  it("refuses haril_run and haril_merge, which no agent is offered before writing arrives (F8)", () => {
+    const { context, close } = openOrchestratorTurn();
+    expect(tools.call(context, "haril_run", { command: "pnpm" })).toMatchObject({
+      ok: false,
+      reason: "haril_run is not a tool of the orchestrator",
+    });
+    expect(tools.call(context, "haril_merge", { taskId: "t" })).toMatchObject({
+      ok: false,
+      reason: "haril_merge is not a tool of the orchestrator",
+    });
+    expect(close().action).toBeNull();
+  });
+
   it("checks a proposal with the Core rules and answers with the reason, so the agent can correct it", () => {
     const { context, close } = openOrchestratorTurn();
     const refused = tools.call(

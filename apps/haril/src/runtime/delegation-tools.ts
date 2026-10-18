@@ -149,13 +149,15 @@ export function createDelegationTools(deps: DelegationToolsDeps): DelegationTool
     }
     if (!isDelegationToolName(tool)) return refuse(window, `unknown tool "${tool}"`);
     if (!mayUseTool(task.role, tool, { writes: false })) {
+      // haril_run and haril_merge are not offered before writing arrives (archetypeTools); a role that gets them then
+      // hears why, every other caller hears that the tool is not its own.
+      if (mayUseTool(task.role, tool, { writes: true })) {
+        return refuse(
+          window,
+          `${tool} runs nothing until writing arrives (phase F8): no command or merge is allowed yet`,
+        );
+      }
       return refuse(window, `${tool} is not a tool of the ${task.role}`);
-    }
-    if (tool === "haril_run" || tool === "haril_merge") {
-      return refuse(
-        window,
-        `${tool} runs nothing until writing arrives (phase F8): no command is allowed yet`,
-      );
     }
     const valid = validateDelegationToolInput(tool, raw);
     if (!valid.ok) return refuse(window, `${tool} input: ${valid.errors.join("; ")}`);

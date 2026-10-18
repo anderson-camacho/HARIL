@@ -6,6 +6,7 @@ import {
   childArchetypeOf,
   DEFAULT_DELEGATION_LIMITS,
   DELEGATION_ARCHETYPES,
+  HOST_COMMAND_TOOLS,
   isDelegationArchetype,
   mayUseTool,
 } from "../../src/delegation/index.js";
@@ -29,7 +30,7 @@ describe("archetypes", () => {
     ]);
   });
 
-  it("gives each archetype the bridge tools of the spec before writing exists", () => {
+  it("gives each archetype only the bridge tools the host serves before writing exists", () => {
     expect(archetypeTools("orchestrator", { writes: false })).toEqual([
       "read",
       "haril_delegate",
@@ -40,25 +41,43 @@ describe("archetypes", () => {
       "read",
       "haril_assign",
       "haril_report",
-      "haril_run",
     ]);
     expect(archetypeTools("executor", { writes: false })).toEqual(["read"]);
-    expect(archetypeTools("auditor", { writes: false })).toEqual([
-      "read",
-      "haril_run",
-      "haril_verdict",
-    ]);
+    expect(archetypeTools("auditor", { writes: false })).toEqual(["read", "haril_verdict"]);
   });
 
-  it("adds the write tools only when writing is enabled (phase F8)", () => {
-    expect(archetypeTools("delegator", { writes: true })).toContain("haril_merge");
+  it("keeps haril_run and haril_merge in the spec's table but announces them only with writing (F8)", () => {
+    expect(ARCHETYPES.delegator.tools).toContain("haril_run");
+    expect(ARCHETYPES.auditor.tools).toContain("haril_run");
+    expect(HOST_COMMAND_TOOLS).toEqual(["haril_run", "haril_merge"]);
+    for (const archetype of DELEGATION_ARCHETYPES) {
+      const announced = archetypeTools(archetype, { writes: false });
+      expect(announced).not.toContain("haril_run");
+      expect(announced).not.toContain("haril_merge");
+    }
+    expect(mayUseTool("delegator", "haril_run", { writes: false })).toBe(false);
+    expect(mayUseTool("auditor", "haril_run", { writes: false })).toBe(false);
+  });
+
+  it("adds the write and command tools only when writing is enabled (phase F8)", () => {
+    expect(archetypeTools("delegator", { writes: true })).toEqual([
+      "read",
+      "haril_assign",
+      "haril_report",
+      "haril_run",
+      "haril_merge",
+    ]);
     expect(archetypeTools("executor", { writes: true })).toEqual([
       "read",
       "write",
       "edit",
       "haril_run",
     ]);
-    expect(archetypeTools("auditor", { writes: true })).not.toContain("write");
+    expect(archetypeTools("auditor", { writes: true })).toEqual([
+      "read",
+      "haril_run",
+      "haril_verdict",
+    ]);
   });
 
   it("lets only the orchestrator delegate and only the delegator assign", () => {

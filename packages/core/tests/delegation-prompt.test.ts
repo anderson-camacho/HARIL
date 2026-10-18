@@ -87,12 +87,11 @@ function turn(delegation: DelegationTurnInput, kind: "plan" | "work" | "verify" 
 describe("buildAgentSpec for a workflow turn", () => {
   it("gives the role's archetype tools and carries the turn input for a fake agent", () => {
     const spec = turn(input());
-    expect(spec.allowedTools).toEqual(["read", "haril_assign", "haril_report", "haril_run"]);
+    expect(spec.allowedTools).toEqual(["read", "haril_assign", "haril_report"]);
     expect(spec.delegation?.label).toBe("part-1");
     expect(turn(input({ role: "executor", layer: 3 }), "work").allowedTools).toEqual(["read"]);
     expect(turn(input({ role: "auditor", layer: 3 }), "verify").allowedTools).toEqual([
       "read",
-      "haril_run",
       "haril_verdict",
     ]);
     expect(turn(input({ role: "orchestrator", layer: 1 })).allowedTools).toEqual([

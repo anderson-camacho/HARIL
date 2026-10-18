@@ -13,7 +13,8 @@ export type AgentTool = "read" | "write" | "edit" | DelegationToolName;
 export interface ArchetypeSpec {
   readonly layer: 1 | 2 | 3;
   readonly taskKind: TaskKind;
-  // Tools before agents may write (phases F1 to F7).
+  // The spec's tools before agents may write (3.4). The host commands among them (HOST_COMMAND_TOOLS) are announced
+  // only once writing arrives: archetypeTools leaves them out until then.
   readonly tools: readonly AgentTool[];
   // Tools added when writing is enabled (phase F8: worktrees, surface locks and integration).
   readonly writeTools: readonly AgentTool[];
@@ -61,20 +62,28 @@ const PROPOSED_CHILD: Partial<Record<DelegationToolName, DelegationArchetype>> =
 };
 
 export interface ToolOptions {
-  // True once agents may write (F8); until then the write tools are never registered.
+  // True once agents may write (F8); until then the write tools and the host commands are never registered.
   readonly writes: boolean;
 }
+
+// The tools the host answers by running something: a command of the allow list (haril_run) or a merge into the
+// integration branch (haril_merge). Both need the worktrees, the allow list and the integration branch of phase F8, so
+// until then no agent is offered them: an announced tool the host always refuses would only waste the agent's turn.
+export const HOST_COMMAND_TOOLS: readonly AgentTool[] = Object.freeze(["haril_run", "haril_merge"]);
 
 export function isDelegationArchetype(value: string): value is DelegationArchetype {
   return (DELEGATION_ARCHETYPES as readonly string[]).includes(value);
 }
 
+// The single source of what an agent of the archetype is offered: the bridge registers these tools, the handshake
+// expects exactly these, and the host accepts calls only to these.
 export function archetypeTools(
   archetype: DelegationArchetype,
   options: ToolOptions,
 ): readonly AgentTool[] {
   const spec = ARCHETYPES[archetype];
-  return options.writes ? [...spec.tools, ...spec.writeTools] : spec.tools;
+  if (options.writes) return [...spec.tools, ...spec.writeTools];
+  return spec.tools.filter((tool) => !HOST_COMMAND_TOOLS.includes(tool));
 }
 
 export function mayUseTool(
