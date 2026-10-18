@@ -124,6 +124,40 @@ test("fails while the top changelog entry still has the placeholder", () => {
   }
 });
 
+test("accepts a filled entry that only mentions the marker in its text", () => {
+  const repo = gitSandbox("0.10.0");
+  try {
+    bumpAndFill(repo.root);
+    const log = readAt(repo.root, "versions/v0/CHANGELOG.md").replace(
+      "### Añadido\n\n- Hecho.",
+      `### Añadido\n\n- bump-version.mjs writes \`${PLACEHOLDER}\` markers for the author to fill.`,
+    );
+    writeAt(repo.root, "versions/v0/CHANGELOG.md", log);
+    repo.commit("release that documents the marker");
+    const result = check(repo.root, { HARIL_VERSION_BASE: repo.base });
+    assert.equal(result.code, 0, result.text);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("fails when a single marker line is left among filled ones", () => {
+  const repo = gitSandbox("0.10.0");
+  try {
+    bumpAndFill(repo.root);
+    const log = readAt(repo.root, "versions/v0/CHANGELOG.md").replace(
+      "### Corregido\n\n- Hecho.",
+      `### Corregido\n\n- ${PLACEHOLDER}`,
+    );
+    writeAt(repo.root, "versions/v0/CHANGELOG.md", log);
+    repo.commit("release with one marker left");
+    const result = check(repo.root, { HARIL_VERSION_BASE: repo.base });
+    assert.equal(result.code, 1, result.text);
+  } finally {
+    repo.cleanup();
+  }
+});
+
 test("fails when the top changelog entry is not the current version", () => {
   const { root, cleanup } = sandbox();
   try {

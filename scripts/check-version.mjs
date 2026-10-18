@@ -17,6 +17,7 @@ import {
   changelogPath,
   compareVersions,
   fileExists,
+  hasUnfilledPlaceholder,
   PLACEHOLDER,
   parseVersion,
   readDocument,
@@ -92,7 +93,7 @@ function consistencyProblems(root) {
     if (top === null) problems.push(`${logPath} has no entry`);
     else if (top.version !== current) {
       problems.push(`${logPath}: top entry is ${top.version}, not ${current}`);
-    } else if (top.body.includes(PLACEHOLDER)) {
+    } else if (hasUnfilledPlaceholder(top.body)) {
       problems.push(`${logPath}: the ${current} entry still has ${PLACEHOLDER}; fill it in`);
     }
   }

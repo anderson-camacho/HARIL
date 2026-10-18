@@ -34,6 +34,14 @@ const FOLDER_RANGE = (major) =>
 // The marker bump-version writes into a new entry; check-version fails while any is left in the top entry.
 export const PLACEHOLDER = "TODO(bump-version)";
 
+// A list item whose whole value is still the marker ("- TODO(bump-version)" or "- **Estado:** TODO(bump-version)").
+// Text that only mentions the marker, as a changelog describing this script does, is not a placeholder.
+const UNFILLED_LINE = /^\s*- (\*\*[^*\n]+:\*\* )?TODO\(bump-version\)\s*$/m;
+
+export function hasUnfilledPlaceholder(text) {
+  return UNFILLED_LINE.test(text);
+}
+
 export function changelogPath(major) {
   return `versions/v${major}/CHANGELOG.md`;
 }
