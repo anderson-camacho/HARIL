@@ -28,6 +28,9 @@ export interface HostInfo {
   readonly interactive?: boolean;
   // Reads all of stdin as UTF-8 (haril usage record --stdin); defaults to the process's stdin. Tests inject it.
   readonly readStdin?: () => string;
+  // Calls the listener once when stdin ends (haril workflow watch and tail with --exit-on-stdin-end) and returns a
+  // function that stops listening; defaults to the process's stdin. Tests inject it.
+  readonly onStdinEnd?: (listener: () => void) => () => void;
   // Store inspection (read-only) and opening; defaults to the real SQLite store.
   readonly inspectStore?: (dataDir: string) => StoreInspection;
   readonly openStore?: (dataDir: string) => Store;

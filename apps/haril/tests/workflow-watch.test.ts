@@ -184,6 +184,40 @@ describe("haril workflow watch", () => {
     expect(ended.lines.map((line) => line.workflow.state)).toEqual(["stopped"]);
   });
 
+  it("ends when its stdin ends with --exit-on-stdin-end: the console that started it went away", async () => {
+    const store = open();
+    const workflowId = runningWorkflow(store);
+    const lines: WorkflowSnapshot[] = [];
+    let endStdin: (() => void) | undefined;
+    const host: HostInfo = {
+      ...sb.host,
+      signals: new EventEmitter(),
+      connectControl: async () => undefined,
+      onStdinEnd: (listener) => {
+        endStdin = listener;
+        return () => {
+          endStdin = undefined;
+        };
+      },
+    };
+    const io = {
+      out: (line: string) => lines.push(JSON.parse(line) as WorkflowSnapshot),
+      err: () => undefined,
+      readFile: () => "",
+    };
+    const done = Promise.resolve(
+      run(
+        ["workflow", "watch", workflowId, "--interval-ms", "40", "--exit-on-stdin-end"],
+        io,
+        host,
+      ),
+    );
+    await until(() => lines.length === 1 && endStdin !== undefined, "the first snapshot", 5000);
+    endStdin?.();
+    expect(await done).toBe(0);
+    expect(endStdin).toBeUndefined();
+  });
+
   it("takes --json as the spec writes it: its lines are JSON already", async () => {
     const store = open();
     const workflowId = runningWorkflow(store);

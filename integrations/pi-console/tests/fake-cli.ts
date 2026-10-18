@@ -18,6 +18,8 @@ interface FakeAnswer {
 interface FakeCall {
   readonly args: string[];
   readonly stdin: string | null;
+  // The pid of the fake command, so a test can check that the console ended it.
+  readonly pid: number;
 }
 
 export interface FakeCli {
@@ -31,7 +33,7 @@ import { appendFileSync, readFileSync } from "node:fs";
 const [log, table] = [process.env.FAKE_HARIL_LOG, process.env.FAKE_HARIL_TABLE];
 const args = process.argv.slice(2);
 const stdin = args.includes("--stdin") ? readFileSync(0, "utf8") : null;
-appendFileSync(log, JSON.stringify({ args, stdin }) + "\n");
+appendFileSync(log, JSON.stringify({ args, stdin, pid: process.pid }) + "\n");
 const answers = JSON.parse(readFileSync(table, "utf8"));
 const key = Object.keys(answers)
   .filter((candidate) => args.join(" ").startsWith(candidate))

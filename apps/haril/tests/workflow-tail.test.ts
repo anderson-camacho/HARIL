@@ -308,6 +308,43 @@ describe("haril workflow tail", () => {
     expect(await done).toBe(0);
   });
 
+  it("ends when its stdin ends with --exit-on-stdin-end: the console that started it went away", async () => {
+    const store = open();
+    const { workflowId } = claimedOrchestrator(store);
+    let endStdin: (() => void) | undefined;
+    const host: HostInfo = {
+      ...sb.host,
+      signals: new EventEmitter(),
+      onStdinEnd: (listener) => {
+        endStdin = listener;
+        return () => {
+          endStdin = undefined;
+        };
+      },
+    };
+    const done = Promise.resolve(
+      run(
+        [
+          "workflow",
+          "tail",
+          workflowId,
+          "o1",
+          "--follow",
+          "--json",
+          "--interval-ms",
+          "30",
+          "--exit-on-stdin-end",
+        ],
+        harness().io,
+        host,
+      ),
+    );
+    await until(() => endStdin !== undefined, "the stdin subscription", 5000);
+    endStdin?.();
+    expect(await done).toBe(0);
+    expect(endStdin).toBeUndefined();
+  });
+
   it("reads the last lines of a run before it follows the node's next run", async () => {
     const store = open();
     const { workflowId, runId } = claimedOrchestrator(store);

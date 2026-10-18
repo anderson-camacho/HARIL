@@ -123,7 +123,7 @@ describe("the workflow feed", () => {
     expect(snapshots.map((item) => item.workflow.state)).toEqual(["awaiting_human", "completed"]);
     const calls = cli.calls().map((call) => call.args.join(" "));
     expect(calls).toContain("workflow list --json --project notes");
-    expect(calls).toContain(`workflow watch ${WORKFLOW_ID}`);
+    expect(calls).toContain(`workflow watch ${WORKFLOW_ID} --exit-on-stdin-end`);
 
     // The watch ended after the workflow did: a refresh does not start it again.
     await watching.refresh();
@@ -151,7 +151,15 @@ describe("the workflow feed", () => {
     await waitFor(() => tails.some((item) => item.lines[0]?.kind === "tokens"), "the tail lines");
     expect(tails.every((item) => item.nodeId === "e1")).toBe(true);
     const call = cli.calls().find((item) => item.args[1] === "tail");
-    expect(call?.args).toEqual(["workflow", "tail", WORKFLOW_ID, "e1", "--follow", "--json"]);
+    expect(call?.args).toEqual([
+      "workflow",
+      "tail",
+      WORKFLOW_ID,
+      "e1",
+      "--follow",
+      "--json",
+      "--exit-on-stdin-end",
+    ]);
     watching.follow({ workflowId: WORKFLOW_ID, nodeId: "e1" });
     expect(cli.calls().filter((item) => item.args[1] === "tail")).toHaveLength(1);
     watching.follow({ workflowId: WORKFLOW_ID, nodeId: "e2" });

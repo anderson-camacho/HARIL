@@ -5,6 +5,7 @@ import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
 import { clockFor } from "../host.js";
 import { dataDirFor, openExisting } from "./common.js";
+import { EXIT_ON_STDIN_END, onStdinEnd } from "./stdin-end.js";
 import { buildWorkflowSnapshot } from "./workflow-snapshot.js";
 
 // `haril workflow watch <workflowId>` (docs/modos-y-delegacion.md 6, 7.6; phase F5b): a stream of JSON lines, each one
@@ -13,10 +14,11 @@ import { buildWorkflowSnapshot } from "./workflow-snapshot.js";
 // at most one per WAKE_INTERVAL_MS for a burst. Without a runtime, or between wakes, the store is read every
 // --interval-ms and a snapshot printed only when it changed (the elapsed time aside), and a subscription is tried again,
 // so a runtime that starts later is followed too. It ends after the snapshot that shows the workflow ended (completed,
-// failed or stopped), or on Ctrl+C. It reads the store only: it writes nothing and queues nothing.
+// failed or stopped), or on Ctrl+C, or with --exit-on-stdin-end when its stdin ends (the console that runs it as a child
+// went away). It reads the store only: it writes nothing and queues nothing.
 
 const USAGE =
-  "usage: haril workflow watch <workflowId> [--json] [--interval-ms <n>] [--data-dir <path>]";
+  "usage: haril workflow watch <workflowId> [--json] [--interval-ms <n>] [--exit-on-stdin-end] [--data-dir <path>]";
 const DEFAULT_INTERVAL_MS = 1_000;
 const WAKE_INTERVAL_MS = 250;
 const ENDED = new Set<WorkflowSnapshot["workflow"]["state"]>(["completed", "failed", "stopped"]);
@@ -39,7 +41,10 @@ export function workflowWatch(
   host: HostInfo,
 ): number | Promise<number> {
   // --json is accepted as spec 6 writes it: every line is JSON already.
-  const parsed = parseArgs(args, { values: ["--interval-ms", "--data-dir"], flags: ["--json"] });
+  const parsed = parseArgs(args, {
+    values: ["--interval-ms", "--data-dir"],
+    flags: ["--json", EXIT_ON_STDIN_END],
+  });
   const problem = argsProblem(parsed, io);
   if (problem !== null) return problem;
   const [workflowId, ...extra] = parsed.positionals;
@@ -56,7 +61,15 @@ export function workflowWatch(
     store.close();
     return fail(io, `no workflow with id "${workflowId}"`);
   }
-  return follow(store, workflowId, dataDir, intervalMs, io, host);
+  return follow(
+    store,
+    workflowId,
+    dataDir,
+    intervalMs,
+    io,
+    host,
+    parsed.flags.has(EXIT_ON_STDIN_END),
+  );
 }
 
 function follow(
@@ -66,6 +79,7 @@ function follow(
   intervalMs: number,
   io: CliIo,
   host: HostInfo,
+  exitOnStdinEnd: boolean,
 ): Promise<number> {
   const clock = clockFor(host);
   const connectControl = host.connectControl ?? connect;
@@ -89,9 +103,11 @@ function follow(
     let ended = false;
     let pendingWake: ReturnType<typeof setTimeout> | undefined;
     let lastWake = Number.NEGATIVE_INFINITY;
+    let stopStdin: (() => void) | undefined;
     const finish = (): void => {
       if (ended) return;
       ended = true;
+      stopStdin?.();
       clearInterval(poll);
       if (pendingWake !== undefined) clearTimeout(pendingWake);
       signals.off("SIGINT", finish);
@@ -145,6 +161,7 @@ function follow(
     }, intervalMs);
     signals.on("SIGINT", finish);
     signals.on("SIGTERM", finish);
+    if (exitOnStdinEnd) stopStdin = onStdinEnd(host, finish);
     void subscribe();
   });
 }

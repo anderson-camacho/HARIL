@@ -5,6 +5,7 @@ import type { Store, WorkflowRecord } from "@haril/core/ports";
 import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
 import { dataDirFor, openExisting } from "./common.js";
+import { EXIT_ON_STDIN_END, onStdinEnd } from "./stdin-end.js";
 import { type ThreadView, threadsOf } from "./workflow-snapshot.js";
 
 // `haril workflow tail <workflowId> <node>` (docs/modos-y-delegacion.md 7.9, spike S7; phase F5b): what a node's agent
@@ -13,13 +14,15 @@ import { type ThreadView, threadsOf } from "./workflow-snapshot.js";
 // message entries with the roles system, user, assistant and toolResult). This reads the session of the node's current
 // or latest run and prints each entry in short form: prompts, the assistant's text, its tool calls, the results and the
 // tokens of each reply. --follow keeps reading while the file grows (a half-written last line waits for its end), moves
-// to the next run when the node starts another turn, and ends once the workflow ended, or on Ctrl+C. --json prints one
+// to the next run when the node starts another turn (the previous run read to its end first), and ends once the
+// workflow ended, or on Ctrl+C, or with --exit-on-stdin-end when its stdin ends (the console that runs it went away).
+// --json prints one
 // object per line ({at, kind, text, tokensIn?, tokensOut?}); `at` is null for a line about the run itself. What an agent
 // wrote is data: whitespace is folded and every control character shown as "?", so nothing reaches the terminal as a
 // command. The text stays on this machine: it is never written to the usage log.
 
 const USAGE =
-  "usage: haril workflow tail <workflowId> <node> [--follow] [--json] [--interval-ms <n>] [--data-dir <path>]";
+  "usage: haril workflow tail <workflowId> <node> [--follow] [--json] [--interval-ms <n>] [--exit-on-stdin-end] [--data-dir <path>]";
 const DEFAULT_INTERVAL_MS = 250;
 const MAX_TEXT = 300;
 const RUNS_DIR = "runs";
@@ -332,7 +335,7 @@ export function workflowTail(
 ): number | Promise<number> {
   const parsed = parseArgs(args, {
     values: ["--interval-ms", "--data-dir"],
-    flags: ["--follow", "-f", "--json"],
+    flags: ["--follow", "-f", "--json", EXIT_ON_STDIN_END],
   });
   const problem = argsProblem(parsed, io);
   if (problem !== null) return problem;
@@ -376,9 +379,11 @@ export function workflowTail(
   return new Promise((resolve) => {
     const signals = host.signals ?? process;
     let ended = false;
+    let stopStdin: (() => void) | undefined;
     const finish = (): void => {
       if (ended) return;
       ended = true;
+      stopStdin?.();
       clearInterval(timer);
       signals.off("SIGINT", finish);
       signals.off("SIGTERM", finish);
@@ -398,6 +403,8 @@ export function workflowTail(
     }, intervalMs);
     signals.on("SIGINT", finish);
     signals.on("SIGTERM", finish);
+    // The console runs it as a child with a stdin pipe: when the console goes away, the tail ends too.
+    if (parsed.flags.has(EXIT_ON_STDIN_END)) stopStdin = onStdinEnd(host, finish);
   });
 }
 

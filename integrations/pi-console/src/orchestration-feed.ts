@@ -26,6 +26,8 @@ export interface WorkflowChoice {
   readonly stopReason: string | null;
 }
 
+// The children end with their stdin, a pipe the console holds (cli.ts): they never outlive the console.
+const EXIT_WITH_CONSOLE = "--exit-on-stdin-end";
 const WORKFLOW_STATES = new Set(["running", "awaiting_human", "completed", "failed", "stopped"]);
 const LIVE_STATES = new Set(["running", "awaiting_human"]);
 
@@ -215,7 +217,15 @@ export function createWorkflowFeed(
   ): void => {
     const id = ++tailSeq;
     const stream = cli.stream(
-      ["workflow", "tail", target.workflowId, target.nodeId, "--follow", "--json"],
+      [
+        "workflow",
+        "tail",
+        target.workflowId,
+        target.nodeId,
+        "--follow",
+        "--json",
+        EXIT_WITH_CONSOLE,
+      ],
       {
         cwd: host.cwd(),
         onLine: (line) => {
@@ -245,7 +255,7 @@ export function createWorkflowFeed(
   const startWatch = (id: string): void => {
     watch?.stream.close();
     watch = undefined;
-    const stream = cli.stream(["workflow", "watch", id], {
+    const stream = cli.stream(["workflow", "watch", id, EXIT_WITH_CONSOLE], {
       cwd: host.cwd(),
       onLine: (line) => {
         if (closed || watch?.id !== id) return;

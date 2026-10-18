@@ -104,7 +104,8 @@ const MAX_LINE_CHARS = 4 * 1024 * 1024;
 
 // Runs `haril <args>` and calls onLine with each line of its stdout as it arrives (stderr is ignored), and onExit once
 // when it ends. Same launcher as runHaril: execFile's pair, no shell, the inherited environment. Undefined when this
-// Pi was not opened by haril.
+// Pi was not opened by haril. The child's stdin is a pipe the console holds and never writes: when the console goes
+// away, even without a chance to end its children, the pipe closes, and a command run with --exit-on-stdin-end exits.
 export function streamHaril(
   args: readonly string[],
   options: {
@@ -128,12 +129,14 @@ export function streamHaril(
     child = spawn(found.node, [found.cli, ...args], {
       cwd: options.cwd,
       windowsHide: true,
-      stdio: ["ignore", "pipe", "ignore"],
+      stdio: ["pipe", "pipe", "ignore"],
     });
   } catch {
     exit(null);
     return { running: false, close: () => undefined };
   }
+  // A child that exits closes its end of the pipe: nothing is ever written, so the error is only that.
+  child.stdin?.on("error", () => undefined);
   let partial = "";
   child.stdout?.setEncoding("utf8");
   child.stdout?.on("data", (chunk: string) => {

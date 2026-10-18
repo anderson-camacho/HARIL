@@ -881,7 +881,17 @@ export default function harilConsole(pi: ConsolePi): void {
     },
   });
 
+  // A session ends: its timer stops and its watch and tail children end with it.
+  function closeSession(ended: Session): void {
+    ended.closed = true;
+    followTimer(ended);
+    ended.feed.close();
+  }
+
   pi.on("session_start", (event, ctx) => {
+    // Pi may start a session again without shutting the last one down (/new, /resume, a reload): the last one's
+    // children end first, so none outlives the session that started it.
+    if (session !== undefined) closeSession(session);
     const current = openSession(ctx);
     session = current;
     // The mode kept in the session comes back (resume, reload); a new session starts in ACTION.
@@ -896,10 +906,7 @@ export default function harilConsole(pi: ConsolePi): void {
 
   pi.on("session_shutdown", () => {
     if (session === undefined) return;
-    session.closed = true;
-    followTimer(session);
-    // The watch and tail children end with the session.
-    session.feed.close();
+    closeSession(session);
     session = undefined;
   });
 
