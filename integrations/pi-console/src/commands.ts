@@ -63,6 +63,8 @@ export interface CommandHost {
   switchMode(mode: ConsoleMode, ctx: ConsoleContext): void;
   // The last plan PLAN mode wrote in this session, which /goal sends when it gets no text.
   lastPlan(): string | undefined;
+  // Logs a typed HARIL command as an order (4.5): Pi runs extension commands before its input event.
+  recordOrder?(text: string): void;
 }
 
 interface CommandSpec {
@@ -467,6 +469,7 @@ export function registerCommands(pi: ConsolePi, host: () => CommandHost | undefi
       async handler(args, ctx) {
         const current = host();
         if (current === undefined) return;
+        current.recordOrder?.(`/${command.name}${args.trim() === "" ? "" : ` ${args.trim()}`}`);
         // CONSULT is read-only: a command that changes HARIL state does not run, whatever it is asked to do.
         const refusal = commandRefusal(current.mode(), command.name);
         if (refusal !== undefined) {

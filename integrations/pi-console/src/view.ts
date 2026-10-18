@@ -25,6 +25,8 @@ export interface BarFacts {
   readonly statuses: readonly string[];
   // The console mode as the bar names it (ACTION, CONSULT, PLAN, DELEGATION).
   readonly mode: string;
+  // Rows of the console's chat log (orders and usage) that could not be recorded; 0 or absent shows nothing.
+  readonly logFailures?: number;
 }
 
 // The parts of the bar a click acts on: the model opens the model selector, the level the level selector, the mode the
@@ -53,8 +55,8 @@ const SEPARATOR: Part = { text: " ◇ ", tone: "dim" };
 const GAUGE_CELLS = 8;
 // The emergency button (3.14.6, P20): pinned at the right end of the bar in every mode, never dropped for room.
 const STOP_PART: Part = { text: "■ STOP ALL", tone: "error", bold: true, target: "stop" };
-// The right side gives way from its least needed part: the cost first, the context gauge last.
-const DROP_ORDER = ["cost", "runtime", "pending", "context"] as const;
+// The right side gives way from its least needed part: the log note first, the context gauge last.
+const DROP_ORDER = ["log", "cost", "runtime", "pending", "context"] as const;
 const OUTPUT_MAX_LINES = 30;
 
 type RightPart = (typeof DROP_ORDER)[number];
@@ -116,10 +118,13 @@ function rightParts(facts: BarFacts): Map<RightPart, Part[]> {
     { text: "runtime ", tone: MAIN },
     { text: facts.runtime, tone: facts.runtime === "running" ? "success" : MAIN },
   ]);
+  if ((facts.logFailures ?? 0) > 0) {
+    parts.set("log", [{ text: `log ✗ ${facts.logFailures}`, tone: "warning" }]);
+  }
   return parts;
 }
 
-const RIGHT_ORDER: readonly RightPart[] = ["context", "cost", "pending", "runtime"];
+const RIGHT_ORDER: readonly RightPart[] = ["context", "cost", "pending", "runtime", "log"];
 
 // The columns of the parts a click acts on, in the parts as drawn from column `from`.
 function hitsOf(parts: readonly Part[], from = 0): BarLayout["hits"][number][] {

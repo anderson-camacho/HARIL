@@ -4,6 +4,7 @@
 // CLI on the project of the folder Pi opened in. Self-contained: node:* imports and local types only, so it bundles
 // into one file next to the bridge.
 
+import { createChatLog } from "./chat-log.js";
 import { cliAvailable, NOT_LAUNCHED, runHaril } from "./cli.js";
 import { type CommandHost, chooseMode, delegationHost, registerCommands } from "./commands.js";
 import {
@@ -157,6 +158,15 @@ export default function harilConsole(pi: ConsolePi): void {
     redraw,
   });
 
+  // Every prompt and every reply of the chat, logged through haril usage record (4.5, P14); only when this Pi was
+  // opened by haril, and never in the way of the chat: failures show as "log ✗ n" in the bar.
+  const chatLog = createChatLog({
+    run: (args, input) => runHaril(args, { cwd: session?.cwd, input, timeoutMs: 10_000 }),
+    projectSlug: () => session?.project?.slug,
+    sessionId: () => session?.ctx.sessionManager.getSessionId(),
+    onChange: redraw,
+  });
+
   function runtimeState(current: Session): RuntimeState {
     if (current.runtimeAlive === true) return "running";
     if (current.started?.running === true) return "starting";
@@ -180,6 +190,7 @@ export default function harilConsole(pi: ConsolePi): void {
       branch,
       statuses,
       mode: modeLabel(modes.mode()),
+      logFailures: chatLog.status().failed,
     };
   }
 
@@ -384,6 +395,9 @@ export default function harilConsole(pi: ConsolePi): void {
         modes.switchTo(mode, modeCtx);
       },
       lastPlan: () => modes.lastPlan(),
+      recordOrder(text) {
+        if (cliAvailable()) chatLog.order(text, modes.mode());
+      },
       harilModelRef: () => harilRef(current.model, current.registration),
       harilModels: () => {
         const registration = current.registration;
@@ -698,7 +712,8 @@ export default function harilConsole(pi: ConsolePi): void {
           "Native Pi slash commands remain separate and available.",
         );
         break;
-      case "everywhere":
+      case "everywhere": {
+        const log = chatLog.status();
         lines.push(
           `Project: ${facts.project}`,
           `Workspace: ${facts.cwd}`,
@@ -712,8 +727,13 @@ export default function harilConsole(pi: ConsolePi): void {
           "Extension statuses:",
           ...(facts.extensionStatuses.length ? facts.extensionStatuses : ["No status reported"]),
           `Runtime: ${facts.runtime} · pending approvals: ${facts.pending === undefined ? "unavailable" : facts.pending}`,
+          `Mode: ${modeLabel(modes.mode())}`,
+          !cliAvailable()
+            ? "Usage log: off (this Pi was not opened by haril)"
+            : `Usage log: ${log.recorded} rows recorded this session${log.failed === 0 ? "" : `, ${log.failed} failed (last: ${log.lastError ?? "unknown"})`}`,
         );
         break;
+      }
     }
     return { title: `${area.toUpperCase()} details · ${facts.project}`, lines };
   }
@@ -819,7 +839,10 @@ export default function harilConsole(pi: ConsolePi): void {
     redraw();
   }
 
-  pi.on("message_end", (event) => recountCost(event.message));
+  pi.on("message_end", (event) => {
+    recountCost(event.message);
+    if (session !== undefined && cliAvailable()) chatLog.usage(event.message, modes.mode());
+  });
 
   pi.on("turn_end", () => recountCost());
 
@@ -835,10 +858,12 @@ export default function harilConsole(pi: ConsolePi): void {
   pi.on("input", (event, ctx) => {
     const current = session;
     current?.clearOutput();
-    if (current === undefined || modes.mode() !== "delegation" || event.source === "extension")
-      return undefined;
+    if (current === undefined || event.source === "extension") return undefined;
     const text = event.text.trim();
     if (text === "") return undefined;
+    // Every order typed in the console is logged, whatever happens to it next.
+    if (cliAvailable()) chatLog.order(event.text, modes.mode());
+    if (modes.mode() !== "delegation") return undefined;
     if (!cliAvailable()) ctx.ui.notify(NOT_LAUNCHED, "error");
     else void delegateFromChat(text, ctx, delegationHost(current));
     return { action: "handled" };

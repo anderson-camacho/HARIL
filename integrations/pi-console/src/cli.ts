@@ -40,17 +40,18 @@ export function cliAvailable(): boolean {
   return launcher() !== undefined;
 }
 
-// Runs `haril <args>` and collects its output. Never rejects: a CLI that cannot run is a failed result.
+// Runs `haril <args>` and collects its output. Never rejects: a CLI that cannot run is a failed result. `input` goes to
+// the CLI's stdin (haril usage record --stdin), which keeps text out of argv and the process list.
 export function runHaril(
   args: readonly string[],
-  options: { readonly cwd?: string; readonly timeoutMs?: number } = {},
+  options: { readonly cwd?: string; readonly timeoutMs?: number; readonly input?: string } = {},
 ): Promise<CliResult> {
   const found = launcher();
   if (found === undefined) {
     return Promise.resolve({ ok: false, code: null, stdout: "", stderr: NOT_LAUNCHED });
   }
   return new Promise((resolve) => {
-    execFile(
+    const child = execFile(
       found.node,
       [found.cli, ...args],
       {
@@ -67,6 +68,11 @@ export function runHaril(
         resolve({ ok: error === null, code, stdout, stderr: detail });
       },
     );
+    if (options.input !== undefined) {
+      // A child that exits before reading all of it closes the pipe: that is its answer, not a crash here.
+      child.stdin?.on("error", () => undefined);
+      child.stdin?.end(options.input, "utf8");
+    }
   });
 }
 

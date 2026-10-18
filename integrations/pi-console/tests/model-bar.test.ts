@@ -77,6 +77,13 @@ describe("mode and STOP ALL in the bar (F4)", () => {
     expect(stripAnsi(line).endsWith("■ STOP ALL")).toBe(true);
   });
 
+  it("says when chat rows could not be logged, and drops that note first", () => {
+    const wide = renderBarLayout(bar({ logFailures: 2 }), 160, THEME);
+    expect(stripAnsi(wide.lines[0] ?? "")).toContain("log ✗ 2");
+    const none = renderBarLayout(bar({ logFailures: 0 }), 160, THEME);
+    expect(stripAnsi(none.lines[0] ?? "")).not.toContain("log ✗");
+  });
+
   it("never drops the button, however narrow the bar", () => {
     for (const width of [12, 20, 30, 44, 60, 80]) {
       const layout = renderBarLayout(bar({ mode: "DELEGATION" }), width, THEME);
