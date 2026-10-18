@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { sep } from "node:path";
-import type { ConsoleTheme, ThemeColor, ThinkingLevel } from "./pi-types.js";
+import type { ConsoleTheme, ThemeColor } from "./pi-types.js";
 import { plainText, stripAnsi, textWidth, truncate, wrap } from "./text.js";
 
 // What the console draws: the HARIL bar (Pi's footer), the startup header and the output of a HARIL command (a widget
@@ -13,8 +13,8 @@ export interface BarFacts {
   // The bound project's slug, else the folder's name.
   readonly place: string;
   readonly model: string | undefined;
-  // Only for a model that reasons.
-  readonly level: ThinkingLevel | undefined;
+  // What follows the model: its reasoning level, or "no reasoning" (model-levels.ts levelLabel).
+  readonly level: string | undefined;
   // undefined without a model; null while Pi does not know the tokens (right after a compaction).
   readonly contextPercent: number | null | undefined;
   readonly cost: number;
@@ -25,10 +25,24 @@ export interface BarFacts {
   readonly statuses: readonly string[];
 }
 
+// The parts of the bar a click acts on: the model opens the model selector, the level the level selector.
+type BarTarget = "model" | "level";
+
+export interface BarLayout {
+  readonly lines: string[];
+  readonly hits: readonly {
+    readonly row: number;
+    readonly start: number;
+    readonly end: number;
+    readonly target: BarTarget;
+  }[];
+}
+
 interface Part {
   readonly text: string;
   readonly tone: ThemeColor;
   readonly bold?: boolean;
+  readonly target?: BarTarget;
 }
 
 const MAIN: ThemeColor = "warning";
@@ -102,17 +116,39 @@ function rightParts(facts: BarFacts): Map<RightPart, Part[]> {
 
 const RIGHT_ORDER: readonly RightPart[] = ["context", "cost", "pending", "runtime"];
 
-function barLine(facts: BarFacts, width: number, theme: ConsoleTheme): string {
-  const modelText =
-    facts.model === undefined
-      ? "no model"
-      : facts.level === undefined
-        ? facts.model
-        : `${facts.model} · ${facts.level}`;
+// The columns of the parts a click acts on, in the parts as drawn.
+function hitsOf(parts: readonly Part[]): BarLayout["hits"][number][] {
+  const hits: BarLayout["hits"][number][] = [];
+  let column = 0;
+  for (const part of parts) {
+    const size = textWidth(part.text);
+    if (part.target !== undefined && size > 0)
+      hits.push({ row: 0, start: column, end: column + size, target: part.target });
+    column += size;
+  }
+  return hits;
+}
+
+function modelParts(facts: BarFacts): Part[] {
+  if (facts.model === undefined) return [{ text: "no model", tone: MAIN, target: "model" }];
+  const model: Part = { text: plainText(facts.model), tone: MAIN, target: "model" };
+  if (facts.level === undefined) return [model];
+  return [
+    model,
+    { text: " · ", tone: MAIN },
+    { text: plainText(facts.level), tone: MAIN, target: "level" },
+  ];
+}
+
+function barLine(
+  facts: BarFacts,
+  width: number,
+  theme: ConsoleTheme,
+): { line: string; hits: BarLayout["hits"][number][] } {
   const left = joined([
     [{ text: "◆ HARIL", tone: MAIN, bold: true }],
     [{ text: plainText(facts.place), tone: MAIN }],
-    [{ text: plainText(modelText), tone: MAIN }],
+    modelParts(facts),
   ]);
   const right = rightParts(facts);
   const shown = (): Part[] =>
@@ -129,8 +165,15 @@ function barLine(facts: BarFacts, width: number, theme: ConsoleTheme): string {
   }
   const shownRight = shown();
   const rightWidth = widthOf(shownRight);
-  if (rightWidth === 0 || leftWidth + 2 + rightWidth > width) return paint(fit(left, width), theme);
-  return paint(left, theme) + " ".repeat(width - leftWidth - rightWidth) + paint(shownRight, theme);
+  if (rightWidth === 0 || leftWidth + 2 + rightWidth > width) {
+    const fitted = fit(left, width);
+    return { line: paint(fitted, theme), hits: hitsOf(fitted) };
+  }
+  return {
+    line:
+      paint(left, theme) + " ".repeat(width - leftWidth - rightWidth) + paint(shownRight, theme),
+    hits: hitsOf(left),
+  };
 }
 
 // The folder with the home directory shown as ~, only when the folder is the home directory or inside it. Windows
@@ -153,11 +196,13 @@ function placeLine(facts: BarFacts, width: number, theme: ConsoleTheme): string 
   return paint(fit(parts, width), theme);
 }
 
-// The two lines of the bar: HARIL, the place and the model on the left, the session and the runtime on the right;
-// below, the folder, its git branch and the statuses other extensions set.
-export function renderBar(facts: BarFacts, width: number, theme: ConsoleTheme): string[] {
-  if (width <= 0) return [];
-  return [barLine(facts, width, theme), placeLine(facts, width, theme)];
+// The two lines of the bar: HARIL, the place and `model · level` on the left, the session and the runtime on the
+// right; below, the folder, its git branch and the statuses other extensions set. The hit-boxes are the model and
+// the level on the first line.
+export function renderBarLayout(facts: BarFacts, width: number, theme: ConsoleTheme): BarLayout {
+  if (width <= 0) return { lines: [], hits: [] };
+  const first = barLine(facts, width, theme);
+  return { lines: [first.line, placeLine(facts, width, theme)], hits: first.hits };
 }
 
 // A command's output: its title, then its lines wrapped to the width, at most OUTPUT_MAX_LINES of them.

@@ -4,6 +4,8 @@ import type { DashboardData } from "./dashboard-data.js";
 export type DashboardAction =
   | "refresh"
   | "model"
+  | "model-level"
+  | "level"
   | "tasks"
   | "approvals"
   | "events"
@@ -102,6 +104,7 @@ export function controlsFor(
     case "tools":
       return [
         { action: "details", label: "View complete details", hint: "D" },
+        { action: "model-level", label: "Model and level", hint: "M" },
         { action: "toggle-tools", label: "Enable or disable Pi tools", hint: "T" },
         refresh,
       ];

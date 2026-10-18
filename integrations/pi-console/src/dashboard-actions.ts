@@ -11,6 +11,7 @@ import {
   readMethodologyDefinition,
   summarizeApproval,
 } from "./dashboard-data.js";
+import { chooseLevel, chooseModel, type LevelMemory, openModelAndLevel } from "./model-picker.js";
 import { demoNotice } from "./orchestration-state.js";
 import type { ConsoleContext, ConsolePi } from "./pi-types.js";
 import { type BoundProject, folderName } from "./project.js";
@@ -36,6 +37,8 @@ export interface DashboardActionHost {
   readonly pending: readonly PendingApproval[];
   started: { readonly pid: number; readonly log: string; running: boolean } | undefined;
   readonly modelRef: () => string | undefined;
+  // The reasoning level kept per model (model-picker.ts).
+  readonly levels: LevelMemory;
   readonly runtime: () => string;
   readonly runtimeAvailable: () => boolean;
   readonly tools: () => { readonly name: string; readonly active: boolean }[];
@@ -504,19 +507,15 @@ export async function runDashboardAction(
       await host.refreshStatus();
       ctx.ui.notify("HARIL project data refreshed.", "info");
       return;
-    case "model": {
-      const models = ctx.modelRegistry.getAll();
-      const choice = await ctx.ui.select(
-        "Pi models",
-        models.map((model) => `${model.provider}/${model.id} · ${model.name ?? model.id}`),
-      );
-      const model = models.find(
-        (item) => choice === `${item.provider}/${item.id} · ${item.name ?? item.id}`,
-      );
-      if (model !== undefined && !(await pi.setModel(model)))
-        ctx.ui.notify("Pi could not select that model; check provider authentication.", "warning");
+    case "model":
+      await chooseModel(ctx, pi);
       return;
-    }
+    case "level":
+      await chooseLevel(ctx, pi, host.levels);
+      return;
+    case "model-level":
+      await openModelAndLevel(ctx, pi, host.levels);
+      return;
     case "tasks":
       await showTasks(host, ctx);
       return;
@@ -716,6 +715,7 @@ export async function openDashboardActionMenu(
     "Open orchestration view",
     host.orchestrationDemo() ? "Orchestration demo off" : "Orchestration demo on",
     "Choose Pi model",
+    "Choose reasoning level",
     ...(host.project === undefined
       ? []
       : ["Review approvals", "Inspect tasks", "Queue a goal", "Project events"]),
@@ -747,6 +747,7 @@ export async function openDashboardActionMenu(
     "Orchestration demo on": "orchestration-demo",
     "Orchestration demo off": "orchestration-demo",
     "Choose Pi model": "model",
+    "Choose reasoning level": "level",
     "Review approvals": "approvals",
     "Inspect tasks": "tasks",
     "Queue a goal": "goal",

@@ -17,6 +17,8 @@ import {
 import { openDashboardActionMenu, runDashboardAction } from "./dashboard-actions.js";
 import type { DashboardAction } from "./dashboard-controls.js";
 import { type DashboardData, emptyDashboardData, loadDashboardData } from "./dashboard-data.js";
+import { levelLabel } from "./model-levels.js";
+import { chooseLevel, chooseModel, createLevelMemory, type LevelMemory } from "./model-picker.js";
 import {
   harilRef,
   type ModelRegistration,
@@ -43,7 +45,13 @@ import type {
 } from "./pi-types.js";
 import { type BoundProject, findProject, folderName } from "./project.js";
 import { type PendingApproval, readStatus } from "./status.js";
-import { type BarFacts, type RuntimeState, renderBar, renderOutput } from "./view.js";
+import {
+  type BarFacts,
+  type BarLayout,
+  type RuntimeState,
+  renderBarLayout,
+  renderOutput,
+} from "./view.js";
 
 const VERSION_ENV = "HARIL_VERSION";
 const OUTPUT_WIDGET = "haril-output";
@@ -62,6 +70,8 @@ interface Session extends CommandHost {
   model: PiModel | undefined;
   // HARIL's providers as registered in Pi; undefined until `haril models` answers.
   registration: ModelRegistration | undefined;
+  // The reasoning level kept per model for this session (model-picker.ts).
+  readonly levels: LevelMemory;
   cost: number;
   runtimeAlive: boolean | undefined;
   runtimeStatusAvailable: boolean;
@@ -146,12 +156,10 @@ export default function harilConsole(pi: ConsolePi): void {
     const model = current.model;
     const usage =
       model === undefined ? undefined : safely(() => current.ctx.getContextUsage(), undefined);
-    const level =
-      model?.reasoning === true ? safely(() => pi.getThinkingLevel(), undefined) : undefined;
     return {
       place: current.project?.slug ?? folderName(current.cwd),
       model: model?.id,
-      level,
+      level: modelLevelOf(current).level,
       contextPercent: usage === undefined ? undefined : usage.percent,
       cost: current.cost,
       pending: current.pendingAvailable ? current.pending.length : undefined,
@@ -159,6 +167,20 @@ export default function harilConsole(pi: ConsolePi): void {
       cwd: current.cwd,
       branch,
       statuses,
+    };
+  }
+
+  // The model and its level as the bar and the headers show them: "<model> · <level>", "<model> · no reasoning" or
+  // "no model selected".
+  function modelLevelOf(current: Session): { level: string | undefined; text: string } {
+    const model = current.model;
+    const level = levelLabel(
+      model,
+      model?.reasoning === true ? safely(() => pi.getThinkingLevel(), undefined) : undefined,
+    );
+    return {
+      level,
+      text: model === undefined ? "no model selected" : `${model.id} · ${level ?? "unknown"}`,
     };
   }
 
@@ -175,14 +197,12 @@ export default function harilConsole(pi: ConsolePi): void {
       project: current.project?.slug ?? folderName(current.cwd),
       cwd: current.cwd,
       branch: current.branch,
-      model: current.model?.id ?? "no model selected",
+      modelLevel: modelLevelOf(current).text,
       providers: [
         ...new Set(
           safely(() => current.ctx.modelRegistry.getAll(), []).map((model) => model.provider),
         ),
       ].sort(),
-      thinking:
-        current.model?.reasoning === true ? safely(() => pi.getThinkingLevel(), "unknown") : "n/a",
       runtime: runtimeState(current),
       runtimeAvailable: current.runtimeStatusAvailable && current.dashboardData.runtimeAvailable,
       pending: current.pendingAvailable ? current.pending.length : undefined,
@@ -275,6 +295,7 @@ export default function harilConsole(pi: ConsolePi): void {
       extensionStatuses: [],
       model: ctx.model,
       registration: undefined,
+      levels: createLevelMemory(pi, () => current.registration?.defaultLevels ?? new Map()),
       cost: safely(() => sessionCost(ctx.sessionManager.getEntries()), 0),
       runtimeAlive: undefined,
       runtimeStatusAvailable: false,
@@ -483,19 +504,27 @@ export default function harilConsole(pi: ConsolePi): void {
       current.tui = tui;
       const unsubscribe = footerData.onBranchChange(() => tui.requestRender());
       let navigation = renderFooterNavigation(80, current.area, theme);
+      let bar: BarLayout = { lines: [], hits: [] };
       return {
         render(width) {
           const statuses = [...footerData.getExtensionStatuses().values()];
           current.branch = footerData.getGitBranch();
           current.extensionStatuses = statuses;
           navigation = renderFooterNavigation(width, current.area, theme);
-          return [
-            ...renderBar(facts(current, statuses, footerData.getGitBranch()), width, theme),
-            ...navigation.lines,
-          ];
+          bar = renderBarLayout(facts(current, statuses, footerData.getGitBranch()), width, theme);
+          return [...bar.lines, ...navigation.lines];
         },
         handleMouse(event: ConsoleMouseEvent) {
           if (event.type !== "click" || event.button !== "left") return undefined;
+          // The model and the level in the bar open their selectors.
+          const barHit = bar.hits.find(
+            (item) => item.row === event.y && event.x >= item.start && event.x < item.end,
+          );
+          if (barHit !== undefined) {
+            if (barHit.target === "model") void chooseModel(current.ctx, pi);
+            else void chooseLevel(current.ctx, pi, current.levels);
+            return { handled: true, render: true };
+          }
           const hit = navigation.tabHits.find(
             (item) => item.row === event.y && event.x >= item.start && event.x < item.end,
           );
@@ -520,10 +549,7 @@ export default function harilConsole(pi: ConsolePi): void {
       lines.push("DATA WARNINGS", ...data.errors.map((error) => `! ${error}`), "");
     switch (area) {
       case "agents":
-        lines.push(
-          `Pi model: ${facts.model} · thinking ${facts.thinking}`,
-          "Observed agents in task records:",
-        );
+        lines.push(`Pi model: ${facts.modelLevel}`, "Observed agents in task records:");
         lines.push(
           ...(data.tasks.length
             ? data.tasks.map(
@@ -624,7 +650,7 @@ export default function harilConsole(pi: ConsolePi): void {
           `Project: ${facts.project}`,
           `Workspace: ${facts.cwd}`,
           `Git: ${facts.branch === undefined ? "unavailable" : (facts.branch ?? "not a Git repository")}`,
-          `Session: ${facts.model} · ${facts.thinking} · context ${facts.context} · cost ${facts.cost}`,
+          `Session: ${facts.modelLevel} · context ${facts.context} · cost ${facts.cost}`,
           `Providers (${facts.providers.length}):`,
           ...(facts.providers.length ? facts.providers : ["None reported"]),
           `Memory: ${facts.memory}`,
@@ -690,13 +716,25 @@ export default function harilConsole(pi: ConsolePi): void {
     session = undefined;
   });
 
+  // A switch puts back the level kept for the new model (or the gateway's default); the console's model follows
+  // first, so the level event that a switch causes is not taken for a choice on the old model.
   pi.on("model_select", (event) => {
     if (session === undefined) return;
     session.model = event.model;
+    session.levels.modelSelected(event.model);
     redraw();
   });
 
-  pi.on("thinking_level_select", () => redraw());
+  // /thinking and Shift+Tab: the new level is kept for the model, unless the event belongs to a model switch.
+  pi.on("thinking_level_select", (event, ctx) => {
+    if (session !== undefined)
+      session.levels.levelSelected(
+        safely(() => ctx.model, undefined),
+        session.model,
+        event.level,
+      );
+    redraw();
+  });
 
   // The cost follows every reply: at its end with the message that ended, and again at the end of each turn and
   // run, once Pi has appended everything to the session.

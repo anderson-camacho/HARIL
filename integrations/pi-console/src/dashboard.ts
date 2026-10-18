@@ -22,9 +22,9 @@ export interface DashboardFacts {
   readonly project: string;
   readonly cwd: string;
   readonly branch: string | null | undefined;
-  readonly model: string;
+  // The model and its reasoning level ("<model> · <level>", "<model> · no reasoning" or "no model selected").
+  readonly modelLevel: string;
   readonly providers: readonly string[];
-  readonly thinking: string;
   readonly runtime: string;
   readonly runtimeAvailable: boolean;
   readonly pending: number | undefined;
@@ -214,7 +214,7 @@ function wideHeader(
     ),
     statusRow("PATH", facts.cwd, rightWidth),
     statusRow("RUNTIME", facts.runtime, rightWidth),
-    statusRow("MODEL", facts.model, rightWidth),
+    statusRow("MODEL", facts.modelLevel, rightWidth),
     statusRow(
       "TOOLS",
       `${facts.activeTools.length} active / ${facts.tools.length} observed`,
@@ -269,7 +269,7 @@ export function renderHeaderLayout(
   const rows = [
     border(width, "┌", "─", "┐"),
     `${frameGlyph("│")}${paddedCell(` ◆ HARIL ${version ?? ""} · MANY MINDS. ONE FLOW.`, width - 2, "yellow")}${frameGlyph("│")}`,
-    `${frameGlyph("│")}${paddedCell(` ${facts.project} · ${facts.model} · ${facts.runtime} · TOOLS ${facts.activeTools.length}/${facts.tools.length} · MCP ${facts.mcpServers.length}`, width - 2, "teal")}${frameGlyph("│")}`,
+    `${frameGlyph("│")}${paddedCell(` ${facts.project} · ${facts.modelLevel} · ${facts.runtime} · TOOLS ${facts.activeTools.length}/${facts.tools.length} · MCP ${facts.mcpServers.length}`, width - 2, "teal")}${frameGlyph("│")}`,
     ...tabLayout.lines.map(
       (line) =>
         `${frameGlyph("│")}${paddedCell(line.trimEnd(), width - 2, "cyan")}${frameGlyph("│")}`,
@@ -303,7 +303,7 @@ function linesFor(area: DashboardArea, facts: DashboardFacts): string[] {
   switch (area) {
     case "agents":
       return [
-        `Pi model: ${facts.model} · thinking ${facts.thinking}`,
+        `Pi model: ${facts.modelLevel}`,
         data.projectSlug === undefined
           ? "Project agents are unavailable until this folder is registered."
           : `${observed.size} observed task agents · ${data.tasks.length} project tasks`,
@@ -354,7 +354,7 @@ function linesFor(area: DashboardArea, facts: DashboardFacts): string[] {
         `Project: ${facts.project}`,
         `Workspace: ${facts.cwd}`,
         `Git: ${facts.branch === undefined ? "unavailable" : (facts.branch ?? "not a Git repository")}`,
-        `Session: ${facts.model} · ${facts.thinking} · context ${facts.context} · cost ${facts.cost}`,
+        `Session: ${facts.modelLevel} · context ${facts.context} · cost ${facts.cost}`,
         `Resources: ${facts.providers.length} providers · ${facts.mcpServers.length} MCP servers · ${facts.extensionStatuses.length} extension statuses`,
         `Runtime ${facts.runtime} · approvals ${facts.pending === undefined ? "unavailable" : facts.pending} · memory ${facts.memory}`,
       ];

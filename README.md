@@ -213,10 +213,12 @@ La extensión solo llama a la CLI `haril`, sin shell: el estado sigue en `haril.
 
 | Zona | Qué muestra |
 |---|---|
-| Izquierda | `◆ HARIL ◇ <proyecto o carpeta> ◇ <modelo> · <nivel>`. Sin proyecto registrado sale el nombre de la carpeta; el nivel solo con un modelo que razona |
+| Izquierda | `◆ HARIL ◇ <proyecto o carpeta> ◇ <modelo> · <nivel>`. Sin proyecto registrado sale el nombre de la carpeta; si el modelo no razona, `<modelo> · no reasoning`. Clic en el modelo: selector de los modelos con acceso, agrupados por proveedor y cuenta, con su contexto y sus niveles; clic en el nivel: solo los niveles de ese modelo |
 | Derecha | `ctx <medidor> <pct>% ◇ $<coste> ◇ <N pending> ◇ runtime <estado>`: contexto usado, coste de la sesión según Pi, planes por aprobar (solo si hay) y runtime (`running`, `starting`, `idle` o `unknown`). Si la terminal es estrecha, cede primero el coste, luego el runtime, los planes y, al final, el medidor |
 | Segunda línea | La carpeta, su rama de git y los estados que ponen otras extensiones de Pi |
-| Cabecera | Panel HARIL en cian/teal con acentos amarillos, marca tipográfica y arte neural de terminal; en terminales amplias incluye una tarjeta con datos observados. Los clics usan eventos de mouse Pi en modo fullscreen. |
+| Cabecera | Panel HARIL en cian/teal con acentos amarillos, marca tipográfica y arte neural de terminal; en terminales amplias incluye una tarjeta con datos observados. Las dos muestran el modelo y su nivel. Los clics usan eventos de mouse Pi en modo fullscreen. |
+
+**Modelo y nivel.** Los niveles de cada modelo de CLIProxyAPI salen de su lista `GET /v1/models?client_version=0.99.0`, que trae también el contexto y la salida reales; para leerla, la extensión usa en memoria la misma variable de clave que Pi y no sigue redirecciones. Un modelo que esa lista no describe toma los niveles del catálogo de Pi por nombre (sin prefijo de cuenta y aceptando variantes como `-preview`); sin dato, sale `no reasoning` y solo ofrece `off`. Así, `/thinking`, `Shift+Tab` y `/model` de Pi ofrecen solo los niveles de cada modelo, y el nivel llega al proveedor como `reasoning_effort`. Si la lista falla, la consola lo avisa y usa el catálogo de Pi. HARIL recuerda el nivel de cada modelo durante la sesión; para conservarlo al reiniciar está `/settings` › *Default thinking level per model* de Pi.
 
 La composición amplia aparece desde 120×40 y muestra el arte y la tarjeta de estado en dos columnas. En terminales menores se usa una cabecera compacta para conservar espacio para el historial y el editor. Las seis áreas permanecen seleccionables desde la fila fija del pie, aunque la cabecera haya salido del área visible; también funcionan `Ctrl+Shift+1..6` y los comandos slash. Pi expone dimensiones reales de la terminal para elegir el modo, sin depender de variables `COLUMNS` simuladas. La interfaz usa color verdadero cuando está disponible, admite `PI_TRUE_COLOR=0` para color de 256 tonos y respeta `NO_COLOR` y `TERM=dumb`.
 
@@ -232,10 +234,10 @@ Los comandos de HARIL no chocan con ninguno de Pi y trabajan sobre el proyecto d
 
 | Área | Datos y acciones reales |
 |---|---|
-| `AGENTS` | Modelo Pi y agentes observados en tareas del proyecto. No existe un catálogo HARIL de perfiles. |
+| `AGENTS` | Modelo Pi con su nivel y agentes observados en tareas del proyecto; **Choose Pi model** lista solo los modelos con acceso. No existe un catálogo HARIL de perfiles. |
 | `ORCHESTRATION` | La vista de workflow de delegación (resumen y vista completa, ver abajo) y, debajo, las tareas, la cola, las aprobaciones y los eventos del proyecto. Las decisiones requieren selección y confirmación; un runtime activo puede aplicar una aprobación. |
 | `AUTOMATION` | Estado del runtime con su disponibilidad, cola del proyecto y controles reales. Ejecutar/iniciar solo aparece con proyecto enlazado y lease confirmado como inactivo; detener solo si se confirma en marcha. El lease es compartido por la raíz de datos. No existe API de horarios programados. |
-| `TOOLS` | Herramientas Pi configuradas y activas; permite alternar su activación para esta sesión. |
+| `TOOLS` | Herramientas Pi configuradas y activas; permite alternar su activación para esta sesión. **Model and level** cambia el modelo y el nivel de razonamiento. |
 | `WORKFLOWS` | Catálogo global de metodologías incluso sin proyecto: seleccionar una abre su definición completa desplazable. `project init` permite vincular una metodología al registrar un proyecto, pero `task add` no acepta una metodología y navegarla no la ejecuta. Los comandos nativos de Pi siguen separados y disponibles. |
 | `EVERYWHERE` | Proyecto, carpeta, rama, sesión, runtime, salud de memoria, MCP y extensiones sin mostrar credenciales. |
 
