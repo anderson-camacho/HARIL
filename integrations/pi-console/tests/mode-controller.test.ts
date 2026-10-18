@@ -259,9 +259,8 @@ describe("the CONSULT trace in the chat", () => {
     await reply([{ id: "w2", name: "write", arguments: { path: "hacked.txt", content: "x" } }]);
     await toolResult("w2", "write", true, "Tool write not found");
     await fake.fire("agent_end", { messages: [] }, ctx);
-    const lines = (
-      fake.entries.find((item) => item.customType === "haril-trace")?.data as { lines: string[] }
-    ).lines;
+    const entry = fake.entries.find((item) => item.customType === "haril-trace");
+    const lines = (entry?.data as { lines: string[] } | undefined)?.lines ?? [];
     expect(lines.join("\n")).toContain("hacked.txt  →  blocked · CONSULT mode is read-only");
   });
 
