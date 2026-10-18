@@ -8,6 +8,8 @@ import {
   MEMO_MAX_LENGTH,
   SURFACE_MAX_ITEMS,
   validateDelegationToolInput,
+  validateWorkspaceFileInput,
+  WORKSPACE_FILE_TOOL_NAMES,
 } from "../src/index.js";
 
 // Tool contracts of the delegation (docs/modos-y-delegacion.md 3.5). Each test builds a valid input and varies only
@@ -53,7 +55,7 @@ function errorsOf(result: { ok: boolean; errors?: string[] }): string[] {
 }
 
 describe("delegation tool names", () => {
-  it("lists the eight tools of the spec in a fixed order", () => {
+  it("lists the tools of the spec in a fixed order, with the merge's continue and abort of phase F8", () => {
     expect(DELEGATION_TOOL_NAMES).toEqual([
       "haril_delegate",
       "haril_assign",
@@ -63,6 +65,8 @@ describe("delegation tool names", () => {
       "haril_abort",
       "haril_run",
       "haril_merge",
+      "haril_merge_continue",
+      "haril_merge_abort",
     ]);
   });
 
@@ -278,19 +282,30 @@ describe("validateDelegationToolInput: the other tools", () => {
     expect(validateDelegationToolInput("haril_abort", { reason: "" }).ok).toBe(false);
   });
 
-  it("accepts a run with a command and optional arguments", () => {
+  it("accepts a run with a command and optional arguments, bounded in size", () => {
     expect(validateDelegationToolInput("haril_run", { command: "pnpm" }).ok).toBe(true);
     expect(validateDelegationToolInput("haril_run", { command: "pnpm", args: ["test"] }).ok).toBe(
       true,
     );
     expect(validateDelegationToolInput("haril_run", { command: "" }).ok).toBe(false);
+    expect(validateDelegationToolInput("haril_run", { command: "x".repeat(300) }).ok).toBe(false);
+    expect(
+      validateDelegationToolInput("haril_run", { command: "npm", args: Array(65).fill("a") }).ok,
+    ).toBe(false);
   });
 
-  it("accepts a merge of one task id and rejects a short id", () => {
+  it("merges one step named by its local id (the delegator never sees task ids)", () => {
+    expect(validateDelegationToolInput("haril_merge", { localId: "step-1" }).ok).toBe(true);
+    expect(validateDelegationToolInput("haril_merge", { localId: "../x" }).ok).toBe(false);
     expect(
       validateDelegationToolInput("haril_merge", { taskId: "01JABCDEFGHJKMNPQRSTVWXYZ0" }).ok,
-    ).toBe(true);
-    expect(validateDelegationToolInput("haril_merge", { taskId: "t1" }).ok).toBe(false);
+    ).toBe(false);
+  });
+
+  it("continues or aborts a merge with an empty input", () => {
+    expect(validateDelegationToolInput("haril_merge_continue", {}).ok).toBe(true);
+    expect(validateDelegationToolInput("haril_merge_abort", {}).ok).toBe(true);
+    expect(validateDelegationToolInput("haril_merge_continue", { force: true }).ok).toBe(false);
   });
 
   it("refuses an unknown tool name at run time instead of throwing", () => {
@@ -323,5 +338,34 @@ describe("isStop", () => {
     for (const stop of ["", "after_node:", "on_budget_pct:0", "on_budget_pct:07", "AT_END", 3]) {
       expect(isStop(stop)).toBe(false);
     }
+  });
+});
+
+describe("workspace file tools (phase F8)", () => {
+  it("accepts Pi's write shape: a path and the whole content", () => {
+    expect(validateWorkspaceFileInput("write", { path: "src/a.ts", content: "x" }).ok).toBe(true);
+    expect(validateWorkspaceFileInput("write", { path: "src/a.ts", content: "" }).ok).toBe(true);
+    expect(validateWorkspaceFileInput("write", { path: "", content: "x" }).ok).toBe(false);
+    expect(validateWorkspaceFileInput("write", { path: "a", content: "x", mode: 7 }).ok).toBe(
+      false,
+    );
+  });
+
+  it("accepts Pi's edit shape: a path and one or more exact replacements", () => {
+    const edits = [{ oldText: "a", newText: "b" }];
+    expect(validateWorkspaceFileInput("edit", { path: "src/a.ts", edits }).ok).toBe(true);
+    expect(validateWorkspaceFileInput("edit", { path: "src/a.ts", edits: [] }).ok).toBe(false);
+    expect(
+      validateWorkspaceFileInput("edit", {
+        path: "src/a.ts",
+        edits: [{ oldText: "", newText: "b" }],
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("names the two tools and refuses any other at run time", () => {
+    expect(WORKSPACE_FILE_TOOL_NAMES).toEqual(["write", "edit"]);
+    const result = validateWorkspaceFileInput("delete" as "write", { path: "a" });
+    expect(result.ok).toBe(false);
   });
 });

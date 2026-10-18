@@ -1,4 +1,4 @@
-import type { WorkflowNode, WorkflowSnapshot } from "@haril/contracts";
+import type { WorkflowGit, WorkflowNode, WorkflowSnapshot } from "@haril/contracts";
 import { visibleText } from "@haril/core";
 import type {
   AuditRecord,
@@ -360,6 +360,26 @@ function eventText(payload: Readonly<Record<string, unknown>>): string {
     .join(" ");
 }
 
+// The git side of a workflow that writes (phase F8): its base, its integration branch and what was merged into it; null
+// for a read-only workflow.
+function gitOf(store: Store, workflow: WorkflowRecord): WorkflowGit | null {
+  if (workflow.baseBranch === null || workflow.baseSha === null) return null;
+  const worktrees = store.worktrees.list({ workflowId: workflow.workflowId });
+  const integration = worktrees.find((record) => record.kind === "integration");
+  const executors = worktrees.filter((record) => record.kind === "executor");
+  return {
+    baseBranch: workflow.baseBranch,
+    baseSha: workflow.baseSha,
+    integrationBranch: integration?.branch ?? `haril/${workflow.workflowId}/integration`,
+    integrationHead: integration?.headSha ?? null,
+    merged: executors.filter((record) => record.mergedAt !== null).length,
+    unmerged: executors
+      .filter((record) => record.mergedAt === null && record.headSha !== null)
+      .map((record) => record.branch),
+    worktrees: worktrees.filter((record) => record.state === "active").length,
+  };
+}
+
 export function buildWorkflowSnapshot(
   store: Store,
   workflowId: string,
@@ -466,6 +486,7 @@ export function buildWorkflowSnapshot(
       autonomy: { mode: workflow.autonomy.mode, stops: [...workflow.autonomy.stops] },
       orchestratorModel: workflow.orchestratorModel,
     },
+    git: gitOf(store, workflow),
     totals: {
       tokensUsed: sum(usage.map((row) => row.tokensIn)) + sum(usage.map((row) => row.tokensOut)),
       tokensBudget: limitOf(limits, ["maxWorkflowTokens"]),
@@ -569,10 +590,23 @@ export function headerLines(snapshot: WorkflowSnapshot, label: string): string[]
     workflow.autonomy.mode === "autonomous"
       ? "autonomous"
       : `stops at ${workflow.autonomy.stops.join(", ")}`;
+  const git = snapshot.git ?? null;
+  const branch =
+    git === null
+      ? []
+      : [
+          visibleText(
+            `branch     ${git.integrationBranch} (from ${git.baseBranch} ${git.baseSha.slice(0, 7)}; ${git.merged} ${git.merged === 1 ? "step" : "steps"} merged${git.integrationHead === null ? ", nothing yet" : ""})`,
+          ),
+          ...(git.unmerged.length === 0
+            ? []
+            : [visibleText(`unmerged   ${git.unmerged.join(", ")}`)]),
+        ];
   return [
     visibleText(`workflow ${workflow.id}  ${workflow.state}  (${label})`),
     visibleText(`goal       ${workflow.goal}`),
     visibleText(`autonomy   ${autonomy} · orchestrator ${workflow.orchestratorModel} (pinned)`),
+    ...branch,
     `elapsed    ${clock(workflow.elapsedMs)}`,
   ];
 }

@@ -359,3 +359,141 @@ describe("the role brief of each workflow agent", () => {
     expect(auditor()).toContain("you do not redo the work");
   });
 });
+
+describe("the role brief of a turn that writes in a git worktree (phase F8)", () => {
+  const workspace = (
+    change: Partial<NonNullable<DelegationTurnInput["workspace"]>> = {},
+  ): NonNullable<DelegationTurnInput["workspace"]> => ({
+    kind: "executor",
+    branch: "haril/wf-1/task/th-1",
+    baseBranch: "main",
+    writeSurface: ["src/button.ts", "tests/button.test.ts"],
+    commands: ["npm test", "node --test"],
+    unmerged: [],
+    conflict: null,
+    ...change,
+  });
+  const executor = () =>
+    turn(
+      input({
+        role: "executor",
+        layer: 3,
+        label: "part-1/step-1",
+        turn: 1,
+        turnKind: "first",
+        files: { write: ["src/button.ts", "tests/button.test.ts"], read: [] },
+        workspace: workspace(),
+      }),
+      "work",
+    );
+
+  it("offers the executor write, edit and haril_run and names its branch, its surface and the allowed commands", () => {
+    const spec = executor();
+    expect(spec.allowedTools).toEqual(["read", "write", "edit", "haril_run"]);
+    expect(spec.prompt).toContain("Your tools: read, write, edit and haril_run.");
+    expect(spec.prompt).toContain("haril/wf-1/task/th-1");
+    expect(spec.prompt).toContain("src/button.ts, tests/button.test.ts");
+    expect(spec.prompt).toContain("npm test; node --test");
+    expect(spec.prompt).not.toContain("You cannot write files or run commands.");
+    expect(spec.prompt).not.toContain("deciding call");
+  });
+
+  it("carries the worktree root on the spec for the agent runtime, and none without a workspace", () => {
+    const delegation = input({ role: "executor", layer: 3, workspace: workspace() });
+    const spec = buildAgentSpec(
+      {
+        taskId: "t-1",
+        goal: "g",
+        description: "d",
+        agentRef: "executor",
+        timeoutMs: 60_000,
+        kind: "work",
+        delegation,
+        workspaceRoot: "/data/worktrees/wf-1/th-1",
+      },
+      run,
+    );
+    expect(spec.workspace).toEqual({ root: "/data/worktrees/wf-1/th-1" });
+    expect(turn(input()).workspace).toBeUndefined();
+  });
+
+  it("tells a delegator continuation to merge its approved steps before it reports done", () => {
+    const spec = turn(
+      input({
+        workspace: workspace({
+          kind: "integration",
+          branch: "haril/wf-1/integration",
+          writeSurface: [],
+          unmerged: ["step-1", "step-2"],
+        }),
+      }),
+    );
+    expect(spec.allowedTools).toEqual([
+      "read",
+      "haril_assign",
+      "haril_report",
+      "haril_run",
+      "haril_merge",
+      "haril_merge_continue",
+      "haril_merge_abort",
+      "write",
+      "edit",
+    ]);
+    expect(spec.prompt).toContain("haril/wf-1/integration");
+    expect(spec.prompt).toContain("Approved steps whose work is not merged yet: step-1, step-2.");
+    expect(spec.prompt).toContain("haril_merge_continue");
+    // The deciding calls stay haril_assign and haril_report: a merge is never one.
+    expect(spec.prompt).toContain("(haril_assign or haril_report)");
+  });
+
+  it("names the conflicting files of a merge left in progress", () => {
+    const spec = turn(
+      input({
+        workspace: workspace({
+          kind: "integration",
+          branch: "haril/wf-1/integration",
+          writeSurface: [],
+          conflict: { localId: "step-2", files: ["src/shared.ts"] },
+        }),
+      }),
+    );
+    expect(spec.prompt).toContain("The merge of step-2 waits for its conflicts: src/shared.ts.");
+  });
+
+  it("asks the delegator for write globs when its executors may write", () => {
+    const spec = turn(
+      input({
+        turn: 1,
+        turnKind: "first",
+        workspace: workspace({ kind: "integration", writeSurface: [] }),
+      }),
+    );
+    expect(spec.prompt).toContain('"write": [the globs the step may write]');
+    expect(spec.prompt).not.toContain('leave "write" empty');
+  });
+
+  it("lets an auditor run commands but tells it that nothing it changes is kept", () => {
+    const spec = turn(
+      input({
+        role: "auditor",
+        layer: 3,
+        label: "audit of part-1/step-1",
+        turn: 1,
+        turnKind: "first",
+        workspace: workspace({ kind: "audit", writeSurface: [] }),
+        subject: {
+          scope: "task",
+          label: "part-1/step-1",
+          goal: "Change the button",
+          result: "changed",
+          reports: [],
+          request: null,
+        },
+      }),
+      "verify",
+    );
+    expect(spec.allowedTools).toEqual(["read", "haril_run", "haril_verdict"]);
+    expect(spec.prompt).toContain("Your tools: read, haril_run and haril_verdict.");
+    expect(spec.prompt).toContain("anything a command changes there is discarded");
+  });
+});

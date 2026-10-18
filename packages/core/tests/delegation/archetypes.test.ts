@@ -4,11 +4,15 @@ import {
   archetypeTools,
   checkArchetypeTaskKind,
   childArchetypeOf,
+  DECIDING_TOOLS,
   DEFAULT_DELEGATION_LIMITS,
   DELEGATION_ARCHETYPES,
   HOST_COMMAND_TOOLS,
+  isDecidingTool,
   isDelegationArchetype,
+  isWorkspaceTool,
   mayUseTool,
+  WORKSPACE_TOOLS,
 } from "../../src/delegation/index.js";
 
 // Archetypes of docs/modos-y-delegacion.md 3.4 and the defaults of section 5.
@@ -49,7 +53,12 @@ describe("archetypes", () => {
   it("keeps haril_run and haril_merge in the spec's table but announces them only with writing (F8)", () => {
     expect(ARCHETYPES.delegator.tools).toContain("haril_run");
     expect(ARCHETYPES.auditor.tools).toContain("haril_run");
-    expect(HOST_COMMAND_TOOLS).toEqual(["haril_run", "haril_merge"]);
+    expect(HOST_COMMAND_TOOLS).toEqual([
+      "haril_run",
+      "haril_merge",
+      "haril_merge_continue",
+      "haril_merge_abort",
+    ]);
     for (const archetype of DELEGATION_ARCHETYPES) {
       const announced = archetypeTools(archetype, { writes: false });
       expect(announced).not.toContain("haril_run");
@@ -60,12 +69,17 @@ describe("archetypes", () => {
   });
 
   it("adds the write and command tools only when writing is enabled (phase F8)", () => {
+    // The delegator integrates its executors' branches and resolves a merge conflict with its own write and edit.
     expect(archetypeTools("delegator", { writes: true })).toEqual([
       "read",
       "haril_assign",
       "haril_report",
       "haril_run",
       "haril_merge",
+      "haril_merge_continue",
+      "haril_merge_abort",
+      "write",
+      "edit",
     ]);
     expect(archetypeTools("executor", { writes: true })).toEqual([
       "read",
@@ -78,6 +92,39 @@ describe("archetypes", () => {
       "haril_run",
       "haril_verdict",
     ]);
+  });
+
+  it("never gives the orchestrator a write or command tool, even with writing", () => {
+    expect(archetypeTools("orchestrator", { writes: true })).toEqual(
+      archetypeTools("orchestrator", { writes: false }),
+    );
+    expect(mayUseTool("auditor", "write", { writes: true })).toBe(false);
+    expect(mayUseTool("executor", "haril_merge", { writes: true })).toBe(false);
+  });
+
+  it("tells the deciding calls (one per turn) from the workspace tools the host answers inside the worktree", () => {
+    expect(DECIDING_TOOLS).toEqual([
+      "haril_delegate",
+      "haril_assign",
+      "haril_report",
+      "haril_verdict",
+      "haril_request_audit",
+      "haril_abort",
+    ]);
+    expect(WORKSPACE_TOOLS).toEqual([
+      "write",
+      "edit",
+      "haril_run",
+      "haril_merge",
+      "haril_merge_continue",
+      "haril_merge_abort",
+    ]);
+    expect(isDecidingTool("haril_report")).toBe(true);
+    expect(isDecidingTool("haril_merge")).toBe(false);
+    expect(isDecidingTool("read")).toBe(false);
+    expect(isWorkspaceTool("edit")).toBe(true);
+    expect(isWorkspaceTool("haril_verdict")).toBe(false);
+    expect(isWorkspaceTool("bash")).toBe(false);
   });
 
   it("lets only the orchestrator delegate and only the delegator assign", () => {

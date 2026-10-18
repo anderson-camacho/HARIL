@@ -7,7 +7,9 @@ import type { DelegationLimits } from "./limits.js";
 // the concurrent loop of F2 asks it on every turn and the tests drive it with generated snapshots. It honours three
 // levels of limits at once (simultaneous per role, live children per thread, workflow total), the writer limit and
 // the surface locks of 3.10: two tasks whose write surfaces may overlap never run together; the second waits and so
-// runs after the first (it is not an error). A full limit never spawns an extra process: the task stays ready.
+// runs after the first (it is not an error). The surfaces that writers of other workflows of the same project hold
+// (`held`) lock the same way, and a named exclusive lock (a workflow's integration worktree, phase F8) has one holder at
+// a time. A full limit never spawns an extra process: the task stays ready.
 
 export interface ClaimCandidate {
   readonly taskId: string;
@@ -22,6 +24,9 @@ export interface ClaimCandidate {
   readonly writeSurface: readonly string[];
   // True when the task already ran an attempt (a retry or a recovery): starting it again creates no new agent.
   readonly started: boolean;
+  // Exclusive locks the task holds while it runs (phase F8: "integration:<workflowId>", the workflow's integration
+  // worktree): no two running tasks share one.
+  readonly locks?: readonly string[];
 }
 
 export interface LiveTask {
@@ -30,6 +35,14 @@ export interface LiveTask {
   readonly parentThreadId: string | null;
   readonly archetype: DelegationArchetype;
   readonly writeSurface: readonly string[];
+  readonly locks?: readonly string[];
+}
+
+// A write surface or lock held outside the workflow being scheduled: a running writer of another workflow of the same
+// project, or one this scheduling pass already started there. It locks; it counts against none of this workflow's limits.
+export interface HeldSurface {
+  readonly writeSurface: readonly string[];
+  readonly locks?: readonly string[];
 }
 
 export interface ClaimSnapshot {
@@ -38,6 +51,7 @@ export interface ClaimSnapshot {
   readonly running: readonly LiveTask[];
   // Distinct tasks of the workflow that ever started an attempt.
   readonly tasksStarted: number;
+  readonly held?: readonly HeldSurface[];
 }
 
 // Why a ready task waits, checked in this order; the first that holds is reported.
@@ -103,6 +117,9 @@ export function selectClaims(snapshot: ClaimSnapshot, limits: DelegationLimits):
   }
 
   const live: LiveTask[] = [...snapshot.running];
+  const held = snapshot.held ?? [];
+  const locked = new Set<string>();
+  for (const task of [...live, ...held]) for (const lock of task.locks ?? []) locked.add(lock);
   const busyThreads = new Set(live.map((task) => task.threadId));
   const perRole = new Map<DelegationArchetype, number>();
   const perParent = new Map<string, number>();
@@ -130,10 +147,14 @@ export function selectClaims(snapshot: ClaimSnapshot, limits: DelegationLimits):
     }
     if (candidate.writeSurface.length > 0) {
       if (writers >= limits.maxConcurrent.writers) return "writer_limit";
-      if (live.some((task) => surfacesMayOverlap(task.writeSurface, candidate.writeSurface))) {
+      if (
+        live.some((task) => surfacesMayOverlap(task.writeSurface, candidate.writeSurface)) ||
+        held.some((other) => surfacesMayOverlap(other.writeSurface, candidate.writeSurface))
+      ) {
         return "surface_conflict";
       }
     }
+    if ((candidate.locks ?? []).some((lock) => locked.has(lock))) return "surface_conflict";
     return null;
   };
 
@@ -147,6 +168,7 @@ export function selectClaims(snapshot: ClaimSnapshot, limits: DelegationLimits):
     }
     claims.push({ taskId: candidate.taskId, archetype: candidate.archetype });
     live.push(candidate);
+    for (const lock of candidate.locks ?? []) locked.add(lock);
     busyThreads.add(candidate.threadId);
     count(candidate);
     if (!candidate.started) started += 1;

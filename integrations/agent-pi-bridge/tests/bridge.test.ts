@@ -169,6 +169,14 @@ const DELEGATION_TOOLS = [
   "haril_request_audit",
   "haril_abort",
 ] as const;
+const WORKSPACE_TOOLS = [
+  "write",
+  "edit",
+  "haril_run",
+  "haril_merge",
+  "haril_merge_continue",
+  "haril_merge_abort",
+] as const;
 const PLAN = { schemaVersion: 1, tasks: [{ localId: "survey", goal: "Survey the CLI" }] };
 
 describe("agent-pi-bridge extension", () => {
@@ -347,14 +355,47 @@ describe("agent-pi-bridge extension", () => {
     }
   });
 
-  it("never registers a tool that writes, edits or runs a command, even when HARIL_TOOLS names it", async () => {
-    const { pi, fake } = await loadWithPipe(
-      "read,write,edit,bash,powershell,grep,haril_run,haril_merge,haril_verdict",
-    );
+  it("never registers Pi's shell or search tools, even when HARIL_TOOLS names them", async () => {
+    const { pi, fake } = await loadWithPipe("read,bash,powershell,grep,find,ls,haril_verdict");
     expect(pi.tools.map((tool) => tool.name)).toEqual(["read", "haril_verdict"]);
     await waitFor(() => fake.hellos.length === 1);
     // The hello lists only what is served, so the host's handshake refuses the run (fail closed).
     expect(fake.hellos[0]?.tools).toEqual(["read", "haril_verdict"]);
+  });
+
+  it("registers the workspace tools of a turn in a worktree only when the host announces them (F8)", async () => {
+    const { pi, fake } = await loadWithPipe(`read,${WORKSPACE_TOOLS.join(",")},bash,haril_report`);
+    expect(pi.tools.map((tool) => tool.name)).toEqual(["read", ...WORKSPACE_TOOLS, "haril_report"]);
+    await waitFor(() => fake.hellos.length === 1);
+    expect(fake.hellos[0]?.tools).toEqual(["read", ...WORKSPACE_TOOLS, "haril_report"]);
+    // Pi's write and edit shapes: a whole file, or exact replacements.
+    expect(toolNamed(pi, "write").parameters).toMatchObject({ required: ["path", "content"] });
+    expect(toolNamed(pi, "edit").parameters).toMatchObject({ required: ["path", "edits"] });
+    expect(toolNamed(pi, "haril_run").parameters).toMatchObject({ required: ["command"] });
+    expect(toolNamed(pi, "haril_merge").parameters).toMatchObject({ required: ["localId"] });
+    for (const name of WORKSPACE_TOOLS) {
+      expect(toolNamed(pi, name).description.length, name).toBeGreaterThan(20);
+    }
+  });
+
+  it("sends each workspace tool's arguments to the host as delegation.call (F8)", async () => {
+    const inputs: Record<string, Record<string, unknown>> = {
+      write: { path: "src/a.ts", content: "x" },
+      edit: { path: "src/a.ts", edits: [{ oldText: "x", newText: "y" }] },
+      haril_run: { command: "npm", args: ["test"] },
+      haril_merge: { localId: "step-1" },
+      haril_merge_continue: {},
+      haril_merge_abort: {},
+    };
+    const { pi, fake } = await loadWithPipe(WORKSPACE_TOOLS.join(","));
+    fake.respond((op) => ({ ok: true, content: `done ${String(op.tool)}`, reply: { ok: true } }));
+    for (const name of WORKSPACE_TOOLS) {
+      const result = await toolNamed(pi, name).execute(`call-${name}`, inputs[name] ?? {});
+      expect(result.content[0]?.text, name).toBe(`done ${name}`);
+    }
+    expect(fake.ops.map((op) => [op.op, op.tool, op.input])).toEqual(
+      WORKSPACE_TOOLS.map((name) => ["delegation.call", name, inputs[name]]),
+    );
   });
 
   it("describes every delegation tool with a label and an object schema of named, required fields", async () => {

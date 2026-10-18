@@ -195,7 +195,7 @@ describe("the snapshot's models and quota", () => {
     const store = storeAccess(sb.host).open(sb.dataDir);
     stores.push(store);
     expect(
-      run(
+      await run(
         [
           "workflow",
           "start",

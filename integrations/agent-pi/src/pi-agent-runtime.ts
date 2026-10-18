@@ -2,8 +2,11 @@
 // owns the bridge channel (named pipe or unix socket with a 256-bit token), the RPC JSONL stream, the
 // handshake (fail closed), the bridge read operation through PathGuard, the plan.propose operation of a plan
 // task through the host's proposer (LD-T4), the delegation.call operation of a workflow turn through the host's
-// delegation tools (phase F2b), and the abort/kill escalation. A workflow turn is read-only until writing arrives
-// (phase F8): it launches only with read and the delegation tools, whatever its spec asks.
+// delegation tools (phase F2b), and the abort/kill escalation. A workflow turn of a read-only workflow launches only with
+// read and the delegation tools, whatever its spec asks. A turn of a workflow that writes (phase F8) runs in a git
+// worktree (spec.workspace): reads resolve under the worktree, and its role's workspace tools (write, edit, haril_run,
+// haril_merge and its continue and abort) go to the host's handler like the delegation tools; the host does them inside
+// the worktree and the declared surface. Pi's own write, edit and bash never launch: the host serves every tool.
 // It never sends new_session, switch_session, fork or clone, and it never logs the token or the key.
 
 import type { ChildProcess } from "node:child_process";
@@ -161,9 +164,29 @@ const DELEGATION_TOOLS: ReadonlySet<string> = new Set([
   "haril_request_audit",
   "haril_abort",
 ]);
-// What a workflow turn may be offered until writing arrives (phase F8): read and the delegation tools. Nothing that
-// writes, edits or runs a command (Pi's write, edit or bash, HARIL's haril_run or haril_merge) launches.
+// What a turn of a read-only workflow may be offered: read and the delegation tools. Nothing that writes, edits or runs
+// a command launches.
 const WORKFLOW_TOOLS: ReadonlySet<string> = new Set(["read", ...DELEGATION_TOOLS]);
+// The workspace tools of a turn that runs in a git worktree (phase F8), by role, as the archetype table of the Core
+// offers them (packages/core/src/delegation/archetypes.ts; a value import of core is not allowed here, so it is mirrored
+// as the store mirrors the roles): the executor writes and runs commands, the delegator merges and resolves conflicts,
+// the auditor runs commands, the orchestrator none. The host checks every call again against the turn's archetype.
+const WORKSPACE_TOOLS_BY_ROLE: Readonly<Record<string, ReadonlySet<string>>> = {
+  executor: new Set(["write", "edit", "haril_run"]),
+  delegator: new Set([
+    "haril_run",
+    "haril_merge",
+    "haril_merge_continue",
+    "haril_merge_abort",
+    "write",
+    "edit",
+  ]),
+  auditor: new Set(["haril_run"]),
+  orchestrator: new Set(),
+};
+const WORKSPACE_TOOLS: ReadonlySet<string> = new Set(
+  Object.values(WORKSPACE_TOOLS_BY_ROLE).flatMap((tools) => [...tools]),
+);
 // Pi waits for an answer only to these extension dialogs; every other extension_ui_request is fire-and-forget.
 const DIALOG_METHODS: ReadonlySet<unknown> = new Set(["select", "confirm", "input", "editor"]);
 const DEFAULT_HELLO_TIMEOUT_MS = 15_000;
@@ -244,10 +267,20 @@ function validate(spec: AgentSpec, options: PiAgentRuntimeOptions): HarilError |
     return invalid("allowedTools must be non-empty names without commas");
   }
   if (spec.delegation !== undefined) {
-    const unsafe = spec.allowedTools.find((tool) => !WORKFLOW_TOOLS.has(tool));
+    const workspace = spec.workspace;
+    if (workspace !== undefined && !isAbsolutePath(workspace.root)) {
+      return invalid("workspace.root must be an absolute path");
+    }
+    const extra =
+      workspace === undefined
+        ? new Set<string>()
+        : (WORKSPACE_TOOLS_BY_ROLE[spec.delegation.role] ?? new Set<string>());
+    const unsafe = spec.allowedTools.find((tool) => !WORKFLOW_TOOLS.has(tool) && !extra.has(tool));
     if (unsafe !== undefined) {
       return invalid(
-        `a workflow agent is read-only until writing arrives: ${unsafe} is not one of read and the delegation tools`,
+        workspace === undefined
+          ? `a workflow agent of a read-only workflow is offered only read and the delegation tools: ${unsafe} is not one of them`
+          : `a ${spec.delegation.role} turn in a worktree is not offered ${unsafe}`,
       );
     }
   }
@@ -306,6 +339,22 @@ function proposalText(approvalId: string, created: boolean): string {
 function delegationText(result: Extract<DelegationToolResult, { ok: true }>): string {
   const { ok: _ok, ...fields } = result;
   return `accepted: ${JSON.stringify(fields)}. This call decides your turn: end it now with a short final message.`;
+}
+
+// What the agent reads after a workspace tool (phase F8), which never decides the turn: a command's exit code and the
+// end of its output as text, any other reply's fields as JSON.
+function workspaceText(tool: string, result: Extract<DelegationToolResult, { ok: true }>): string {
+  const { ok: _ok, ...fields } = result;
+  if (tool !== "haril_run") return `${tool}: ${JSON.stringify(fields)}`;
+  const exit = fields.timedOut === true ? "timed out" : `exit code ${String(fields.exitCode)}`;
+  const out = typeof fields.stdout === "string" ? fields.stdout : "";
+  const err = typeof fields.stderr === "string" ? fields.stderr : "";
+  const cut = fields.truncated === true ? " (only the end of the output is shown)" : "";
+  return [
+    `haril_run: ${exit} after ${String(fields.durationMs)} ms${cut}`,
+    out === "" ? "stdout: (empty)" : `stdout:\n${out}`,
+    err === "" ? "stderr: (empty)" : `stderr:\n${err}`,
+  ].join("\n");
 }
 
 // The longest refusal reason a plan.propose record keeps, in code points (LD-T7c).
@@ -414,7 +463,8 @@ class PiRun implements PiAgentHandle {
     this.helloTimeoutMs = options.timings?.helloTimeoutMs ?? DEFAULT_HELLO_TIMEOUT_MS;
     this.startupTimeoutMs = options.timings?.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS;
     this.graceMs = options.timings?.graceMs ?? DEFAULT_GRACE_MS;
-    this.guard = options.pathGuard ?? createPathGuard(options.projectRoot);
+    // A turn of a workflow that writes reads its own worktree (phase F8); every other run reads the project.
+    this.guard = options.pathGuard ?? createPathGuard(spec.workspace?.root ?? options.projectRoot);
     this.runDir = join(options.runsDir, spec.runId);
     this.launch = launchOf(options);
     const suffix = randomBytes(8).toString("hex");
@@ -733,7 +783,7 @@ class PiRun implements PiAgentHandle {
       return;
     }
     if (message.op === DELEGATION_CALL_OP) {
-      this.onDelegationCall(id, message.tool, message.input);
+      await this.onDelegationCall(id, message.tool, message.input);
       return;
     }
     if (message.op !== "read") {
@@ -811,8 +861,13 @@ class PiRun implements PiAgentHandle {
 
   // A delegation tool (phase F2b): the call goes to the host's handler untouched, with the run's own context, only for a
   // tool this run was offered; the handler checks it and its typed reply goes back, a refusal with its reason, so the
-  // agent can fix the call in the same turn. A host failure is a fixed reason, never the host's error.
-  private onDelegationCall(id: string | number, tool: unknown, input: unknown): void {
+  // agent can fix the call in the same turn. A host failure is a fixed reason, never the host's error. A workspace tool
+  // (phase F8) is answered once the host finished it.
+  private async onDelegationCall(
+    id: string | number,
+    tool: unknown,
+    input: unknown,
+  ): Promise<void> {
     const name = typeof tool === "string" ? tool : "";
     const body = JSON.stringify(input) ?? "";
     const fingerprint = {
@@ -825,7 +880,7 @@ class PiRun implements PiAgentHandle {
     if (
       handler === undefined ||
       projectId === undefined ||
-      !DELEGATION_TOOLS.has(name) ||
+      !(DELEGATION_TOOLS.has(name) || WORKSPACE_TOOLS.has(name)) ||
       !this.spec.allowedTools.includes(name)
     ) {
       this.recordOperation(DELEGATION_CALL_OP, sha256(""), "unsupported", fingerprint);
@@ -834,7 +889,11 @@ class PiRun implements PiAgentHandle {
     }
     let result: DelegationToolResult;
     try {
-      result = handler({ projectId, taskId: this.spec.taskId, runId: this.runId }, name, input);
+      result = await handler(
+        { projectId, taskId: this.spec.taskId, runId: this.runId },
+        name,
+        input,
+      );
     } catch {
       result = { ok: false, reason: "the call could not be recorded" };
     }
@@ -847,7 +906,10 @@ class PiRun implements PiAgentHandle {
       return;
     }
     this.recordOperation(DELEGATION_CALL_OP, sha256(""), "ok", fingerprint);
-    this.replyBridge(id, { ok: true, content: delegationText(result), reply: result });
+    const content = WORKSPACE_TOOLS.has(name)
+      ? workspaceText(name, result)
+      : delegationText(result);
+    this.replyBridge(id, { ok: true, content, reply: result });
   }
 
   private recordOperation(

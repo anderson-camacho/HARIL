@@ -1037,4 +1037,114 @@ describe("createPiAgentRuntime delegation.call (F2b)", () => {
     );
     expect((await ok.hello).tools).toEqual(["read", "haril_verdict"]);
   });
+
+  it("sends a workspace tool to the host's handler and answers without ending the turn (F8)", async () => {
+    const h = harness();
+    const seen: string[] = [];
+    const handle = await startHandle(
+      runtimeWith(
+        h,
+        [
+          { tool: "write", input: { path: "src/a.ts", content: "x" } },
+          { tool: "haril_run", input: { command: "npm", args: ["test"] } },
+        ],
+        {
+          delegationTools: async (_context, tool) => {
+            seen.push(tool);
+            return tool === "write"
+              ? { ok: true, path: "src/a.ts", bytes: 1, created: true }
+              : {
+                  ok: true,
+                  exitCode: 0,
+                  signal: null,
+                  timedOut: false,
+                  durationMs: 5,
+                  stdout: "1 passing",
+                  stderr: "",
+                  truncated: false,
+                };
+          },
+        },
+      ),
+      {
+        ...workflowSpec(["read", "write", "edit", "haril_run"]),
+        kind: "work",
+        delegation: { role: "executor" } as unknown as NonNullable<AgentSpec["delegation"]>,
+        workspace: { root: h.root },
+      },
+    );
+    await handle.prompt("Change the button");
+    const summary = summaryOf(await handle.settled);
+    expect(seen).toEqual(["write", "haril_run"]);
+    expect(summary).toContain('ok: write: {"path":"src/a.ts","bytes":1,"created":true}');
+    expect(summary).toContain("haril_run: exit code 0 after 5 ms");
+    expect(summary).toContain("stdout:\n1 passing");
+    expect(summary).not.toContain("decides your turn");
+  });
+});
+
+// A turn of a workflow that writes (phase F8): it runs in a git worktree, its role's workspace tools launch, Pi's own
+// tools never do, its reads resolve under the worktree, and a workspace tool goes to the host's handler like a
+// delegation tool but never ends the turn.
+describe("createPiAgentRuntime in a worktree (F8)", () => {
+  function worktreeSpec(
+    role: string,
+    allowedTools: readonly string[],
+    root: string,
+    runId = "run-wt",
+  ): AgentSpec {
+    return {
+      ...spec(runId),
+      projectId: "project-1",
+      allowedTools,
+      kind: "work",
+      delegation: { role } as unknown as NonNullable<AgentSpec["delegation"]>,
+      workspace: { root },
+    };
+  }
+
+  it("launches only the workspace tools the archetype table gives the role, never Pi's own", async () => {
+    const h = harness();
+    const worktree = join(tmp, "worktree-launch");
+    mkdirSync(worktree, { recursive: true });
+    for (const [role, tool] of [
+      ["executor", "bash"],
+      ["executor", "grep"],
+      ["executor", "haril_merge"],
+      ["auditor", "write"],
+      ["orchestrator", "haril_run"],
+    ] as const) {
+      const started = await h
+        .runtime("ok")
+        .start(worktreeSpec(role, ["read", tool], worktree, `run-${role}-${tool}`));
+      expect(started.ok, `${role} ${tool}`).toBe(false);
+      if (!started.ok) expect(started.error.message).toContain(tool);
+    }
+    const relative = await h
+      .runtime("ok")
+      .start(worktreeSpec("executor", ["read"], "worktree", "run-rel"));
+    expect(relative.ok).toBe(false);
+    expect(h.spawnCalls).toEqual([]);
+    const executor = await startHandle(
+      h.runtime("ok"),
+      worktreeSpec("executor", ["read", "write", "edit", "haril_run"], worktree, "run-exec"),
+    );
+    expect((await executor.hello).tools).toEqual(["read", "write", "edit", "haril_run"]);
+  });
+
+  it("reads the worktree, not the project", async () => {
+    const h = harness();
+    const worktree = join(tmp, "worktree-read");
+    mkdirSync(worktree, { recursive: true });
+    writeFileSync(join(worktree, "notes.txt"), "hello from the worktree", "utf8");
+    const handle = await startHandle(
+      h.runtime("ok_with_read", { readPath: "notes.txt" }),
+      worktreeSpec("executor", ["read", "write", "edit", "haril_run"], worktree, "run-read"),
+    );
+    await handle.prompt("go");
+    expect(await handle.settled).toEqual({
+      status: "succeeded",
+      summary: "read ok: hello from the worktree",
+    });
+  });
 });

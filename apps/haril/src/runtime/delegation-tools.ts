@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   type AbortInput,
   type AssignInput,
@@ -7,6 +8,7 @@ import {
   type RequestAuditInput,
   type VerdictInput,
   validateDelegationToolInput,
+  validateWorkspaceFileInput,
 } from "@haril/contracts";
 import {
   canonicalJson,
@@ -16,17 +18,20 @@ import {
   type DelegationCheck,
   type DelegationState,
   isDelegationArchetype,
+  isWorkspaceTool,
   mayUseTool,
   proposalFromAssign,
   proposalFromDelegate,
 } from "@haril/core";
 import type { Clock, DelegationToolHandler, DelegationToolResult, Store } from "@haril/core/ports";
+import { createIntegration, type Integration, unmergedSteps } from "./integration.js";
 import {
   type DelegationOptions,
   type WorkflowSettings,
   WorkflowView,
   workflowSettings,
 } from "./workflow-view.js";
+import type { TurnWorkspace, Workspaces } from "./worktrees.js";
 
 // The host side of the delegation tools (docs/modos-y-delegacion.md 3.4, 3.5, 3.6): one handler serves every agent
 // runtime, the FakeAgentRuntime option now and Pi's bridge tools in phase F2b, as plan-proposals.ts does for
@@ -37,6 +42,12 @@ import {
 // an abort): the same call again is the same answer, any other is refused. Nothing is created here. The accepted call
 // waits in the turn's window until the turn ends, and the run loop applies it in the transaction that closes the turn
 // (workflow-turns.ts), so a crash in between leaves nothing behind and the rerun makes the call again.
+//
+// Phase F8: a turn of a workflow that writes runs in a git worktree, which the run loop attaches to its window. Its
+// workspace tools (write, edit, haril_run, haril_merge and its continue and abort) are not deciding calls: the host does
+// them inside that worktree, as many times as the turn asks, and answers once each is done (a promise). An executor
+// writes only inside its write surface; a delegator writes only the conflicting files of the merge it left waiting.
+// A delegator's haril_report with status done is refused while an approved step's work is not merged.
 
 export type TurnAction =
   | { readonly tool: "haril_delegate"; readonly input: DelegateInput }
@@ -63,18 +74,27 @@ export interface DelegationTools {
   readonly call: DelegationToolHandler;
   // Opens the window of one workflow turn; the returned function closes it and reports its decided call.
   open(attempt: TurnAttempt): () => TurnWindowReport;
+  // Gives an open window its git worktree once the run loop made it (phase F8), with the epoch of the runtime.
+  attach(runId: string, workspace: TurnWorkspace | null, epoch: number): void;
+  // The delegators' merges (phase F8): the run loop forgets a merge whose turn ended, and the prompt names one waiting.
+  readonly integration: Integration;
 }
 
 interface Window {
   readonly attempt: TurnAttempt;
   action: TurnAction | null;
   readonly refusals: string[];
+  // The turn's git worktree and the runtime epoch its writes are fenced by (phase F8); null for a read-only turn.
+  workspace: TurnWorkspace | null;
+  epoch: number;
 }
 
 export interface DelegationToolsDeps {
   readonly store: Store;
   readonly clock: Clock;
   readonly options?: DelegationOptions;
+  // The worktrees of workflows that write (phase F8). Without them every workspace tool is refused.
+  readonly workspaces?: Workspaces;
 }
 
 // The state checkDelegation reads for a calling thread (3.6).
@@ -132,9 +152,14 @@ export function reassignmentProblem(
   return null;
 }
 
+function sha256(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
 export function createDelegationTools(deps: DelegationToolsDeps): DelegationTools {
   const { store, clock } = deps;
   const windows = new Map<string, Window>();
+  const integration = createIntegration();
 
   const refuse = (window: Window | undefined, reason: string): DelegationToolResult => {
     window?.refusals.push(reason);
@@ -149,14 +174,6 @@ export function createDelegationTools(deps: DelegationToolsDeps): DelegationTool
     }
     if (!isDelegationToolName(tool)) return refuse(window, `unknown tool "${tool}"`);
     if (!mayUseTool(task.role, tool, { writes: false })) {
-      // haril_run and haril_merge are not offered before writing arrives (archetypeTools); a role that gets them then
-      // hears why, every other caller hears that the tool is not its own.
-      if (mayUseTool(task.role, tool, { writes: true })) {
-        return refuse(
-          window,
-          `${tool} runs nothing until writing arrives (phase F8): no command or merge is allowed yet`,
-        );
-      }
       return refuse(window, `${tool} is not a tool of the ${task.role}`);
     }
     const valid = validateDelegationToolInput(tool, raw);
@@ -218,6 +235,20 @@ export function createDelegationTools(deps: DelegationToolsDeps): DelegationTool
         };
         break;
       }
+      case "haril_report": {
+        // 3.10.3: a part that writes is done once its approved work is in the integration branch.
+        if (action.input.status === "done" && window.workspace?.kind === "integration") {
+          const unmerged = unmergedSteps(store, view, task.threadId, settings.limits);
+          if (unmerged.length > 0) {
+            return refuse(
+              window,
+              `merge your approved steps before reporting done: haril_merge {"localId": "..."} for ${unmerged.join(", ")}`,
+            );
+          }
+        }
+        reply = { ok: true };
+        break;
+      }
       case "haril_verdict": {
         const verdict = checkVerdict(action.input);
         if (!verdict.ok) return refuse(window, `${verdict.code}: ${verdict.reason}`);
@@ -250,6 +281,110 @@ export function createDelegationTools(deps: DelegationToolsDeps): DelegationTool
     return reply;
   };
 
+  // A workspace tool (phase F8): checked like any call, then done inside the turn's worktree. Never a deciding call.
+  const workspaceCall = async (
+    window: Window,
+    tool: string,
+    raw: unknown,
+  ): Promise<DelegationToolResult> => {
+    const view = WorkflowView.load(store, window.attempt.workflowId);
+    const task = view?.task(window.attempt.taskId);
+    if (view === undefined || task === undefined || !isDelegationArchetype(task.role)) {
+      return refuse(window, `run ${window.attempt.runId} is not a turn of a workflow`);
+    }
+    const workspace = window.workspace;
+    if (!mayUseTool(task.role, tool as never, { writes: workspace !== null })) {
+      return refuse(
+        window,
+        mayUseTool(task.role, tool as never, { writes: true })
+          ? `${tool} works only in a workflow that writes in git worktrees; this workflow is read-only`
+          : `${tool} is not a tool of the ${task.role}`,
+      );
+    }
+    const workspaces = deps.workspaces;
+    if (workspace === null || workspaces === undefined) {
+      return refuse(window, `${tool} has no worktree to work in`);
+    }
+    if (view.workflow.state !== "running") {
+      return refuse(window, `the workflow is ${view.workflow.state}; it takes no call`);
+    }
+    const settings = workflowSettings(view.workflow, deps.options);
+    const context = {
+      store,
+      epoch: window.epoch,
+      view,
+      task,
+      workspace,
+      limits: settings.limits,
+      workspaces,
+    };
+    if (tool === "write" || tool === "edit") {
+      const valid = validateWorkspaceFileInput(tool, raw);
+      if (!valid.ok) return refuse(window, `${tool} input: ${valid.errors.join("; ")}`);
+      let surface: readonly string[] = workspace.writeSurface;
+      if (task.role === "delegator") {
+        const waiting = integration.pending(view.workflow.workflowId);
+        if (waiting === null) {
+          return refuse(
+            window,
+            `${tool} only resolves the conflicting files of a merge, and no merge waits for its conflicts`,
+          );
+        }
+        surface = waiting.files;
+      }
+      const reply =
+        valid.tool === "write"
+          ? await workspaces.write(
+              workspace,
+              surface,
+              valid.input.path,
+              (valid.input as { content: string }).content,
+            )
+          : await workspaces.edit(
+              workspace,
+              surface,
+              valid.input.path,
+              (valid.input as { edits: { oldText: string; newText: string }[] }).edits,
+            );
+      return reply.ok ? reply : refuse(window, reply.reason);
+    }
+    const valid = validateDelegationToolInput(tool as "haril_run", raw);
+    if (!valid.ok) return refuse(window, `${tool} input: ${valid.errors.join("; ")}`);
+    if (tool === "haril_run") {
+      const input = valid.input;
+      const args = input.args ?? [];
+      const result = await workspaces.run(workspace, input.command, args);
+      if (!result.ok) return refuse(window, result.reason);
+      store.events.append({
+        aggregateType: "task",
+        aggregateId: task.taskId,
+        type: "workspace.command",
+        actorKind: "system",
+        actorId: `runtime:${window.epoch}`,
+        payload: {
+          workflowId: view.workflow.workflowId,
+          command: input.command,
+          argsSha256: sha256(JSON.stringify(args)),
+          exitCode: result.exitCode,
+          timedOut: result.timedOut,
+          durationMs: result.durationMs,
+          truncated: result.truncated,
+        },
+        projectId: view.workflow.projectId,
+        taskId: task.taskId,
+        runId: window.attempt.runId,
+      });
+      return result;
+    }
+    const reply =
+      tool === "haril_merge"
+        ? await integration.merge(context, (raw as { localId: string }).localId)
+        : tool === "haril_merge_continue"
+          ? await integration.mergeContinue(context)
+          : await integration.mergeAbort(context);
+    return reply.ok ? reply : refuse(window, reply.reason);
+  };
+
   return {
     call: (context, tool, input) => {
       const window = windows.get(context.runId);
@@ -263,15 +398,30 @@ export function createDelegationTools(deps: DelegationToolsDeps): DelegationTool
           `run ${context.runId} is not a running workflow turn; only a workflow turn may call the delegation tools`,
         );
       }
+      if (isWorkspaceTool(tool)) {
+        return workspaceCall(window, tool, input).catch((error: unknown) =>
+          refuse(
+            window,
+            `${tool} failed in the host: ${error instanceof Error ? error.message.slice(0, 200) : "unknown error"}`,
+          ),
+        );
+      }
       return check(window, tool, input);
     },
     open: (attempt) => {
-      const window: Window = { attempt, action: null, refusals: [] };
+      const window: Window = { attempt, action: null, refusals: [], workspace: null, epoch: 0 };
       windows.set(attempt.runId, window);
       return () => {
         windows.delete(attempt.runId);
         return { action: window.action, refusals: [...window.refusals] };
       };
     },
+    attach: (runId, workspace, epoch) => {
+      const window = windows.get(runId);
+      if (window === undefined) return;
+      window.workspace = workspace;
+      window.epoch = epoch;
+    },
+    integration,
   };
 }

@@ -55,6 +55,7 @@ import { createQuotaFacet } from "./quota.js";
 import { createStopsFacet, type StopsFacet, stopModeOf } from "./stops.js";
 import { createUsageLogFacet } from "./usage-log.js";
 import { createWorkflowsFacet, type WorkflowCommandHandler } from "./workflows.js";
+import { createWorktreesFacet } from "./worktrees.js";
 
 // Implementation of the Store port over one node:sqlite connection. Writes run in BEGIN IMMEDIATE.
 // Core rules (transition table, plan checks) arrive through `rules`; this file never imports Core values.
@@ -250,6 +251,7 @@ export class SqliteStore implements Store {
   readonly usageLog: Store["usageLog"];
   readonly quota: Store["quota"];
   readonly workflows: Store["workflows"];
+  readonly worktrees: Store["worktrees"];
   private readonly applyWorkflowCommand: WorkflowCommandHandler;
   private readonly stops: StopsFacet;
   readonly maintenance: Store["maintenance"];
@@ -393,6 +395,14 @@ export class SqliteStore implements Store {
       clock: this.clock,
       ids: this.ids,
       transaction: (work) => this.inTransaction(work),
+    });
+    this.worktrees = createWorktreesFacet({
+      db: this.db,
+      clock: this.clock,
+      ids: this.ids,
+      transaction: (work) => this.inTransaction(work),
+      appendEvent: (input) => this.appendEvent(input),
+      assertActiveEpoch: (epoch) => this.assertActiveEpoch(epoch),
     });
     this.maintenance = createMaintenance({ db: this.db, walPath: options.walPath });
   }

@@ -9,6 +9,7 @@ import type {
   DelegationSibling,
   DelegationTurnInput,
   DelegationTurnKind,
+  DelegationWorkspaceView,
   Store,
 } from "@haril/core/ports";
 import type { TurnWindowReport } from "./delegation-tools.js";
@@ -130,11 +131,13 @@ function finalAuditFor(view: WorkflowView, task: Task): DelegationTurnInput["fin
   return later ? null : { verdict: audit.verdict, reasons: audit.reasons };
 }
 
+// `workspace` is the turn's git worktree in a workflow that writes (phase F8), as the prompt shows it; null otherwise.
 export function buildTurnInput(
   view: WorkflowView,
   task: Task,
   settings: WorkflowSettings,
   now: number,
+  workspace: DelegationWorkspaceView | null = null,
 ): DelegationTurnInput {
   const turns = view.turns(task.threadId);
   const index = Math.max(
@@ -165,6 +168,7 @@ export function buildTurnInput(
     finalAudit: null,
     siblings: siblingsOf(view, task),
     capacity: capacityOf(view, task, settings, now),
+    workspace,
   } satisfies DelegationTurnInput;
   switch (task.role) {
     case "orchestrator":

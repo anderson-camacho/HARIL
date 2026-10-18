@@ -31,12 +31,20 @@ export const ARCHETYPES: Readonly<Record<DelegationArchetype, ArchetypeSpec>> = 
     writeTools: Object.freeze([] as const),
     children: Object.freeze(["delegator"] as const),
   }),
-  // R-D6: the delegator may check for itself with a read-only haril_run; the automatic auditor still always runs.
+  // R-D6: the delegator may check for itself with a read-only haril_run; the automatic auditor still always runs. With
+  // writing (R-D13), it integrates its executors' branches with haril_merge and resolves a conflict with its own write
+  // and edit, which the host confines to the conflicting files of the merge in progress.
   delegator: Object.freeze({
     layer: 2,
     taskKind: "plan",
     tools: Object.freeze(["read", "haril_assign", "haril_report", "haril_run"] as const),
-    writeTools: Object.freeze(["haril_merge"] as const),
+    writeTools: Object.freeze([
+      "haril_merge",
+      "haril_merge_continue",
+      "haril_merge_abort",
+      "write",
+      "edit",
+    ] as const),
     children: Object.freeze(["executor"] as const),
   }),
   executor: Object.freeze({
@@ -62,14 +70,47 @@ const PROPOSED_CHILD: Partial<Record<DelegationToolName, DelegationArchetype>> =
 };
 
 export interface ToolOptions {
-  // True once agents may write (F8); until then the write tools and the host commands are never registered.
+  // True for a turn that runs in a git worktree of a workflow that writes (F8); otherwise the write tools and the host
+  // commands are never registered.
   readonly writes: boolean;
 }
 
 // The tools the host answers by running something: a command of the allow list (haril_run) or a merge into the
-// integration branch (haril_merge). Both need the worktrees, the allow list and the integration branch of phase F8, so
-// until then no agent is offered them: an announced tool the host always refuses would only waste the agent's turn.
-export const HOST_COMMAND_TOOLS: readonly AgentTool[] = Object.freeze(["haril_run", "haril_merge"]);
+// integration branch (haril_merge, its continue and its abort). They need a worktree, so only a turn of a workflow that
+// writes in worktrees (phase F8) is offered them: an announced tool the host always refuses would only waste the turn.
+export const HOST_COMMAND_TOOLS: readonly AgentTool[] = Object.freeze([
+  "haril_run",
+  "haril_merge",
+  "haril_merge_continue",
+  "haril_merge_abort",
+]);
+
+// The calls that decide a turn (3.5): a turn makes exactly one accepted deciding call, and its result is applied when the
+// turn ends. Every other tool (read, write, edit and the host commands) may be called any number of times.
+export const DECIDING_TOOLS: readonly AgentTool[] = Object.freeze([
+  "haril_delegate",
+  "haril_assign",
+  "haril_report",
+  "haril_verdict",
+  "haril_request_audit",
+  "haril_abort",
+]);
+
+// The tools the host serves inside the turn's git worktree (phase F8), each answered when its work is done: a write, an
+// edit, a command or a merge.
+export const WORKSPACE_TOOLS: readonly AgentTool[] = Object.freeze([
+  "write",
+  "edit",
+  ...HOST_COMMAND_TOOLS,
+]);
+
+export function isDecidingTool(tool: string): boolean {
+  return (DECIDING_TOOLS as readonly string[]).includes(tool);
+}
+
+export function isWorkspaceTool(tool: string): boolean {
+  return (WORKSPACE_TOOLS as readonly string[]).includes(tool);
+}
 
 export function isDelegationArchetype(value: string): value is DelegationArchetype {
   return (DELEGATION_ARCHETYPES as readonly string[]).includes(value);

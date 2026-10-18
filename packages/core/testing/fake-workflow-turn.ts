@@ -21,6 +21,11 @@ import {
 // fakes are the pure functions of fake-delegation-agents.ts; this feeds them the turn input of the spec, the same data a
 // real agent's prompt renders, and sends their calls to the host's delegation tools. The scenario comes from the
 // workflow's goal (fakeScenarioOf), as visible text, the way a real agent follows its prompt.
+//
+// A turn of a workflow that writes in git worktrees (phase F8) also uses the workspace tools, whose replies come back as
+// promises (fakeWritingTurn): an executor writes every literal path of its write surface, an auditor runs the command
+// the goal names ([fake:run=...]) and rejects a step it fails, and a delegator continuation merges each approved step
+// and resolves a conflict by writing each conflicting file again before it reports.
 
 export type WorkflowTurnResult =
   | { readonly outcome: AgentOutcome; readonly cost: FakeTurnCost }
@@ -28,6 +33,7 @@ export type WorkflowTurnResult =
   | "stalled";
 
 type Call = (tool: string, payload: unknown) => DelegationToolResult;
+type AsyncCall = (tool: string, payload: unknown) => Promise<DelegationToolResult>;
 
 function sumCost(a: FakeTurnCost, b: FakeTurnCost): FakeTurnCost {
   return {
@@ -110,13 +116,14 @@ function turnOf(
 ): WorkflowTurnResult {
   const scenario = fakeScenarioOf(input.workflowGoal);
   const call: Call = (tool, payload) => {
-    if (tools === undefined || spec.projectId === undefined) {
+    const reply = callTool(spec, tools, tool, payload);
+    // A deciding call is answered at once (DelegationToolHandler); only a workspace tool answers later.
+    if (reply instanceof Promise) {
       throw new Error(
-        `${spec.agentRef} has no delegation tools: the agent runtime was created without them`,
+        `${tool} answered later; a fake turn of a read-only workflow expects its reply at once`,
       );
     }
-    const context = { projectId: spec.projectId, taskId: spec.taskId, runId: spec.runId };
-    return tools(context, tool, payload);
+    return reply;
   };
   switch (spec.agentRef) {
     case "fake:orchestrate":
@@ -128,6 +135,149 @@ function turnOf(
     default:
       return auditorTurn(input, scenario, call);
   }
+}
+
+function callTool(
+  spec: AgentSpec,
+  tools: DelegationToolHandler | undefined,
+  tool: string,
+  payload: unknown,
+): DelegationToolResult | Promise<DelegationToolResult> {
+  if (tools === undefined || spec.projectId === undefined) {
+    throw new Error(
+      `${spec.agentRef} has no delegation tools: the agent runtime was created without them`,
+    );
+  }
+  const context = { projectId: spec.projectId, taskId: spec.taskId, runId: spec.runId };
+  return tools(context, tool, payload);
+}
+
+// A turn of a workflow that writes (phase F8): the executor, the auditor and the delegator continuation use the workspace
+// tools; the other turns run as in a read-only workflow. Provider errors scripted in the goal still apply.
+export async function fakeWritingTurn(
+  spec: AgentSpec,
+  tools: DelegationToolHandler | undefined,
+): Promise<WorkflowTurnResult> {
+  const input = spec.delegation;
+  const workspace = input?.workspace ?? null;
+  if (input === undefined || workspace === null) return fakeWorkflowTurn(spec, tools);
+  const scripted = scriptedProviderError(spec, input);
+  if (scripted !== null && !scripted.afterCall) return providerFailed(spec, scripted.status);
+  const scenario = fakeScenarioOf(input.workflowGoal);
+  const call: AsyncCall = async (tool, payload) => await callTool(spec, tools, tool, payload);
+  let result: WorkflowTurnResult;
+  if (spec.agentRef === "fake:execute") {
+    result = await writingExecutorTurn(input, scenario, workspace.writeSurface, call);
+  } else if (spec.agentRef === "fake:audit" && input.subject?.scope === "task") {
+    result = await runningAuditorTurn(input, scenario, call);
+  } else if (spec.agentRef === "fake:delegate" && input.turnKind !== "first") {
+    result = await mergingDelegatorTurn(input, scenario, call);
+  } else {
+    result = fakeWorkflowTurn(spec, tools);
+  }
+  return scripted === null ? result : providerFailed(spec, scripted.status);
+}
+
+// Every literal path of the surface (no wildcard), written with a line that names the step and its attempt.
+async function writingExecutorTurn(
+  input: DelegationTurnInput,
+  scenario: FakeScenario,
+  surface: readonly string[],
+  call: AsyncCall,
+): Promise<WorkflowTurnResult> {
+  const outcome = fakeExecute({
+    seed: scenario.seed,
+    key: input.label,
+    goal: input.goal,
+    instructions: input.instructions,
+    attempt: input.turn,
+    reformulated: input.turnKind === "reformulation",
+  });
+  if (outcome.outcome === "stalled") return "stalled";
+  const refused: string[] = [];
+  for (const path of surface.filter((glob) => !/[*?]/.test(glob) && !glob.endsWith("/"))) {
+    const reply = await call("write", {
+      path,
+      content: `${input.label} attempt ${input.turn}\n`,
+    });
+    if (!reply.ok) refused.push(`${path}: ${reply.reason}`);
+  }
+  if (refused.length > 0) {
+    return succeeded(
+      `${input.goal}: partly done, writes refused (${refused.join("; ")})`,
+      outcome.cost,
+    );
+  }
+  return succeeded(outcome.summary, outcome.cost);
+}
+
+// The fake audit, with the goal's command ([fake:run=...]) run in the step's worktree: a command that fails or is
+// refused fails the criteria.
+async function runningAuditorTurn(
+  input: DelegationTurnInput,
+  scenario: FakeScenario,
+  call: AsyncCall,
+): Promise<WorkflowTurnResult> {
+  let passed = true;
+  if (scenario.runCommand !== null && scenario.runCommand.length > 0) {
+    const [command, ...args] = scenario.runCommand;
+    const reply = await call("haril_run", { command, args });
+    passed = reply.ok && reply.exitCode === 0;
+  }
+  const audit = fakeAudit({
+    seed: scenario.seed,
+    key: `${input.label}:${input.turn}`,
+    scope: "task",
+    acceptanceCriteria:
+      input.acceptanceCriteria.length > 0 ? input.acceptanceCriteria : ["The step is done"],
+    complete: passed && fakeResultIsComplete(input.subject?.result ?? null),
+  });
+  const reply = await call("haril_verdict", audit.verdict);
+  return succeeded(replyText("haril_verdict", reply), audit.cost);
+}
+
+// Merges each approved step; a conflict is resolved by writing each conflicting file with a line of its own, then the
+// merge continues. Then the report the read-only fake would make.
+async function mergingDelegatorTurn(
+  input: DelegationTurnInput,
+  scenario: FakeScenario,
+  call: AsyncCall,
+): Promise<WorkflowTurnResult> {
+  const partId = input.localId ?? input.label;
+  const notes: string[] = [];
+  for (const child of input.children.filter((item) => item.status === "approved")) {
+    const merged = await call("haril_merge", { localId: child.localId });
+    if (!merged.ok) {
+      notes.push(`${child.localId}: ${merged.reason}`);
+      continue;
+    }
+    const files = Array.isArray(merged.conflicts) ? (merged.conflicts as string[]) : [];
+    if (files.length === 0) continue;
+    for (const path of files) {
+      await call("write", { path, content: `resolved by ${partId} for ${child.localId}\n` });
+    }
+    const finished = await call("haril_merge_continue", {});
+    if (!finished.ok) notes.push(`${child.localId}: ${finished.reason}`);
+  }
+  const turn = fakeDelegate({
+    kind: "continuation",
+    goal: input.goal,
+    seed: scenario.seed,
+    partId,
+    reformulated: input.children.filter((child) => child.reassigned).map((child) => child.localId),
+    children: input.children.map((child) => ({
+      localId: child.localId,
+      status:
+        child.status === "approved" || child.status === "done"
+          ? "done"
+          : child.status === "escalated" || child.status === "blocked"
+            ? child.status
+            : "failed",
+    })),
+  });
+  const reply = await call(turn.call.tool, turn.call.input);
+  const text = replyText(turn.call.tool, reply);
+  return succeeded(notes.length === 0 ? text : `${text} (${notes.join("; ")})`, turn.cost);
 }
 
 function orchestratorTurn(
@@ -200,6 +350,8 @@ function delegatorTurn(
       seed: scenario.seed,
       partId,
       executors: steps === null ? scenario.steps : Math.min(Number(steps[1]), 10),
+      commonFile: scenario.commonFile,
+      ownFiles: scenario.ownFiles,
     });
     return succeeded(replyText(turn.call.tool, call(turn.call.tool, turn.call.input)), turn.cost);
   }

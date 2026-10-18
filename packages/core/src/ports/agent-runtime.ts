@@ -38,6 +38,14 @@ export interface AgentSpec {
   readonly kind?: TaskKind;
   // A turn of a workflow (3.4): what the host told it, as data. Its prompt carries the same, rendered.
   readonly delegation?: DelegationTurnInput;
+  // A turn of a workflow that writes (phase F8): the git worktree its tools work in. Reads resolve under its root, and the
+  // host serves write, edit and the host commands inside it; an agent runtime points its read guard there.
+  readonly workspace?: AgentWorkspace;
+}
+
+export interface AgentWorkspace {
+  // Absolute path of the worktree.
+  readonly root: string;
 }
 
 export interface AgentHello {

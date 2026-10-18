@@ -27,6 +27,7 @@ import type {
   CancelReason,
   ClaimedTask,
   Clock,
+  DelegationWorkspaceView,
   ProcessControl,
   RecoveredTask,
   Store,
@@ -38,6 +39,7 @@ import { projectFileReader, verificationPayload } from "./acceptance.js";
 import { applyDecidedApprovals, denyPlansOfFailedTask } from "./approvals.js";
 import { controlEventOf } from "./control-events.js";
 import type { DelegationTools, TurnWindowReport } from "./delegation-tools.js";
+import { unmergedSteps } from "./integration.js";
 import {
   backoffJitter,
   defaultRuntimeMemory,
@@ -68,6 +70,7 @@ import {
   retryWorkflowTurn,
 } from "./workflow-turns.js";
 import { type DelegationOptions, WorkflowView, workflowSettings } from "./workflow-view.js";
+import type { TurnWorkspace, Workspaces } from "./worktrees.js";
 
 // Runtime loop (M1-D6, LD-T1, phase F2): take the lease, apply the queue, run the ready tasks, and wait for new work for
 // `idleExitMs` before the lease is released. `idleExitMs` 0 is `haril run`: it stops as soon as nothing is claimable.
@@ -133,6 +136,9 @@ export interface RunLoopOptions {
   readonly delegationTools?: DelegationTools;
   // The limits and models of workflows (phase F2; haril.json's delegation section arrives in F7).
   readonly delegation?: DelegationOptions;
+  // The git worktrees of workflows that write (phase F8): each turn of such a workflow runs in one, and the worktrees of
+  // workflows that ended are removed at startup and once they end. Without them, a writing workflow's turns fail.
+  readonly workspaces?: Workspaces;
   // Where each attempt's kill is registered once its agent started, for an exit that cannot wait for the ordered stop
   // (a second signal, 3.14). Defaults to none.
   readonly killSwitch?: KillSwitch;
@@ -195,6 +201,8 @@ export async function runUntilIdle(given: RunLoopOptions): Promise<RunLoopResult
     // 3.14.5: the agents a dead runtime left are killed first, while their runs still name them; a recorded pid is
     // killed only while it still names the recorded process (pid and start time).
     await sweepOrphanProcesses(store, epoch, options.clock, options.processControl, emit);
+    // Phase F8: the worktrees of workflows that ended while no runtime ran go away; their integration branches stay.
+    await sweepWorktrees(options, epoch, new Set(), new Set());
     // M1-T7: attempts orphaned by a previous runtime go back to the queue before anything is claimed.
     for (const recovered of store.runtime.reconcile(epoch, MAX_INFRA_RESTARTS)) {
       emit(recoveryEvent(recovered));
@@ -260,6 +268,33 @@ async function sweepOrphanProcesses(
   });
   recordSweep(store, report, "startup_sweep");
   emit({ type: "runtime.swept", killed: report.killed.length, kept: report.kept.length });
+}
+
+// Removes the worktrees of workflows that ended (phase F8), except those whose attempts still run (`busy`). A removal that
+// fails is left for the next runtime's startup sweep (`tried` keeps the loop from trying it again and again). Never throws.
+async function sweepWorktrees(
+  options: RunLoopOptions,
+  epoch: number,
+  busy: ReadonlySet<string>,
+  tried: Set<string>,
+): Promise<void> {
+  const workspaces = options.workspaces;
+  if (workspaces === undefined) return;
+  const { store } = options;
+  const due = store.worktrees.list({ state: "active" }).filter((record) => {
+    if (tried.has(record.worktreeId) || busy.has(record.workflowId)) return false;
+    const state = store.workflows.get(record.workflowId)?.state;
+    return state === "completed" || state === "failed" || state === "stopped";
+  });
+  if (due.length === 0) return;
+  try {
+    await workspaces.sweep(store, epoch, busy);
+  } catch {
+    // A git failure leaves the worktree for the next sweep; the runtime goes on.
+  }
+  for (const record of due) {
+    if (store.worktrees.get(record.worktreeId)?.state === "active") tried.add(record.worktreeId);
+  }
 }
 
 // A channel that cannot open (its endpoint is taken, for instance) leaves the runtime working: the queue is still
@@ -356,6 +391,8 @@ async function serve(
   };
   let idleSince = clock.now();
   let haltTold = false;
+  // Worktrees whose removal failed in this runtime: the next runtime's startup sweep tries them again.
+  const sweepTried = new Set<string>();
   // The watchdog (3.16): residual turns are cancelled every turn of the loop, the live nodes judged when their check
   // comes. What it ends is killed here: a residual attempt's run is already cancelled, an idle one commits as failed.
   const policy = watchdogPolicy(options.watchdog);
@@ -443,6 +480,17 @@ async function serve(
     // A workflow that just ended (its wall time among the reasons) leaves residual turns: they end now.
     endAttempts(cancelStrandedTurns(watchdog));
     endAttempts(checkLiveNodes(watchdog));
+    // Phase F8: once its attempts closed, an ended workflow's worktrees go away (its integration branch stays).
+    await sweepWorktrees(
+      options,
+      epoch,
+      new Set(
+        [...live.values()].flatMap((attempt) =>
+          attempt.workflow === null ? [] : [attempt.workflow.workflowId],
+        ),
+      ),
+      sweepTried,
+    );
 
     // 3.14: an emergency stop left the runtime halted. It still applies commands (haril resume among them) and closes
     // what was in flight, but it claims nothing; the store refuses the claims as well.
@@ -670,7 +718,34 @@ async function startWorkflowTurn(
     };
   }
   const settings = workflowSettings(view.workflow, options.delegation);
-  const delegation = buildTurnInput(view, task, settings, clock.now());
+  // Phase F8: a turn of a workflow that writes runs in its git worktree, made now when it does not exist yet.
+  let workspace: TurnWorkspace | null = null;
+  if (view.workflow.baseSha !== null && view.workflow.baseBranch !== null) {
+    if (options.workspaces === undefined) {
+      return {
+        status: "failed",
+        code: "workspace.unavailable",
+        message: "this runtime has no worktrees for a workflow that writes",
+      };
+    }
+    try {
+      workspace = await options.workspaces.prepare(store, context.epoch, view, task);
+    } catch (error) {
+      return {
+        status: "failed",
+        code: "workspace.failed",
+        message: error instanceof Error ? error.message.slice(0, 500) : String(error),
+      };
+    }
+  }
+  options.delegationTools?.attach(claimed.runId, workspace, context.epoch);
+  const delegation = buildTurnInput(
+    view,
+    task,
+    settings,
+    clock.now(),
+    workspace === null ? null : workspaceViewOf(options, view, task, workspace),
+  );
   // The model and reasoning level the attempt runs at (3.11, 7.10): the snapshot shows them. Agents send no reasoning
   // level, so the gateway's default level applies; it is known when the live catalog published it.
   const levelOf = options.delegation?.levelOf;
@@ -692,10 +767,10 @@ async function startWorkflowTurn(
     });
   }
   const spec = buildAgentSpec(
-    { ...claimed, delegation },
+    { ...claimed, delegation, ...(workspace === null ? {} : { workspaceRoot: workspace.root }) },
     { runId: claimed.runId, attempt: claimed.attempt },
   );
-  return await runAttempt(
+  const outcome = await runAttempt(
     runtimeFor(options, claimed),
     clock,
     spec,
@@ -703,6 +778,46 @@ async function startWorkflowTurn(
     attempt,
     context.hooks,
   );
+  if (workspace === null || options.workspaces === undefined) return outcome;
+  // The executor's surface changes are committed to its branch; every other turn leaves its worktree as it found it.
+  try {
+    return await options.workspaces.finish(store, context.epoch, view, task, workspace, outcome);
+  } catch (error) {
+    return {
+      status: "failed",
+      code: "workspace.failed",
+      message: error instanceof Error ? error.message.slice(0, 500) : String(error),
+    };
+  } finally {
+    if (task.role === "delegator") options.delegationTools?.integration.clear(workflowId);
+  }
+}
+
+// What a turn's prompt says about its worktree (phase F8): the branches, an executor's write surface, the allowed
+// commands, and for a delegator its approved steps not merged yet and a merge left waiting.
+function workspaceViewOf(
+  options: RunLoopOptions,
+  view: WorkflowView,
+  task: WorkflowView["tasks"][number],
+  workspace: TurnWorkspace,
+): DelegationWorkspaceView {
+  const settings = workflowSettings(view.workflow, options.delegation);
+  const pending = options.delegationTools?.integration.pending(view.workflow.workflowId) ?? null;
+  return {
+    kind: workspace.kind,
+    branch: workspace.branch,
+    baseBranch: workspace.baseBranch,
+    writeSurface: workspace.kind === "executor" ? workspace.writeSurface : [],
+    commands: options.workspaces?.settings.commands.allow ?? [],
+    unmerged:
+      task.role === "delegator"
+        ? unmergedSteps(options.store, view, task.threadId, settings.limits)
+        : [],
+    conflict:
+      task.role === "delegator" && pending !== null
+        ? { localId: pending.localId, files: pending.files }
+        : null,
+  };
 }
 
 // Closes a workflow turn: its decided call, its run and its usage row in one transaction (workflow-turns.ts). A stop that

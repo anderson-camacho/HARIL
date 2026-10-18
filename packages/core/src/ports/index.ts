@@ -11,3 +11,4 @@ export * from "./result.js";
 export * from "./secret-store.js";
 export * from "./store.js";
 export * from "./usage-log.js";
+export * from "./worktrees.js";

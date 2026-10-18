@@ -205,6 +205,9 @@ importers:
       '@haril/gateway':
         specifier: workspace:*
         version: link:../../integrations/gateway
+      '@haril/git':
+        specifier: workspace:*
+        version: link:../../integrations/git
       '@haril/os':
         specifier: workspace:*
         version: link:../../integrations/os

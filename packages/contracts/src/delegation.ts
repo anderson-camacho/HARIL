@@ -1,6 +1,5 @@
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
-import { TaskIdSchema } from "./primitives.js";
 
 // Tool contracts of the three-layer delegation (docs/modos-y-delegacion.md 3.5, ADR-0021). Agents call these tools
 // through the Pi bridge; the Core validates what they propose and the Runtime creates the tasks. The schemas check
@@ -17,6 +16,8 @@ export const DELEGATION_TOOL_NAMES = [
   "haril_abort",
   "haril_run",
   "haril_merge",
+  "haril_merge_continue",
+  "haril_merge_abort",
 ] as const;
 export type DelegationToolName = (typeof DELEGATION_TOOL_NAMES)[number];
 
@@ -186,21 +187,38 @@ export const AbortInputSchema = Type.Object(
 );
 export type AbortInput = Static<typeof AbortInputSchema>;
 
-// haril_run: one command from delegation.commands.allow, run by the host (never by Pi) in the agent's worktree with a
-// time limit, an output limit and a clean environment (3.10). The spec fixes no shape; this one is provisional.
+// haril_run: one command from the allow list, run by the host (never by Pi) in the agent's worktree with a time limit, an
+// output limit and a clean environment (3.10). argv only: `command` is the program and `args` its arguments, never a
+// shell line. Both are bounded so the allow-list check always runs on small input.
+export const RUN_COMMAND_MAX_LENGTH = 200;
+export const RUN_ARG_MAX_LENGTH = 4000;
+export const RUN_ARGS_MAX_ITEMS = 64;
 export const RunInputSchema = Type.Object(
-  { command: NonEmptyText, args: Type.Optional(Type.Array(Type.String())) },
+  {
+    command: Type.String({ minLength: 1, maxLength: RUN_COMMAND_MAX_LENGTH }),
+    args: Type.Optional(
+      Type.Array(Type.String({ maxLength: RUN_ARG_MAX_LENGTH }), { maxItems: RUN_ARGS_MAX_ITEMS }),
+    ),
+  },
   { additionalProperties: false },
 );
 export type RunInput = Static<typeof RunInputSchema>;
 
-// haril_merge: the delegator integrates one executor's branch into the workflow's integration branch; the host runs
-// `git merge --no-ff` and answers with the conflicting files, if any (3.10, phase F8).
+// haril_merge: the delegator integrates one of its approved steps, named by the step's local id (the delegator reads its
+// children by local id, never by task id), into the workflow's integration branch; the host pre-checks the merge with
+// `git merge-tree --write-tree`, runs `git merge --no-ff`, and answers with the conflicting files, if any (3.10, phase
+// F8). haril_merge_continue commits the delegator's resolution of those files; haril_merge_abort gives the merge up.
 export const MergeInputSchema = Type.Object(
-  { taskId: TaskIdSchema },
+  { localId: LocalIdSchema },
   { additionalProperties: false },
 );
 export type MergeInput = Static<typeof MergeInputSchema>;
+
+export const MergeContinueInputSchema = Type.Object({}, { additionalProperties: false });
+export type MergeContinueInput = Static<typeof MergeContinueInputSchema>;
+
+export const MergeAbortInputSchema = Type.Object({}, { additionalProperties: false });
+export type MergeAbortInput = Static<typeof MergeAbortInputSchema>;
 
 const TOOL_SCHEMAS = {
   haril_delegate: DelegateInputSchema,
@@ -211,6 +229,8 @@ const TOOL_SCHEMAS = {
   haril_abort: AbortInputSchema,
   haril_run: RunInputSchema,
   haril_merge: MergeInputSchema,
+  haril_merge_continue: MergeContinueInputSchema,
+  haril_merge_abort: MergeAbortInputSchema,
 } as const;
 
 export type DelegationToolInputs = {
@@ -243,4 +263,77 @@ export function validateDelegationToolInput<T extends DelegationToolName>(
     (error) => `${error.instancePath || "/"}: ${error.message}`,
   );
   return { ok: false, errors };
+}
+
+// The workspace file tools of a workflow turn that writes (phase F8): Pi's own write and edit shapes, served by the host
+// inside the turn's worktree and its declared write surface (3.10.5), never by Pi. The path is checked by the host's
+// PathGuard; here only its size.
+export const WORKSPACE_FILE_TOOL_NAMES = ["write", "edit"] as const;
+export type WorkspaceFileToolName = (typeof WORKSPACE_FILE_TOOL_NAMES)[number];
+
+export const WORKSPACE_PATH_MAX_CHARS = 1024;
+// The most text one write or one replacement may carry, in characters.
+export const WORKSPACE_TEXT_MAX_CHARS = 2_000_000;
+export const EDITS_MAX_ITEMS = 100;
+
+const WorkspacePathSchema = Type.String({ minLength: 1, maxLength: WORKSPACE_PATH_MAX_CHARS });
+const WorkspaceTextSchema = Type.String({ maxLength: WORKSPACE_TEXT_MAX_CHARS });
+
+export const WriteInputSchema = Type.Object(
+  { path: WorkspacePathSchema, content: WorkspaceTextSchema },
+  { additionalProperties: false },
+);
+export type WriteInput = Static<typeof WriteInputSchema>;
+
+// Each oldText must match one region of the original file exactly once, and the regions must not overlap.
+export const EditInputSchema = Type.Object(
+  {
+    path: WorkspacePathSchema,
+    edits: Type.Array(
+      Type.Object(
+        {
+          oldText: Type.String({ minLength: 1, maxLength: WORKSPACE_TEXT_MAX_CHARS }),
+          newText: WorkspaceTextSchema,
+        },
+        { additionalProperties: false },
+      ),
+      { minItems: 1, maxItems: EDITS_MAX_ITEMS },
+    ),
+  },
+  { additionalProperties: false },
+);
+export type EditInput = Static<typeof EditInputSchema>;
+
+const FILE_SCHEMAS = { write: WriteInputSchema, edit: EditInputSchema } as const;
+
+export type WorkspaceFileInputs = {
+  readonly [K in WorkspaceFileToolName]: Static<(typeof FILE_SCHEMAS)[K]>;
+};
+
+export type WorkspaceFileInputValidation<T extends WorkspaceFileToolName> =
+  | { readonly ok: true; readonly tool: T; readonly input: WorkspaceFileInputs[T] }
+  | { readonly ok: false; readonly errors: string[] };
+
+export function isWorkspaceFileToolName(value: string): value is WorkspaceFileToolName {
+  return (WORKSPACE_FILE_TOOL_NAMES as readonly string[]).includes(value);
+}
+
+// Schema-level check of a write or edit call's untrusted arguments; a name outside the two is refused, never thrown.
+export function validateWorkspaceFileInput<T extends WorkspaceFileToolName>(
+  tool: T,
+  value: unknown,
+): WorkspaceFileInputValidation<T> {
+  if (!isWorkspaceFileToolName(tool)) {
+    return { ok: false, errors: [`/: unknown tool "${String(tool)}"`] };
+  }
+  const schema = FILE_SCHEMAS[tool];
+  if (Value.Check(schema, value)) {
+    return { ok: true, tool, input: value as WorkspaceFileInputs[T] };
+  }
+  return {
+    ok: false,
+    errors: Value.Errors(schema, value).map(
+      (error) => `${error.instancePath || "/"}: ${error.message}`,
+    ),
+  };
 }
