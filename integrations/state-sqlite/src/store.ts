@@ -827,16 +827,18 @@ export class SqliteStore implements Store {
     });
   }
 
-  // pending -> ready (all dependencies completed) or pending -> blocked(dep_failed) (a dependency failed, was
-  // cancelled or is blocked(dep_failed)). Rounds repeat until nothing changes, so the block propagates down any
-  // chain inside this one transaction (M1 fix b).
+  // pending -> ready (every dependency met) or pending -> blocked(dep_failed) (a dependency of kind completed failed, was
+  // cancelled or is blocked(dep_failed)). A completed dependency is met when its task completed; a settled one (3.7)
+  // when its task completed or can never complete, so a continuation runs after a failed child and is never blocked by
+  // it. Rounds repeat until nothing changes, so the block propagates down any chain inside this one transaction (M1 fix
+  // b).
   private promoteTasks(): PromoteResult {
     return this.inTransaction(() => {
       const pendingTasks = this.db.prepare(
         "SELECT task_id AS taskId, goal, project_id AS projectId FROM tasks WHERE state = 'pending' ORDER BY created_seq",
       );
       const dependencyStates = this.db.prepare(
-        "SELECT t.state AS state, t.block_reason AS blockReason FROM task_dependencies d JOIN tasks t ON t.task_id = d.depends_on_task_id WHERE d.task_id = ?",
+        "SELECT d.kind AS kind, t.state AS state, t.block_reason AS blockReason FROM task_dependencies d JOIN tasks t ON t.task_id = d.depends_on_task_id WHERE d.task_id = ?",
       );
       const ready: Array<{ taskId: string; goal: string }> = [];
       const blocked: Array<{ taskId: string; goal: string }> = [];
@@ -851,10 +853,15 @@ export class SqliteStore implements Store {
         }>;
         for (const task of pending) {
           const dependencies = dependencyStates.all(task.taskId) as Array<{
+            kind: string;
             state: string;
             blockReason: string | null;
           }>;
-          if (dependencies.some(isDependencyFailure)) {
+          if (
+            dependencies.some(
+              (dependency) => dependency.kind === "completed" && isDependencyFailure(dependency),
+            )
+          ) {
             this.transition("pending", "blocked");
             this.db
               .prepare(
@@ -873,7 +880,7 @@ export class SqliteStore implements Store {
             });
             blocked.push({ taskId: task.taskId, goal: task.goal });
             changed = true;
-          } else if (dependencies.every((dependency) => dependency.state === "completed")) {
+          } else if (dependencies.every(isDependencyMet)) {
             this.transition("pending", "ready");
             this.db
               .prepare("UPDATE tasks SET state = 'ready', updated_at = ? WHERE task_id = ?")
@@ -1564,6 +1571,17 @@ function isDependencyFailure(dependency: { state: string; blockReason: string | 
     dependency.state === "cancelled" ||
     (dependency.state === "blocked" && dependency.blockReason === "dep_failed")
   );
+}
+
+// A dependency of kind completed is met by a completed task; one of kind settled (3.7) also by a task that can never
+// complete.
+function isDependencyMet(dependency: {
+  kind: string;
+  state: string;
+  blockReason: string | null;
+}): boolean {
+  if (dependency.state === "completed") return true;
+  return dependency.kind === "settled" && isDependencyFailure(dependency);
 }
 
 function parseCommand(row: CommandRow): CommandRecord {
