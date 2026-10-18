@@ -44,6 +44,18 @@ export interface AgentHello {
   readonly tools: readonly string[];
 }
 
+// What the gateway answered when a model call of the attempt failed (docs/modos-y-delegacion.md 3.11, phase F6), as the
+// Broker saw it: quota (HTTP 402: the provider's quota, never HARIL's own token budget), rate_limited (HTTP 429),
+// transient (a 5xx, a timeout or a broken stream) or fatal (any other refusal). The runtime turns quota and rate_limited
+// into a cooldown of the model, and retries a workflow turn once.
+export interface ProviderFailure {
+  readonly kind: "quota" | "rate_limited" | "transient" | "fatal";
+  readonly httpStatus: number | null;
+  readonly retryAfterMs: number | null;
+  // The model reference the failed call asked for, when known.
+  readonly model: string | null;
+}
+
 export type AgentOutcome =
   // `simulated` marks a run of a non-fake agentRef, which M1 completes without a real agent (M1-D7).
   | {
@@ -56,7 +68,13 @@ export type AgentOutcome =
       // Tokens the run reported itself (a fake agent); a real agent's come from the Broker's ledger. null: not reported.
       readonly usage?: { readonly tokensIn: number | null; readonly tokensOut: number | null };
     }
-  | { readonly status: "failed"; readonly code: string; readonly message: string }
+  | {
+      readonly status: "failed";
+      readonly code: string;
+      readonly message: string;
+      // Set when the failure came from the gateway's answer to a model call.
+      readonly provider?: ProviderFailure;
+    }
   | { readonly status: "timed_out" }
   | { readonly status: "aborted" };
 

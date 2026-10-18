@@ -82,13 +82,24 @@ export function reachStop(
   return true;
 }
 
-// A model for a new turn (3.11), or null when none can run now (the turn is then not created and the node fails with
-// no_capacity). A substitution is recorded as model.substituted.
+// A model for a new turn (3.11), or null when none can run now or within maxWaitMs (the turn is then not created and the
+// workflow fails with no_capacity). A model held back until a known time within maxWaitMs is still given: the turn is
+// created with it, and the check at its launch makes it wait (model-launch.ts). A substitution is recorded as
+// model.substituted.
 function pickModel(
   context: Pick<TurnContext, "store" | "clock" | "settings" | "view">,
   request: ModelRequest,
 ): { readonly model: string; readonly pinned: boolean } | null {
-  const choice = chooseModel(request, context.settings.models(context.clock.now()));
+  const models = context.settings.models(context.clock.now());
+  const choice = chooseModel(request, models);
+  if (choice.kind === "wait") {
+    const model =
+      choice.model ??
+      request.proposed ??
+      models.table.classes[request.difficulty].order[0] ??
+      context.view.workflow.orchestratorModel;
+    return { model, pinned: models.pinned[request.archetype] === model };
+  }
   if (choice.kind !== "use") return null;
   if (choice.substitutedFrom !== null) {
     context.store.events.append({
@@ -511,16 +522,15 @@ function orchestratorPlan(
     const turns = typeof check === "string" ? null : delegateTurns(context, action.input, check);
     if (typeof check === "string" || turns === null) {
       const reason = typeof check === "string" ? "refused_at_commit" : "no_capacity";
+      const detail = typeof check === "string" ? check : "no model can run a delegator now";
       return {
         before: [],
-        completion: failure(
-          context,
-          `delegation.${reason}`,
-          typeof check === "string" ? check : "no model can run a delegator now",
-        ),
+        completion: failure(context, `delegation.${reason}`, detail),
         outcome: reason,
         verdict: null,
-        after: [setWorkflowFailed(context, reason)],
+        after: [
+          setWorkflowFailed(context, reason === "no_capacity" ? `no_capacity: ${detail}` : reason),
+        ],
       };
     }
     const firstPlan = !view.delegations.some((row) => row.tool === "haril_delegate");
@@ -564,7 +574,7 @@ function orchestratorPlan(
         ),
         outcome: "no_capacity",
         verdict: null,
-        after: [setWorkflowFailed(context, "no_capacity")],
+        after: [setWorkflowFailed(context, "no_capacity: no model can run the final auditor now")],
       };
     }
     const finalAuditor: NewTurn = {
@@ -657,16 +667,16 @@ function delegatorPlan(
     const turns = typeof check === "string" ? null : assignTurns(context, action.input, check);
     if (typeof check === "string" || turns === null) {
       const reason = typeof check === "string" ? "refused_at_commit" : "no_capacity";
+      const detail =
+        typeof check === "string" ? check : "no model can run an executor or its auditor now";
       return {
         before: [],
-        completion: failure(
-          context,
-          `delegation.${reason}`,
-          typeof check === "string" ? check : "no model can run an executor or its auditor now",
-        ),
+        completion: failure(context, `delegation.${reason}`, detail),
         outcome: reason,
         verdict: null,
-        after: [],
+        // No model at all ends the workflow (8: it never asks); a refused proposal is the delegator's to answer.
+        after:
+          reason === "no_capacity" ? [setWorkflowFailed(context, `no_capacity: ${detail}`)] : [],
       };
     }
     const continuation = view.turns(task.threadId)[0]?.taskId !== task.taskId;

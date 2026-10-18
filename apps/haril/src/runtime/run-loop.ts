@@ -45,6 +45,8 @@ import {
   memoryLeftOf,
   type RuntimeMemory,
 } from "./memory.js";
+import { withStoreState } from "./model-context.js";
+import { decideProviderRetry } from "./model-launch.js";
 import type { PlanAttemptReport, PlanProposals } from "./plan-proposals.js";
 import { killRecordedProcesses, recordSweep } from "./processes.js";
 import type { RealAgentReadiness, RealAgents } from "./real-agent.js";
@@ -59,7 +61,12 @@ import {
 } from "./watchdog.js";
 import { claimWorkflowTurns, settleWorkflows } from "./workflow-scheduler.js";
 import { summarizeWorkflows, type WorkflowTally } from "./workflow-summary.js";
-import { buildTurnInput, commitWorkflowAttempt, recordCancelledTurn } from "./workflow-turns.js";
+import {
+  buildTurnInput,
+  commitWorkflowAttempt,
+  recordCancelledTurn,
+  retryWorkflowTurn,
+} from "./workflow-turns.js";
 import { type DelegationOptions, WorkflowView, workflowSettings } from "./workflow-view.js";
 
 // Runtime loop (M1-D6, LD-T1, phase F2): take the lease, apply the queue, run the ready tasks, and wait for new work for
@@ -151,7 +158,12 @@ export type RunLoopResult =
       readonly memory: MemoryLeft;
     };
 
-export async function runUntilIdle(options: RunLoopOptions): Promise<RunLoopResult> {
+export async function runUntilIdle(given: RunLoopOptions): Promise<RunLoopResult> {
+  // Every model decision of a workflow also reads the store's cooldowns and quota readings (3.11, phase F6).
+  const options: RunLoopOptions = {
+    ...given,
+    delegation: withStoreState(given.store, given.delegation),
+  };
   const { store } = options;
   const shutdown = options.shutdown ?? createShutdown();
   const ttlMs = options.leaseTtlMs ?? LEASE_TTL_MS;
@@ -457,7 +469,14 @@ async function serve(
     }
     const turns = halted
       ? []
-      : claimWorkflowTurns(store, epoch, options.delegation, new Set(notRunnable));
+      : claimWorkflowTurns(
+          store,
+          epoch,
+          options.delegation,
+          new Set(notRunnable),
+          (ended) => emit({ type: "workflow.state", ...ended }),
+          clock.now(),
+        );
     for (const turn of turns) {
       // The attempt's first watchdog window starts at its claim (3.16).
       store.workflows.scheduleCheck(epoch, turn.claimed.taskId, clock.now() + policy.intervalMs);
@@ -696,6 +715,42 @@ function closeWorkflowTurn(
   }
   const before = store.workflows.get(turn.workflowId)?.state;
   const task = store.workflows.tasks(turn.workflowId).find((row) => row.taskId === claimed.taskId);
+  // 3.11: a 402 or 429 cools the model down; the turn is retried once on another model or after the cooldown, a
+  // transient error once on the same model, never after its deciding call was accepted.
+  let noCapacity: string | undefined;
+  if (!closedIdle && outcome.status === "failed" && outcome.provider !== undefined) {
+    const view = WorkflowView.load(store, turn.workflowId);
+    const current = view?.task(claimed.taskId);
+    if (view !== undefined && current !== undefined) {
+      const decision = decideProviderRetry({
+        store,
+        view,
+        task: current,
+        settings: workflowSettings(view.workflow, options.delegation),
+        outcome,
+        report,
+        now: clock.now(),
+      });
+      if (decision.kind === "retry") {
+        retryWorkflowTurn(
+          { store, clock, epoch },
+          { claimed, workflowId: turn.workflowId, startedAt: turn.startedAt },
+          outcome,
+          decision,
+        );
+        emit({
+          type: "task.retrying",
+          taskId: claimed.taskId,
+          goal: claimed.goal,
+          nextAttempt: claimed.attempt + 1,
+          maxAttempts: claimed.attempt + 1,
+          code: decision.outcome,
+        });
+        return;
+      }
+      if (decision.kind === "no_capacity") noCapacity = decision.reason;
+    }
+  }
   let taskState: "completed" | "failed";
   let outcomeText: string;
   try {
@@ -730,6 +785,17 @@ function closeWorkflowTurn(
     });
     taskState = "failed";
     outcomeText = `commit_failed: ${message}`;
+  }
+  // No model can run the turn again within the wait allowed: the workflow ends (it never asks).
+  if (noCapacity !== undefined) {
+    const current = store.workflows.get(turn.workflowId);
+    if (current?.state === "running" || current?.state === "awaiting_human") {
+      store.workflows.setState(epoch, {
+        workflowId: turn.workflowId,
+        state: "failed",
+        reason: noCapacity,
+      });
+    }
   }
   emit({
     type: "workflow.turn",

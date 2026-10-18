@@ -12,6 +12,7 @@ import type {
   Store,
 } from "@haril/core/ports";
 import type { TurnWindowReport } from "./delegation-tools.js";
+import type { RetryDecision } from "./model-launch.js";
 import { commitPlanOf, reachStop, type TurnContext } from "./workflow-commit.js";
 import {
   type DelegationOptions,
@@ -389,6 +390,81 @@ export function recordCancelledTurn(
     retries: task.role === "executor" ? (task.delegationId === null ? 1 : 0) : null,
     simulated: task.agentRef.startsWith("fake:"),
     idempotencyKey: `run:${attempt.claimed.runId}`,
+  });
+}
+
+// A turn the gateway's error made retry (3.11, model-launch.ts): in one transaction its run closes failed and its task is
+// ready again (or waits for a cooldown) on the model chosen, a replaced model leaves model.substituted, and the run leaves
+// its usage row: what it spent, and no model served, since the gateway refused the call. The thread gets no new turn.
+export function retryWorkflowTurn(
+  deps: Pick<CommitDeps, "store" | "clock" | "epoch">,
+  attempt: WorkflowAttempt,
+  outcome: Extract<AgentOutcome, { status: "failed" }>,
+  decision: Extract<RetryDecision, { kind: "retry" }>,
+): void {
+  const { store, clock, epoch } = deps;
+  const view = WorkflowView.load(store, attempt.workflowId);
+  const task = view?.task(attempt.claimed.taskId);
+  if (view === undefined || task === undefined) {
+    throw new Error(
+      `task ${attempt.claimed.taskId} is not a turn of workflow ${attempt.workflowId}`,
+    );
+  }
+  const now = clock.now();
+  store.transaction(() => {
+    store.workflows.retryTurn(epoch, {
+      runId: attempt.claimed.runId,
+      model: decision.model,
+      cooldownUntil: decision.cooldownUntil,
+      retryReason: decision.retryReason,
+      error: { code: outcome.code, message: outcome.message.slice(0, 500) },
+    });
+    // What it spent, its open calls settled with the run.
+    const ledger = store.budgets.usageSummary({ runId: attempt.claimed.runId });
+    if (decision.substitutedFrom !== null) {
+      store.events.append({
+        aggregateType: "workflow",
+        aggregateId: view.workflow.workflowId,
+        type: "model.substituted",
+        actorKind: "system",
+        actorId: "runtime",
+        payload: {
+          from: decision.substitutedFrom,
+          to: decision.model,
+          archetype: task.role,
+          taskId: task.taskId,
+        },
+        projectId: view.workflow.projectId,
+      });
+    }
+    store.usageLog.appendUsage({
+      kind: "agent_run",
+      orderId: view.workflow.orderId,
+      projectId: view.workflow.projectId,
+      workflowId: view.workflow.workflowId,
+      taskId: task.taskId,
+      runId: attempt.claimed.runId,
+      threadId: task.threadId,
+      layer: task.layer,
+      role: task.role,
+      mode: "delegacion",
+      provider: task.model?.split("/")[0] ?? null,
+      modelRequested: task.model,
+      modelServed: null,
+      modelPinned: task.modelPinned,
+      tokensIn: ledger?.inputTokens ?? null,
+      tokensOut: ledger?.outputTokens ?? null,
+      startedAt: attempt.startedAt,
+      endedAt: now,
+      durationMs: Math.max(0, now - attempt.startedAt),
+      difficultyEst: task.difficulty,
+      difficultyReason: task.difficultyReason,
+      outcome: decision.outcome,
+      auditVerdict: null,
+      retries: task.role === "executor" ? (task.delegationId === null ? 1 : 0) : null,
+      simulated: task.agentRef.startsWith("fake:"),
+      idempotencyKey: `run:${attempt.claimed.runId}`,
+    });
   });
 }
 

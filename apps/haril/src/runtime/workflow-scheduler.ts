@@ -1,6 +1,7 @@
 import type { WorkflowState } from "@haril/contracts";
 import { type ClaimCandidate, type LiveTask, selectClaims } from "@haril/core";
 import type { ClaimedTask, Clock, Store } from "@haril/core/ports";
+import { checkLaunch } from "./model-launch.js";
 import { reachStop } from "./workflow-commit.js";
 import {
   type DelegationOptions,
@@ -46,12 +47,16 @@ function liveOf(task: Task, view: WorkflowView): LiveTask {
 }
 
 // Claims the turns selectClaims starts now in every running workflow, oldest workflow first. `exclude` names ready
-// turns that must wait (a real agent whose setup is missing, for instance).
+// turns that must wait (a real agent whose setup is missing, for instance). Each turn's model is checked right before
+// its claim (3.11, model-launch.ts): it may be replaced, the turn may wait for a cooldown, or the workflow may fail with
+// no_capacity, which `onEnded` hears.
 export function claimWorkflowTurns(
   store: Store,
   epoch: number,
   options: DelegationOptions | undefined,
   exclude: ReadonlySet<string> = new Set(),
+  onEnded: (ended: WorkflowEnded) => void = () => undefined,
+  now: number = Date.now(),
 ): WorkflowClaim[] {
   const claims: WorkflowClaim[] = [];
   const running = [...store.workflows.list({ state: "running" })].reverse();
@@ -60,7 +65,8 @@ export function claimWorkflowTurns(
     if (view === undefined) continue;
     const ready = view.tasks.filter((task) => task.state === "ready" && !exclude.has(task.taskId));
     if (ready.length === 0) continue;
-    const { limits } = workflowSettings(view.workflow, options);
+    const settings = workflowSettings(view.workflow, options);
+    const { limits } = settings;
     const selection = selectClaims(
       {
         workflowState: view.workflow.state,
@@ -73,6 +79,14 @@ export function claimWorkflowTurns(
       limits,
     );
     for (const plan of selection.claims) {
+      const task = view.task(plan.taskId);
+      if (task === undefined) continue;
+      const launch = checkLaunch(store, epoch, view, task, settings, now);
+      if (launch.kind === "deferred") continue;
+      if (launch.kind === "no_capacity") {
+        onEnded({ workflowId: workflow.workflowId, state: "failed", reason: launch.reason });
+        break;
+      }
       const claimed = store.tasks.claimTask(epoch, plan.taskId);
       if (claimed !== undefined) claims.push({ claimed, workflowId: workflow.workflowId });
     }

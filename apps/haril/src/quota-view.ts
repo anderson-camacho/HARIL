@@ -1,4 +1,4 @@
-import { evaluateQuota, type QuotaPolicy, type QuotaSample } from "@haril/core";
+import { evaluateQuota, type QuotaPolicy, type QuotaSample, worstQuota } from "@haril/core";
 import type { QuotaSampleRecord } from "@haril/core/ports";
 
 // Quota readings as people and the model choice read them (docs/modos-y-delegacion.md 3.11; ADR-0021 P4, P25): one row
@@ -94,4 +94,28 @@ export function accountViews(
       source: first.source,
     };
   });
+}
+
+// The quota of each quota key: "<provider>/<prefix>" for an account with a prefix, and "<provider>" for the worst account
+// of the provider. A provider that could not be read has no key: "sin dato", and its rule is skipped.
+export function quotaByKey(
+  records: readonly QuotaSampleRecord[],
+  policy: QuotaPolicy,
+): Record<string, QuotaSample> {
+  const byProvider = new Map<string, QuotaSample[]>();
+  const out: Record<string, QuotaSample> = {};
+  for (const account of accountViews(records, policy)) {
+    const sample = sampleOf(account.window5h, account.weekly);
+    if (account.prefix !== null) out[`${account.provider}/${account.prefix}`] = sample;
+    byProvider.set(account.provider, [...(byProvider.get(account.provider) ?? []), sample]);
+  }
+  for (const [provider, samples] of byProvider) out[provider] = worstQuota(samples);
+  return out;
+}
+
+// The quota key of a model reference "<provider>/<model id>": the account prefix when the model id names one
+// ("cliproxy/Gemini1/gemini-3-flash" -> "cliproxy/Gemini1"), else the provider.
+export function quotaKeyOf(ref: string): string {
+  const parts = ref.split("/");
+  return parts.length >= 3 ? `${parts[0]}/${parts[1]}` : (parts[0] ?? ref);
 }

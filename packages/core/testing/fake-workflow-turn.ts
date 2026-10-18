@@ -52,6 +52,43 @@ function replyText(tool: string, reply: DelegationToolResult): string {
   return reply.ok ? `${tool} accepted` : `${tool} refused: ${reply.reason}`;
 }
 
+// A provider error the goal scripts for one turn: [fake:provider=<target>:<kind>] where the target is "orchestrator",
+// "part-<i>" (a delegator) or "part-<i>/step-<j>" (an executor), and the kind is 402, 429 (with Retry-After 60 s), 500,
+// or one of them followed by "-after-call" (the turn first makes its deciding call, which is accepted, then the error
+// comes). It hits the first attempt of the target's first turn only: the retried attempt runs normally.
+const PROVIDER_DIRECTIVE = /\[fake:provider=([A-Za-z0-9_/-]+):(402|429|500)(-after-call)?\]/g;
+
+function scriptedProviderError(
+  spec: AgentSpec,
+  input: DelegationTurnInput,
+): { readonly status: 402 | 429 | 500; readonly afterCall: boolean } | null {
+  if (spec.attempt !== 1 || input.turnKind !== "first") return null;
+  const target = input.role === "orchestrator" ? "orchestrator" : input.label;
+  for (const match of input.workflowGoal.matchAll(PROVIDER_DIRECTIVE)) {
+    if (match[1] === target) {
+      return { status: Number(match[2]) as 402 | 429 | 500, afterCall: match[3] !== undefined };
+    }
+  }
+  return null;
+}
+
+function providerFailed(spec: AgentSpec, status: 402 | 429 | 500): WorkflowTurnResult {
+  return {
+    outcome: {
+      status: "failed",
+      code: "provider_error",
+      message: `the gateway answered HTTP ${status}`,
+      provider: {
+        kind: status === 402 ? "quota" : status === 429 ? "rate_limited" : "transient",
+        httpStatus: status,
+        retryAfterMs: status === 429 ? 60_000 : null,
+        model: spec.model ?? null,
+      },
+    },
+    cost: { tokensIn: 0, tokensOut: 0, durationMs: 1_000 },
+  };
+}
+
 export function fakeWorkflowTurn(
   spec: AgentSpec,
   tools: DelegationToolHandler | undefined,
@@ -60,6 +97,17 @@ export function fakeWorkflowTurn(
   if (input === undefined) {
     throw new Error(`${spec.agentRef} runs only workflow turns: its spec has no turn input`);
   }
+  const scripted = scriptedProviderError(spec, input);
+  if (scripted !== null && !scripted.afterCall) return providerFailed(spec, scripted.status);
+  const result = turnOf(spec, tools, input);
+  return scripted === null ? result : providerFailed(spec, scripted.status);
+}
+
+function turnOf(
+  spec: AgentSpec,
+  tools: DelegationToolHandler | undefined,
+  input: DelegationTurnInput,
+): WorkflowTurnResult {
   const scenario = fakeScenarioOf(input.workflowGoal);
   const call: Call = (tool, payload) => {
     if (tools === undefined || spec.projectId === undefined) {

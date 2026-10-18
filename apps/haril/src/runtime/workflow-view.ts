@@ -35,14 +35,19 @@ import type {
 
 export type Task = WorkflowTaskRecord;
 
-// The models a child may run on (3.11), as the runtime option gives them; phase F7 reads them from haril.json.
-type DelegationModels = Omit<ModelSelectionContext, "now" | "largeTaskTokens">;
+// The models a child may run on (3.11): the catalog, the difficulty table, the quota and the cooldowns.
+export type DelegationModels = Omit<ModelSelectionContext, "now" | "largeTaskTokens">;
 
 export interface DelegationOptions {
   // The limits of a workflow that started without a full snapshot (P11); default DEFAULT_DELEGATION_LIMITS.
   readonly limits?: DelegationLimits;
-  // The catalog, table and quota of the children's models; default: the orchestrator's model only.
-  readonly models?: DelegationModels;
+  // The catalog, table and quota of the children's models, fixed or read at each decision (phase F6: the live catalog,
+  // the quota samples and the cooldowns change while a workflow runs); default: the orchestrator's model only.
+  readonly models?:
+    | DelegationModels
+    | ((now: number, workflow: WorkflowRecord) => DelegationModels);
+  // The reasoning level a model runs at when nothing asks for one (the gateway's default level), when known.
+  readonly levelOf?: (ref: string) => string | null;
 }
 
 export interface WorkflowSettings {
@@ -85,9 +90,9 @@ function limitsOf(snapshot: JsonObject, base: DelegationLimits): DelegationLimit
   };
 }
 
-// Provisional until F6 and F7: without a configured catalog, every child runs on the orchestrator's model (the one the
-// user chose), and a model a parent proposes must be that one.
-function defaultModels(orchestratorModel: string): DelegationModels {
+// Without a catalog (simulated agents, or a gateway that has not answered yet), every child runs on the orchestrator's
+// model (the one the user chose), and a model a parent proposes must be that one.
+export function defaultModels(orchestratorModel: string): DelegationModels {
   const classes = Object.fromEntries(
     DIFFICULTIES.map((difficulty) => [difficulty, { minSuccessRate: 0, order: [] }]),
   ) as unknown as ModelSelectionContext["table"]["classes"];
@@ -114,10 +119,18 @@ export function workflowSettings(
   options: DelegationOptions | undefined,
 ): WorkflowSettings {
   const limits = limitsOf(workflow.limits, options?.limits ?? DEFAULT_DELEGATION_LIMITS);
-  const models = options?.models ?? defaultModels(workflow.orchestratorModel);
+  const source = options?.models;
   return {
     limits,
-    models: (now) => ({ ...models, now, largeTaskTokens: limits.largeTaskTokens }),
+    models: (now) => ({
+      ...(source === undefined
+        ? defaultModels(workflow.orchestratorModel)
+        : typeof source === "function"
+          ? source(now, workflow)
+          : source),
+      now,
+      largeTaskTokens: limits.largeTaskTokens,
+    }),
   };
 }
 
@@ -387,15 +400,24 @@ export class WorkflowView {
     };
   }
 
-  // Threads whose latest turn has not settled: still pending, ready or running.
+  // Threads whose latest turn has not settled: still pending, ready or running, or waiting for a cooldown to end.
   unsettled(threadId: string): boolean {
     const latest = this.latest(threadId);
-    return latest !== undefined && !TERMINAL_TASK.has(latest.state) && latest.state !== "blocked";
+    return (
+      latest !== undefined &&
+      !TERMINAL_TASK.has(latest.state) &&
+      (latest.state !== "blocked" || latest.blockReason === "cooldown")
+    );
   }
 
+  // Turns that will still run: pending, ready, running, or blocked by a cooldown that ends (3.11).
   liveWork(): boolean {
     return this.tasks.some(
-      (task) => task.state === "pending" || task.state === "ready" || task.state === "running",
+      (task) =>
+        task.state === "pending" ||
+        task.state === "ready" ||
+        task.state === "running" ||
+        (task.state === "blocked" && task.blockReason === "cooldown"),
     );
   }
 
