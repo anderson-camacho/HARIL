@@ -1,5 +1,7 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -216,6 +218,53 @@ describe.skipIf(!HAS_GIT)("worktrees, commits and merges", () => {
     ).toEqual({ ok: true, reused: true });
     const listed = await listWorktrees(project, { env });
     expect(listed?.some((entry) => entry.branch === "haril/wf/task/t1")).toBe(true);
+  });
+
+  it("never contacts a remote for Git LFS, even with LFS filters set up in the user's configuration", async () => {
+    // A loopback server stands in for the remote's LFS endpoint and counts what reaches it.
+    let requests = 0;
+    const server = createServer((request, response) => {
+      requests += 1;
+      request.resume();
+      response.writeHead(500).end();
+    });
+    await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+    const port = (server.address() as AddressInfo).port;
+    try {
+      const project = repo("project");
+      writeFileSync(join(project, ".gitattributes"), "*.bin filter=lfs diff=lfs merge=lfs -text\n");
+      // An LFS pointer whose object exists nowhere locally: checking it out would download it.
+      writeFileSync(
+        join(project, "data.bin"),
+        `version https://git-lfs.github.com/spec/v1\noid sha256:${"ab".repeat(32)}\nsize 12\n`,
+      );
+      git(project, "add", ".");
+      git(project, "commit", "--quiet", "-m", "lfs pointer");
+      git(project, "remote", "add", "origin", `http://127.0.0.1:${port}/repo.git`);
+      writeFileSync(
+        env.GIT_CONFIG_GLOBAL as string,
+        [
+          '[filter "lfs"]',
+          "\tprocess = git-lfs filter-process",
+          "\tsmudge = git-lfs smudge -- %f",
+          "\tclean = git-lfs clean -- %f",
+          "\trequired = true",
+          "[lfs]",
+          `\turl = http://127.0.0.1:${port}/info/lfs`,
+          "",
+        ].join("\n"),
+      );
+      const base = git(project, "rev-parse", "main");
+      const tree = join(root, "wt-lfs");
+      expect(
+        await addWorktree(project, { path: tree, branch: "haril/wf/step/lfs", base }, { env }),
+      ).toEqual({ ok: true, reused: false });
+      expect(readFileSync(join(tree, "data.bin"), "utf8")).toContain("git-lfs.github.com/spec/v1");
+      expect(await changedPaths(tree, { env })).toEqual([]);
+      expect(requests).toBe(0);
+    } finally {
+      await new Promise((done) => server.close(done));
+    }
   });
 
   it("refuses a worktree folder whose own path is too long for git on Windows", async () => {

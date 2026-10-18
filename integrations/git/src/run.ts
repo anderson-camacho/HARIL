@@ -8,7 +8,9 @@ import { execFile } from "node:child_process";
 //     (post-checkout, pre-commit, post-merge...), so a project's hook can neither fail nor slow an agent's commit;
 //   - commit.gpgsign=false and gc.auto=0: nothing asks for a passphrase, and no garbage collection starts mid-workflow;
 //   - core.quotePath=false: paths with non-ASCII characters come back as they are, not as octal escapes;
-//   - a fixed identity: HARIL's commits and merges say who made them.
+//   - a fixed identity: HARIL's commits and merges say who made them;
+//   - no Git LFS filter, no credential helper and no transport (protocol.allow=never), plus GIT_LFS_SKIP_SMUDGE=1: a
+//     user's global LFS setup would otherwise download objects from the remote when a worktree is checked out.
 // The variables that point git at another repository, index or object store are removed (the list of
 // `git rev-parse --local-env-vars`), GIT_TERMINAL_PROMPT=0 keeps git from asking for credentials, and the process never
 // reads stdin. HARIL never fetches, pulls or pushes: no function here contacts a remote.
@@ -73,6 +75,21 @@ const SETTINGS = [
   `user.name=${HARIL_AUTHOR.name}`,
   "-c",
   `user.email=${HARIL_AUTHOR.email}`,
+  // Git LFS never runs: a user's global LFS filters would download objects from the remote on checkout (a probe saw
+  // git worktree add POST to /info/lfs/objects/batch). Pointer files stay pointer files.
+  "-c",
+  "filter.lfs.smudge=",
+  "-c",
+  "filter.lfs.clean=",
+  "-c",
+  "filter.lfs.process=",
+  "-c",
+  "filter.lfs.required=false",
+  // No credential helper is asked, and no transport is allowed: nothing here may reach a remote.
+  "-c",
+  "credential.helper=",
+  "-c",
+  "protocol.allow=never",
 ];
 
 function gitEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -80,6 +97,7 @@ function gitEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     Object.entries(base).filter(([name]) => !REPOSITORY_ENV.has(name.toUpperCase())),
   );
   env.GIT_TERMINAL_PROMPT = "0";
+  env.GIT_LFS_SKIP_SMUDGE = "1";
   return env;
 }
 
