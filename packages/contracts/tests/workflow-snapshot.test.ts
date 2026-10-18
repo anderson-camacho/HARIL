@@ -121,4 +121,20 @@ describe("validateWorkflowSnapshot", () => {
   it("rejects an unknown top-level key", () => {
     expect(validateWorkflowSnapshot({ ...snapshot, secret: "x" }).ok).toBe(false);
   });
+
+  it("takes the integration branch of a workflow that writes, or null, or nothing (phase F8)", () => {
+    const git = {
+      baseBranch: "main",
+      baseSha: "a".repeat(40),
+      integrationBranch: "haril/wf1/integration",
+      integrationHead: null,
+      merged: 0,
+      unmerged: [],
+      worktrees: 2,
+    };
+    expect(validateWorkflowSnapshot({ ...snapshot, git }).ok).toBe(true);
+    expect(validateWorkflowSnapshot({ ...snapshot, git: null }).ok).toBe(true);
+    expect(validateWorkflowSnapshot({ ...snapshot, git: { ...git, pushed: true } }).ok).toBe(false);
+    expect(validateWorkflowSnapshot({ ...snapshot, git: { ...git, merged: -1 } }).ok).toBe(false);
+  });
 });

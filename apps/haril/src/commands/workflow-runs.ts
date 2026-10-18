@@ -1,6 +1,12 @@
 import { isStop, type Stop } from "@haril/contracts";
-import { DEFAULT_DELEGATION_LIMITS, orderPreview, visibleText } from "@haril/core";
+import {
+  DEFAULT_DELEGATION_LIMITS,
+  type DelegationLimits,
+  orderPreview,
+  visibleText,
+} from "@haril/core";
 import type { Store, WorkflowRecord } from "@haril/core/ports";
+import { detectBaseBranch, inspectRepository } from "@haril/git";
 import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_INVALID, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
 import { clockFor, storeAccess } from "../host.js";
@@ -15,14 +21,24 @@ import { buildWorkflowSnapshot, headerLines, treeLines } from "./workflow-snapsh
 // workflow.continue, the only way a stop is lifted (3.13). The agents follow the orchestrator's ref: orchestrator runs
 // real Pi agents (orchestrator, delegator, executor, auditor; read-only until writing arrives, phase F2b), and
 // fake:orchestrate runs the fake workflow agents (fake:delegate, fake:execute, fake:audit).
+//
+// Phase F8: a workflow on a project whose root is the top level of a git repository writes. start fixes its base branch
+// (main, or the default branch detected when the project names it otherwise; --base names another) and that branch's
+// commit, so every executor's worktree starts from it whatever happens to the branch meanwhile, and the result goes to
+// the integration branch haril/<workflow>/integration. --read-only keeps a workflow from writing. Without git, or when
+// the root is not a repository's top level, the workflow stays read-only and start says why.
 
 const START_USAGE = [
   "usage: haril workflow start <goal> [--model <ref>] [--agent <ref>] [--autonomous | --stop-at <stops>] [--project <slug>]",
-  "                            [--budget-tokens <n>] [--idempotency-key <key>] [--json] [--data-dir <path>]",
+  "                            [--budget-tokens <n>] [--read-only | --base <branch>] [--idempotency-key <key>] [--json]",
+  "                            [--data-dir <path>]",
   "  queues a three-layer workflow for the runtime (haril start runs it). --model is the orchestrator's model (pinned),",
   "  default HARIL_DEFAULT_MODEL; every child runs on it until the model catalog arrives. --agent orchestrator runs real",
   "  Pi agents (read-only); the default, fake:orchestrate, runs the simulated agents.",
   "  Without --autonomous or --stop-at it stops after the first plan (after_plan); continue it with haril workflow continue.",
+  "  In a git project the executors write, each in its own worktree from main (or --base), and the delegators merge their",
+  "  work into the branch haril/<workflow>/integration for you to review; nothing is merged into main or pushed.",
+  "  --read-only keeps the agents from writing.",
 ].join("\n");
 const LIST_USAGE = "usage: haril workflow list [--project <slug>] [--json] [--data-dir <path>]";
 const SHOW_USAGE = "usage: haril workflow show <workflowId> [--json] [--data-dir <path>]";
@@ -55,7 +71,58 @@ function stopsOf(text: string | undefined): Stop[] | string {
     : `--stop-at has an unknown stop "${bad}" (after_plan, after_node:<id>, on_audit_failure, on_budget_pct:<n>, at_end)`;
 }
 
-export function workflowStart(args: readonly string[], io: CliIo, host: HostInfo): number {
+// What start fixes for a workflow that writes (phase F8), or why it stays read-only.
+type WritingBase =
+  | { readonly writes: true; readonly branch: string; readonly sha: string }
+  | { readonly writes: false; readonly reason: string };
+
+async function writingBaseOf(
+  root: string,
+  readOnly: boolean,
+  requested: string | null,
+): Promise<WritingBase> {
+  if (readOnly) return { writes: false, reason: "--read-only" };
+  const repository = await inspectRepository(root);
+  if (!repository.ok) return { writes: false, reason: repository.detail };
+  const base = await detectBaseBranch(root, requested);
+  return base.ok
+    ? { writes: true, branch: base.branch, sha: base.sha }
+    : { writes: false, reason: base.detail };
+}
+
+// A writing workflow's limits (phase F8): with worktrees the writers no longer share one checkout, so up to the executor
+// limit write at once (3.9.4: the writer limit was 1 only until worktrees existed); the surface locks still serialize
+// writers whose files may overlap.
+function limitsFor(base: WritingBase): DelegationLimits {
+  if (!base.writes) return DEFAULT_DELEGATION_LIMITS;
+  const concurrent = DEFAULT_DELEGATION_LIMITS.maxConcurrent;
+  return {
+    ...DEFAULT_DELEGATION_LIMITS,
+    maxConcurrent: { ...concurrent, writers: Math.max(concurrent.writers, concurrent.executors) },
+  };
+}
+
+// The project root start would queue for: --project's, or the only one. Undefined when the store or the project is
+// missing (the enqueue step then says why).
+function projectRootFor(
+  host: HostInfo,
+  dataDir: string,
+  slug: string | undefined,
+): string | undefined {
+  let root: string | undefined;
+  const silent = { out: () => undefined, err: () => undefined, readFile: () => "" };
+  withProject(silent, host, dataDir, slug, (_store, project) => {
+    root = project.rootPath;
+    return EXIT_OK;
+  });
+  return root;
+}
+
+export async function workflowStart(
+  args: readonly string[],
+  io: CliIo,
+  host: HostInfo,
+): Promise<number> {
   const parsed = parseArgs(args, {
     values: [
       "--goal",
@@ -66,8 +133,9 @@ export function workflowStart(args: readonly string[], io: CliIo, host: HostInfo
       "--budget-tokens",
       "--idempotency-key",
       "--data-dir",
+      "--base",
     ],
-    flags: ["--json", "--autonomous"],
+    flags: ["--json", "--autonomous", "--read-only"],
   });
   const problem = argsProblem(parsed, io);
   if (problem !== null) return problem;
@@ -114,10 +182,26 @@ export function workflowStart(args: readonly string[], io: CliIo, host: HostInfo
   if (explicitKey !== undefined && explicitKey.trim() === "") {
     return fail(io, "--idempotency-key needs a value");
   }
+  const readOnly = parsed.flags.has("--read-only");
+  const requestedBase = lastValue(parsed, "--base") ?? null;
+  if (readOnly && requestedBase !== null)
+    return fail(io, "--read-only and --base exclude each other");
+  if (requestedBase !== null && requestedBase.trim() === "")
+    return fail(io, "--base needs a branch name");
   const json = parsed.flags.has("--json");
   const dataDir = dataDirFor(host, lastValue(parsed, "--data-dir"));
+  const slug = lastValue(parsed, "--project");
+  const root = projectRootFor(host, dataDir, slug);
+  const base =
+    root === undefined
+      ? ({ writes: false, reason: "no project" } as const)
+      : await writingBaseOf(root, readOnly, requestedBase);
+  if (requestedBase !== null && !base.writes) {
+    return fail(io, `--base ${requestedBase}: ${base.reason}`);
+  }
+  const limits = limitsFor(base);
   const idempotencyKey = explicitKey ?? `workflow-start-${storeAccess(host).ids.next()}`;
-  return withProject(io, host, dataDir, lastValue(parsed, "--project"), (store, project) => {
+  return withProject(io, host, dataDir, slug, (store, project) => {
     // 4.5: the order that passes through the shell, its hash, length and redacted preview, never its text.
     const order = store.usageLog.appendOrder({
       mode: "delegacion",
@@ -127,7 +211,7 @@ export function workflowStart(args: readonly string[], io: CliIo, host: HostInfo
       projectId: project.projectId,
       idempotencyKey: `order:${idempotencyKey}`,
     });
-    return queueCommand(
+    const code = queueCommand(
       io,
       json,
       store,
@@ -140,15 +224,27 @@ export function workflowStart(args: readonly string[], io: CliIo, host: HostInfo
           agent,
           autonomy,
           // P11: the limits are a snapshot taken when the workflow starts.
-          limits: DEFAULT_DELEGATION_LIMITS,
+          limits,
           budgetTokens,
-          timeoutMs: DEFAULT_DELEGATION_LIMITS.attemptTimeoutMs,
+          timeoutMs: limits.attemptTimeoutMs,
           orderId: order.record.orderId,
+          // Phase F8: the base branch and the commit every worktree of the workflow starts from.
+          ...(base.writes ? { baseBranch: base.branch, baseSha: base.sha } : {}),
         },
         idempotencyKey,
       },
       dataDir,
     );
+    if (!json) {
+      io.out(
+        visibleText(
+          base.writes
+            ? `writes     in git worktrees from ${base.branch} ${base.sha.slice(0, 7)}; the result goes to the branch haril/<workflow>/integration (never merged into ${base.branch}, never pushed)`
+            : `read-only  the agents write nothing (${base.reason})`,
+        ),
+      );
+    }
+    return code;
   });
 }
 

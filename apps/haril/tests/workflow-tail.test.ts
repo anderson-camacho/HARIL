@@ -54,9 +54,9 @@ function withLease<T>(store: Store, work: (epoch: number) => T): T {
 }
 
 // A workflow whose orchestrator turn was claimed by a runtime (its run exists) and never ends on its own.
-function claimedOrchestrator(store: Store): { workflowId: string; runId: string } {
+async function claimedOrchestrator(store: Store): Promise<{ workflowId: string; runId: string }> {
   expect(
-    run(
+    await run(
       [
         "workflow",
         "start",
@@ -228,7 +228,7 @@ describe("sessionLines", () => {
 describe("haril workflow tail", () => {
   it("prints the node's latest run, as JSON lines", async () => {
     const store = open();
-    const { workflowId, runId } = claimedOrchestrator(store);
+    const { workflowId, runId } = await claimedOrchestrator(store);
     writeFileSync(
       sessionFile(runId),
       `${ENTRIES.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
@@ -253,7 +253,7 @@ describe("haril workflow tail", () => {
 
   it("prints readable lines without --json, and says when a node has not run", async () => {
     const store = open();
-    const { workflowId, runId } = claimedOrchestrator(store);
+    const { workflowId, runId } = await claimedOrchestrator(store);
     writeFileSync(
       sessionFile(runId),
       `${ENTRIES.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
@@ -272,7 +272,7 @@ describe("haril workflow tail", () => {
 
   it("follows a session while Pi writes it, a half-written line included, and ends when the workflow ends", async () => {
     const store = open();
-    const { workflowId, runId } = claimedOrchestrator(store);
+    const { workflowId, runId } = await claimedOrchestrator(store);
     const file = sessionFile(runId);
     const lines: TailJson[] = [];
     const host: HostInfo = { ...sb.host, signals: new EventEmitter() };
@@ -310,7 +310,7 @@ describe("haril workflow tail", () => {
 
   it("ends when its stdin ends with --exit-on-stdin-end: the console that started it went away", async () => {
     const store = open();
-    const { workflowId } = claimedOrchestrator(store);
+    const { workflowId } = await claimedOrchestrator(store);
     let endStdin: (() => void) | undefined;
     const host: HostInfo = {
       ...sb.host,
@@ -347,7 +347,7 @@ describe("haril workflow tail", () => {
 
   it("reads the last lines of a run before it follows the node's next run", async () => {
     const store = open();
-    const { workflowId, runId } = claimedOrchestrator(store);
+    const { workflowId, runId } = await claimedOrchestrator(store);
     const file = sessionFile(runId);
     writeFileSync(
       file,

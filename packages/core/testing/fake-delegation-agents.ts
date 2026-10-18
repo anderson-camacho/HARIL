@@ -508,7 +508,8 @@ export function fakeResultIsComplete(text: string | null): boolean {
 //   [fake:mistake]                      the orchestrator first proposes a model that does not exist;
 //   [fake:part-<i>/step-<j>=<behavior>] a behavior (reject-once, reject-twice, stall-once) at that step;
 //   [fake:common=<path>]                step 1 of every part also writes <path> (phase F8: a merge conflict);
-//   [fake:own-files]                    steps from 3 on write a file of their own (phase F8: parallel writes).
+//   [fake:own-files]                    steps from 3 on write a file of their own (phase F8: parallel writes);
+//   [fake:run=<command and args>]       an auditor in a worktree runs that command (haril_run) and fails a step it fails.
 // Without a named behavior and without a seed, every step passes at once.
 export interface FakeScenario {
   readonly parts: number;
@@ -518,6 +519,8 @@ export interface FakeScenario {
   readonly scenario: ReadonlyMap<string, DemoBehavior>;
   readonly commonFile: string | null;
   readonly ownFiles: boolean;
+  // The command an auditor in a worktree runs, as argv; null when it runs none.
+  readonly runCommand: readonly string[] | null;
 }
 
 export function fakeScenarioOf(goal: string): FakeScenario {
@@ -546,5 +549,10 @@ export function fakeScenarioOf(goal: string): FakeScenario {
     scenario,
     commonFile: common,
     ownFiles: goal.includes("[fake:own-files]"),
+    runCommand:
+      /\[fake:run=([A-Za-z0-9 ._/=-]{1,200})\]/
+        .exec(goal)?.[1]
+        ?.split(" ")
+        .filter((part) => part !== "") ?? null,
   };
 }

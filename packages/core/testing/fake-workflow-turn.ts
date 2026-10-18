@@ -23,9 +23,9 @@ import {
 // workflow's goal (fakeScenarioOf), as visible text, the way a real agent follows its prompt.
 //
 // A turn of a workflow that writes in git worktrees (phase F8) also uses the workspace tools, whose replies come back as
-// promises (fakeWritingTurn): an executor writes every literal path of its write surface, an auditor runs the first
-// allowed command and rejects a failing one, and a delegator continuation merges each approved step and resolves a
-// conflict by writing each conflicting file again before it reports.
+// promises (fakeWritingTurn): an executor writes every literal path of its write surface, an auditor runs the command
+// the goal names ([fake:run=...]) and rejects a step it fails, and a delegator continuation merges each approved step
+// and resolves a conflict by writing each conflicting file again before it reports.
 
 export type WorkflowTurnResult =
   | { readonly outcome: AgentOutcome; readonly cost: FakeTurnCost }
@@ -169,7 +169,7 @@ export async function fakeWritingTurn(
   if (spec.agentRef === "fake:execute") {
     result = await writingExecutorTurn(input, scenario, workspace.writeSurface, call);
   } else if (spec.agentRef === "fake:audit" && input.subject?.scope === "task") {
-    result = await runningAuditorTurn(input, scenario, workspace.commands, call);
+    result = await runningAuditorTurn(input, scenario, call);
   } else if (spec.agentRef === "fake:delegate" && input.turnKind !== "first") {
     result = await mergingDelegatorTurn(input, scenario, call);
   } else {
@@ -211,17 +211,16 @@ async function writingExecutorTurn(
   return succeeded(outcome.summary, outcome.cost);
 }
 
-// The fake audit, with the first allowed command run in the step's worktree: a failing command fails the criteria.
+// The fake audit, with the goal's command ([fake:run=...]) run in the step's worktree: a command that fails or is
+// refused fails the criteria.
 async function runningAuditorTurn(
   input: DelegationTurnInput,
   scenario: FakeScenario,
-  commands: readonly string[],
   call: AsyncCall,
 ): Promise<WorkflowTurnResult> {
   let passed = true;
-  const first = commands[0];
-  if (first !== undefined) {
-    const [command, ...args] = first.split(/\s+/).filter((part) => part !== "" && part !== "*");
+  if (scenario.runCommand !== null && scenario.runCommand.length > 0) {
+    const [command, ...args] = scenario.runCommand;
     const reply = await call("haril_run", { command, args });
     passed = reply.ok && reply.exitCode === 0;
   }

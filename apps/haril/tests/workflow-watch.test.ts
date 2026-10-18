@@ -50,10 +50,10 @@ function applyQueued(store: Store): void {
 }
 
 // A running workflow whose turns never run: the watch sees it until the test stops it.
-function runningWorkflow(store: Store): string {
+async function runningWorkflow(store: Store): Promise<string> {
   const queued = harness();
   expect(
-    run(
+    await run(
       ["workflow", "start", "Watch me", "--model", "fake/high-model", "--autonomous"],
       queued.io,
       sb.host,
@@ -134,7 +134,7 @@ function watch(workflowId: string, channel: FakeChannel | undefined): Watch {
 describe("haril workflow watch", () => {
   it("prints a snapshot at once and another on each wake, and ends when the workflow ends", async () => {
     const store = open();
-    const workflowId = runningWorkflow(store);
+    const workflowId = await runningWorkflow(store);
     const channel = new FakeChannel();
     const watching = watch(workflowId, channel);
     await until(() => watching.lines.length === 1, "the first snapshot", 5000);
@@ -159,7 +159,7 @@ describe("haril workflow watch", () => {
 
   it("without a runtime, polls the store and prints a snapshot when it changed", async () => {
     const store = open();
-    const workflowId = runningWorkflow(store);
+    const workflowId = await runningWorkflow(store);
     const watching = watch(workflowId, undefined);
     await until(() => watching.lines.length === 1, "the first snapshot", 5000);
     await new Promise((resolve) => setTimeout(resolve, 200));
@@ -172,7 +172,7 @@ describe("haril workflow watch", () => {
 
   it("ends on Ctrl+C, and prints one snapshot and ends for a workflow that already ended", async () => {
     const store = open();
-    const workflowId = runningWorkflow(store);
+    const workflowId = await runningWorkflow(store);
     const watching = watch(workflowId, new FakeChannel());
     await until(() => watching.lines.length === 1, "the first snapshot", 5000);
     watching.signals.emit("SIGINT");
@@ -186,7 +186,7 @@ describe("haril workflow watch", () => {
 
   it("ends when its stdin ends with --exit-on-stdin-end: the console that started it went away", async () => {
     const store = open();
-    const workflowId = runningWorkflow(store);
+    const workflowId = await runningWorkflow(store);
     const lines: WorkflowSnapshot[] = [];
     let endStdin: (() => void) | undefined;
     const host: HostInfo = {
@@ -220,7 +220,7 @@ describe("haril workflow watch", () => {
 
   it("takes --json as the spec writes it: its lines are JSON already", async () => {
     const store = open();
-    const workflowId = runningWorkflow(store);
+    const workflowId = await runningWorkflow(store);
     stopWorkflow(store, workflowId);
     const out = harness();
     expect(await run(["workflow", "watch", workflowId, "--json"], out.io, sb.host)).toBe(0);

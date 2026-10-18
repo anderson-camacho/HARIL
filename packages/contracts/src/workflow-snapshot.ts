@@ -100,6 +100,27 @@ export type WorkflowNode = Static<typeof WorkflowNodeSchema>;
 
 const LiveMax = Type.Object({ live: Count, max: Count }, { additionalProperties: false });
 
+// A workflow that writes in git worktrees (phase F8, docs/modos-y-delegacion.md 3.10): the base branch and the commit it
+// started from, and the integration branch the delegators merged into, which is the result the user reviews. Absent or
+// null for a read-only workflow.
+export const WorkflowGitSchema = Type.Object(
+  {
+    baseBranch: Type.String(),
+    baseSha: Type.String(),
+    integrationBranch: Type.String(),
+    // The integration branch's last merge; null while nothing is merged.
+    integrationHead: Nullable(Type.String()),
+    // Steps merged into the integration branch.
+    merged: Count,
+    // Step branches that hold work not merged (kept for the user when the workflow ended).
+    unmerged: Type.Array(Type.String()),
+    // Worktrees that still exist.
+    worktrees: Count,
+  },
+  { additionalProperties: false },
+);
+export type WorkflowGit = Static<typeof WorkflowGitSchema>;
+
 export const WorkflowSnapshotSchema = Type.Object(
   {
     schemaVersion: Type.Literal(1),
@@ -122,6 +143,7 @@ export const WorkflowSnapshotSchema = Type.Object(
       },
       { additionalProperties: false },
     ),
+    git: Type.Optional(Nullable(WorkflowGitSchema)),
     totals: Type.Object(
       {
         tokensUsed: Count,

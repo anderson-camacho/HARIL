@@ -202,7 +202,10 @@ describe.skipIf(!HAS_GIT)("a workflow that writes in parallel", () => {
   it("writes disjoint files at once, overlapping ones in sequence, and leaves an integration branch", async () => {
     const store = open();
     const mainBefore = git("rev-parse", "main");
-    startWorkflow(store, "Write the part [fake:parts=1] [fake:steps=3] [fake:own-files]");
+    startWorkflow(
+      store,
+      "Write the part [fake:parts=1] [fake:steps=3] [fake:own-files] [fake:run=node --version]",
+    );
     const log = await run(store);
     const workflow = onlyWorkflow(store);
     expect(workflow.state).toBe("completed");
@@ -249,7 +252,7 @@ describe.skipIf(!HAS_GIT)("a workflow that writes in parallel", () => {
     const store = open();
     startWorkflow(
       store,
-      "Write a common file [fake:parts=2] [fake:steps=1] [fake:common=src/common.ts]",
+      "Write a common file [fake:parts=2] [fake:steps=1] [fake:common=src/common.ts] [fake:run=node --version]",
     );
     const log = await run(store);
     const workflow = onlyWorkflow(store);
