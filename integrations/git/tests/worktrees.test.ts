@@ -53,7 +53,17 @@ afterEach(() => {
 function git(cwd: string, ...args: string[]): string {
   return execFileSync(
     "git",
-    ["-c", "user.name=HARIL test", "-c", "user.email=test@haril.invalid", "-C", cwd, ...args],
+    [
+      "-c",
+      "user.name=HARIL test",
+      "-c",
+      "user.email=test@haril.invalid",
+      "-c",
+      "core.longpaths=true",
+      "-C",
+      cwd,
+      ...args,
+    ],
     { windowsHide: true, encoding: "utf8", env },
   ).trim();
 }
