@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ProcessControl, ProcessEntry } from "@haril/core/ports";
+import type { BootStart, ProcessControl, ProcessEntry } from "@haril/core/ports";
 
 // ProcessControl over the operating system (docs/modos-y-delegacion.md 3.14): the start time of running processes and the
 // kill of a process tree, without dependencies. Windows asks PowerShell's Get-Process for the start times (one call for
@@ -10,10 +10,16 @@ import type { ProcessControl, ProcessEntry } from "@haril/core/ports";
 // parent's pid was reused would be taken along. Instead one snapshot of every process (pid, parent pid, start time) is
 // read, Core's planTreeKills keeps only the children that started at or after their parent, and each pid is killed on
 // its own, children first, with process.kill: no shell, no command line, a validated whole-number pid. On Linux each
-// kill first checks that the pid still has the start of the snapshot; on POSIX a root's process group goes with it
-// (agents lead their own group: they are spawned detached). The walk itself is the caller's (Core's planTreeKills, run
-// by the runtime and the CLI). Nothing is ever found or killed by name: the caller names pids it recorded with their
-// start time.
+// kill first checks that the pid still has the start of the snapshot (in boot ticks); on POSIX a root's process group goes
+// with it (agents lead their own group: they are spawned detached). The walk itself is the caller's (Core's
+// planTreeKills, run by the runtime and the CLI). Nothing is ever found or killed by name: the caller names pids it
+// recorded with their start time. On Linux every start also carries its boot ticks and the boot's id (BootStart), which
+// no wall-clock step changes. The start-time query asks a bounded batch of pids per call: one PowerShell command line
+// fails past 32,767 characters, and a failed batch leaves only its own pids unchecked.
+//
+// Pid reuse between a snapshot and a kill: Linux checks the boot ticks right before each kill. Windows and macOS read
+// nothing in between (that would start a process per pid), so a pid that exits and is reused within those few
+// milliseconds could be hit; the root is killed first and the window is one snapshot long.
 
 export interface ProcessControlOptions {
   readonly platform?: NodeJS.Platform;
@@ -21,20 +27,31 @@ export interface ProcessControlOptions {
   readonly env?: Readonly<Record<string, string | undefined>>;
   // How long one OS query may take before it is given up (milliseconds).
   readonly timeoutMs?: number;
+  // Runs one OS command and resolves with its stdout (a test seam; the default spawns it without a shell).
+  readonly run?: CommandRunner;
 }
+
+// Resolves with the command's stdout whatever its exit code; an error or a timeout resolves with what was read.
+type CommandRunner = (
+  command: string,
+  args: readonly string[],
+  timeoutMs: number,
+) => Promise<string>;
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 // Windows FILETIME counts 100 ns intervals since 1601-01-01; the Unix epoch is this many milliseconds later.
 const FILETIME_EPOCH_OFFSET_MS = 11_644_473_600_000n;
 // USER_HZ of Linux /proc times; 100 on every mainstream kernel.
 const LINUX_TICKS_PER_SECOND = 100;
+// Pids asked per OS call: about 3,500 characters of command line, far below Windows' 32,767.
+const START_TIME_BATCH = 500;
 
 function validPids(pids: readonly number[]): number[] {
   return [...new Set(pids.filter((pid) => Number.isSafeInteger(pid) && pid > 0))];
 }
 
 // Runs a command and resolves with its stdout, whatever its exit code; an error or a timeout resolves with what was read.
-function capture(command: string, args: readonly string[], timeoutMs: number): Promise<string> {
+const capture: CommandRunner = (command, args, timeoutMs) => {
   return new Promise((resolve) => {
     let child: ChildProcess;
     try {
@@ -60,7 +77,7 @@ function capture(command: string, args: readonly string[], timeoutMs: number): P
     child.once("error", finish);
     child.once("close", finish);
   });
-}
+};
 
 function powershellPath(systemRoot: string): string {
   return join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
@@ -70,10 +87,11 @@ async function windowsStartTimes(
   pids: readonly number[],
   systemRoot: string,
   timeoutMs: number,
+  run: CommandRunner,
 ): Promise<Map<number, number>> {
   // The pids are whole numbers checked above, so the script holds no text from outside.
   const script = `$ErrorActionPreference='SilentlyContinue'; Get-Process -Id ${pids.join(",")} | ForEach-Object { try { '{0} {1}' -f $_.Id, $_.StartTime.ToFileTime() } catch {} }`;
-  const out = await capture(
+  const out = await run(
     powershellPath(systemRoot),
     ["-NoProfile", "-NonInteractive", "-Command", script],
     timeoutMs,
@@ -112,11 +130,12 @@ export function cimDateTimeMs(text: string): number | undefined {
 async function windowsTable(
   systemRoot: string,
   timeoutMs: number,
+  run: CommandRunner,
 ): Promise<ProcessEntry[] | undefined> {
   // A fixed script: it holds no text from outside.
   const script =
     "$ErrorActionPreference='SilentlyContinue'; foreach ($p in ([wmisearcher]'SELECT ProcessId,ParentProcessId,CreationDate FROM Win32_Process').Get()) { if ($p.CreationDate) { '{0} {1} {2}' -f $p.ProcessId, $p.ParentProcessId, $p.CreationDate } }";
-  const out = await capture(
+  const out = await run(
     powershellPath(systemRoot),
     ["-NoProfile", "-NonInteractive", "-Command", script],
     timeoutMs,
@@ -150,6 +169,16 @@ function linuxStat(pid: number): { parentPid: number; startTicks: number } | und
   }
 }
 
+// The id of the current boot; undefined when it cannot be read.
+function readBootId(): string | undefined {
+  try {
+    const id = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+    return id === "" ? undefined : id;
+  } catch {
+    return undefined;
+  }
+}
+
 function readUptimeSeconds(): number | undefined {
   try {
     const value = Number(readFileSync("/proc/uptime", "utf8").split(" ")[0]);
@@ -177,14 +206,28 @@ function linuxStartTimes(pids: readonly number[]): Map<number, number> {
   return times;
 }
 
+function linuxBootStarts(pids: readonly number[]): Map<number, BootStart> | undefined {
+  const bootId = readBootId();
+  if (bootId === undefined) return undefined;
+  const boots = new Map<number, BootStart>();
+  for (const pid of pids) {
+    const stat = linuxStat(pid);
+    if (stat !== undefined) boots.set(pid, { bootId, ticks: stat.startTicks });
+  }
+  return boots;
+}
+
 // Two reads of one process's start differ by the resolution of /proc/uptime (10 ms) and the clock's drift between them.
 const LINUX_SAME_START_MS = 50;
 
-// The pid runs and started when the snapshot said: the guard of a kill on Linux.
-function linuxStartsAt(pid: number, startedAt: number): boolean {
-  const uptimeSeconds = readUptimeSeconds();
+// The pid runs and started when the snapshot said: the guard of a kill on Linux. With boot ticks it compares them, which
+// no clock step moves; without, the wall-clock rebuild within LINUX_SAME_START_MS.
+function linuxStartsAt(pid: number, startedAt: number, boot: BootStart | undefined): boolean {
   const stat = linuxStat(pid);
-  if (uptimeSeconds === undefined || stat === undefined) return false;
+  if (stat === undefined) return false;
+  if (boot !== undefined) return readBootId() === boot.bootId && stat.startTicks === boot.ticks;
+  const uptimeSeconds = readUptimeSeconds();
+  if (uptimeSeconds === undefined) return false;
   return (
     Math.abs(linuxStartMs(stat.startTicks, uptimeSeconds, Date.now()) - startedAt) <=
     LINUX_SAME_START_MS
@@ -194,6 +237,7 @@ function linuxStartsAt(pid: number, startedAt: number): boolean {
 function linuxTable(): ProcessEntry[] | undefined {
   const uptimeSeconds = readUptimeSeconds();
   if (uptimeSeconds === undefined) return undefined;
+  const bootId = readBootId();
   let names: string[];
   try {
     names = readdirSync("/proc");
@@ -211,6 +255,7 @@ function linuxTable(): ProcessEntry[] | undefined {
       pid,
       parentPid: stat.parentPid,
       startedAt: linuxStartMs(stat.startTicks, uptimeSeconds, now),
+      ...(bootId === undefined ? {} : { boot: { bootId, ticks: stat.startTicks } }),
     });
   }
   return table.length === 0 ? undefined : table;
@@ -231,8 +276,9 @@ function etimeMs(text: string): number | undefined {
 async function psStartTimes(
   pids: readonly number[],
   timeoutMs: number,
+  run: CommandRunner,
 ): Promise<Map<number, number>> {
-  const out = await capture("ps", ["-o", "pid=,etime=", "-p", pids.join(",")], timeoutMs);
+  const out = await run("ps", ["-o", "pid=,etime=", "-p", pids.join(",")], timeoutMs);
   const now = Date.now();
   const times = new Map<number, number>();
   for (const line of out.split(/\r?\n/)) {
@@ -244,8 +290,8 @@ async function psStartTimes(
   return times;
 }
 
-async function psTable(timeoutMs: number): Promise<ProcessEntry[] | undefined> {
-  const out = await capture("ps", ["-A", "-o", "pid=,ppid=,etime="], timeoutMs);
+async function psTable(timeoutMs: number, run: CommandRunner): Promise<ProcessEntry[] | undefined> {
+  const out = await run("ps", ["-A", "-o", "pid=,ppid=,etime="], timeoutMs);
   const now = Date.now();
   const table: ProcessEntry[] = [];
   for (const line of out.split(/\r?\n/)) {
@@ -273,31 +319,50 @@ export function createProcessControl(options: ProcessControlOptions = {}): Proce
   const env = options.env ?? process.env;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const systemRoot = env.SystemRoot ?? env.windir ?? "C:\\Windows";
+  const run = options.run ?? capture;
+  // One OS query for a batch of pids, or undefined for a platform it does not know.
+  const query = async (asked: readonly number[]): Promise<Map<number, number> | undefined> => {
+    if (platform === "win32") return windowsStartTimes(asked, systemRoot, timeoutMs, run);
+    if (platform === "linux") return linuxStartTimes(asked);
+    if (platform === "darwin") return psStartTimes(asked, timeoutMs, run);
+    return undefined;
+  };
   return {
     async startTimes(pids) {
       const valid = validPids(pids);
       if (valid.length === 0) return new Map();
-      // The query also asks for this process, which always runs: when it is missing, the OS was not read.
-      const asked = [...new Set([...valid, process.pid])];
-      let times: Map<number, number> | undefined;
-      if (platform === "win32") times = await windowsStartTimes(asked, systemRoot, timeoutMs);
-      else if (platform === "linux") times = linuxStartTimes(asked);
-      else if (platform === "darwin") times = await psStartTimes(asked, timeoutMs);
-      if (times === undefined || !times.has(process.pid)) return undefined;
-      if (!valid.includes(process.pid)) times.delete(process.pid);
-      return times;
+      const times = new Map<number, number | null>();
+      let answered = 0;
+      for (let first = 0; first < valid.length; first += START_TIME_BATCH) {
+        const batch = valid.slice(first, first + START_TIME_BATCH);
+        // Each batch also asks for this process, which always runs: when it is missing, that batch was not read.
+        const read = await query([...new Set([...batch, process.pid])]);
+        if (read === undefined || !read.has(process.pid)) {
+          for (const pid of batch) times.set(pid, null);
+          continue;
+        }
+        answered += 1;
+        for (const pid of batch) {
+          const startedAt = read.get(pid);
+          if (startedAt !== undefined) times.set(pid, startedAt);
+        }
+      }
+      return answered === 0 ? undefined : times;
+    },
+    bootStarts(pids) {
+      return platform === "linux" ? linuxBootStarts(validPids(pids)) : undefined;
     },
     async processTable() {
-      if (platform === "win32") return windowsTable(systemRoot, timeoutMs);
+      if (platform === "win32") return windowsTable(systemRoot, timeoutMs, run);
       if (platform === "linux") return linuxTable();
-      if (platform === "darwin") return psTable(timeoutMs);
+      if (platform === "darwin") return psTable(timeoutMs, run);
       return undefined;
     },
     killProcess(target, killOptions) {
       if (!Number.isSafeInteger(target.pid) || target.pid <= 0 || target.pid === process.pid)
         return;
       // Linux: the pid still has the start of the snapshot (one file read, no process started).
-      if (platform === "linux" && !linuxStartsAt(target.pid, target.startedAt)) return;
+      if (platform === "linux" && !linuxStartsAt(target.pid, target.startedAt, target.boot)) return;
       // POSIX: a root leads its own process group (agents are spawned detached); the group goes with it.
       if (platform !== "win32" && killOptions?.group === true) {
         try {

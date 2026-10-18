@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  matchProcess,
   PROCESS_START_WINDOW,
   planProcessKills,
   planTreeKills,
@@ -64,6 +65,7 @@ describe("planProcessKills", () => {
       kill: [ours],
       reused: [reused],
       gone: [gone],
+      uncertain: [],
     });
   });
 
@@ -73,6 +75,7 @@ describe("planProcessKills", () => {
       kill: [],
       reused: [record],
       gone: [],
+      uncertain: [],
     });
     expect(
       planProcessKills([record], new Map([[100, SPAWNED + 500]]), processStartWindow("darwin"))
@@ -102,7 +105,91 @@ describe("planProcessKills", () => {
       kill: [],
       reused: [],
       gone: [bad],
+      uncertain: [],
     });
+  });
+
+  it("concludes nothing about a pid whose batch of the OS query failed", () => {
+    const record = { runId: "r1", pid: 100, startedAt: SPAWNED };
+    expect(planProcessKills([record], new Map([[100, null]]))).toEqual({
+      kill: [],
+      reused: [],
+      gone: [],
+      uncertain: [record],
+    });
+  });
+
+  it("compares Linux boot ticks, so a wall-clock step never turns a live agent into a reused pid", () => {
+    const boot = { bootId: "boot-a", ticks: 123_456 };
+    const record = { runId: "r1", pid: 100, startedAt: SPAWNED, boot };
+    // The clock stepped 5 s forward since the spawn: the wall-clock rebuild of the start moved with it.
+    const stepped = new Map([[100, SPAWNED + 5_000]]);
+    expect(
+      planProcessKills([record], stepped, PROCESS_START_WINDOW, new Map([[100, boot]])).kill,
+    ).toEqual([record]);
+    // The same pid with other ticks, or after a reboot, is another process.
+    expect(
+      planProcessKills(
+        [record],
+        new Map([[100, SPAWNED]]),
+        PROCESS_START_WINDOW,
+        new Map([[100, { bootId: "boot-a", ticks: 999_999 }]]),
+      ).reused,
+    ).toEqual([record]);
+    expect(
+      planProcessKills(
+        [record],
+        new Map([[100, SPAWNED]]),
+        PROCESS_START_WINDOW,
+        new Map([[100, { bootId: "boot-b", ticks: 123_456 }]]),
+      ).reused,
+    ).toEqual([record]);
+  });
+
+  it("marks nothing reused when only a clock step could explain the mismatch of a record without boot ticks", () => {
+    const legacy = { runId: "r1", pid: 100, startedAt: SPAWNED };
+    const plan = planProcessKills(
+      [legacy],
+      new Map([[100, SPAWNED + 5_000]]),
+      PROCESS_START_WINDOW,
+      new Map([[100, { bootId: "boot-a", ticks: 42 }]]),
+    );
+    expect(plan).toEqual({ kill: [], reused: [], gone: [], uncertain: [legacy] });
+  });
+});
+
+describe("matchProcess", () => {
+  const boot = { bootId: "boot-a", ticks: 500 };
+  it("decides by boot id and ticks when both sides have them, whatever the wall clocks say", () => {
+    expect(matchProcess({ startedAt: SPAWNED, boot }, { startedAt: SPAWNED - 60_000, boot })).toBe(
+      "same",
+    );
+    expect(
+      matchProcess(
+        { startedAt: SPAWNED, boot },
+        { startedAt: SPAWNED, boot: { ...boot, ticks: 501 } },
+      ),
+    ).toBe("other");
+    expect(
+      matchProcess(
+        { startedAt: SPAWNED, boot },
+        { startedAt: SPAWNED, boot: { ...boot, bootId: "boot-b" } },
+      ),
+    ).toBe("other");
+  });
+
+  it("falls back to the wall-clock window, and says unknown where a Linux clock step could explain a mismatch", () => {
+    expect(matchProcess({ startedAt: SPAWNED }, { startedAt: SPAWNED - 10 })).toBe("same");
+    expect(matchProcess({ startedAt: SPAWNED }, { startedAt: SPAWNED + 5_000 })).toBe("other");
+    expect(matchProcess({ startedAt: SPAWNED }, { startedAt: SPAWNED + 5_000, boot })).toBe(
+      "unknown",
+    );
+    expect(matchProcess({ startedAt: SPAWNED, boot }, { startedAt: SPAWNED + 5_000 })).toBe(
+      "unknown",
+    );
+    expect(matchProcess({ startedAt: SPAWNED, boot }, { startedAt: SPAWNED, boot: null })).toBe(
+      "same",
+    );
   });
 });
 
@@ -117,18 +204,33 @@ describe("planTreeKills", () => {
     { pid: 20, parentPid: 1, startedAt: T - 9000 },
   ];
 
-  it("kills a verified root's descendants before the root, children before their parents", () => {
+  it("kills a verified root first, then its descendants, each parent before its children", () => {
     const plan = planTreeKills([{ pid: 10, startedAt: T + 20 }], table);
     expect(plan.roots.map((entry) => entry.pid)).toEqual([10]);
-    expect(plan.order.map((entry) => entry.pid)).toEqual([12, 11, 13, 10]);
-    expect(plan.order.at(-1)).toEqual({ pid: 10, parentPid: 1, startedAt: T });
+    // A live root could start a child after the snapshot; killed first, it starts none.
+    expect(plan.order.map((entry) => entry.pid)).toEqual([10, 11, 12, 13]);
+    expect(plan.order[0]).toEqual({ pid: 10, parentPid: 1, startedAt: T });
+  });
+
+  it("verifies a Linux root by its boot ticks and a child by ticks, unmoved by a clock step", () => {
+    const boot = (ticks: number) => ({ bootId: "boot-a", ticks });
+    const linux = [
+      { pid: 10, parentPid: 1, startedAt: T + 7_000, boot: boot(100) },
+      { pid: 11, parentPid: 10, startedAt: T + 8_000, boot: boot(150) },
+      { pid: 30, parentPid: 10, startedAt: T + 9_000, boot: boot(50) },
+    ];
+    const plan = planTreeKills([{ pid: 10, startedAt: T, boot: boot(100) }], linux);
+    expect(plan.order.map((entry) => entry.pid)).toEqual([10, 11]);
+    expect(
+      planTreeKills([{ pid: 10, startedAt: T + 7_000, boot: boot(101) }], linux).order,
+    ).toEqual([]);
   });
 
   it("leaves out a process that names a parent pid but started before that parent: its real parent died and the pid was reused", () => {
     const stale = [...table, { pid: 30, parentPid: 10, startedAt: T - 60_000 }];
     const plan = planTreeKills([{ pid: 10, startedAt: T }], stale);
     expect(plan.order.map((entry) => entry.pid)).not.toContain(30);
-    expect(plan.order.map((entry) => entry.pid)).toEqual([12, 11, 13, 10]);
+    expect(plan.order.map((entry) => entry.pid)).toEqual([10, 11, 12, 13]);
   });
 
   it("kills nothing of a root whose pid now names another process, or that is not running", () => {
@@ -147,11 +249,11 @@ describe("planTreeKills", () => {
       ],
       table,
     );
-    expect(plan.order.map((entry) => entry.pid)).toEqual([12, 11, 13, 10]);
+    expect(plan.order.map((entry) => entry.pid)).toEqual([10, 11, 12, 13]);
     const guarded = planTreeKills([{ pid: 10, startedAt: T }], table, {
       protectedPids: new Set([11]),
     });
-    expect(guarded.order.map((entry) => entry.pid)).toEqual([13, 10]);
+    expect(guarded.order.map((entry) => entry.pid)).toEqual([10, 13]);
   });
 
   it("stops at a loop of parent pids instead of walking it forever", () => {
@@ -160,7 +262,7 @@ describe("planTreeKills", () => {
       { pid: 41, parentPid: 40, startedAt: T },
     ];
     expect(planTreeKills([{ pid: 40, startedAt: T }], loop).order.map((e) => e.pid)).toEqual([
-      41, 40,
+      40, 41,
     ]);
   });
 

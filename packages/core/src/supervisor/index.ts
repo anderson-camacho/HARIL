@@ -3,9 +3,11 @@
 // after the spawn returned, so the process itself started a little before that time. A pid the OS reused belongs to a
 // process that started after the recorded one ended, so it always starts after the recorded time. The window is
 // therefore asymmetric: wide before the recorded time, narrow after it. A process whose start time cannot be read is
-// never killed. Pure: the OS is read by the ProcessControl port.
+// never killed. On Linux the start is also compared as boot ticks with the boot's id, which no wall-clock step changes:
+// the wall-clock start there is rebuilt as "now minus age", so an NTP or WSL2 clock step of more than the window would
+// otherwise make a live agent look like a reused pid. Pure: the OS is read by the ProcessControl port.
 
-import type { ProcessEntry } from "../ports/index.js";
+import type { BootStart, ProcessEntry } from "../ports/index.js";
 
 // How far the OS's start time may fall before and after the recorded one for the same process (milliseconds).
 export interface ProcessStartWindow {
@@ -27,13 +29,51 @@ export function processStartWindow(platform: string): ProcessStartWindow {
 
 export function sameProcess(
   recordedStartedAt: number,
-  observedStartedAt: number | undefined,
+  observedStartedAt: number | null | undefined,
   window: ProcessStartWindow = PROCESS_START_WINDOW,
 ): boolean {
-  if (observedStartedAt === undefined) return false;
+  if (observedStartedAt === undefined || observedStartedAt === null) return false;
   if (!Number.isFinite(recordedStartedAt) || !Number.isFinite(observedStartedAt)) return false;
   const delta = observedStartedAt - recordedStartedAt;
   return delta >= -window.beforeMs && delta <= window.afterMs;
+}
+
+export interface ProcessStart {
+  readonly startedAt: number;
+  readonly boot?: BootStart | null | undefined;
+}
+
+// same: the pid still names the recorded process. other: it names another process (the recorded one ended). unknown: only
+// a wall-clock step could tell the two apart (a Linux start without boot ticks on one side), so nothing may be concluded.
+export type ProcessMatch = "same" | "other" | "unknown";
+
+function validBoot(boot: BootStart | null | undefined): boot is BootStart {
+  return (
+    boot !== undefined &&
+    boot !== null &&
+    boot.bootId !== "" &&
+    Number.isSafeInteger(boot.ticks) &&
+    boot.ticks >= 0
+  );
+}
+
+// Boot ticks decide when both sides have them: the same boot and the same ticks is the same process, whatever the wall
+// clocks say; another boot (a reboot ended every process of the last one) or other ticks is another process. Otherwise
+// the wall-clock window decides; outside it, a Linux reading (boot ticks on one side) may only be off by a clock step,
+// so the answer is unknown, never "other".
+export function matchProcess(
+  recorded: ProcessStart,
+  observed: ProcessStart,
+  window: ProcessStartWindow = PROCESS_START_WINDOW,
+): ProcessMatch {
+  if (validBoot(recorded.boot) && validBoot(observed.boot)) {
+    return recorded.boot.bootId === observed.boot.bootId &&
+      recorded.boot.ticks === observed.boot.ticks
+      ? "same"
+      : "other";
+  }
+  if (sameProcess(recorded.startedAt, observed.startedAt, window)) return "same";
+  return validBoot(recorded.boot) || validBoot(observed.boot) ? "unknown" : "other";
 }
 
 export interface ProcessKillPlan<T> {
@@ -43,37 +83,61 @@ export interface ProcessKillPlan<T> {
   readonly reused: readonly T[];
   // Not running (or its start time cannot be read): nothing to do.
   readonly gone: readonly T[];
+  // Nothing may be concluded: its part of the OS query failed, or only a clock step could explain its mismatch. Neither
+  // killed nor taken for gone: the next check looks again.
+  readonly uncertain: readonly T[];
 }
 
-// Sorts recorded processes by what may be done with them, given the start times the OS reported for the running pids.
-export function planProcessKills<T extends { readonly pid: number; readonly startedAt: number }>(
+// Sorts recorded processes by what may be done with them, given the start times the OS reported for the running pids
+// and, on Linux, their boot ticks.
+export function planProcessKills<
+  T extends {
+    readonly pid: number;
+    readonly startedAt: number;
+    readonly boot?: BootStart | null;
+  },
+>(
   records: readonly T[],
-  startTimes: ReadonlyMap<number, number>,
+  startTimes: ReadonlyMap<number, number | null>,
   window: ProcessStartWindow = PROCESS_START_WINDOW,
+  boots: ReadonlyMap<number, BootStart> = new Map(),
 ): ProcessKillPlan<T> {
   const kill: T[] = [];
   const reused: T[] = [];
   const gone: T[] = [];
+  const uncertain: T[] = [];
   const killed = new Set<number>();
   for (const record of records) {
-    const observed =
-      Number.isSafeInteger(record.pid) && record.pid > 0 ? startTimes.get(record.pid) : undefined;
+    const valid = Number.isSafeInteger(record.pid) && record.pid > 0;
+    const observed = valid ? startTimes.get(record.pid) : undefined;
     if (observed === undefined) {
       gone.push(record);
-    } else if (!sameProcess(record.startedAt, observed, window)) {
-      reused.push(record);
-    } else if (!killed.has(record.pid)) {
+      continue;
+    }
+    if (observed === null) {
+      uncertain.push(record);
+      continue;
+    }
+    const match = matchProcess(
+      record,
+      { startedAt: observed, boot: boots.get(record.pid) },
+      window,
+    );
+    if (match === "other") reused.push(record);
+    else if (match === "unknown") uncertain.push(record);
+    else if (!killed.has(record.pid)) {
       killed.add(record.pid);
       kill.push(record);
     }
   }
-  return { kill, reused, gone };
+  return { kill, reused, gone, uncertain };
 }
 
 export interface TreeKillPlan {
   // The roots still running as the recorded process, as the snapshot shows them.
   readonly roots: readonly ProcessEntry[];
-  // Every process to kill, one pid at a time: each child before its parent, each root after its whole tree.
+  // Every process to kill, one pid at a time: each root first, then its descendants, each parent before its children, so
+  // a live root cannot start a child the snapshot never saw.
   readonly order: readonly ProcessEntry[];
 }
 
@@ -88,12 +152,17 @@ function validPid(pid: number): boolean {
 }
 
 // The processes to kill for recorded roots, from one snapshot of the OS's processes (docs/modos-y-delegacion.md 3.14).
-// A root counts only while its start time matches the recorded one. A child counts only when it names its parent's pid
-// and started at or after that parent: Windows keeps a dead parent's pid in its children's ParentProcessId, so a process
-// that names a pid the OS reused as its parent started before the process that now holds that pid. Walking the tree here,
-// instead of letting the OS's tree kill walk it by parent pid alone, keeps such a stranger out.
+// A root counts only while it matches the recorded process (matchProcess). A child counts only when it names its
+// parent's pid and started at or after that parent (in boot ticks when both have them): Windows keeps a dead parent's pid
+// in its children's ParentProcessId, so a process that names a pid the OS reused as its parent started before the process
+// that now holds that pid. Walking the tree here, instead of letting the OS's tree kill walk it by parent pid alone,
+// keeps such a stranger out. A root that runs under another verified root is killed within that root's tree.
 export function planTreeKills(
-  roots: readonly { readonly pid: number; readonly startedAt: number }[],
+  roots: readonly {
+    readonly pid: number;
+    readonly startedAt: number;
+    readonly boot?: BootStart | null;
+  }[],
   table: readonly ProcessEntry[],
   options: TreeKillOptions = {},
 ): TreeKillPlan {
@@ -108,38 +177,48 @@ export function planTreeKills(
     siblings.push(entry);
     children.set(entry.parentPid, siblings);
   }
-  const verified: ProcessEntry[] = [];
-  const order: ProcessEntry[] = [];
-  const seen = new Set<number>();
-  // Iterative post-order walk: a deep tree or a loop of parent pids never overflows the stack.
-  const walk = (root: ProcessEntry): void => {
-    const stack: { entry: ProcessEntry; expanded: boolean }[] = [{ entry: root, expanded: false }];
+  const startedBefore = (child: ProcessEntry, parent: ProcessEntry): boolean =>
+    validBoot(child.boot) && validBoot(parent.boot) && child.boot.bootId === parent.boot.bootId
+      ? child.boot.ticks < parent.boot.ticks
+      : child.startedAt < parent.startedAt;
+  // Iterative pre-order walk (a deep tree or a loop of parent pids never overflows the stack): each process before its
+  // children.
+  const walk = (root: ProcessEntry, seen: Set<number>, out: ProcessEntry[]): void => {
+    const stack: ProcessEntry[] = [root];
     seen.add(root.pid);
     while (stack.length > 0) {
-      const top = stack[stack.length - 1] as { entry: ProcessEntry; expanded: boolean };
-      if (top.expanded) {
-        stack.pop();
-        order.push(top.entry);
-        continue;
-      }
-      top.expanded = true;
-      const kids = children.get(top.entry.pid) ?? [];
+      const entry = stack.pop() as ProcessEntry;
+      out.push(entry);
+      const kids = children.get(entry.pid) ?? [];
       for (let index = kids.length - 1; index >= 0; index -= 1) {
         const child = kids[index] as ProcessEntry;
-        if (child.pid === top.entry.pid || seen.has(child.pid) || protectedPids.has(child.pid))
+        if (child.pid === entry.pid || seen.has(child.pid) || protectedPids.has(child.pid))
           continue;
-        if (child.startedAt < top.entry.startedAt) continue;
+        if (startedBefore(child, entry)) continue;
         seen.add(child.pid);
-        stack.push({ entry: child, expanded: false });
+        stack.push(child);
       }
     }
   };
+  const verified: ProcessEntry[] = [];
   for (const root of roots) {
     if (!validPid(root.pid) || protectedPids.has(root.pid)) continue;
     const entry = byPid.get(root.pid);
-    if (entry === undefined || !sameProcess(root.startedAt, entry.startedAt, window)) continue;
-    verified.push(entry);
-    if (!seen.has(entry.pid)) walk(entry);
+    if (entry === undefined || matchProcess(root, entry, window) !== "same") continue;
+    if (!verified.includes(entry)) verified.push(entry);
+  }
+  // The roots no other verified root reaches: their walks cover the rest, root first.
+  const inside = new Set<number>();
+  for (const root of verified) {
+    const subtree: ProcessEntry[] = [];
+    walk(root, new Set<number>(), subtree);
+    for (const entry of subtree) if (entry.pid !== root.pid) inside.add(entry.pid);
+  }
+  const order: ProcessEntry[] = [];
+  const seen = new Set<number>();
+  for (const root of verified) {
+    if (inside.has(root.pid) || seen.has(root.pid)) continue;
+    walk(root, seen, order);
   }
   return { roots: verified, order };
 }

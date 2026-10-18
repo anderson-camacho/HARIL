@@ -1,5 +1,6 @@
-import { planProcessKills, planTreeKills, processStartWindow, sameProcess } from "@haril/core";
+import { matchProcess, planProcessKills, planTreeKills, processStartWindow } from "@haril/core";
 import type {
+  BootStart,
   ProcessControl,
   RecordedProcess,
   RecordedProcessFilter,
@@ -10,7 +11,9 @@ import type {
 // stop kill the ones that still run as the process that was recorded, and nothing else. A pid is checked against the
 // start time recorded at spawn before anything is killed, so a pid the OS reused for another program is never touched.
 // A process is marked verified gone only once the OS was read and showed it gone (not running, or its pid naming another
-// program); until then every sweep checks it again, so a kill that failed is never taken for an all-clear.
+// program); until then every sweep checks it again, so a kill that failed is never taken for an all-clear. On Linux the
+// boot ticks decide (supervisor's matchProcess), and a record whose mismatch only a clock step could explain is neither
+// killed nor marked gone: it waits for a verified exit.
 
 export interface ProcessKillReport {
   // Every recorded process the filter selected.
@@ -21,7 +24,8 @@ export interface ProcessKillReport {
   readonly kept: readonly RecordedProcess[];
   // Still running as the recorded process after the kill: a kill that did not take.
   readonly alive: readonly RecordedProcess[];
-  // The OS could not be read: nothing is known of these, nothing was killed and nothing marked.
+  // The OS could not be read (or, on Linux, only a clock step could explain a mismatch): nothing is known of these,
+  // nothing was killed and nothing marked.
   readonly unverified: readonly RecordedProcess[];
 }
 
@@ -46,26 +50,42 @@ export async function killRecordedProcesses(
   const records = store.runs.processes(filter).filter(select);
   if (records.length === 0) return NOTHING;
   const window = processStartWindow(process.platform);
-  const startTimes = await control.startTimes(records.map((record) => record.pid));
+  const pids = records.map((record) => record.pid);
+  const startTimes = await control.startTimes(pids);
   if (startTimes === undefined) return { ...NOTHING, checked: records.length, unverified: records };
-  const plan = planProcessKills(records, startTimes, window);
+  const boots = control.bootStarts?.(pids) ?? new Map<number, BootStart>();
+  const plan = planProcessKills(records, startTimes, window, boots);
   let alive: RecordedProcess[] = [];
-  let unverified: RecordedProcess[] = [];
+  let unverified: RecordedProcess[] = [...plan.uncertain];
   if (plan.kill.length > 0) {
     // Every record still running as itself, the second record of a pid two runs recorded included.
-    const running = records.filter((record) =>
-      sameProcess(record.startedAt, startTimes.get(record.pid), window),
+    const running = records.filter(
+      (record) => observedMatch(record, startTimes, boots, window) === "same",
     );
     const killed = await killTrees(control, plan.kill);
     // Nothing was killed when the snapshot could not be read: one look says what still runs.
     const after = await stillRunning(control, running, killed === undefined ? 1 : RECHECK.times);
     alive = after.alive;
-    unverified = after.unverified;
+    unverified = [...unverified, ...after.unverified];
   }
   const open = new Set([...alive, ...unverified]);
   const gone = records.filter((record) => !open.has(record));
   if (gone.length > 0) store.runs.markProcessesGone(gone, (options.now ?? Date.now)());
   return { checked: records.length, killed: plan.kill, kept: plan.reused, alive, unverified };
+}
+
+// How a recorded process compares with what the OS shows for its pid; "gone" when the pid does not run, "unknown" when
+// its part of the query failed.
+function observedMatch(
+  record: RecordedProcess,
+  startTimes: ReadonlyMap<number, number | null>,
+  boots: ReadonlyMap<number, BootStart>,
+  window: ReturnType<typeof processStartWindow>,
+): "same" | "other" | "unknown" | "gone" {
+  const observed = startTimes.get(record.pid);
+  if (observed === undefined) return "gone";
+  if (observed === null) return "unknown";
+  return matchProcess(record, { startedAt: observed, boot: boots.get(record.pid) }, window);
 }
 
 export interface TreeKillResult {
@@ -75,14 +95,19 @@ export interface TreeKillResult {
   readonly killed: number;
 }
 
-// Kills each recorded root's process tree, one pid at a time, children first. One snapshot of the OS's processes gives
+// Kills each recorded root's process tree, one pid at a time, each root first (a live root then starts no child the
+// snapshot never saw), then its descendants. One snapshot of the OS's processes gives
 // every pid's parent and start time; Core's planTreeKills keeps a root only while it still started at its recorded time
 // and a descendant only when it started at or after its parent, so a process that merely names a reused pid as its
 // parent is left alone (the OS's own tree kill walks parent pids alone). Each kill follows the snapshot at once.
 // undefined when the OS could not be read: then nothing was killed.
 export async function killTrees(
   control: ProcessControl,
-  roots: readonly { readonly pid: number; readonly startedAt: number }[],
+  roots: readonly {
+    readonly pid: number;
+    readonly startedAt: number;
+    readonly boot?: BootStart | null;
+  }[],
   platform: string = process.platform,
 ): Promise<TreeKillResult | undefined> {
   if (roots.length === 0) return { roots: [], killed: 0 };
@@ -105,15 +130,22 @@ async function stillRunning(
 ): Promise<{ alive: RecordedProcess[]; unverified: RecordedProcess[] }> {
   const window = processStartWindow(process.platform);
   let left = [...records];
+  const unknown: RecordedProcess[] = [];
   for (let attempt = 0; attempt < times && left.length > 0; attempt += 1) {
     if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, RECHECK.delayMs));
-    const startTimes = await control.startTimes(left.map((record) => record.pid));
-    if (startTimes === undefined) return { alive: [], unverified: left };
-    left = left.filter((record) =>
-      sameProcess(record.startedAt, startTimes.get(record.pid), window),
-    );
+    const pids = left.map((record) => record.pid);
+    const startTimes = await control.startTimes(pids);
+    if (startTimes === undefined) return { alive: [], unverified: [...unknown, ...left] };
+    const boots = control.bootStarts?.(pids) ?? new Map<number, BootStart>();
+    const still: RecordedProcess[] = [];
+    for (const record of left) {
+      const match = observedMatch(record, startTimes, boots, window);
+      if (match === "same") still.push(record);
+      else if (match === "unknown") unknown.push(record);
+    }
+    left = still;
   }
-  return { alive: left, unverified: [] };
+  return { alive: left, unverified: unknown };
 }
 
 // Each kill and each kept pid of a sweep is an audit event of its run: the pid and why, never more.

@@ -249,12 +249,31 @@ export function createStopsFacet(options: StopsFacetOptions): StopsFacet {
     return { ok: true, taskIds: [] };
   };
 
+  // A run's row as a RecordedProcess: the boot ticks only when both of their columns are filled (Linux).
+  const toRecordedProcess = (row: Record<string, unknown>): RecordedProcess => {
+    const { startTicks, bootId, ...rest } = row;
+    return {
+      ...(rest as unknown as Omit<RecordedProcess, "boot">),
+      boot:
+        typeof startTicks === "number" && typeof bootId === "string"
+          ? { bootId, ticks: startTicks }
+          : null,
+    };
+  };
+
   const recordProcess = (epoch: number, runId: string, process: AgentProcess): boolean => {
     const changed = db
       .prepare(
-        `UPDATE runs SET pid = ?, pid_started_at = ? WHERE run_id = ? AND runtime_epoch = ? AND status IN ${OPEN_RUN}`,
+        `UPDATE runs SET pid = ?, pid_started_at = ?, pid_start_ticks = ?, pid_boot_id = ? WHERE run_id = ? AND runtime_epoch = ? AND status IN ${OPEN_RUN}`,
       )
-      .run(process.pid, process.startedAt, runId, epoch);
+      .run(
+        process.pid,
+        process.startedAt,
+        process.boot?.ticks ?? null,
+        process.boot?.bootId ?? null,
+        runId,
+        epoch,
+      );
     return Number(changed.changes) > 0;
   };
 
@@ -263,25 +282,27 @@ export function createStopsFacet(options: StopsFacetOptions): StopsFacet {
     if (filter.unverified === true) {
       return db
         .prepare(
-          `SELECT run_id AS runId, task_id AS taskId, project_id AS projectId, runtime_epoch AS runtimeEpoch, status AS runStatus, pid, pid_started_at AS startedAt
+          `SELECT run_id AS runId, task_id AS taskId, project_id AS projectId, runtime_epoch AS runtimeEpoch, status AS runStatus, pid, pid_started_at AS startedAt, pid_start_ticks AS startTicks, pid_boot_id AS bootId
            FROM runs
            WHERE pid IS NOT NULL AND pid_started_at IS NOT NULL AND pid_gone_at IS NULL
              AND NOT (status IN ${OPEN_RUN} AND ? IS NOT NULL AND runtime_epoch = ?)
            ORDER BY created_at, rowid`,
         )
-        .all(excludeEpoch, excludeEpoch) as unknown as RecordedProcess[];
+        .all(excludeEpoch, excludeEpoch)
+        .map(toRecordedProcess);
     }
     const endedSince = filter.endedSince ?? null;
     return db
       .prepare(
-        `SELECT run_id AS runId, task_id AS taskId, project_id AS projectId, runtime_epoch AS runtimeEpoch, status AS runStatus, pid, pid_started_at AS startedAt
+        `SELECT run_id AS runId, task_id AS taskId, project_id AS projectId, runtime_epoch AS runtimeEpoch, status AS runStatus, pid, pid_started_at AS startedAt, pid_start_ticks AS startTicks, pid_boot_id AS bootId
          FROM runs
          WHERE pid IS NOT NULL AND pid_started_at IS NOT NULL
            AND ((status IN ${OPEN_RUN} AND (? IS NULL OR runtime_epoch <> ?))
              OR (? IS NOT NULL AND ended_at IS NOT NULL AND ended_at >= ?))
          ORDER BY created_at, rowid`,
       )
-      .all(excludeEpoch, excludeEpoch, endedSince, endedSince) as unknown as RecordedProcess[];
+      .all(excludeEpoch, excludeEpoch, endedSince, endedSince)
+      .map(toRecordedProcess);
   };
 
   const markProcessesGone = (

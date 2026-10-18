@@ -7,7 +7,14 @@ import {
   checkTaskKind,
   type RunEvent,
 } from "@haril/core";
-import type { AgentRuntime, Clock, ProcessControl, ProcessEntry, Store } from "@haril/core/ports";
+import type {
+  AgentRuntime,
+  BootStart,
+  Clock,
+  ProcessControl,
+  ProcessEntry,
+  Store,
+} from "@haril/core/ports";
 import { FakeAgentRuntime } from "@haril/core/testing";
 import { openStore } from "@haril/state-sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -40,6 +47,8 @@ const DEAD_PID = 2_000_000_000;
 // The OS as a map of running pids to start times; a kill removes a pid only while kills take.
 class FakeOs implements ProcessControl {
   readonly running = new Map<number, number>();
+  // Linux: the boot ticks of running pids; empty on the other systems.
+  readonly boots = new Map<number, BootStart>();
   readonly kills: ProcessEntry[] = [];
   killsTake = true;
   unreadable = false;
@@ -54,9 +63,22 @@ class FakeOs implements ProcessControl {
     return times;
   }
 
+  bootStarts(pids: readonly number[]): ReadonlyMap<number, BootStart> | undefined {
+    if (this.boots.size === 0) return undefined;
+    return new Map(
+      pids.flatMap((pid) => {
+        const boot = this.boots.get(pid);
+        return boot === undefined ? [] : [[pid, boot] as const];
+      }),
+    );
+  }
+
   async processTable(): Promise<readonly ProcessEntry[] | undefined> {
     if (this.unreadable) return undefined;
-    return [...this.running].map(([pid, startedAt]) => ({ pid, parentPid: 1, startedAt }));
+    return [...this.running].map(([pid, startedAt]) => {
+      const boot = this.boots.get(pid);
+      return { pid, parentPid: 1, startedAt, ...(boot === undefined ? {} : { boot }) };
+    });
   }
 
   killProcess(target: ProcessEntry): void {
@@ -97,7 +119,7 @@ function open(): Store {
 }
 
 // A runtime that is gone now ran a task whose run recorded `pid`; a stop cancelled that run long ago.
-function cancelledRunOf(store: Store, pid: number, startedAt: number): string {
+function cancelledRunOf(store: Store, pid: number, startedAt: number, boot?: BootStart): string {
   run(["task", "add", "Slow", "--agent", "fake:slow:600000"], harness().io, sb.host);
   const grant = store.runtime.acquire({
     pid: DEAD_PID,
@@ -109,7 +131,11 @@ function cancelledRunOf(store: Store, pid: number, startedAt: number): string {
   store.commands.applyNext(grant.value.epoch);
   const claimed = store.tasks.claimNext(grant.value.epoch);
   if (claimed === undefined) throw new Error("nothing claimed");
-  store.runs.recordProcess(grant.value.epoch, claimed.runId, { pid, startedAt });
+  store.runs.recordProcess(grant.value.epoch, claimed.runId, {
+    pid,
+    startedAt,
+    ...(boot === undefined ? {} : { boot }),
+  });
   store.runs.cancel(claimed.runId, "user_stop");
   store.runtime.release(grant.value.epoch, false);
   return claimed.runId;
@@ -191,6 +217,49 @@ describe("the CLI's emergency stop", () => {
     expect(first.code).toBe(0);
     expect(first.report.processes).toMatchObject({ recorded: 1, killed: 0, kept: 1, alive: 0 });
     expect(os.kills).toEqual([]);
+    expect((await stopNow(host)).report.processes.recorded).toBe(0);
+  });
+});
+
+describe("a Linux clock step", () => {
+  it("still kills an agent recorded with its boot ticks after the clock stepped forward", async () => {
+    const store = open();
+    const os = new FakeOs();
+    const startedAt = Date.now() - 60_000;
+    const boot = { bootId: "boot-test-a", ticks: 4_200 };
+    // The wall clock stepped 5 s: the start the OS rebuilds from "now minus age" moved with it, the ticks did not.
+    os.running.set(4245, startedAt + 5_000);
+    os.boots.set(4245, boot);
+    cancelledRunOf(store, 4245, startedAt, boot);
+    const host: HostInfo = {
+      ...sb.host,
+      processControl: os,
+      isPidAlive: (pid) => pid !== DEAD_PID,
+    };
+    const stopped = await stopNow(host);
+    expect(stopped.report.processes).toMatchObject({ recorded: 1, killed: 1, alive: 0 });
+    expect(os.kills).toEqual([expect.objectContaining({ pid: 4245 })]);
+  });
+
+  it("neither kills nor forgets a record without boot ticks whose mismatch only a clock step could explain", async () => {
+    const store = open();
+    const os = new FakeOs();
+    const startedAt = Date.now() - 60_000;
+    os.running.set(4246, startedAt + 5_000);
+    os.boots.set(4246, { bootId: "boot-test-a", ticks: 9_999 });
+    cancelledRunOf(store, 4246, startedAt);
+    const host: HostInfo = {
+      ...sb.host,
+      processControl: os,
+      isPidAlive: (pid) => pid !== DEAD_PID,
+    };
+    const first = await stopNow(host);
+    expect(first.report.processes).toMatchObject({ recorded: 1, killed: 0, unverified: 1 });
+    expect(os.kills).toEqual([]);
+    // Not marked gone: the next check looks again, and once the process exits it is verified gone.
+    expect((await stopNow(host)).report.processes.recorded).toBe(1);
+    os.running.delete(4246);
+    expect((await stopNow(host)).report.processes).toMatchObject({ recorded: 1, killed: 0 });
     expect((await stopNow(host)).report.processes.recorded).toBe(0);
   });
 });

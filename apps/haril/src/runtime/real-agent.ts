@@ -19,6 +19,7 @@ import type {
   Store,
 } from "@haril/core/ports";
 import type { Broker } from "@haril/gateway";
+import { createProcessControl } from "@haril/os";
 import { startHarilBroker } from "../broker.js";
 import type { HostInfo, RuntimeInspection } from "../context.js";
 import {
@@ -85,6 +86,8 @@ export function createRealAgents(options: RealAgentsOptions): RealAgents {
   const { host, store, clock } = options;
   const dataDir = resolve(options.dataDir);
   let brokerStart: Promise<Broker> | undefined;
+  // The OS side of 3.14: each agent's boot ticks are read right after its spawn (Linux), so a clock step never hides it.
+  const processControl = host.processControl ?? createProcessControl();
 
   // One Broker per `haril start`, on the first real task (M2-T6): the upstream is the OpenAI-compatible gateway.
   // One upstream per configured provider (M3-T7); the providers are read once per run.
@@ -211,6 +214,7 @@ export function createRealAgents(options: RealAgentsOptions): RealAgents {
         model: runModel,
         virtualKey,
         onBridgeOperation: (event) => recordBridgeOperation(store, spec, event),
+        bootStartOf: (pid) => processControl.bootStarts?.([pid])?.get(pid),
         ...(options.proposePlan === undefined ? {} : { proposePlan: options.proposePlan }),
         ...(options.delegationTools === undefined
           ? {}

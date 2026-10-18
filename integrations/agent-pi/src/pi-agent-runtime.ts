@@ -18,6 +18,7 @@ import type {
   AgentProcess,
   AgentRuntime,
   AgentSpec,
+  BootStart,
   DelegationToolHandler,
   DelegationToolResult,
   HarilError,
@@ -105,6 +106,9 @@ export interface PiAgentRuntimeOptions {
   // The host side of the delegation tools (phase F2b). Without it, delegation.call is unsupported and a workflow turn
   // cannot make its deciding call.
   readonly delegationTools?: DelegationToolHandler;
+  // Linux (3.14): reads the spawned pid's boot ticks right after the spawn, recorded with its start time so a wall-clock
+  // step never makes the live agent look like a reused pid. Absent or undefined elsewhere.
+  readonly bootStartOf?: (pid: number) => BootStart | undefined;
 }
 
 export interface PiDiagnostics {
@@ -323,6 +327,7 @@ class PiRun implements PiAgentHandle {
   private bridgeSocket: Socket | undefined;
   private child: ChildProcess | undefined;
   private spawnedAt: number | undefined;
+  private spawnBoot: BootStart | undefined;
   private stderrLog: WriteStream | undefined;
   private stdoutReader: JsonlReader | undefined;
   private stdinOpen = false;
@@ -421,6 +426,7 @@ class PiRun implements PiAgentHandle {
     // Read right after the spawn returned: the OS created the process during the call, so its own start time is within
     // milliseconds of this one, which the startup sweep compares before it kills a recorded pid (3.14.5).
     this.spawnedAt = Date.now();
+    this.spawnBoot = child.pid === undefined ? undefined : this.bootOf(child.pid);
     this.child = child;
     this.stdinOpen = child.stdin !== null;
     this.wireChild(child);
@@ -454,12 +460,25 @@ class PiRun implements PiAgentHandle {
     await this.exitedD.promise;
   }
 
-  // The process serving the run (3.14): its pid and the time taken right after the spawn returned it.
+  // The process serving the run (3.14): its pid and the time taken right after the spawn returned it, with its boot
+  // ticks on Linux.
   get process(): AgentProcess | undefined {
     const pid = this.child?.pid;
-    return pid === undefined || this.spawnedAt === undefined
-      ? undefined
-      : { pid, startedAt: this.spawnedAt };
+    if (pid === undefined || this.spawnedAt === undefined) return undefined;
+    return {
+      pid,
+      startedAt: this.spawnedAt,
+      ...(this.spawnBoot === undefined ? {} : { boot: this.spawnBoot }),
+    };
+  }
+
+  // The host's reading of the boot ticks; a failed reading records none.
+  private bootOf(pid: number): BootStart | undefined {
+    try {
+      return this.options.bootStartOf?.(pid);
+    } catch {
+      return undefined;
+    }
   }
 
   // The emergency stop and the watchdog's close (3.14, 3.16): no abort request and no grace period, the tree is killed

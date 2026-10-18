@@ -441,6 +441,7 @@ describe("recorded processes and run activity", () => {
       runStatus: "running",
       pid: 4242,
       startedAt: clock.now() - 5,
+      boot: null,
     };
     expect(store.runs.processes()).toEqual([own]);
     // The same run is not an orphan of this epoch, but it is of the next runtime's.
@@ -448,6 +449,13 @@ describe("recorded processes and run activity", () => {
     clock.advance(120_000);
     const next = acquire();
     expect(store.runs.processes({ excludeEpoch: next })).toEqual([own]);
+  });
+
+  it("keeps a Linux process's boot ticks with its run, so a later check compares them instead of wall clocks", () => {
+    const claimed = claim(addTask("Linux agent"));
+    const boot = { bootId: "0f1e2d3c-test-boot", ticks: 987_654 };
+    store.runs.recordProcess(epoch, claimed.runId, { pid: 4343, startedAt: clock.now(), boot });
+    expect(store.runs.processes()).toMatchObject([{ runId: claimed.runId, pid: 4343, boot }]);
   });
 
   it("lists a run a stop just cancelled while its process may still be dying", () => {

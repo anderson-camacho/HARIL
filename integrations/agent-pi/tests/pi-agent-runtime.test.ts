@@ -510,6 +510,24 @@ describe("createPiAgentRuntime lifecycle", () => {
     expect(process?.startedAt).toBeLessThanOrEqual(after);
   });
 
+  it("records the boot ticks the host reads for the spawned pid, so a Linux clock step cannot hide it (3.14)", async () => {
+    const h = harness();
+    const asked: number[] = [];
+    const boot = { bootId: "boot-test-id", ticks: 777 };
+    const handle = await startHandle(
+      h.runtime("hang", {
+        bootStartOf: (pid) => {
+          asked.push(pid);
+          return boot;
+        },
+      }),
+    );
+    expect(asked).toEqual([handle.process?.pid]);
+    expect(handle.process?.boot).toEqual(boot);
+    const plain = await startHandle(h.runtime("hang"), spec("run-2"));
+    expect(plain.process?.boot).toBeUndefined();
+  });
+
   it("kill ends a hung Pi at once, without the grace period, and its tree with it (3.14)", async () => {
     const h = harness();
     const handle = await startHandle(h.runtime("hang_with_tool", { timings: { graceMs: 30_000 } }));

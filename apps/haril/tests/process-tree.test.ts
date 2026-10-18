@@ -89,7 +89,8 @@ describe("killTrees", () => {
     ]);
     const result = await killTrees(os, [{ pid: 500, startedAt: T }], "win32");
     expect(result).toEqual({ roots: [500], killed: 3 });
-    expect(os.kills).toEqual([502, 501, 500]);
+    // The root first, so a live root starts no child the snapshot never saw, then its descendants.
+    expect(os.kills).toEqual([500, 501, 502]);
   });
 
   it("kills nothing when the OS's process list cannot be read", async () => {

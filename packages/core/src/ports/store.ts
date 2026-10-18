@@ -14,6 +14,7 @@ import type {
 } from "@haril/contracts";
 import type { AgentProcess } from "./agent-runtime.js";
 import type { WorkflowsPort } from "./delegation.js";
+import type { BootStart } from "./process-control.js";
 import type { HarilError, Result } from "./result.js";
 import type { UsageLogPort } from "./usage-log.js";
 
@@ -358,6 +359,8 @@ export interface RecordedProcess {
   readonly runStatus: string;
   readonly pid: number;
   readonly startedAt: number;
+  // Linux: the boot ticks recorded with it (process-control.ts); null when none was recorded.
+  readonly boot: BootStart | null;
 }
 
 export interface RecordedProcessFilter {

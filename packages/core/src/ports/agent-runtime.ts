@@ -1,6 +1,7 @@
 // Minimal AgentRuntime port for M1 (agent-runtime contract, ARCH 5.1). The real adapter (Pi) arrives in M2.
 import type { TaskKind } from "@haril/contracts";
 import type { DelegationTurnInput } from "./delegation-channel.js";
+import type { BootStart } from "./process-control.js";
 import type { HarilError, Result } from "./result.js";
 
 // The host side of haril_propose_plan (LD-T4, ARCH 9.4). An agent runtime calls it with the run it serves and the
@@ -61,10 +62,12 @@ export type AgentOutcome =
 
 // The operating-system process that serves an attempt (docs/modos-y-delegacion.md 3.14): its pid and the wall-clock
 // time it was started, taken right after the spawn. The runtime records both on the run, so the startup sweep and the
-// emergency stop kill a process only while its pid still names the same process (a reused pid has a later start).
+// emergency stop kill a process only while its pid still names the same process (a reused pid has a later start). On
+// Linux it also carries the process's boot ticks, which no wall-clock step changes (process-control.ts).
 export interface AgentProcess {
   readonly pid: number;
   readonly startedAt: number;
+  readonly boot?: BootStart;
 }
 
 export interface AgentHandle {
