@@ -1,0 +1,221 @@
+// HARIL console: a Pi extension loaded with `-e` by `haril console` (and a bare `haril` in a terminal), the way
+// Gentle Shell is Pi with its own extension. Pi keeps everything it has (/login, /model, the thinking level,
+// /settings, sessions); this adds HARIL's yellow bar, a startup header and the HARIL commands, which run the `haril`
+// CLI on the project of the folder Pi opened in. Self-contained: node:* imports and local types only, so it bundles
+// into one file next to the bridge.
+
+import { cliAvailable } from "./cli.js";
+import { type CommandHost, registerCommands } from "./commands.js";
+import type { ConsoleContext, ConsolePi, ConsoleTui, PiModel, SessionEntry } from "./pi-types.js";
+import { type BoundProject, findProject, folderName } from "./project.js";
+import { type PendingApproval, readStatus } from "./status.js";
+import { type BarFacts, type RuntimeState, renderBar, renderHeader, renderOutput } from "./view.js";
+
+const VERSION_ENV = "HARIL_VERSION";
+const OUTPUT_WIDGET = "haril-output";
+// The bar reads the runtime and the plans again this often, and only while a runtime runs or a plan waits.
+const REFRESH_MS = 5_000;
+
+interface Session extends CommandHost {
+  readonly ctx: ConsoleContext;
+  project: BoundProject | undefined;
+  pending: readonly PendingApproval[];
+  tui: ConsoleTui | undefined;
+  model: PiModel | undefined;
+  cost: number;
+  runtimeAlive: boolean | undefined;
+  timer: ReturnType<typeof setInterval> | undefined;
+  refreshing: Promise<void> | undefined;
+  // A refresh asked for while one runs: that one reads once more before it settles, so no caller sees stale state.
+  refreshAgain: boolean;
+  closed: boolean;
+}
+
+// The session's spend: the cost Pi recorded on every assistant message of the session file, every branch included.
+function sessionCost(entries: readonly SessionEntry[]): number {
+  let total = 0;
+  for (const entry of entries) {
+    if (entry.type !== "message" || entry.message?.role !== "assistant") continue;
+    const cost = entry.message.usage?.cost?.total;
+    if (typeof cost === "number" && Number.isFinite(cost)) total += cost;
+  }
+  return total;
+}
+
+function safely<T>(read: () => T, fallback: T): T {
+  try {
+    return read();
+  } catch {
+    return fallback;
+  }
+}
+
+export default function harilConsole(pi: ConsolePi): void {
+  let session: Session | undefined;
+
+  const redraw = (): void => session?.tui?.requestRender();
+
+  function runtimeState(current: Session): RuntimeState {
+    if (current.runtimeAlive === true) return "running";
+    if (current.started?.running === true) return "starting";
+    if (current.runtimeAlive === undefined) return "unknown";
+    return "idle";
+  }
+
+  function facts(current: Session, statuses: readonly string[], branch: string | null): BarFacts {
+    const model = current.model;
+    const usage =
+      model === undefined ? undefined : safely(() => current.ctx.getContextUsage(), undefined);
+    const level =
+      model?.reasoning === true ? safely(() => pi.getThinkingLevel(), undefined) : undefined;
+    return {
+      place: current.project?.slug ?? folderName(current.cwd),
+      model: model?.id,
+      level,
+      contextPercent: usage === undefined ? undefined : usage.percent,
+      cost: current.cost,
+      pending: current.pending.length,
+      runtime: runtimeState(current),
+      cwd: current.cwd,
+      branch,
+      statuses,
+    };
+  }
+
+  // The light timer runs only while there is something to follow, and never keeps Pi alive.
+  function followTimer(current: Session): void {
+    const busy = current.runtimeAlive === true || current.started?.running === true;
+    const wanted = !current.closed && (busy || current.pending.length > 0);
+    if (wanted && current.timer === undefined) {
+      current.timer = setInterval(() => void current.refresh(), REFRESH_MS);
+      current.timer.unref();
+    } else if (!wanted && current.timer !== undefined) {
+      clearInterval(current.timer);
+      current.timer = undefined;
+    }
+  }
+
+  function openSession(ctx: ConsoleContext): Session {
+    const current: Session = {
+      ctx,
+      cwd: ctx.cwd,
+      project: undefined,
+      pending: [],
+      started: undefined,
+      tui: undefined,
+      model: ctx.model,
+      cost: safely(() => sessionCost(ctx.sessionManager.getEntries()), 0),
+      runtimeAlive: undefined,
+      timer: undefined,
+      refreshing: undefined,
+      refreshAgain: false,
+      closed: false,
+      harilModelRef: () => undefined,
+      showOutput(title, lines) {
+        if (!ctx.hasUI) return;
+        if (ctx.mode !== "tui") {
+          ctx.ui.notify([title, ...lines].join("\n"), "info");
+          return;
+        }
+        ctx.ui.setWidget(OUTPUT_WIDGET, (_tui, theme) => ({
+          render: (width) => renderOutput(title, lines, width, theme),
+          invalidate() {},
+        }));
+      },
+      clearOutput() {
+        if (ctx.hasUI && ctx.mode === "tui") ctx.ui.setWidget(OUTPUT_WIDGET, undefined);
+      },
+      async rebind() {
+        current.project = await findProject(current.cwd);
+        redraw();
+      },
+      refresh() {
+        // One read at a time: a refresh asked for meanwhile joins the running one, which then reads again.
+        if (current.refreshing !== undefined) {
+          current.refreshAgain = true;
+          return current.refreshing;
+        }
+        current.refreshing = (async () => {
+          do {
+            current.refreshAgain = false;
+            const status = await readStatus(current.project?.slug);
+            if (current.closed) return;
+            current.runtimeAlive = status.runtimeAlive;
+            if (status.pending !== undefined) current.pending = status.pending;
+          } while (current.refreshAgain);
+          followTimer(current);
+          redraw();
+        })().finally(() => {
+          current.refreshing = undefined;
+        });
+        return current.refreshing;
+      },
+    };
+    return current;
+  }
+
+  function installUi(current: Session): void {
+    const { ctx } = current;
+    if (!ctx.hasUI || ctx.mode !== "tui") return;
+    const version = process.env[VERSION_ENV];
+    ctx.ui.setHeader((_tui, theme) => ({
+      render: (width) => renderHeader(version === "" ? undefined : version, width, theme),
+      invalidate() {},
+    }));
+    ctx.ui.setFooter((tui, theme, footerData) => {
+      current.tui = tui;
+      const unsubscribe = footerData.onBranchChange(() => tui.requestRender());
+      return {
+        render(width) {
+          const statuses = [...footerData.getExtensionStatuses().values()];
+          return renderBar(facts(current, statuses, footerData.getGitBranch()), width, theme);
+        },
+        invalidate() {},
+        dispose: unsubscribe,
+      };
+    });
+  }
+
+  registerCommands(pi, () => session);
+
+  pi.on("session_start", (_event, ctx) => {
+    const current = openSession(ctx);
+    session = current;
+    installUi(current);
+    if (!cliAvailable()) return;
+    // The project and the HARIL state arrive after the first frame: the bar shows the folder until then.
+    void current.rebind().then(() => current.refresh());
+  });
+
+  pi.on("session_shutdown", () => {
+    if (session === undefined) return;
+    session.closed = true;
+    followTimer(session);
+    session = undefined;
+  });
+
+  pi.on("model_select", (event) => {
+    if (session === undefined) return;
+    session.model = event.model;
+    redraw();
+  });
+
+  pi.on("thinking_level_select", () => redraw());
+
+  pi.on("message_end", () => {
+    if (session === undefined) return;
+    const current = session;
+    current.cost = safely(() => sessionCost(current.ctx.sessionManager.getEntries()), current.cost);
+    redraw();
+  });
+
+  pi.on("agent_end", () => {
+    if (session === undefined || !cliAvailable()) return;
+    void session.refresh();
+  });
+
+  // A new prompt replaces the answer of the last HARIL command.
+  pi.on("input", () => {
+    session?.clearOutput();
+  });
+}

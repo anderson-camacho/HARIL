@@ -17,6 +17,9 @@
       "ignoreDependencies": ["@haril/contracts"]
     },
     "integrations/agent-pi": { "ignoreDependencies": ["@haril/contracts"] },
+    "integrations/pi-console": {
+      "entry": ["src/console.ts"]
+    },
     "apps/*": {
       "entry": ["src/**/index.ts"]
     },
