@@ -296,3 +296,54 @@ describe("a live feed that ended", () => {
     expect(text(renderLiveView(state, 120, 30, UNICODE_GLYPHS))).not.toContain("Live feed ended");
   });
 });
+
+describe("models and quota from a real snapshot (phase F6)", () => {
+  it("draws the model's source, its level, the account quota and n/a where nothing is known", () => {
+    const raw = JSON.parse(fixture("snapshot-completed.json"));
+    raw.nodes[1].model = "cliproxy/Gemini1/gemini-3-flash";
+    raw.nodes[1].modelSource = "parent";
+    raw.nodes[1].thinkingLevel = "medium";
+    raw.nodes[1].quota = { window5hPct: 83, weeklyPct: 41 };
+    raw.nodes[2].thinkingLevel = null;
+    raw.nodes[2].quota = null;
+    raw.quota = [
+      {
+        provider: "cliproxy",
+        credential: "Gemini1",
+        window5hPct: 83,
+        weeklyPct: 41,
+        resetAt: NOW + 3_600_000,
+        note: "over 80% of its 5-hour window: avoided",
+      },
+      {
+        provider: "cliproxy",
+        credential: "codex acct-0000000000b2",
+        window5hPct: null,
+        weeklyPct: null,
+        resetAt: null,
+        note: "sin dato: no usage probe for codex",
+      },
+    ];
+    const parsed = parseSnapshotLine(JSON.stringify(raw));
+    if (parsed === undefined) throw new Error("not a snapshot");
+    let state = reduceOrchestration(initialOrchestrationState(), {
+      type: "real-snapshot",
+      snapshot: parsed,
+      now: NOW,
+    }).state;
+    state = select(state, "d1");
+    const parent = text(renderOrchestrationView(state, 140, 45, UNICODE_GLYPHS));
+    // The detail column is narrow: the source shows as "(fr…" there and whole in the live view's header.
+    expect(parent).toContain("cliproxy/Gemini1/gemini-3-flash · medium (fr");
+    expect(parent).toMatch(/5h +83%/);
+    state = select(state, "e1");
+    const unknown = text(renderOrchestrationView(state, 140, 45, UNICODE_GLYPHS));
+    expect(unknown).toContain("level n/a");
+    expect(unknown).toMatch(/5h +n\/a/);
+    state = reduceOrchestration(state, { type: "set-view", view: "quota" }).state;
+    const quota = text(renderOrchestrationView(state, 140, 45, UNICODE_GLYPHS));
+    expect(quota).toContain("Gemini1");
+    expect(quota).toContain("sin dato: no usage probe for codex");
+    expect(quota).toContain("n/a");
+  });
+});

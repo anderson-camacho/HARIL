@@ -5,6 +5,7 @@ import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_INVALID, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
 import { clockFor, storeAccess } from "../host.js";
 import { dataDirFor, openExisting, queueCommand, withProject } from "./common.js";
+import { storeQuota } from "./snapshot-quota.js";
 import { buildWorkflowSnapshot, headerLines, treeLines } from "./workflow-snapshot.js";
 
 // `haril workflow start|list|show|continue` (docs/modos-y-delegacion.md 6, 3.13; phase F2). start queues workflow.start
@@ -212,8 +213,10 @@ export function workflowShow(args: readonly string[], io: CliIo, host: HostInfo)
   const [workflowId, ...extra] = parsed.positionals;
   if (workflowId === undefined || extra.length > 0) return fail(io, SHOW_USAGE);
   return withWorkflow(io, host, lastValue(parsed, "--data-dir"), workflowId, (store, workflow) => {
+    const now = clockFor(host).now();
     const snapshot = buildWorkflowSnapshot(store, workflow.workflowId, {
-      now: clockFor(host).now(),
+      now,
+      ...storeQuota(store, host, now),
     });
     if (parsed.flags.has("--json")) {
       io.out(JSON.stringify(snapshot));

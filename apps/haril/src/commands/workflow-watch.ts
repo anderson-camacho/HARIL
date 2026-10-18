@@ -5,6 +5,7 @@ import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
 import { clockFor } from "../host.js";
 import { dataDirFor, openExisting } from "./common.js";
+import { storeQuota } from "./snapshot-quota.js";
 import { EXIT_ON_STDIN_END, onStdinEnd } from "./stdin-end.js";
 import { buildWorkflowSnapshot } from "./workflow-snapshot.js";
 
@@ -87,7 +88,11 @@ function follow(
   let last = "";
   // Prints the snapshot when forced (a wake) or when it changed; true once the workflow ended.
   const print = (force: boolean): boolean => {
-    const snapshot = buildWorkflowSnapshot(store, workflowId, { now: clock.now() });
+    const now = clock.now();
+    const snapshot = buildWorkflowSnapshot(store, workflowId, {
+      now,
+      ...storeQuota(store, host, now),
+    });
     const current = fingerprint(snapshot);
     if (force || current !== last) io.out(JSON.stringify(snapshot));
     last = current;

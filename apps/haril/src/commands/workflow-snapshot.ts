@@ -112,7 +112,47 @@ interface NodeContext {
   readonly audits: readonly AuditRecord[];
   readonly usage: readonly UsageRecord[];
   readonly memos: ReadonlyMap<string, string | null>;
+  // The model a parent proposed for a child, by proposalKey (null: it left the choice to the table).
+  readonly proposed: ReadonlyMap<string, string | null>;
+  // The reasoning level each attempt ran at, by task, when the runtime knew it (event model.selected).
+  readonly levels: ReadonlyMap<string, string | null>;
   readonly options: SnapshotOptions;
+}
+
+function proposalKey(delegationId: string, localId: string): string {
+  return `${delegationId}\u0000${localId}`;
+}
+
+// Where a thread's model came from (3.11): the user pinned it, its parent proposed it and the Core accepted it as is, or
+// the difficulty table chose it (also when the parent's choice was replaced).
+function modelSourceOf(thread: ThreadView, context: NodeContext): WorkflowNode["modelSource"] {
+  const latest = thread.turns[thread.turns.length - 1] as WorkflowTaskRecord;
+  if (latest.modelPinned) return "pinned";
+  const made = [...thread.turns].reverse().find((turn) => turn.delegationId !== null);
+  const localId = thread.turns[0]?.localId ?? null;
+  const proposed =
+    made?.delegationId === null || made?.delegationId === undefined || localId === null
+      ? undefined
+      : context.proposed.get(proposalKey(made.delegationId, localId));
+  return proposed !== undefined && proposed !== null && proposed === latest.model
+    ? "parent"
+    : "table";
+}
+
+// The level of the thread's newest attempt that recorded one.
+function levelOf(thread: ThreadView, context: NodeContext): string | null {
+  for (const turn of [...thread.turns].reverse()) {
+    const level = context.levels.get(turn.taskId);
+    if (level !== undefined) return level;
+  }
+  return null;
+}
+
+function clockOf(ms: number): string {
+  const date = new Date(ms);
+  return [date.getHours(), date.getMinutes(), date.getSeconds()]
+    .map((value) => String(value).padStart(2, "0"))
+    .join(":");
 }
 
 // Retries of an executor thread: its relaunched turns, not counting a reformulation after an escalation.
@@ -209,6 +249,15 @@ function nodeOf(thread: ThreadView, context: NodeContext): WorkflowNode {
           : "ready, waiting for capacity";
       break;
     case "blocked":
+      if (latest.blockReason === "cooldown") {
+        // 3.11: its model is cooling down (a 402 or 429) or over its quota; it runs again when that ends.
+        state = "waiting";
+        waitingReason =
+          latest.cooldownUntil === null
+            ? "waits for its model's cooldown"
+            : `cooldown until ${clockOf(latest.cooldownUntil)} (${latest.model ?? "its model"})`;
+        break;
+      }
       state = latest.blockReason === "awaiting_human" ? "awaiting_human" : "failed";
       waitingReason =
         latest.blockReason === "dep_failed" ? "a dependency failed" : latest.blockReason;
@@ -238,8 +287,8 @@ function nodeOf(thread: ThreadView, context: NodeContext): WorkflowNode {
     goal: thread.turns[0]?.goal ?? "",
     state,
     model,
-    modelSource: latest.modelPinned ? "pinned" : "table",
-    thinkingLevel: null,
+    modelSource: modelSourceOf(thread, context),
+    thinkingLevel: levelOf(thread, context),
     tokens: sum(rows.map((row) => row.tokensIn)) + sum(rows.map((row) => row.tokensOut)),
     elapsedMs: rows.length === 0 ? null : sum(rows.map((row) => row.durationMs)),
     lastProgress:
@@ -293,8 +342,31 @@ export function buildWorkflowSnapshot(
   const audits = store.workflows.audits(workflowId);
   const usage = store.usageLog.usage({ workflowId });
   const memos = new Map<string, string | null>();
-  for (const delegation of store.workflows.delegations(workflowId))
+  const proposed = new Map<string, string | null>();
+  for (const delegation of store.workflows.delegations(workflowId)) {
     memos.set(delegation.threadId, delegation.memo);
+    const payload = delegation.payload as Record<string, unknown> | null;
+    const items = payload?.delegations ?? payload?.assignments;
+    for (const item of Array.isArray(items) ? items : []) {
+      const child = item as { localId?: unknown; model?: unknown };
+      if (typeof child.localId !== "string") continue;
+      proposed.set(
+        proposalKey(delegation.delegationId, child.localId),
+        typeof child.model === "string" ? child.model : null,
+      );
+    }
+  }
+  const projectEvents = store.events.list({ projectId: workflow.projectId });
+  const levels = new Map<string, string | null>();
+  for (const event of projectEvents) {
+    const payload = event.payload as { workflowId?: unknown; thinkingLevel?: unknown };
+    if (event.type !== "model.selected" || payload.workflowId !== workflowId) continue;
+    if (event.taskId === null || event.taskId === undefined) continue;
+    levels.set(
+      event.taskId,
+      typeof payload.thinkingLevel === "string" ? payload.thinkingLevel : null,
+    );
+  }
   const context: NodeContext = {
     workflow,
     threads: threadMap,
@@ -302,6 +374,8 @@ export function buildWorkflowSnapshot(
     audits,
     usage,
     memos,
+    proposed,
+    levels,
     options,
   };
 
@@ -322,8 +396,7 @@ export function buildWorkflowSnapshot(
   const limits = workflow.limits as Readonly<Record<string, unknown>>;
   const live = (role: WorkflowTaskRecord["role"]) =>
     tasks.filter((task) => task.role === role && task.state === "running").length;
-  const events = store.events
-    .list({ projectId: workflow.projectId })
+  const events = projectEvents
     .filter(
       (event) =>
         event.aggregateId === workflowId ||
