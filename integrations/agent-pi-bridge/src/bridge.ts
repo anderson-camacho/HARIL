@@ -1,9 +1,12 @@
 // HARIL bridge: a Pi extension loaded with `-e` (ADR-0004 decision 5, ARCHITECTURE 9.4). It sends the
 // handshake `hello` over the run's pipe, registers the `haril` provider, the `read` tool and, for a plan task,
 // `haril_propose_plan` (LD-T4), and for a workflow turn the delegation tools its role is announced (phase F2b:
-// haril_delegate, haril_assign, haril_report, haril_verdict, haril_request_audit, haril_abort). It forwards every tool
-// operation to the Runtime, which decides. It serves nothing that writes, edits or runs a command: a name it does not
-// serve is never registered, so the hello leaves it out and the Runtime's handshake refuses the run. Self-contained:
+// haril_delegate, haril_assign, haril_report, haril_verdict, haril_request_audit, haril_abort). A turn of a workflow that
+// writes (phase F8) is also announced its workspace tools: write and edit (Pi's own shapes), haril_run, haril_merge,
+// haril_merge_continue and haril_merge_abort; they go to the Runtime like the delegation tools, and the Runtime does
+// them inside the turn's git worktree and declared surface. It forwards every tool operation to the Runtime, which
+// decides. Pi's shell and search tools are never served: a name it does not serve is never registered, so the hello
+// leaves it out and the Runtime's handshake refuses the run. Self-contained:
 // node:* imports and local types only (R6), so it bundles into one file. The shapes below follow Pi 1.2.0's
 // ExtensionAPI types (ProviderConfig, ProviderChatModelConfig, ToolDefinition, AgentToolResult), which are read-only
 // under vendor/pi/1.2.0.
@@ -146,7 +149,8 @@ function readTool(channel: Channel, nextId: () => string): BridgeToolDefinition 
   return {
     name: "read",
     label: "Read",
-    description: "Read a UTF-8 text file inside the project. The runtime decides what may be read.",
+    description:
+      "Read a UTF-8 text file inside the project (your worktree, in a workflow that writes). The runtime decides what may be read.",
     parameters: {
       type: "object",
       properties: { path: { type: "string" } },
@@ -304,7 +308,9 @@ const DELEGATION_TOOLS: Readonly<Record<string, DelegationToolSpec>> = {
                 type: "object",
                 description: "The step's surface, as paths or globs relative to the project root.",
                 properties: {
-                  write: texts("Always [] for now: executors cannot write yet."),
+                  write: texts(
+                    "The globs the step may write; [] when it only reads, and always [] in a read-only workflow.",
+                  ),
                   read: texts("The files the step reads."),
                 },
                 required: ["write", "read"],
@@ -399,6 +405,79 @@ const DELEGATION_TOOLS: Readonly<Record<string, DelegationToolSpec>> = {
       properties: { reason: text("Why the workflow cannot reach its goal.") },
       required: ["reason"],
     },
+  },
+  // The workspace tools of a turn in a git worktree (phase F8). None of them decides the turn.
+  write: {
+    label: "Write",
+    description:
+      "Write a whole file in your worktree, creating it or replacing it, with its folders. The path is relative to the project root and must be inside your write surface; .git, .haril and secret files are refused.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: text("The file's path relative to the project root."),
+        content: text("The file's whole new content."),
+      },
+      required: ["path", "content"],
+    },
+  },
+  edit: {
+    label: "Edit",
+    description:
+      "Edit a file in your worktree with exact text replacements. Each edits[].oldText must appear exactly once in the file and the edits must not overlap; the path must be inside your write surface.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: text("The file's path relative to the project root."),
+        edits: {
+          type: "array",
+          description: "One or more replacements, each matched against the original file.",
+          items: {
+            type: "object",
+            properties: {
+              oldText: text("Exact text to replace; it must be unique in the file."),
+              newText: text("The replacement text."),
+            },
+            required: ["oldText", "newText"],
+          },
+        },
+      },
+      required: ["path", "edits"],
+    },
+  },
+  haril_run: {
+    label: "Run command",
+    description:
+      "Run one allowed command in your worktree, for example the tests: the program and its arguments, never a shell line. The answer has its exit code and the end of its output.",
+    parameters: {
+      type: "object",
+      properties: {
+        command: text('The program, for example "npm".'),
+        args: texts('Its arguments, for example ["test"].'),
+      },
+      required: ["command"],
+    },
+  },
+  haril_merge: {
+    label: "Merge step",
+    description:
+      "Delegator only: merge one of your approved steps into the integration branch. When it conflicts, the answer lists the conflicting files: fix them with edit or write, then call haril_merge_continue.",
+    parameters: {
+      type: "object",
+      properties: { localId: text("The step's localId.") },
+      required: ["localId"],
+    },
+  },
+  haril_merge_continue: {
+    label: "Continue merge",
+    description:
+      "Delegator only: commit the merge whose conflicts you resolved; refused while a file still holds a conflict marker.",
+    parameters: { type: "object", properties: {}, required: [] },
+  },
+  haril_merge_abort: {
+    label: "Abort merge",
+    description:
+      "Delegator only: give up the merge that waits for its conflicts; the integration branch stays as it was.",
+    parameters: { type: "object", properties: {}, required: [] },
   },
 };
 
