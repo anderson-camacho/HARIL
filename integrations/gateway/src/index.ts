@@ -19,6 +19,7 @@ export {
   type ChatMessage,
   type ChatRequest,
   createOpenAiCompatibleClient,
+  type ModelDetail,
   type OpenAiCompatibleClient,
   type OpenAiCompatibleOptions,
 } from "./providers/openai-compatible.js";

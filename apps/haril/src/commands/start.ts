@@ -4,7 +4,9 @@ import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_ERROR, EXIT_USAGE, type HostInfo } from "../context.js";
 import { agentRuntimeFor, clockFor } from "../host.js";
 import { createDelegationTools } from "../runtime/delegation-tools.js";
+import { createLiveModels } from "../runtime/live-models.js";
 import { memoryLeftLine } from "../runtime/memory.js";
+import { withStoreState } from "../runtime/model-context.js";
 import { createPlanProposals } from "../runtime/plan-proposals.js";
 import { createRealAgents } from "../runtime/real-agent.js";
 import { runUntilIdle } from "../runtime/run-loop.js";
@@ -19,6 +21,8 @@ import { dataDirFor, failureReasonText, openExisting } from "./common.js";
 // `--started-by shell` (LD-T6, ADR-0022) is how haril shell starts it: the same runtime, which also records
 // runtime.started_by_shell once it holds the lease, because the shell never writes the store.
 const IDLE_EXIT_SEC = 120;
+// How long the start waits for the first catalog reading (phase F6).
+const CATALOG_HEAD_START_MS = 3_000;
 const STARTED_BY_SHELL = "shell";
 const START_USAGE =
   "usage: haril start [--project <slug>] [--json] [--data-dir <path>] [--idle-exit-sec <n>] [--started-by shell]";
@@ -75,8 +79,16 @@ async function serve(
   // The host handler of haril_propose_plan (LD-T4): a plan task's proposal becomes a requested approval. Both lanes get
   // the same handler, so the run loop opens one attempt window whichever runtime serves the plan task.
   const planProposals = createPlanProposals(store);
+  // The models of real workflows (phase F6): the live catalog, the difficulty table, the quota and the cooldowns. The
+  // delegation tools check a proposal against the same models the run loop decides with.
+  const liveModels = createLiveModels({ host, store, clock: clockFor(host) });
+  const delegation = liveModels.options;
   // The host handler of the delegation tools (phase F2): the workflow turns of every lane call it.
-  const delegationTools = createDelegationTools({ store, clock: clockFor(host) });
+  const delegationTools = createDelegationTools({
+    store,
+    clock: clockFor(host),
+    options: withStoreState(store, delegation),
+  });
   // The real lane (M2-T6): the analyst, the planner and the workflow archetypes in Pi through one Broker, closed when
   // the run ends. A real workflow turn's tool calls reach the same delegation tools as a fake one's (phase F2b).
   const realAgents = createRealAgents({
@@ -119,6 +131,9 @@ async function serve(
         )
       : control;
 
+    // The first turns see the catalog when the gateway answers within a few seconds; otherwise they start with the
+    // orchestrator's model and the catalog arrives in the background.
+    await liveModels.ready(CATALOG_HEAD_START_MS);
     const result = await runUntilIdle({
       store,
       agentRuntime: agentRuntimeFor(host, planProposals.propose, delegationTools.call),
@@ -128,6 +143,7 @@ async function serve(
       realAgents,
       planProposals,
       delegationTools,
+      delegation,
       control: channel,
       idleExitMs: idleExitSec * 1000,
       startedByShell: startedBy === STARTED_BY_SHELL,
@@ -177,6 +193,7 @@ async function serve(
   } finally {
     detach();
     await realAgents.close();
+    await liveModels.close();
     store.close();
   }
 }

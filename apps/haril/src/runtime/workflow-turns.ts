@@ -31,6 +31,8 @@ import {
 // rework state is read back from the store every time, so a restart continues with the same counts.
 
 const MAX_SIBLINGS = 20;
+// The models a parent's prompt lists at most when the table names none (a live catalog lists dozens).
+const MAX_CAPACITY_MODELS = 40;
 
 const SIBLING_STATE: Readonly<Record<string, DelegationSibling["state"]>> = {
   running: "running",
@@ -59,11 +61,16 @@ function capacityOf(
     task.role === "orchestrator" ? "delegator" : task.role === "delegator" ? "executor" : null;
   const context = settings.models(now);
   const allow = childRole === null ? [] : (context.allow[childRole] ?? []);
+  // The models the difficulty table recommends for some class (3.11: the parent chooses by task, quota and table), or the
+  // catalog's first ones when the table names none.
+  const recommended = new Set(Object.values(context.table.classes).flatMap((rule) => rule.order));
   const models =
     childRole === null
       ? []
       : context.catalog
           .filter((entry) => allow.length === 0 || allow.includes(entry.ref))
+          .filter((entry) => recommended.size === 0 || recommended.has(entry.ref))
+          .slice(0, MAX_CAPACITY_MODELS)
           .map((entry) => {
             const quota = evaluateQuota(context.quota[entry.quotaKey], false, context.policy);
             return {

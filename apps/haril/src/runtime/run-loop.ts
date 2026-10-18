@@ -671,6 +671,26 @@ async function startWorkflowTurn(
   }
   const settings = workflowSettings(view.workflow, options.delegation);
   const delegation = buildTurnInput(view, task, settings, clock.now());
+  // The model and reasoning level the attempt runs at (3.11, 7.10): the snapshot shows them. Agents send no reasoning
+  // level, so the gateway's default level applies; it is known when the live catalog published it.
+  const levelOf = options.delegation?.levelOf;
+  if (levelOf !== undefined && task.model !== null) {
+    store.events.append({
+      aggregateType: "task",
+      aggregateId: task.taskId,
+      type: "model.selected",
+      actorKind: "system",
+      actorId: "runtime",
+      payload: {
+        workflowId: view.workflow.workflowId,
+        model: task.model,
+        thinkingLevel: levelOf(task.model),
+      },
+      projectId: view.workflow.projectId,
+      taskId: task.taskId,
+      runId: claimed.runId,
+    });
+  }
   const spec = buildAgentSpec(
     { ...claimed, delegation },
     { runId: claimed.runId, attempt: claimed.attempt },
