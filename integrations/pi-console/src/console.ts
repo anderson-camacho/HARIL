@@ -343,10 +343,14 @@ export default function harilConsole(pi: ConsolePi): void {
     void runDashboardAction(action, current.ctx, pi, current);
   }
 
-  // The light timer runs only while there is something to follow, and never keeps Pi alive.
+  // The light timer runs only while there is something to follow, and never keeps Pi alive. A real workflow on screen
+  // (the ORCHESTRATION panel or the full view) is something to follow: its relative times move with the timer.
   function followTimer(current: Session): void {
     const busy = current.runtimeAlive === true || current.started?.running === true;
-    const wanted = !current.closed && (busy || current.pending.length > 0);
+    const watching =
+      (current.area === "orchestration" || current.orchestrationOpen) &&
+      current.orchestration.real !== undefined;
+    const wanted = !current.closed && (busy || watching || current.pending.length > 0);
     if (wanted && current.timer === undefined) {
       current.timer = setInterval(() => void current.refresh(), REFRESH_MS);
       current.timer.unref();
@@ -392,6 +396,8 @@ export default function harilConsole(pi: ConsolePi): void {
         onSnapshot: (snapshot) => {
           orchestrate(current, { type: "real-snapshot", snapshot, now: Date.now() });
           syncLive(current);
+          // A real workflow on screen keeps the light timer running, so its relative times move.
+          followTimer(current);
           redraw();
         },
         onTail: (nodeId, lines) => {
@@ -603,9 +609,12 @@ export default function harilConsole(pi: ConsolePi): void {
             current.pendingAvailable = status.pending !== undefined;
             if (status.pending !== undefined) current.pending = status.pending;
           } while (current.refreshAgain);
-          // A workflow started elsewhere (another terminal) is found while ORCHESTRATION shows.
-          if (current.area === "orchestration" || current.orchestrationOpen)
+          // A workflow started elsewhere (another terminal) is found while ORCHESTRATION shows, and the real view's
+          // relative times move on even when no snapshot came.
+          if (current.area === "orchestration" || current.orchestrationOpen) {
+            orchestrate(current, { type: "tick", now: Date.now() });
             void current.feed.refresh();
+          }
           followTimer(current);
           redraw();
         })().finally(() => {

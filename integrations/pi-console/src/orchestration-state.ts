@@ -42,9 +42,8 @@ export interface OrchestrationState {
   // What the view draws: the demo's sample data while the demo is on, else the real snapshot (or none).
   readonly snapshot: WorkflowSnapshot | undefined;
   readonly demo: boolean;
-  // The newest real snapshot (haril workflow watch) and when it arrived, kept while the demo shows.
+  // The newest real snapshot (haril workflow watch), kept while the demo shows.
   readonly real: WorkflowSnapshot | undefined;
-  readonly realClock: number;
   // The project's workflows (haril workflow list), newest first, for the choice of the one to follow.
   readonly workflows: readonly WorkflowChoice[];
   // The live view's lines (haril workflow tail) and the node they belong to.
@@ -102,6 +101,9 @@ export type OrchestrationAction =
   | { readonly type: "real-snapshot"; readonly snapshot: WorkflowSnapshot; readonly now: number }
   | { readonly type: "workflows"; readonly rows: readonly WorkflowChoice[] }
   | { readonly type: "tail"; readonly nodeId: string; readonly lines: readonly TailLine[] }
+  // The console's status timer: the real view's relative times (last progress, next check) move on with no new
+  // snapshot, since haril workflow watch prints only when the workflow changed.
+  | { readonly type: "tick"; readonly now: number }
   | { readonly type: "close" };
 
 // Effects only the console can carry out: closing the overlay, opening it, the real emergency stop (■ STOP ALL,
@@ -132,7 +134,6 @@ export function initialOrchestrationState(): OrchestrationState {
     snapshot: undefined,
     demo: false,
     real: undefined,
-    realClock: 0,
     workflows: [],
     live: NO_LIVE_LINES,
     clock: 0,
@@ -322,7 +323,7 @@ function takeReal(
   snapshot: WorkflowSnapshot,
   now: number,
 ): OrchestrationState {
-  const next = { ...state, real: snapshot, realClock: now };
+  const next = { ...state, real: snapshot };
   if (state.demo) return next;
   const sameWorkflow = state.snapshot?.workflow.id === snapshot.workflow.id;
   const kept =
@@ -347,14 +348,14 @@ function takeTail(
   return { ...state, live: { nodeId, lines: [...previous, ...lines].slice(-LIVE_LINES) } };
 }
 
-// Turning the demo off brings back the real snapshot that waited, if any.
-function leaveDemo(state: OrchestrationState): OrchestrationState {
+// Turning the demo off brings back the real snapshot that waited, if any, drawn at the current time.
+function leaveDemo(state: OrchestrationState, now: number): OrchestrationState {
   const real = state.real;
   return {
     ...state,
     snapshot: real,
     demo: false,
-    clock: state.realClock,
+    clock: now,
     selectedNodeId: real === undefined ? undefined : treeOrder(real.nodes)[0]?.id,
     quotaCursor: 0,
     logCursor: 0,
@@ -434,7 +435,9 @@ export function reduceOrchestration(
       return done({ ...state, view: "log", logFilter: action.filter, logCursor: 0 });
     case "toggle-demo":
       // The DEMO label (or the empty state) already says what changed: no status line.
-      return done(state.demo ? leaveDemo(state) : loadDemo(state, action.now, undefined));
+      return done(
+        state.demo ? leaveDemo(state, action.now) : loadDemo(state, action.now, undefined),
+      );
     case "simulate-watchdog":
       return done(simulateWatchdog(state));
     case "stop-all":
@@ -458,6 +461,11 @@ export function reduceOrchestration(
       );
     case "tail":
       return done(takeTail(state, action.nodeId, action.lines));
+    case "tick":
+      // The demo keeps its own fixed clock (its sample times are drawn relative to it).
+      return done(
+        state.demo || state.snapshot === undefined ? state : { ...state, clock: action.now },
+      );
     case "close":
       return done(state, "close");
   }

@@ -218,3 +218,41 @@ describe("the live view of a real agent", () => {
     expect(drawn).toContain("LIVE · Orchestrator 1 o1");
   });
 });
+
+describe("relative times on real data", () => {
+  it("keep moving with no new snapshot: last progress and next check follow the console's clock", () => {
+    const awaiting = snapshot("snapshot-awaiting.json");
+    const o1 = awaiting.nodes.find((node) => node.id === "o1");
+    const progressAt = o1?.lastProgress?.at ?? 0;
+    let state = reduceOrchestration(initialOrchestrationState(), {
+      type: "real-snapshot",
+      snapshot: awaiting,
+      now: progressAt + 10_000,
+    }).state;
+    state = select(state, "o1");
+    const before = text(renderOrchestrationView(state, 140, 45, UNICODE_GLYPHS));
+    expect(before).toContain("10 s ago");
+    state = reduceOrchestration(state, { type: "tick", now: progressAt + 130_000 }).state;
+    const after = text(renderOrchestrationView(state, 140, 45, UNICODE_GLYPHS));
+    expect(after).toContain("2 min ago");
+    expect(after).not.toContain("10 s ago");
+    expect(after).not.toEqual(before);
+  });
+
+  it("leaves the demo at the current time, not at the time of the last real snapshot", () => {
+    let state = real("snapshot-awaiting.json");
+    state = reduceOrchestration(state, { type: "toggle-demo", now: NOW + 1_000 }).state;
+    state = reduceOrchestration(state, { type: "toggle-demo", now: NOW + 600_000 }).state;
+    expect(state.demo).toBe(false);
+    expect(state.clock).toBe(NOW + 600_000);
+  });
+
+  it("does not move the demo's own clock", () => {
+    let state = reduceOrchestration(initialOrchestrationState(), {
+      type: "toggle-demo",
+      now: NOW,
+    }).state;
+    state = reduceOrchestration(state, { type: "tick", now: NOW + 60_000 }).state;
+    expect(state.clock).toBe(NOW);
+  });
+});
