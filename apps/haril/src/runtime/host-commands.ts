@@ -9,14 +9,18 @@ import { delimiter, isAbsolute, join, win32 } from "node:path";
 //     pnpm, yarn, corepack) and a node package's command shim run as `node <its script>` instead, and any other batch
 //     file is refused;
 //   - the allow list decides: an entry ("npm test") allows exactly that argv, and an entry ending in " *" ("npm test *")
-//     allows any further arguments after it;
+//     allows further arguments after it, except an argument that loads code or moves where the command runs
+//     (--import, --require, -r, --loader, --config, -c, --prefix, -C, --dir, --cwd, --script-shell, --userconfig,
+//     --globalconfig, --node-options, --eval, -e, --inspect...), an absolute path or one with "..". The default list has
+//     exact entries only;
 //   - a clean environment: only the variables a program needs to start (PATH, the system and profile folders, the
 //     temporary folders, the locale), plus CI=true and the switches that keep tools quiet. No key, token or other
 //     variable of the runtime reaches the command;
 //   - a time limit (the command's tree is killed when it passes) and an output limit (the end of each stream is kept);
 //   - the result comes back as data: the exit code, whether it timed out, the duration and the end of its output.
 // N0 (3.10.6): there is no sandbox. An allowed command such as `npm test` runs the project's own code with the user's
-// rights; the allow list is the boundary, and the user owns it.
+// rights, and that code is what the agents wrote: a test script can do anything the user can. The allow list is the
+// boundary, and the user owns it; the refused arguments only keep a "*" entry from naming other code or another folder.
 
 export interface HostCommandSettings {
   // The allow list, as its entries are spelled ("npm test", "pnpm run build", "npm test *").
@@ -30,6 +34,37 @@ export interface HostCommandSettings {
 // starts; without them the defaults of @haril/contracts apply (DEFAULT_COMMAND_ALLOW, 5 minutes, 16 KiB).
 
 const WILDCARD = "*";
+
+// Arguments a "*" entry never lets through: each loads code or moves where the command runs. A "--name=value" form is
+// refused like "--name", and every "--inspect" variant with it.
+const REFUSED_FLAGS = new Set([
+  "--import",
+  "--require",
+  "-r",
+  "--loader",
+  "--experimental-loader",
+  "--config",
+  "-c",
+  "--prefix",
+  "-C",
+  "--dir",
+  "--cwd",
+  "--script-shell",
+  "--userconfig",
+  "--globalconfig",
+  "--node-options",
+  "--eval",
+  "-e",
+]);
+
+// Whether an argument after a "*" entry's fixed part is refused: a flag of REFUSED_FLAGS (or any --inspect form), an
+// absolute path (POSIX, a drive or a share) or a path that climbs with "..".
+function refusedExtra(argument: string): boolean {
+  const flag = argument.split("=")[0] as string;
+  if (REFUSED_FLAGS.has(flag) || flag.startsWith("--inspect")) return true;
+  if (/^([\\/]|[A-Za-z]:)/.test(argument) || isAbsolute(argument)) return true;
+  return argument.split(/[\\/]/).includes("..");
+}
 
 function isProgramName(command: string): boolean {
   return (
@@ -66,7 +101,8 @@ export function allowedCommand(
       return false;
     }
     if (prefix ? args.length < rest.length : args.length !== rest.length) return false;
-    return rest.every((token, index) => args[index] === token);
+    if (!rest.every((token, index) => args[index] === token)) return false;
+    return args.slice(rest.length).every((argument) => !refusedExtra(argument));
   });
 }
 

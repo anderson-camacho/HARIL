@@ -73,7 +73,6 @@
     "commands": {
       "allow": [
         "npm test",
-        "npm test *",
         "npm run test",
         "npm run build",
         "npm run lint",
@@ -81,7 +80,6 @@
         "npm run typecheck",
         "npm ci",
         "pnpm test",
-        "pnpm test *",
         "pnpm run test",
         "pnpm run build",
         "pnpm run lint",
@@ -712,7 +710,6 @@
       },
       "value": [
         "npm test",
-        "npm test *",
         "npm run test",
         "npm run build",
         "npm run lint",
@@ -720,7 +717,6 @@
         "npm run typecheck",
         "npm ci",
         "pnpm test",
-        "pnpm test *",
         "pnpm run test",
         "pnpm run build",
         "pnpm run lint",
@@ -742,7 +738,6 @@
       ],
       "default": [
         "npm test",
-        "npm test *",
         "npm run test",
         "npm run build",
         "npm run lint",
@@ -750,7 +745,6 @@
         "npm run typecheck",
         "npm ci",
         "pnpm test",
-        "pnpm test *",
         "pnpm run test",
         "pnpm run build",
         "pnpm run lint",

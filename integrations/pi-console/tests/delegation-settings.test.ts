@@ -89,7 +89,7 @@ describe("the delegation settings as the console shows them", () => {
     expect(decoded.fields).toHaveLength(48);
     expect(valueText(field("limits.maxConcurrent.writers"))).toBe("5");
     expect(sourceText(field("limits.maxConcurrent.writers"))).toBe("inherits");
-    expect(valueText(field("commands.allow"))).toMatch(/^npm test, npm test \*, /);
+    expect(valueText(field("commands.allow"))).toMatch(/^npm test, npm run test, /);
     expect(valueText(field("commands.timeoutMs"))).toBe("5 min");
     expect(valueText(field("commands.outputMaxBytes"))).toBe("16,384");
     expect(valueText(field("context.perLayer.orchestrator"))).toBe("400,000 tokens");

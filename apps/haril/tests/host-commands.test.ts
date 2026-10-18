@@ -65,6 +65,56 @@ describe("allowedCommand", () => {
     expect(allowedCommand([], "npm", ["test"])).toBe(false);
   });
 
+  it("refuses, after an entry's *, an argument that loads code or moves where the command runs", () => {
+    // The probes that ran an agent-written file or another folder's script through "npm test *" and "pnpm test *".
+    expect(
+      allowedCommand(["npm test *"], "npm", ["test", "--", "--import", "./docs/evil.mjs"]),
+    ).toBe(false);
+    expect(allowedCommand(["npm test *"], "npm", ["test", "--import=./docs/evil.mjs"])).toBe(false);
+    expect(allowedCommand(["npm test *"], "npm", ["test", "--prefix", "elsewhere"])).toBe(false);
+    expect(allowedCommand(["pnpm test *"], "pnpm", ["test", "-C", "sub"])).toBe(false);
+    for (const flag of [
+      "--require",
+      "-r",
+      "--loader",
+      "--experimental-loader",
+      "--config",
+      "-c",
+      "--dir",
+      "--cwd",
+      "--script-shell",
+      "--userconfig",
+      "--globalconfig",
+      "--node-options",
+      "--eval",
+      "-e",
+      "--inspect",
+      "--inspect-brk=9229",
+    ]) {
+      expect([flag, allowedCommand(["npm test *"], "npm", ["test", flag, "x"])]).toEqual([
+        flag,
+        false,
+      ]);
+    }
+    // An absolute path or a climb out of the worktree in any extra argument.
+    expect(allowedCommand(["npm test *"], "npm", ["test", "--", "/etc/passwd"])).toBe(false);
+    expect(allowedCommand(["npm test *"], "npm", ["test", "--", "C:\\Windows\\x"])).toBe(false);
+    expect(allowedCommand(["npm test *"], "npm", ["test", "--", "../outside.test.js"])).toBe(false);
+    expect(allowedCommand(["npm test *"], "npm", ["test", "--", "src/../../x"])).toBe(false);
+    // Plain extra arguments still pass.
+    expect(
+      allowedCommand(["npm test *"], "npm", ["test", "--", "-t", "button", "src/a.test.ts"]),
+    ).toBe(true);
+  });
+
+  it("has only exact entries in the default list", () => {
+    expect(DEFAULT_COMMAND_ALLOW.filter((entry) => entry.trim().endsWith("*"))).toEqual([]);
+    expect(allowedCommand(DEFAULT_COMMAND_ALLOW, "npm", ["test", "--prefix", "elsewhere"])).toBe(
+      false,
+    );
+    expect(allowedCommand(DEFAULT_COMMAND_ALLOW, "pnpm", ["test", "-C", ".."])).toBe(false);
+  });
+
   it("refuses a command given as a path, whatever the list says", () => {
     expect(allowedCommand(["node --test"], "./node", ["--test"])).toBe(false);
     expect(allowedCommand(["node --test"], "C:\\tools\\node", ["--test"])).toBe(false);
