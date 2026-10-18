@@ -338,3 +338,29 @@ describe("haril usage", () => {
     expect(h.out.join("\n")).toContain("haril usage log");
   });
 });
+
+describe("simulated rows in haril usage log and summary", () => {
+  it("leaves simulated rows out by default and shows them with --include-simulated", async () => {
+    seed();
+    const store = seedStore();
+    try {
+      now = T0 + 3.5 * HOUR;
+      store.usageLog.appendUsage(usageRow({ runId: "run-sim", simulated: true, tokensIn: 7 }));
+    } finally {
+      store.close();
+    }
+    expect(await invoke(["usage", "log", "--kind", "agent_run"])).toBe(0);
+    expect(h.out.some((line) => line.includes("run:run-sim"))).toBe(false);
+    expect(await invoke(["usage", "log", "--kind", "agent_run", "--include-simulated"])).toBe(0);
+    expect(h.out.some((line) => line.includes("run:run-sim"))).toBe(true);
+    expect(await invoke(["usage", "summary", "--by", "role", "--json"])).toBe(0);
+    const real = parseJson<{ rows: { key: string; rows: number }[] }>(h.out).rows;
+    expect(
+      await invoke(["usage", "summary", "--by", "role", "--json", "--include-simulated"]),
+    ).toBe(0);
+    const all = parseJson<{ rows: { key: string; rows: number }[] }>(h.out).rows;
+    const executors = (rows: { key: string; rows: number }[]) =>
+      rows.find((row) => row.key === "executor")?.rows ?? 0;
+    expect(executors(all)).toBe(executors(real) + 1);
+  });
+});

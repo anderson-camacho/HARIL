@@ -19,6 +19,7 @@ import { openStore } from "@haril/state-sqlite";
 import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_INVALID, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
 import { clockFor, storeAccess } from "../host.js";
+import { dataDirFor } from "./common.js";
 import { parseInstant } from "./usage-format.js";
 import { type DemoResult, runDemoWorkflow } from "./workflow-demo-run.js";
 import { buildWorkflowSnapshot, headerLines, treeLines } from "./workflow-snapshot.js";
@@ -32,9 +33,11 @@ import { buildWorkflowSnapshot, headerLines, treeLines } from "./workflow-snapsh
 
 const USAGE = [
   "usage: haril workflow demo [--goal <text>] [--seed <n>] [--delegators <n>] [--executors <n>] [--stop-at <stops>]",
-  "                           [--start <time>] [--data-dir <path>] [--json]",
+  "                           [--start <time>] [--data-dir <path> [--allow-real-data-dir]] [--json]",
   "  runs a simulated three-layer workflow (orchestrator, delegators, executors and auditors) with the fake agents",
-  "  on a temporary store, removed at the end; --data-dir <path> keeps the rows there (never the default data dir).",
+  "  on a temporary store, removed at the end. --data-dir <path> keeps the rows in that folder instead; it refuses the",
+  "  default HARIL data directory (where your real work lives) unless --allow-real-data-dir is given. The rows are marked",
+  "  simulated, and haril usage log and summary leave them out unless --include-simulated.",
   "  --stop-at takes stops such as after_plan or after_node:part-1, comma separated; without it the run is autonomous.",
 ].join("\n");
 
@@ -203,7 +206,7 @@ function demo(args: readonly string[], io: CliIo, host: HostInfo): number {
       "--start",
       "--data-dir",
     ],
-    flags: ["--json"],
+    flags: ["--json", "--allow-real-data-dir"],
   });
   const problem = argsProblem(parsed, io);
   if (problem !== null) return problem;
@@ -231,7 +234,10 @@ function demo(args: readonly string[], io: CliIo, host: HostInfo): number {
       `--stop-at has an unknown stop "${badStop}" (after_plan, after_node:<id>, on_audit_failure, on_budget_pct:<n>, at_end)`,
     );
   }
-  const dataDirFlag = lastValue(parsed, "--data-dir");
+  // An empty --data-dir counts as unset, as in every other command: the demo then uses a temporary store.
+  const dataDirText = lastValue(parsed, "--data-dir");
+  const dataDirFlag =
+    dataDirText === undefined || dataDirText.trim() === "" ? undefined : dataDirText;
   const startText = lastValue(parsed, "--start");
   const start =
     startText === undefined
@@ -242,6 +248,15 @@ function demo(args: readonly string[], io: CliIo, host: HostInfo): number {
   if (start === null) return fail("--start takes an ISO 8601 date or time, or epoch milliseconds");
 
   const temporary = dataDirFlag === undefined;
+  if (
+    !temporary &&
+    !parsed.flags.has("--allow-real-data-dir") &&
+    samePath(resolve(host.cwd ?? process.cwd(), dataDirFlag), dataDirFor(host, undefined), host)
+  ) {
+    return fail(
+      "--data-dir names the default HARIL data directory, where your real work lives; give another folder, or add --allow-real-data-dir to write the simulated rows there",
+    );
+  }
   const dataDir = temporary
     ? mkdtempSync(join(tmpdir(), "haril-demo-"))
     : resolve(host.cwd ?? process.cwd(), dataDirFlag);
@@ -302,6 +317,15 @@ function demo(args: readonly string[], io: CliIo, host: HostInfo): number {
     for (const line of renderText(snapshot, result, chain, rows, seed, store)) io.out(line);
   }
   return snapshot.workflow.state === "failed" ? EXIT_INVALID : EXIT_OK;
+}
+
+// Two paths name the same folder: compared resolved, without a trailing separator, and without case on Windows.
+function samePath(left: string, right: string, host: HostInfo): boolean {
+  const clean = (path: string) => {
+    const resolved = resolve(path).replace(/[\\/]+$/, "");
+    return host.platform === "win32" ? resolved.toLowerCase() : resolved;
+  };
+  return clean(left) === clean(right);
 }
 
 function runOnStore(
@@ -429,7 +453,7 @@ function renderText(
   lines.push(
     store.removed
       ? "store      temporary, removed (keep the rows with --data-dir <path>)"
-      : `store      ${store.path} (read it with haril usage log --data-dir ${store.path})`,
+      : `store      ${store.path} (read it with haril usage log --include-simulated --data-dir ${store.path})`,
   );
   return lines;
 }

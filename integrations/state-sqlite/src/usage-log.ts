@@ -174,6 +174,7 @@ function usageWhere(filter: UsageFilter | undefined, alias = ""): ReturnType<typ
     [`${p}layer = ?`, filter?.layer],
     [`${p}mode = ?`, filter?.mode],
     [`${p}difficulty_est = ?`, filter?.difficulty],
+    [`${p}simulated = ?`, filter?.simulated === undefined ? undefined : filter.simulated ? 1 : 0],
   ]);
 }
 

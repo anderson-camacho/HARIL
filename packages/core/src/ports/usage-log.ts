@@ -144,6 +144,8 @@ export interface UsageFilter {
   readonly layer?: number;
   readonly mode?: OrderMode;
   readonly difficulty?: UsageDifficulty;
+  // true keeps only simulated rows (haril workflow demo), false only real ones; absent keeps both.
+  readonly simulated?: boolean;
   readonly limit?: number;
 }
 

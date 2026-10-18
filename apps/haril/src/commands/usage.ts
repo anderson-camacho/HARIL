@@ -33,8 +33,9 @@ import {
 const USAGE = [
   "usage: haril usage log|summary|verify|export",
   "  haril usage log [--since 2h | --from <time> --to <time>] [--kind order|chat|agent_run] [--model <id>] [--workflow <id>]",
-  "    [--layer 1|2|3] [--mode <mode>] [--difficulty <class>] [--limit <n>] [--json] [--data-dir <path>]",
-  "  haril usage summary [--by day|model|layer|difficulty|workflow|mode|role] [--since ... | --from ... --to ...] [--json]",
+  "    [--layer 1|2|3] [--mode <mode>] [--difficulty <class>] [--limit <n>] [--include-simulated] [--json] [--data-dir <path>]",
+  "  haril usage summary [--by day|model|layer|difficulty|workflow|mode|role] [--since ... | --from ... --to ...] [--include-simulated] [--json]",
+  "    log and summary leave out the rows of simulated runs (haril workflow demo) unless --include-simulated",
   "  haril usage verify [--json]          walk both hash chains; exit 1 when a row was changed or deleted",
   "  haril usage export --format jsonl|csv [--table usage|orders] [--since ... | --from ... --to ... | --before <time>]",
   "    [--out <file>]   a time is an ISO 8601 date or time, or epoch milliseconds",
@@ -200,6 +201,7 @@ function logFilters(parsed: ParsedArgs, host: HostInfo): LogFilters | Problem {
       layer,
       mode: mode as OrderMode | undefined,
       difficulty: difficulty as UsageDifficulty | undefined,
+      ...(parsed.flags.has("--include-simulated") ? {} : { simulated: false }),
       limit,
     },
     orders: { ...range, mode: mode as OrderMode | undefined, workflowId, limit },
@@ -272,7 +274,7 @@ function log(args: readonly string[], io: CliIo, host: HostInfo): number {
       "--limit",
       "--data-dir",
     ],
-    flags: ["--json"],
+    flags: ["--json", "--include-simulated"],
   });
   const problem = argsProblem(parsed, io);
   if (problem !== null) return problem;
@@ -294,7 +296,7 @@ function log(args: readonly string[], io: CliIo, host: HostInfo): number {
 function summary(args: readonly string[], io: CliIo, host: HostInfo): number {
   const parsed = parseArgs(args, {
     values: ["--by", "--since", "--from", "--to", "--kind", "--data-dir"],
-    flags: ["--json"],
+    flags: ["--json", "--include-simulated"],
   });
   const problem = argsProblem(parsed, io);
   if (problem !== null) return problem;
@@ -308,7 +310,11 @@ function summary(args: readonly string[], io: CliIo, host: HostInfo): number {
     return fail(io, `--kind is chat or agent_run; got "${kind}"`);
   }
   return withStore(io, host, parsed, (store) => {
-    const rows = store.usageLog.summary(by, { ...range, kind: kind as UsageKind | undefined });
+    const rows = store.usageLog.summary(by, {
+      ...range,
+      kind: kind as UsageKind | undefined,
+      ...(parsed.flags.has("--include-simulated") ? {} : { simulated: false }),
+    });
     const orders = store.usageLog.orders(range).length;
     if (parsed.flags.has("--json")) io.out(JSON.stringify({ by, rows, orders }));
     else for (const line of summaryLines(by, rows, orders)) io.out(line);

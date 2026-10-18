@@ -208,9 +208,18 @@ describe("haril workflow demo", () => {
     expect(h.out).toHaveLength(1);
     expect(h.out[0]).toMatch(/order\.cli .* mode=delegacion/);
     // Each relaunch counts once in the log: the executor rows add up to the demo's three retries.
-    expect(await invoke(["usage", "summary", "--by", "role", "--json", "--data-dir", folder])).toBe(
-      0,
-    );
+    expect(
+      await invoke([
+        "usage",
+        "summary",
+        "--by",
+        "role",
+        "--json",
+        "--include-simulated",
+        "--data-dir",
+        folder,
+      ]),
+    ).toBe(0);
     const byRole = parseJson<{ rows: { key: string; retries: number; rejected: number }[] }>(
       h.out,
     ).rows;
@@ -251,5 +260,23 @@ describe("haril workflow demo", () => {
     }
     expect(await invoke(["workflow"])).toBe(2);
     expect(h.err.join("\n")).toMatch(/usage: haril workflow demo/);
+  });
+});
+
+describe("haril workflow demo and the data directory", () => {
+  it("treats an empty --data-dir as unset: a temporary store, never the current folder", async () => {
+    const result = await demoJson(["--data-dir", ""]);
+    expect(result.demo.store).toMatchObject({ kind: "temporary", removed: true });
+    expect(existsSync(join(sb.root, "haril.db"))).toBe(false);
+  });
+
+  it("refuses the user's default data directory unless --allow-real-data-dir is given", async () => {
+    expect(await invoke(["workflow", "demo", "--data-dir", sb.dataDir])).toBe(2);
+    expect(h.err.join("\n")).toMatch(/default HARIL data directory.*--allow-real-data-dir/);
+    expect(existsSync(join(sb.dataDir, "haril.db"))).toBe(false);
+    expect(
+      await invoke(["workflow", "demo", "--data-dir", sb.dataDir, "--allow-real-data-dir"]),
+    ).toBe(0);
+    expect(existsSync(join(sb.dataDir, "haril.db"))).toBe(true);
   });
 });
