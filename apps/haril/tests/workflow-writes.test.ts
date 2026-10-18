@@ -12,7 +12,14 @@ import {
   type DelegationLimits,
   surfacesMayOverlap,
 } from "@haril/core";
-import type { AgentRuntime, AgentSpec, Clock, Store } from "@haril/core/ports";
+import type {
+  AgentRuntime,
+  AgentSpec,
+  Clock,
+  DelegationToolHandler,
+  DelegationToolResult,
+  Store,
+} from "@haril/core/ports";
 import { FakeAgentRuntime } from "@haril/core/testing";
 import { openStore } from "@haril/state-sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -165,7 +172,12 @@ function tracked(inner: AgentRuntime, store: Store, log: WriterLog): AgentRuntim
 
 async function run(
   store: Store,
-  setup: { readonly allow?: readonly string[]; readonly shutdown?: Shutdown } = {},
+  setup: {
+    readonly allow?: readonly string[];
+    readonly shutdown?: Shutdown;
+    // Stands between the fake agents and the host's tools: sees each call and may answer it itself.
+    readonly wrap?: (call: DelegationToolHandler) => DelegationToolHandler;
+  } = {},
 ): Promise<WriterLog> {
   const log: WriterLog = { peak: 0, overlaps: [] };
   const workspaces = createWorkspaces({
@@ -181,7 +193,7 @@ async function run(
   const tools = createDelegationTools({ store, clock, options: { limits: LIMITS }, workspaces });
   const agents = new FakeAgentRuntime({
     clock,
-    delegationTools: tools.call,
+    delegationTools: setup.wrap === undefined ? tools.call : setup.wrap(tools.call),
     // Each turn takes a few milliseconds, so turns that may run together do.
     delegationDelayMs: (cost) => Math.round((cost.durationMs / 60_000) * 4),
   });
@@ -289,6 +301,84 @@ describe.skipIf(!HAS_GIT)("a workflow that writes in parallel", () => {
     // The command was recorded with its run and verified gone: nothing is left for a sweep.
     expect(store.runs.processes({ endedSince: 0 })).toHaveLength(1);
     expect(store.runs.processes({ unverified: true })).toEqual([]);
+  }, 120_000);
+
+  it("refuses a delegator's report of done while one of its approved steps is not merged", async () => {
+    const store = open();
+    startWorkflow(store, "Write the part [fake:parts=1] [fake:steps=1]");
+    const reports: DelegationToolResult[] = [];
+    // The delegator's merges never reach the host: its approved step stays out of the integration branch. Every other
+    // call goes through as it came (a planning turn's calls answer at once).
+    const wrap =
+      (call: DelegationToolHandler): DelegationToolHandler =>
+      (context, tool, input) => {
+        if (tool === "haril_merge") return { ok: false, reason: "dropped by the test" };
+        const reply = call(context, tool, input);
+        if (tool === "haril_report" && (input as { status?: unknown }).status === "done") {
+          void Promise.resolve(reply).then((answer) => reports.push(answer));
+        }
+        return reply;
+      };
+    await run(store, { wrap });
+    expect(reports.length).toBeGreaterThan(0);
+    expect(reports[0]).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining("merge your approved steps before reporting done"),
+    });
+    expect(git("rev-parse", "main")).toBe(store.workflows.list()[0]?.baseSha);
+  }, 120_000);
+
+  it("refuses a delegator's write outside the conflicting files, and any write while no merge waits", async () => {
+    const store = open();
+    startWorkflow(
+      store,
+      "Write a common file [fake:parts=2] [fake:steps=1] [fake:common=src/common.ts] [fake:run=node --version]",
+    );
+    const replies: { when: string; reply: DelegationToolResult }[] = [];
+    let probedIdle = false;
+    const wrap =
+      (call: DelegationToolHandler): DelegationToolHandler =>
+      (context, tool, input) => {
+        if (tool !== "haril_merge" && tool !== "write") return call(context, tool, input);
+        return probe(call, context, tool, input);
+      };
+    const probe = async (
+      call: DelegationToolHandler,
+      context: Parameters<DelegationToolHandler>[0],
+      tool: string,
+      input: unknown,
+    ): Promise<DelegationToolResult> => {
+      // Before the delegator's first merge: no merge waits, so a write resolves nothing.
+      if (tool === "haril_merge" && !probedIdle) {
+        probedIdle = true;
+        replies.push({
+          when: "idle",
+          reply: await call(context, "write", { path: "src/common.ts", content: "x" }),
+        });
+      }
+      // While a merge waits for its conflicts: a file outside them is refused (the delegator's own writes only).
+      const role = store.workflows
+        .tasks(onlyWorkflow(store).workflowId)
+        .find((task) => task.taskId === context.taskId)?.role;
+      if (tool === "write" && role === "delegator") {
+        replies.push({
+          when: "conflict",
+          reply: await call(context, "write", { path: "src/elsewhere.ts", content: "x" }),
+        });
+      }
+      return await call(context, tool, input);
+    };
+    await run(store, { allow: ["node --version"], wrap });
+    expect(replies.find((item) => item.when === "idle")?.reply).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining("no merge waits for its conflicts"),
+    });
+    expect(replies.find((item) => item.when === "conflict")?.reply).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining("not one of the conflicting files"),
+    });
+    // The conflict itself was still resolved and merged.
+    expect(onlyWorkflow(store).state).toBe("completed");
   }, 120_000);
 
   it("lets a delegator resolve the conflict of two parts that wrote the same file", async () => {

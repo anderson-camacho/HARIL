@@ -395,6 +395,47 @@ describe.skipIf(!HAS_GIT)("the sweep of an ended workflow's worktrees", () => {
   });
 });
 
+describe.skipIf(!HAS_GIT)("a delegator's turn after a crash", () => {
+  it("starts clean: a merge a crashed runtime left half done is given up, and nothing uncommitted stays", async () => {
+    const host = workspaces();
+    const base = gitIn(repo, "rev-parse", "main");
+    const store = {
+      projects: { list: () => [{ projectId: "p1", rootPath: repo }] },
+      worktrees: {
+        record: (_epoch: number, input: object) => ({ ...input, worktreeId: "w-int" }),
+        list: () => [],
+      },
+    } as unknown as Store;
+    const view = {
+      workflow: { workflowId: "wf2", projectId: "p1", baseBranch: "main", baseSha: base },
+      task: () => undefined,
+    } as unknown as WorkflowView;
+    const delegator = {
+      role: "delegator",
+      taskId: "t-d",
+      threadId: "th-d",
+      parentTaskId: "t-o",
+    } as unknown as Task;
+    const first = await host.prepare(store, 1, view, delegator);
+    if (first === null) throw new Error("no integration worktree");
+    // A step's commit and an integration commit that change the same line.
+    writeFileSync(join(tree, "src", "button.ts"), "export const color = 'step';\n");
+    gitIn(tree, "commit", "--quiet", "-am", "step");
+    writeFileSync(join(first.root, "src", "button.ts"), "export const color = 'integration';\n");
+    gitIn(first.root, "commit", "--quiet", "-am", "integration");
+    // The merge the crashed runtime started, left with its conflict, and a stray file.
+    expect(() => gitIn(first.root, "merge", "--no-ff", "haril/wf/step/s1")).toThrow();
+    writeFileSync(join(first.root, "stray.txt"), "left behind\n");
+    expect(gitIn(first.root, "rev-parse", "-q", "--verify", "MERGE_HEAD")).not.toBe("");
+
+    const again = await host.prepare(store, 1, view, delegator);
+    expect(again?.root).toBe(first.root);
+    expect(() => gitIn(first.root, "rev-parse", "-q", "--verify", "MERGE_HEAD")).toThrow();
+    expect(gitIn(first.root, "status", "--porcelain")).toBe("");
+    expect(readFileSync(join(first.root, "src", "button.ts"), "utf8")).toContain("'integration'");
+  });
+});
+
 describe("applyEdits", () => {
   it("applies every replacement against the original text", () => {
     expect(
