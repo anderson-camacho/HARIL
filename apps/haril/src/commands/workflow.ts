@@ -466,7 +466,7 @@ const WORKFLOW_USAGE = [
   "usage: haril workflow start|list|show|watch|tail|continue|stop|demo",
   "  haril workflow start <goal> --model <ref> [--autonomous | --stop-at <stops>]   queue a three-layer workflow",
   "  haril workflow list | show <workflowId> [--json]                              read workflows (show: tree, or WorkflowSnapshot v1)",
-  "  haril workflow watch <workflowId> [--interval-ms <n>]                         WorkflowSnapshot v1 as JSON lines, one per change",
+  "  haril workflow watch <workflowId> [--json] [--interval-ms <n>]                WorkflowSnapshot v1 as JSON lines, one per change",
   "  haril workflow tail <workflowId> <node> [--follow] [--json]                   what a node's agent writes and calls, from its Pi session",
   "  haril workflow continue <workflowId> [--remove-stop <stop>]...                lift the stop a workflow waits at",
   "  haril workflow stop <workflowId> [--json]                                     stop one workflow and kill its agents now",

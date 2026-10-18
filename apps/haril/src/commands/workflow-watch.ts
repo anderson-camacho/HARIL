@@ -15,7 +15,8 @@ import { buildWorkflowSnapshot } from "./workflow-snapshot.js";
 // so a runtime that starts later is followed too. It ends after the snapshot that shows the workflow ended (completed,
 // failed or stopped), or on Ctrl+C. It reads the store only: it writes nothing and queues nothing.
 
-const USAGE = "usage: haril workflow watch <workflowId> [--interval-ms <n>] [--data-dir <path>]";
+const USAGE =
+  "usage: haril workflow watch <workflowId> [--json] [--interval-ms <n>] [--data-dir <path>]";
 const DEFAULT_INTERVAL_MS = 1_000;
 const WAKE_INTERVAL_MS = 250;
 const ENDED = new Set<WorkflowSnapshot["workflow"]["state"]>(["completed", "failed", "stopped"]);
@@ -37,7 +38,8 @@ export function workflowWatch(
   io: CliIo,
   host: HostInfo,
 ): number | Promise<number> {
-  const parsed = parseArgs(args, { values: ["--interval-ms", "--data-dir"], flags: [] });
+  // --json is accepted as spec 6 writes it: every line is JSON already.
+  const parsed = parseArgs(args, { values: ["--interval-ms", "--data-dir"], flags: ["--json"] });
   const problem = argsProblem(parsed, io);
   if (problem !== null) return problem;
   const [workflowId, ...extra] = parsed.positionals;

@@ -184,6 +184,17 @@ describe("haril workflow watch", () => {
     expect(ended.lines.map((line) => line.workflow.state)).toEqual(["stopped"]);
   });
 
+  it("takes --json as the spec writes it: its lines are JSON already", async () => {
+    const store = open();
+    const workflowId = runningWorkflow(store);
+    stopWorkflow(store, workflowId);
+    const out = harness();
+    expect(await run(["workflow", "watch", workflowId, "--json"], out.io, sb.host)).toBe(0);
+    expect(out.out.map((line) => (JSON.parse(line) as WorkflowSnapshot).workflow.state)).toEqual([
+      "stopped",
+    ]);
+  });
+
   it("refuses a workflow that does not exist", async () => {
     const out = harness();
     expect(await run(["workflow", "watch", "wf-none"], out.io, sb.host)).toBe(2);
