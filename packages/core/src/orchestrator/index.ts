@@ -92,6 +92,24 @@ export type RunEvent =
       readonly approvalId: string;
       readonly taskId: string;
       readonly created: boolean;
+    }
+  | {
+      // A turn of a workflow closed (phase F2). taskState is its gate for its dependents: an auditor turn that rejects and
+      // a delegator turn that reports partial or failed end failed, as part of the workflow, not as a failed task of the
+      // run; outcome says what the turn did (delegated, assigned, completed, approved, rejected, reported_done...).
+      readonly type: "workflow.turn";
+      readonly taskId: string;
+      readonly goal: string;
+      readonly role: "orchestrator" | "delegator" | "executor" | "auditor";
+      readonly taskState: "completed" | "failed";
+      readonly outcome: string;
+    }
+  | {
+      // A workflow paused for the human, completed or failed (phase F2).
+      readonly type: "workflow.state";
+      readonly workflowId: string;
+      readonly state: "awaiting_human" | "completed" | "failed" | "stopped";
+      readonly reason: string | null;
     };
 
 export interface RunSummary {

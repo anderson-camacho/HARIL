@@ -6,7 +6,14 @@ import {
   checkPlanSubmission,
   checkTaskKind,
 } from "@haril/core";
-import type { AgentRuntime, Clock, Ids, PlanProposer, Store } from "@haril/core/ports";
+import type {
+  AgentRuntime,
+  Clock,
+  DelegationToolHandler,
+  Ids,
+  PlanProposer,
+  Store,
+} from "@haril/core/ports";
 import { FakeAgentRuntime } from "@haril/core/testing";
 import { inspectStore, openStore, type StoreInspection } from "@haril/state-sqlite";
 import type { HostInfo } from "./context.js";
@@ -70,13 +77,18 @@ export function clockFor(host: HostInfo): Clock {
 }
 
 // The simulated agent (M1-D7) unless the host injects another runtime (tests). fake:plan proposes through proposePlan
-// (LD-T4); an injected runtime keeps its own.
-export function agentRuntimeFor(host: HostInfo, proposePlan?: PlanProposer): AgentRuntime {
+// (LD-T4), and the fake workflow agents call delegationTools (phase F2); an injected runtime keeps its own.
+export function agentRuntimeFor(
+  host: HostInfo,
+  proposePlan?: PlanProposer,
+  delegationTools?: DelegationToolHandler,
+): AgentRuntime {
   return (
     host.agentRuntime ??
     new FakeAgentRuntime({
       clock: clockFor(host),
       ...(proposePlan === undefined ? {} : { proposePlan }),
+      ...(delegationTools === undefined ? {} : { delegationTools }),
     })
   );
 }

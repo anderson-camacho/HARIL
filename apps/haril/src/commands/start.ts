@@ -3,6 +3,7 @@ import { type RunEvent, runExitCode, visibleText } from "@haril/core";
 import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_ERROR, EXIT_USAGE, type HostInfo } from "../context.js";
 import { agentRuntimeFor, clockFor } from "../host.js";
+import { createDelegationTools } from "../runtime/delegation-tools.js";
 import { memoryLeftLine } from "../runtime/memory.js";
 import { createPlanProposals } from "../runtime/plan-proposals.js";
 import { createRealAgents } from "../runtime/real-agent.js";
@@ -72,6 +73,8 @@ async function serve(
   // The host handler of haril_propose_plan (LD-T4): a plan task's proposal becomes a requested approval. Both lanes get
   // the same handler, so the run loop opens one attempt window whichever runtime serves the plan task.
   const planProposals = createPlanProposals(store);
+  // The host handler of the delegation tools (phase F2): the workflow turns of every lane call it.
+  const delegationTools = createDelegationTools({ store, clock: clockFor(host) });
   // The real lane (M2-T6): the analyst and planner agents in Pi through one Broker, closed when the run ends.
   const realAgents = createRealAgents({
     host,
@@ -112,12 +115,13 @@ async function serve(
 
     const result = await runUntilIdle({
       store,
-      agentRuntime: agentRuntimeFor(host, planProposals.propose),
+      agentRuntime: agentRuntimeFor(host, planProposals.propose, delegationTools.call),
       clock: clockFor(host),
       pid,
       nodeVersion: host.nodeVersion,
       realAgents,
       planProposals,
+      delegationTools,
       control: channel,
       idleExitMs: idleExitSec * 1000,
       startedByShell: startedBy === STARTED_BY_SHELL,
@@ -220,5 +224,11 @@ function formatEvent(event: RunEvent): string {
       return event.created
         ? `approval ${event.approvalId} requested by task ${event.taskId}: decide with haril approve|deny ${event.approvalId}`
         : `the same plan already waits as approval ${event.approvalId}: decide with haril approve|deny ${event.approvalId}`;
+    case "workflow.turn":
+      return `turn ${event.taskId} ${event.role} ${event.goal}: ${event.outcome}`;
+    case "workflow.state":
+      return event.state === "awaiting_human"
+        ? `workflow ${event.workflowId} waits for you at ${event.reason ?? "a stop"}: haril workflow continue ${event.workflowId}`
+        : `workflow ${event.workflowId} ${event.state}${event.reason === null ? "" : `: ${event.reason}`}`;
   }
 }
