@@ -92,6 +92,8 @@ const HELP_LINES = [
   "    queue a three-layer workflow (orchestrator, delegators, executors, auditors) that haril start runs; it stops",
   "    after the first plan unless --autonomous or --stop-at; --agent defaults to fake:orchestrate (simulated agents)",
   "  haril workflow list | show <workflowId> [--json]   workflows, and one workflow's tree (--json: WorkflowSnapshot v1)",
+  "  haril workflow watch <workflowId>   WorkflowSnapshot v1 as JSON lines: one now, one per change, until it ends",
+  "  haril workflow tail <workflowId> <node> [--follow] [--json]   what a node's agent writes and calls (its Pi session)",
   "  haril workflow continue <workflowId> [--remove-stop <stop>]...   lift the stop a workflow waits at",
   "  haril workflow stop <workflowId> [--json]   stop one workflow now: its turns cancelled, its agents killed",
   "  haril workflow demo [--seed <n>] [--delegators <n>] [--executors <n>] [--stop-at <stops>] [--json]",

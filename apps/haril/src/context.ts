@@ -1,3 +1,4 @@
+import type { ControlClient } from "@haril/control";
 import type { AgentRuntime, Clock, Ids, ProcessControl, Store } from "@haril/core/ports";
 import type { StoreInspection } from "@haril/state-sqlite";
 import type { ProviderEntry, ProviderListing } from "./providers.js";
@@ -42,6 +43,12 @@ export interface HostInfo {
   readonly forceExit?: (code: number) => void;
   // The OS process control of the emergency stop and the startup sweep (3.14); defaults to @haril/os.
   readonly processControl?: ProcessControl;
+  // Opens a client of the runtime's control channel (haril workflow watch); defaults to @haril/control's connect.
+  // Tests inject a fake channel whose wakes they fire.
+  readonly connectControl?: (
+    dataDir: string,
+    options: { readonly subscribe: boolean },
+  ) => Promise<ControlClient | undefined>;
   // How long haril stop --now waits for the runtime to apply the stop and exit before it kills the recorded agent
   // processes itself (milliseconds); defaults to the value in commands/stop.ts.
   readonly stopWaitMs?: number;
