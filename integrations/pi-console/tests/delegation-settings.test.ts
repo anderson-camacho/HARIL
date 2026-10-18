@@ -86,7 +86,10 @@ describe("the delegation settings as the console shows them", () => {
   it("decode HARIL's config get output, every field with its value and source", () => {
     const decoded = view();
     expect(decoded.configPath).toBe("fake-config/haril.json");
-    expect(decoded.fields).toHaveLength(45);
+    expect(decoded.fields).toHaveLength(47);
+    expect(valueText(field("commands.allow"))).toMatch(/^npm test, npm test \*, /);
+    expect(valueText(field("commands.timeoutMs"))).toBe("5 min");
+    expect(valueText(field("commands.outputMaxBytes"))).toBe("16,384");
     expect(valueText(field("context.perLayer.orchestrator"))).toBe("400,000 tokens");
     expect(sourceText(field("context.perLayer.orchestrator"))).toBe("haril.json");
     expect(valueText(field("context.perLayer.executor"))).toBe("300,000 tokens");
