@@ -66,9 +66,40 @@ export type RunEvent =
       readonly fix: string;
     }
   | {
-      // The runtime stops: "command" when runtime.stop was applied, "signal" for Ctrl+C or SIGTERM (ARCH 4.2).
+      // The runtime stops: "command" when runtime.stop was applied, "signal" for Ctrl+C or SIGTERM (ARCH 4.2),
+      // "emergency" for haril stop --now (3.14): every attempt in flight is killed and the runtime stays halted.
       readonly type: "runtime.stopping";
-      readonly reason: "command" | "signal";
+      readonly reason: "command" | "signal" | "emergency";
+    }
+  | {
+      // A task ended without a retry (3.14, 3.16): the human stopped it (user_stop) or the watchdog found that nobody
+      // will consume its result (residual). A running one had its process killed.
+      readonly type: "task.cancelled";
+      readonly taskId: string;
+      readonly goal: string;
+      readonly reason: "user_stop" | "residual";
+    }
+  | {
+      // An emergency stop left the runtime halted (3.14): it claims nothing until haril resume.
+      readonly type: "runtime.halted";
+    }
+  | {
+      // A verdict of the watchdog on one node of a workflow (3.16): asked by code, never a model. text starts with the
+      // node's id (o1, d2, e3, a3, fa), as the console's watchdog line reads it.
+      readonly type: "watchdog.checked";
+      readonly workflowId: string;
+      readonly taskId: string;
+      readonly node: string;
+      readonly verdict: "active" | "idle" | "residual" | "waiting_human" | "cooling_down";
+      readonly action: "continue" | "close" | "cancel";
+      readonly text: string;
+    }
+  | {
+      // The startup sweep (3.14.5): agent processes a dead runtime left were killed, and recorded pids that now name
+      // another process were kept.
+      readonly type: "runtime.swept";
+      readonly killed: number;
+      readonly kept: number;
     }
   | {
       // A run cancelled by a stop returned its task to ready; no attempt was charged (ARCH 4.2, step 3).
@@ -92,6 +123,24 @@ export type RunEvent =
       readonly approvalId: string;
       readonly taskId: string;
       readonly created: boolean;
+    }
+  | {
+      // A turn of a workflow closed (phase F2). taskState is its gate for its dependents: an auditor turn that rejects and
+      // a delegator turn that reports partial or failed end failed, as part of the workflow, not as a failed task of the
+      // run; outcome says what the turn did (delegated, assigned, completed, approved, rejected, reported_done...).
+      readonly type: "workflow.turn";
+      readonly taskId: string;
+      readonly goal: string;
+      readonly role: "orchestrator" | "delegator" | "executor" | "auditor";
+      readonly taskState: "completed" | "failed";
+      readonly outcome: string;
+    }
+  | {
+      // A workflow paused for the human, completed or failed (phase F2).
+      readonly type: "workflow.state";
+      readonly workflowId: string;
+      readonly state: "awaiting_human" | "completed" | "failed" | "stopped";
+      readonly reason: string | null;
     };
 
 export interface RunSummary {
@@ -100,6 +149,8 @@ export interface RunSummary {
   readonly blocked: readonly string[];
   // Tasks left ready because their real agent is not set up (M2-T6); the run then exits 1.
   readonly skipped: readonly string[];
+  // Tasks a stop or the watchdog cancelled (3.14, 3.16); a cancelled task does not fail the run.
+  readonly cancelled: readonly string[];
   readonly commandsApplied: number;
   readonly commandsRejected: number;
 }
@@ -109,6 +160,7 @@ export function summarizeRun(events: readonly RunEvent[]): RunSummary {
   const failed: string[] = [];
   const blocked: string[] = [];
   const skipped: string[] = [];
+  const cancelled: string[] = [];
   let commandsApplied = 0;
   let commandsRejected = 0;
   for (const event of events) {
@@ -131,11 +183,14 @@ export function summarizeRun(events: readonly RunEvent[]): RunSummary {
       case "task.skipped":
         skipped.push(event.taskId);
         break;
+      case "task.cancelled":
+        cancelled.push(event.taskId);
+        break;
       default:
         break;
     }
   }
-  return { completed, failed, blocked, skipped, commandsApplied, commandsRejected };
+  return { completed, failed, blocked, skipped, cancelled, commandsApplied, commandsRejected };
 }
 
 // M1-D2 / start: 0 when no task failed, was blocked or was skipped during the run, 1 otherwise.

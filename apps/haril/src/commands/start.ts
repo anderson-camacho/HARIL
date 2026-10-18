@@ -1,27 +1,73 @@
+import { join } from "node:path";
 import { type ControlServer, createControlServer } from "@haril/control";
-import { type RunEvent, runExitCode, visibleText } from "@haril/core";
+import { type DelegationLimits, type RunEvent, runExitCode, visibleText } from "@haril/core";
+import { createProcessControl } from "@haril/os";
 import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_ERROR, EXIT_USAGE, type HostInfo } from "../context.js";
+import { loadDelegationSettings } from "../delegation-config.js";
+import { delegationLimitsOf, delegationSettingsOf } from "../delegation-section.js";
 import { agentRuntimeFor, clockFor } from "../host.js";
+import { createDelegationTools } from "../runtime/delegation-tools.js";
+import type { HostCommandSettings } from "../runtime/host-commands.js";
+import { createLiveModels } from "../runtime/live-models.js";
 import { memoryLeftLine } from "../runtime/memory.js";
+import { withStoreState } from "../runtime/model-context.js";
 import { createPlanProposals } from "../runtime/plan-proposals.js";
+import { killTrees } from "../runtime/processes.js";
 import { createRealAgents } from "../runtime/real-agent.js";
 import { runUntilIdle } from "../runtime/run-loop.js";
-import { attachStopSignals, createShutdown } from "../runtime/shutdown.js";
+import { attachStopSignals, createKillSwitch, createShutdown } from "../runtime/shutdown.js";
+import type { WatchdogSettings } from "../runtime/watchdog.js";
+import { workflowExitCode, workflowSummaryText } from "../runtime/workflow-summary.js";
+import { createWorkspaces } from "../runtime/worktrees.js";
 import { dataDirFor, failureReasonText, openExisting } from "./common.js";
 
 // `haril start` (M1-T5, LD-T1): the foreground runtime. It applies the queue, runs the ready tasks and stays up for new
 // work until --idle-exit-sec of nothing to do (ARCH 4.2). `haril run` is start until idle: it exits as soon as the
-// queue is empty. A runtime.stop, a first Ctrl+C or SIGTERM stops it in order; a second signal exits at once.
+// queue is empty. A runtime.stop, a first Ctrl+C or SIGTERM stops it in order; a second signal kills the agents in
+// flight and exits (3.14); haril stop --now kills them, cancels their tasks and leaves the runtime halted.
 // `--started-by shell` (LD-T6, ADR-0022) is how haril shell starts it: the same runtime, which also records
 // runtime.started_by_shell once it holds the lease, because the shell never writes the store.
 const IDLE_EXIT_SEC = 120;
+// How long the start waits for the first catalog reading (phase F6).
+const CATALOG_HEAD_START_MS = 3_000;
 const STARTED_BY_SHELL = "shell";
 const START_USAGE =
   "usage: haril start [--project <slug>] [--json] [--data-dir <path>] [--idle-exit-sec <n>] [--started-by shell]";
 const RUN_USAGE = "usage: haril run [--project <slug>] [--json] [--data-dir <path>]";
 const NOT_INITIALIZED =
   "store not initialized (run haril project init <path> --name <name> --yes first)";
+
+// What the runtime takes from haril.json's delegation section when it starts (docs/modos-y-delegacion.md 5, 3.16,
+// 3.10.5; phases F7 and F8): the limits of a workflow that started without a full snapshot (P11), the watchdog's cadence
+// and haril_run's allow list, time limit and output cap. A section the rules refuse leaves the defaults in effect, with a
+// warning that names its problems.
+export function runtimeDelegationOf(host: HostInfo): {
+  readonly limits: DelegationLimits;
+  readonly watchdog: Required<WatchdogSettings>;
+  readonly commands: HostCommandSettings;
+  readonly warning?: string;
+} {
+  const loaded = loadDelegationSettings(host);
+  const settings = loaded.ok ? loaded.settings : delegationSettingsOf(undefined);
+  return {
+    limits: delegationLimitsOf(settings.limits),
+    watchdog: {
+      intervalMs: settings.watchdog.intervalMs,
+      idleStrikesToClose: settings.watchdog.idleStrikesToClose,
+    },
+    commands: {
+      allow: [...settings.commands.allow],
+      timeoutMs: settings.commands.timeoutMs,
+      outputMaxBytes: settings.commands.outputMaxBytes,
+    },
+    ...(loaded.ok
+      ? {}
+      : {
+          warning: `${loaded.path}: delegation settings not used, the defaults apply (${loaded.errors.join("; ")})`,
+        }),
+  };
+}
 
 export function start(args: readonly string[], io: CliIo, host: HostInfo): Promise<number> {
   return serve(args, io, host, "start");
@@ -72,23 +118,55 @@ async function serve(
   // The host handler of haril_propose_plan (LD-T4): a plan task's proposal becomes a requested approval. Both lanes get
   // the same handler, so the run loop opens one attempt window whichever runtime serves the plan task.
   const planProposals = createPlanProposals(store);
-  // The real lane (M2-T6): the analyst and planner agents in Pi through one Broker, closed when the run ends.
+  // The models of real workflows (phase F6): the live catalog, the difficulty table, the quota and the cooldowns. The
+  // delegation tools check a proposal against the same models the run loop decides with.
+  const liveModels = createLiveModels({ host, store, clock: clockFor(host) });
+  // Phase F7: haril.json's limits and watchdog cadence, read once at start.
+  const configured = runtimeDelegationOf(host);
+  if (configured.warning !== undefined) io.err(`haril: ${configured.warning}`);
+  const delegation = { ...liveModels.options, limits: configured.limits };
+  // The git worktrees of workflows that write (phase F8): under the data directory, short hashed folders (git refuses a
+  // long worktree path on Windows). haril_run takes its allow list, time limit and output cap from haril.json's
+  // delegation.commands (the defaults when it says nothing) and kills a command's tree through the verified tree kill.
+  const processControl = host.processControl ?? createProcessControl();
+  const workspaces = createWorkspaces({
+    root: join(dataDir, "worktrees"),
+    commands: configured.commands,
+    ...(host.env === undefined ? {} : { env: { ...process.env, ...host.env } }),
+    killTree: async (target) => {
+      await killTrees(processControl, [target]);
+    },
+  });
+  // The host handler of the delegation tools (phase F2): the workflow turns of every lane call it.
+  const delegationTools = createDelegationTools({
+    store,
+    clock: clockFor(host),
+    options: withStoreState(store, delegation),
+    workspaces,
+  });
+  // The real lane (M2-T6): the analyst, the planner and the workflow archetypes in Pi through one Broker, closed when
+  // the run ends. A real workflow turn's tool calls reach the same delegation tools as a fake one's (phase F2b).
   const realAgents = createRealAgents({
     host,
     store,
     clock: clockFor(host),
     dataDir,
     proposePlan: planProposals.propose,
+    delegationTools: delegationTools.call,
+    // Phase F7: each agent gets its model's real context window and output from the live catalog.
+    modelFacts: liveModels.factsOf,
   });
   // The control channel (LD-T2): the runtime opens it after taking the lease, so subscribed shells and nudging CLIs
   // reach this runtime only while it holds the lease.
   const control = createControlServer({ dataDir });
-  // Ctrl+C and SIGTERM ask for the ordered stop; a second signal exits at once (ARCH 4.2).
+  // Ctrl+C and SIGTERM ask for the ordered stop; a second signal kills the agents in flight and exits (ARCH 4.2, 3.14).
   const shutdown = createShutdown();
+  const killSwitch = createKillSwitch();
   const detach = attachStopSignals(
     host.signals ?? process,
     shutdown,
     host.forceExit ?? ((code) => process.exit(code)),
+    killSwitch,
   );
   try {
     // M1-D6: the lease is per data root, so one runtime serves every project. --project only names one that exists.
@@ -110,18 +188,27 @@ async function serve(
         )
       : control;
 
+    // The first turns see the catalog when the gateway answers within a few seconds; otherwise they start with the
+    // orchestrator's model and the catalog arrives in the background.
+    await liveModels.ready(CATALOG_HEAD_START_MS);
     const result = await runUntilIdle({
       store,
-      agentRuntime: agentRuntimeFor(host, planProposals.propose),
+      agentRuntime: agentRuntimeFor(host, planProposals.propose, delegationTools.call),
       clock: clockFor(host),
       pid,
       nodeVersion: host.nodeVersion,
       realAgents,
       planProposals,
+      delegationTools,
+      delegation,
+      watchdog: configured.watchdog,
+      workspaces,
       control: channel,
       idleExitMs: idleExitSec * 1000,
       startedByShell: startedBy === STARTED_BY_SHELL,
       shutdown,
+      killSwitch,
+      ...(host.processControl === undefined ? {} : { processControl: host.processControl }),
       // LD-T7c: the goals of a plan's tasks are agent-written, so each line is shown as the terminal draws it.
       onEvent: (event) => {
         if (!json) io.out(visibleText(formatEvent(event)));
@@ -133,24 +220,39 @@ async function serve(
       return EXIT_ERROR;
     }
 
-    const exitCode = runExitCode(result.summary);
+    // A workflow that failed fails the run, as a failed task does (phase F2b).
+    const exitCode = Math.max(runExitCode(result.summary), workflowExitCode(result.workflows)) as
+      | 0
+      | 1;
     if (json) {
-      io.out(JSON.stringify({ ...result.summary, memory: result.memory, exitCode }));
+      io.out(
+        JSON.stringify({
+          ...result.summary,
+          workflows: result.workflows,
+          memory: result.memory,
+          exitCode,
+        }),
+      );
     } else {
       // MC-T4 fix: the tasks that wait for memory and the queued writes outlive this runtime; the next one resumes them.
       const memoryLeft = memoryLeftLine(result.memory);
       if (memoryLeft !== undefined) io.out(memoryLeft);
       const skipped =
         result.summary.skipped.length === 0 ? "" : `, ${result.summary.skipped.length} skipped`;
+      const cancelled =
+        result.summary.cancelled.length === 0
+          ? ""
+          : `, ${result.summary.cancelled.length} cancelled`;
       const whose = mode === "start" ? ` (pid ${pid})` : "";
       io.out(
-        `done: ${result.summary.completed.length} completed, ${result.summary.failed.length} failed, ${result.summary.blocked.length} blocked${skipped}${whose}`,
+        `done: ${result.summary.completed.length} completed, ${result.summary.failed.length} failed, ${result.summary.blocked.length} blocked${skipped}${cancelled}${workflowSummaryText(result.workflows)}${whose}`,
       );
     }
     return exitCode;
   } finally {
     detach();
     await realAgents.close();
+    await liveModels.close();
     store.close();
   }
 }
@@ -207,7 +309,19 @@ function formatEvent(event: RunEvent): string {
     case "task.skipped":
       return `skipped ${event.taskId} ${event.goal}: needs setup (${event.what}: ${event.fix})`;
     case "runtime.stopping":
-      return `stopping (${event.reason}): the in-flight run returns to ready`;
+      return event.reason === "emergency"
+        ? "stopping now (emergency stop): every agent process is killed; the runtime stays halted until haril resume"
+        : `stopping (${event.reason}): the in-flight run returns to ready`;
+    case "runtime.halted":
+      return "halted by an emergency stop: nothing is claimed until haril resume";
+    case "runtime.swept":
+      return `startup sweep: killed ${event.killed} agent ${event.killed === 1 ? "process" : "processes"} a stopped runtime left${event.kept === 0 ? "" : `; kept ${event.kept} whose pid now names another process`}`;
+    case "watchdog.checked":
+      return `watchdog: ${event.text}`;
+    case "task.cancelled":
+      return event.reason === "user_stop"
+        ? `cancelled ${event.taskId} ${event.goal} (stopped by you; not retried)`
+        : `cancelled ${event.taskId} ${event.goal} (residual: nothing will use its result)`;
     case "task.returned":
       return `returned ${event.taskId} ${event.goal} to ready (stopped, no attempt charged)`;
     case "approval.applied":
@@ -220,5 +334,11 @@ function formatEvent(event: RunEvent): string {
       return event.created
         ? `approval ${event.approvalId} requested by task ${event.taskId}: decide with haril approve|deny ${event.approvalId}`
         : `the same plan already waits as approval ${event.approvalId}: decide with haril approve|deny ${event.approvalId}`;
+    case "workflow.turn":
+      return `turn ${event.taskId} ${event.role} ${event.goal}: ${event.outcome}`;
+    case "workflow.state":
+      return event.state === "awaiting_human"
+        ? `workflow ${event.workflowId} waits for you at ${event.reason ?? "a stop"}: haril workflow continue ${event.workflowId}`
+        : `workflow ${event.workflowId} ${event.state}${event.reason === null ? "" : `: ${event.reason}`}`;
   }
 }

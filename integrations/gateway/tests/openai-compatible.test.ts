@@ -416,3 +416,57 @@ describe("cancellation", () => {
     expect(seen.some((event) => event.type === "done")).toBe(false);
   });
 });
+
+describe("listModelDetails", () => {
+  it("reads CLIProxyAPI's ?client_version= listing: levels, default level, context and output limits", async () => {
+    const asked: string[] = [];
+    const client = createOpenAiCompatibleClient({
+      baseUrl: "http://127.0.0.1:9/v1",
+      timeoutMs: 2000,
+      fetch: (async (url: string) => {
+        asked.push(url);
+        return new Response(
+          JSON.stringify({
+            models: [
+              {
+                slug: "Gemini1/gemini-3-flash",
+                display_name: "Gemini 3 Flash",
+                context_window: 1_048_576,
+                max_tokens: 65_536,
+                supported_reasoning_levels: [{ effort: "low" }, "medium", "HIGH", "bogus"],
+                default_reasoning_level: "medium",
+              },
+              { slug: "claude-sonnet-4-6", context_window: 200_000 },
+              { slug: "Gemini1/gemini-3-flash" },
+              { nothing: true },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }) as typeof fetch,
+    });
+    const details = await client.listModelDetails("0.99.0");
+    expect(asked).toEqual(["http://127.0.0.1:9/v1/models?client_version=0.99.0"]);
+    expect(details).toEqual([
+      {
+        id: "Gemini1/gemini-3-flash",
+        displayName: "Gemini 3 Flash",
+        contextWindow: 1_048_576,
+        maxTokens: 65_536,
+        levels: ["low", "medium", "high"],
+        defaultLevel: "medium",
+      },
+      { id: "claude-sonnet-4-6", contextWindow: 200_000, levels: [] },
+    ]);
+  });
+
+  it("refuses an answer that is not a listing", async () => {
+    const client = createOpenAiCompatibleClient({
+      baseUrl: "http://127.0.0.1:9/v1",
+      timeoutMs: 2000,
+      fetch: (async () =>
+        new Response(JSON.stringify({ unexpected: true }), { status: 200 })) as typeof fetch,
+    });
+    await expect(client.listModelDetails("0.99.0")).rejects.toMatchObject({ code: "upstream" });
+  });
+});

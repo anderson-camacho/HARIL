@@ -1,6 +1,22 @@
 import { cliAvailable, NOT_LAUNCHED, runHaril, type StartedRuntime, startRuntime } from "./cli.js";
 import { DASHBOARD_AREAS, type DashboardArea } from "./dashboard.js";
-import type { AutocompleteItem, ConsoleContext, ConsolePi } from "./pi-types.js";
+import {
+  continueWorkflow,
+  type DelegationHost,
+  lastUserText,
+  startDelegation,
+} from "./delegation.js";
+import { openDelegationSettings } from "./delegation-panel.js";
+import {
+  CONSOLE_MODES,
+  type ConsoleMode,
+  commandRefusal,
+  modeDescription,
+  modeLabel,
+  parseMode,
+} from "./modes.js";
+import { demoNotice } from "./orchestration-state.js";
+import type { AutocompleteItem, ConsoleContext, ConsolePi, SessionEntry } from "./pi-types.js";
 import { type BoundProject, folderName } from "./project.js";
 import { type PendingApproval, readPending, readRuntimeAlive } from "./status.js";
 import { plainText } from "./text.js";
@@ -13,6 +29,8 @@ const DEFAULT_MODEL_ENV = "HARIL_DEFAULT_MODEL";
 const PLANNER = "planner";
 const SIMULATED_PLANNER = "fake:plan";
 const EVENTS_LIMIT = "20";
+// A plan PLAN mode wrote goes to the planner as the goal; Windows caps a command line near 32 000 characters.
+const PLAN_GOAL_MAX = 8_000;
 const NO_PROJECT = "this folder is not a HARIL project: /init registers it";
 // What the plan commands of a folder that is not a project cover, said in their titles and notifications.
 const ALL_PROJECTS = "all projects (this folder is not a HARIL project)";
@@ -26,6 +44,8 @@ export interface CommandHost {
   started: StartedRuntime | undefined;
   // The current Pi model as a HARIL reference (<provider>/<model>) when a HARIL provider serves it.
   harilModelRef(): string | undefined;
+  // Every model a HARIL provider serves, as <provider>/<model> (the /delegate card's model choice).
+  harilModels(): readonly string[];
   showOutput(title: string, lines: readonly string[]): void;
   clearOutput(): void;
   openArea(area: DashboardArea): void;
@@ -35,6 +55,19 @@ export interface CommandHost {
   refresh(): Promise<void>;
   reload(): Promise<void>;
   openActions(ctx: ConsoleContext): Promise<void>;
+  // The ORCHESTRATION demo (sample data) on or off; returns whether it is now on.
+  toggleOrchestrationDemo(): boolean;
+  // Opens the ORCHESTRATION full view over the terminal.
+  openOrchestrationView(ctx: ConsoleContext): Promise<void>;
+  // Lets the user choose the workflow ORCHESTRATION follows; resolves whether one was chosen.
+  pickWorkflow(ctx: ConsoleContext): Promise<boolean>;
+  // The console mode (modes.ts) and the switch to another one.
+  mode(): ConsoleMode;
+  switchMode(mode: ConsoleMode, ctx: ConsoleContext): void;
+  // The last plan PLAN mode wrote in this session, which /goal sends when it gets no text.
+  lastPlan(): string | undefined;
+  // Logs a typed HARIL command as an order (4.5): Pi runs extension commands before its input event.
+  recordOrder?(text: string): void;
 }
 
 interface CommandSpec {
@@ -195,7 +228,56 @@ function plannerArgs(host: CommandHost): { readonly args: string[]; readonly not
   };
 }
 
+// Asks for a mode with a select, each mode with what it does (the bar's MODE click and /mode without a name).
+export async function chooseMode(host: CommandHost, ctx: ConsoleContext): Promise<void> {
+  const current = host.mode();
+  const options = CONSOLE_MODES.map(
+    (mode) => `${mode === current ? "●" : "○"} ${modeLabel(mode)} · ${modeDescription(mode)}`,
+  );
+  const choice = await ctx.ui.select(`Console mode · now ${modeLabel(current)}`, options);
+  const picked = CONSOLE_MODES.find((_mode, index) => options[index] === choice);
+  if (picked !== undefined) host.switchMode(picked, ctx);
+}
+
+// What /delegate, /continue and DELEGATION mode need from the console.
+export function delegationHost(host: CommandHost): DelegationHost {
+  return {
+    cwd: host.cwd,
+    project: host.project,
+    harilModelRef: () => host.harilModelRef(),
+    harilModels: () => host.harilModels(),
+    ensureRuntime: () => ensureRuntime(host),
+    openArea: (area) => host.openArea(area),
+  };
+}
+
+const MODE_COMPLETIONS: readonly AutocompleteItem[] = CONSOLE_MODES.map((mode) => ({
+  value: mode,
+  label: mode,
+  description: modeDescription(mode),
+}));
+
 const COMMANDS: readonly CommandSpec[] = [
+  {
+    name: "mode",
+    usage: "/mode [action|consult|plan|delegation]",
+    description: "Switch the console mode (Alt+M cycles; a click on MODE in the bar chooses)",
+    local: true,
+    async run(args, host, ctx) {
+      const name = plainText(args).trim();
+      if (name === "") {
+        await chooseMode(host, ctx);
+        return;
+      }
+      const mode = parseMode(name);
+      if (mode === undefined) {
+        ctx.ui.notify("usage: /mode action | consult | plan | delegation", "warning");
+        return;
+      }
+      if (mode === host.mode()) ctx.ui.notify(`MODE: ${modeLabel(mode)} already`, "info");
+      else host.switchMode(mode, ctx);
+    },
+  },
   {
     name: "haril",
     usage: "/haril",
@@ -203,6 +285,54 @@ const COMMANDS: readonly CommandSpec[] = [
     local: true,
     async run(_args, host, ctx) {
       await host.openActions(ctx);
+    },
+  },
+  {
+    name: "delegation",
+    usage: "/delegation [<setting>] | /delegation set <setting> <value>",
+    description:
+      "Open TOOLS' Delegation settings (context per layer, limits, models and levels, quota, watchdog, autonomy)",
+    async run(args, host, ctx) {
+      const words = plainText(args)
+        .trim()
+        .split(/s+/)
+        .filter((word) => word !== "");
+      const full = (path: string): string =>
+        path.startsWith("delegation.") ? path : `delegation.${path}`;
+      if (words[0] === "set") {
+        const [, path, ...rest] = words;
+        if (path === undefined || rest.length === 0) {
+          ctx.ui.notify(
+            "usage: /delegation set <setting> <value> (for example context.compactAtTokens 300000)",
+            "warning",
+          );
+          return;
+        }
+        if (host.mode() === "consult") {
+          ctx.ui.notify(
+            "CONSULT mode is read-only: /delegation set changes haril.json. Switch with /mode action (or Alt+M) first.",
+            "warning",
+          );
+          return;
+        }
+        const value = rest.join(" ");
+        if (
+          !(await ctx.ui.confirm(
+            "Change a delegation setting",
+            `${full(path)} → ${value}
+This writes haril.json (haril config set).`,
+          ))
+        )
+          return;
+        await runAndShow(ctx, host, ["config", "set", full(path), value], { title: "config set" });
+        return;
+      }
+      host.openArea("tools");
+      await openDelegationSettings(
+        ctx,
+        { cwd: host.cwd, mode: () => host.mode() },
+        words[0] === undefined ? undefined : full(words[0]),
+      );
     },
   },
   {
@@ -223,11 +353,19 @@ const COMMANDS: readonly CommandSpec[] = [
   {
     name: "goal",
     usage: "/goal <text>",
-    description: "Ask the planner for a plan to reach a goal; it waits for /approve",
+    description:
+      "Ask the planner for a plan to reach a goal; it waits for /approve (in PLAN mode, without text: the plan above)",
     async run(args, host, ctx) {
-      const goal = plainText(args).trim();
+      const typed = plainText(args).trim();
+      const plan = typed === "" && host.mode() === "plan" ? host.lastPlan()?.trim() : undefined;
+      const goal = typed !== "" ? typed : (plan ?? "").slice(0, PLAN_GOAL_MAX);
       if (goal === "") {
-        ctx.ui.notify("usage: /goal <what you want done>", "warning");
+        ctx.ui.notify(
+          host.mode() === "plan"
+            ? "usage: /goal <what you want done> (no plan written in this session yet)"
+            : "usage: /goal <what you want done>",
+          "warning",
+        );
         return;
       }
       if (host.project === undefined) {
@@ -247,6 +385,36 @@ const COMMANDS: readonly CommandSpec[] = [
       const parts = [firstLine(result.stdout) || "goal queued", planner.note, runtime];
       ctx.ui.notify(parts.filter((part) => part !== undefined).join(" · "), "info");
     },
+  },
+  {
+    name: "delegate",
+    usage: "/delegate [goal]",
+    description:
+      "Open the card that starts a three-layer workflow with real agents (without a goal: your last message)",
+    async run(args, host, ctx) {
+      let goal = plainText(args).trim();
+      if (goal === "") {
+        let branch: readonly SessionEntry[] = [];
+        try {
+          branch = ctx.sessionManager.getBranch();
+        } catch {
+          branch = [];
+        }
+        goal = lastUserText(branch) ?? "";
+      }
+      if (goal === "") {
+        ctx.ui.notify("usage: /delegate <what the workflow must reach>", "warning");
+        return;
+      }
+      await startDelegation(goal, ctx, delegationHost(host));
+    },
+  },
+  {
+    name: "continue",
+    usage: "/continue [workflowId] [stop…]",
+    description:
+      "Lift the stop a workflow waits at; name stops to remove them (only you remove stops)",
+    run: (args, host, ctx) => continueWorkflow(args, ctx, delegationHost(host)),
   },
   {
     name: "plans",
@@ -341,10 +509,24 @@ export function registerCommands(pi: ConsolePi, host: () => CommandHost | undefi
       description: `HARIL: ${command.description}`,
       ...(command.completesApprovals === true
         ? { getArgumentCompletions: (prefix: string) => approvalCompletions(host(), prefix) }
-        : {}),
+        : command.name === "mode"
+          ? {
+              getArgumentCompletions: (prefix: string) =>
+                MODE_COMPLETIONS.filter((item) =>
+                  item.value.startsWith(prefix.trim().toLowerCase()),
+                ),
+            }
+          : {}),
       async handler(args, ctx) {
         const current = host();
         if (current === undefined) return;
+        current.recordOrder?.(`/${command.name}${args.trim() === "" ? "" : ` ${args.trim()}`}`);
+        // CONSULT is read-only: a command that changes HARIL state does not run, whatever it is asked to do.
+        const refusal = commandRefusal(current.mode(), command.name);
+        if (refusal !== undefined) {
+          ctx.ui.notify(refusal, "warning");
+          return;
+        }
         if (command.local !== true && !cliAvailable()) {
           ctx.ui.notify(NOT_LAUNCHED, "error");
           return;
@@ -367,19 +549,57 @@ export function registerCommands(pi: ConsolePi, host: () => CommandHost | undefi
   });
 }
 
+const ORCHESTRATION_SUBCOMMANDS: readonly AutocompleteItem[] = [
+  { value: "demo", label: "demo", description: "Turn the sample workflow on or off" },
+  { value: "view", label: "view", description: "Open the full orchestration view" },
+  { value: "pick", label: "pick", description: "Choose the workflow to follow" },
+];
+
+// /orchestration demo toggles the sample workflow; /orchestration view opens the full view; /orchestration pick
+// chooses the workflow to follow. Each opens the area, so the module panel shows the result.
+async function orchestrationCommand(
+  args: string,
+  current: CommandHost,
+  ctx: ConsoleContext,
+): Promise<boolean> {
+  const sub = plainText(args).trim().toLowerCase();
+  if (sub === "") return false;
+  current.openArea("orchestration");
+  if (sub === "demo") ctx.ui.notify(demoNotice(current.toggleOrchestrationDemo()), "info");
+  else if (sub === "view") await current.openOrchestrationView(ctx);
+  else if (sub === "pick") await current.pickWorkflow(ctx);
+  else ctx.ui.notify("usage: /orchestration [demo|view|pick]", "warning");
+  return true;
+}
+
 // Pi binds runtime actions after extension factories have registered their listeners. Read its command list only
 // from session_start, when getCommands is initialized, before adding aliases that could shadow other extensions.
 function registerDashboardCommands(pi: ConsolePi, host: () => CommandHost | undefined): void {
   const registeredCommands = new Set(pi.getCommands().map((command) => command.name));
   for (const area of DASHBOARD_AREAS) {
     if (registeredCommands.has(area)) continue;
+    const orchestration = area === "orchestration";
     pi.registerCommand(area, {
-      description: `HARIL: open the ${area.toUpperCase()} dashboard`,
-      async handler(_args, ctx) {
+      description: orchestration
+        ? "HARIL: open the ORCHESTRATION dashboard (view: full view, pick: workflow to follow, demo: sample workflow)"
+        : `HARIL: open the ${area.toUpperCase()} dashboard`,
+      ...(orchestration
+        ? {
+            getArgumentCompletions: (prefix: string) =>
+              ORCHESTRATION_SUBCOMMANDS.filter((item) =>
+                item.value.startsWith(prefix.trim().toLowerCase()),
+              ),
+          }
+        : {}),
+      async handler(args, ctx) {
         const current = host();
         if (current === undefined) return;
+        if (orchestration && (await orchestrationCommand(args, current, ctx))) return;
         current.openArea(area);
-        ctx.ui.notify(`${area.toUpperCase()} dashboard · Ctrl+Shift+1..6 or /${area}`, "info");
+        ctx.ui.notify(
+          `${area.toUpperCase()} dashboard · Ctrl+Shift+1..${DASHBOARD_AREAS.length} or /${area}`,
+          "info",
+        );
       },
     });
   }

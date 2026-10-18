@@ -29,7 +29,24 @@ const HOST = "127.0.0.1";
 type Outcome =
   | { readonly kind: "done" }
   | { readonly kind: "cut" }
-  | { readonly kind: "failed"; readonly code: string };
+  | {
+      readonly kind: "failed";
+      readonly code: string;
+      readonly httpStatus: number | null;
+      readonly retryAfterMs: number | null;
+    };
+
+// The status and Retry-After an adapter error carries (duck-typed: the Broker never imports providers/, R9).
+function errorFacts(error: unknown): { httpStatus: number | null; retryAfterMs: number | null } {
+  const record =
+    typeof error === "object" && error !== null ? (error as Record<string, unknown>) : {};
+  const status = record.httpStatus;
+  const wait = record.retryAfterMs;
+  return {
+    httpStatus: typeof status === "number" && Number.isInteger(status) ? status : null,
+    retryAfterMs: typeof wait === "number" && Number.isFinite(wait) && wait >= 0 ? wait : null,
+  };
+}
 
 export async function startBroker(options: BrokerOptions): Promise<Broker> {
   const { resolveUpstream, ledger, clock } = options;
@@ -158,7 +175,12 @@ export async function startBroker(options: BrokerOptions): Promise<Broker> {
     // The newest chunk is held back until the next one arrives or the reply ends: it is written after settlement,
     // so a client that reads to the end sees the final ledger state. For a non-stream request it is the reply.
     let last: UpstreamChunk | undefined;
-    let outcome: Outcome = { kind: "failed", code: "unknown" };
+    let outcome: Outcome = {
+      kind: "failed",
+      code: "unknown",
+      httpStatus: null,
+      retryAfterMs: null,
+    };
     const iterator = resolveUpstream(grant.providerId)
       .chatRaw(upstreamBody(input, maxTokens), controller.signal)
       [Symbol.asyncIterator]();
@@ -171,7 +193,12 @@ export async function startBroker(options: BrokerOptions): Promise<Broker> {
         }
         const chunk = next.value;
         if (chunk.error !== null) {
-          outcome = { kind: "failed", code: "upstream_stream_error" };
+          outcome = {
+            kind: "failed",
+            code: "upstream_stream_error",
+            httpStatus: null,
+            retryAfterMs: null,
+          };
           break;
         }
         // BR-7: the output counted so far, as an upper bound, may not take the reservation past its amount.
@@ -191,7 +218,7 @@ export async function startBroker(options: BrokerOptions): Promise<Broker> {
         }
       }
     } catch (error) {
-      outcome = { kind: "failed", code: upstreamCode(error) };
+      outcome = { kind: "failed", code: upstreamCode(error), ...errorFacts(error) };
     } finally {
       untrack(grant.runId, controller);
     }
@@ -240,6 +267,19 @@ export async function startBroker(options: BrokerOptions): Promise<Broker> {
       }
       return;
     }
+    try {
+      options.onUpstreamFailure?.({
+        runId: grant.runId,
+        taskId: grant.taskId,
+        providerId: grant.providerId,
+        model: routeId,
+        code: outcome.code,
+        httpStatus: outcome.httpStatus,
+        retryAfterMs: outcome.retryAfterMs,
+      });
+    } catch {
+      // A listener's failure never changes the answer.
+    }
     const message = `upstream failed (${outcome.code})`;
     if (input.stream && started) {
       if (last !== undefined) response.write(chunkEvent(last.json));
@@ -247,10 +287,15 @@ export async function startBroker(options: BrokerOptions): Promise<Broker> {
       response.end(DONE_EVENT);
       return;
     }
+    // A 429 carries the upstream's Retry-After on (3.11), in whole seconds.
+    const limited = outcome.code === "rate_limited";
     sendJson(
       response,
-      outcome.code === "rate_limited" ? 429 : 502,
+      limited ? 429 : 502,
       errorBody("upstream_error", message),
+      limited && outcome.retryAfterMs !== null
+        ? { "retry-after": String(Math.ceil(outcome.retryAfterMs / 1000)) }
+        : {},
     );
   }
 
@@ -338,11 +383,16 @@ function insufficientQuota(detail: string): Record<string, unknown> {
   return errorBody("insufficient_quota", `insufficient_quota: ${detail}`);
 }
 
-function sendJson(response: ServerResponse, status: number, body: unknown): void {
+function sendJson(
+  response: ServerResponse,
+  status: number,
+  body: unknown,
+  headers: Readonly<Record<string, string>> = {},
+): void {
   if (response.headersSent) {
     response.end();
     return;
   }
-  response.writeHead(status, { "content-type": "application/json" });
+  response.writeHead(status, { "content-type": "application/json", ...headers });
   response.end(JSON.stringify(body));
 }

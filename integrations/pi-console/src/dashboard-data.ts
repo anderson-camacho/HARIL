@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { runHaril } from "./cli.js";
+import { type DelegationView, decodeDelegationView } from "./delegation-settings.js";
 import type { PendingApproval } from "./status.js";
 
 export interface DashboardMethodology {
@@ -44,6 +45,10 @@ export interface DashboardData {
   readonly memorySummary: string;
   readonly errors: readonly string[];
   readonly loadedAt: number | undefined;
+  // haril.json's delegation settings (haril config get delegation --json, phase F7), or why they are not shown. Kept out
+  // of `errors`: the project's data does not depend on them.
+  readonly delegation?: DelegationView;
+  readonly delegationError?: string;
 }
 
 export const emptyDashboardData = (projectSlug?: string): DashboardData => ({
@@ -92,8 +97,23 @@ async function readJson(
   }
 }
 
+// The delegation settings for TOOLS, or the reason they are not shown.
+async function readDelegation(): Promise<Pick<DashboardData, "delegation" | "delegationError">> {
+  const result = await readJson(
+    ["config", "get", "delegation", "--json"],
+    "Delegation settings",
+    false,
+  );
+  if (result.error !== undefined) return { delegationError: result.error };
+  const view = decodeDelegationView(result.value);
+  return view === undefined
+    ? { delegationError: "Delegation settings: unexpected JSON shape" }
+    : { delegation: view };
+}
+
 export async function loadDashboardData(projectSlug: string | undefined): Promise<DashboardData> {
   const methodsPromise = readJson(["methodology", "list", "--json"], "Methodologies", false);
+  const delegationPromise = readDelegation();
   if (projectSlug === undefined) {
     const methodsResult = await methodsPromise;
     const decoded = decodeMethodologies(methodsResult.value);
@@ -107,6 +127,7 @@ export async function loadDashboardData(projectSlug: string | undefined): Promis
       methodologiesAvailable: methodsResult.error === undefined && decoded !== undefined,
       errors,
       loadedAt: Date.now(),
+      ...(await delegationPromise),
     };
   }
   const scope = ["--project", projectSlug];
@@ -199,6 +220,7 @@ export async function loadDashboardData(projectSlug: string | undefined): Promis
         : `${String(memory.provider ?? "provider unknown")} · ${String(memory.health ?? "health unknown")} · degraded ${String(memory.degraded ?? "unknown")} · outbox ${String(outbox?.depth ?? "unknown")}`,
     errors,
     loadedAt: Date.now(),
+    ...(await delegationPromise),
   };
 }
 

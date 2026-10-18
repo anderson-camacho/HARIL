@@ -1,20 +1,29 @@
 // AgentRuntime adapter for Pi 1.2.0 in `--mode rpc` (ADR-0004). One Pi process per attempt. The adapter
 // owns the bridge channel (named pipe or unix socket with a 256-bit token), the RPC JSONL stream, the
 // handshake (fail closed), the bridge read operation through PathGuard, the plan.propose operation of a plan
-// task through the host's proposer (LD-T4), and the abort/kill escalation.
+// task through the host's proposer (LD-T4), the delegation.call operation of a workflow turn through the host's
+// delegation tools (phase F2b), and the abort/kill escalation. A workflow turn of a read-only workflow launches only with
+// read and the delegation tools, whatever its spec asks. A turn of a workflow that writes (phase F8) runs in a git
+// worktree (spec.workspace): reads resolve under the worktree, and its role's workspace tools (write, edit, haril_run,
+// haril_merge and its continue and abort) go to the host's handler like the delegation tools; the host does them inside
+// the worktree and the declared surface. Pi's own write, edit and bash never launch: the host serves every tool.
 // It never sends new_session, switch_session, fork or clone, and it never logs the token or the key.
 
 import type { ChildProcess } from "node:child_process";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
+import { createWriteStream, mkdirSync, type WriteStream, writeFileSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { join } from "node:path";
 import type {
   AgentHandle,
   AgentHello,
   AgentOutcome,
+  AgentProcess,
   AgentRuntime,
   AgentSpec,
+  BootStart,
+  DelegationToolHandler,
+  DelegationToolResult,
   HarilError,
   PlanProposalResult,
   PlanProposer,
@@ -24,11 +33,14 @@ import { JsonlReader } from "./jsonl.js";
 import {
   buildPiArgv,
   buildPiEnv,
+  compactionReserveTokens,
   DEFAULT_MODEL_CONTEXT_WINDOW,
   DEFAULT_MODEL_MAX_TOKENS,
   defaultSpawn,
   killProcessTree,
+  PI_THINKING_LEVELS,
   type SpawnFn,
+  thinkingLevelFor,
 } from "./launch.js";
 import { createPathGuard, type PathGuard } from "./path-guard.js";
 import { readGuardedFile } from "./read-guarded.js";
@@ -40,12 +52,14 @@ export interface PiTimings {
 }
 
 // plan_refused: the host refused a plan.propose (an invalid plan, a closed attempt); the agent hears the reason.
+// delegation_refused: the host refused a delegation.call (a bad input, a limit, a second deciding call).
 export type BridgeOperationOutcome =
   | "ok"
   | "path_denied"
   | "too_large"
   | "read_failed"
   | "plan_refused"
+  | "delegation_refused"
   | "unsupported";
 
 // Event-friendly record of one bridge operation: the path is hashed and the content is never included.
@@ -54,6 +68,8 @@ export type BridgeOperationOutcome =
 // accepted plan became, never the plan. A refused one also carries the reason the host gave the agent (LD-T7c), cut to
 // MAX_REFUSAL_REASON_CHARS, so the refusal is audited outside the Pi session log. The reason is HARIL's own validation
 // message: it may name a task's local id, its agent or the paths it lists, never a goal or a description.
+// A delegation.call names its tool and carries its input's SHA-256 and UTF-8 size, and the refusal reason the agent
+// heard (capped the same way), never the input.
 export interface BridgeOperationEvent {
   readonly runId: string;
   readonly op: string;
@@ -63,11 +79,14 @@ export interface BridgeOperationEvent {
   readonly planSha256?: string;
   readonly planBytes?: number;
   readonly approvalId?: string;
+  readonly tool?: string;
+  readonly inputSha256?: string;
+  readonly inputBytes?: number;
 }
 
 type OperationDetail = Pick<
   BridgeOperationEvent,
-  "reason" | "planSha256" | "planBytes" | "approvalId"
+  "reason" | "planSha256" | "planBytes" | "approvalId" | "tool" | "inputSha256" | "inputBytes"
 >;
 
 export interface PiAgentRuntimeOptions {
@@ -84,17 +103,45 @@ export interface PiAgentRuntimeOptions {
   // Limits the bridge registers for the model (HARIL_MODEL_CONTEXT, HARIL_MODEL_MAX_TOKENS). Positive integers.
   readonly modelContextWindow?: number;
   readonly modelMaxTokens?: number;
+  // The layer's reasoning level and the levels the gateway publishes for the model (phase F7). Pi runs at the level, or
+  // the nearest one the model publishes (--thinking), and the bridge registers the published levels so Pi sends it as
+  // reasoning_effort. Without published levels (unknown, or none) no level is asked for: the gateway's default applies.
+  readonly thinkingLevel?: string;
+  readonly modelLevels?: readonly string[];
+  // The layer's compaction threshold (3.12): Pi gets compaction.reserveTokens = max(16384, window - threshold) in the
+  // run's agent settings.json, so it compacts there. Absent: Pi's own reserve.
+  readonly compactAtTokens?: number;
   readonly spawn?: SpawnFn;
   readonly pathGuard?: PathGuard;
   readonly timings?: PiTimings;
   readonly onBridgeOperation?: (event: BridgeOperationEvent) => void;
   // The host side of haril_propose_plan (LD-T4). Without it, plan.propose is unsupported and a plan task cannot propose.
   readonly proposePlan?: PlanProposer;
+  // The host side of the delegation tools (phase F2b). Without it, delegation.call is unsupported and a workflow turn
+  // cannot make its deciding call.
+  readonly delegationTools?: DelegationToolHandler;
+  // Linux (3.14): reads the spawned pid's boot ticks right after the spawn, recorded with its start time so a wall-clock
+  // step never makes the live agent look like a reused pid. Absent or undefined elsewhere.
+  readonly bootStartOf?: (pid: number) => BootStart | undefined;
+  // The host's verified tree kill (3.14): one snapshot of the processes, the root checked against its recorded start and
+  // each descendant against its parent's, every pid killed on its own, root first. "gone": the root no longer runs as
+  // recorded; "unreadable": the process table could not be read. Without it, or when it answers "unreadable", the OS's
+  // own tree kill (taskkill /T, or the POSIX process group) is the fallback.
+  readonly killTree?: (process: AgentProcess) => Promise<"killed" | "gone" | "unreadable">;
+}
+
+interface PiLaunch {
+  readonly contextWindow: number;
+  readonly maxTokens: number;
+  readonly compactionReserveTokens: number | null;
+  readonly thinkingLevel: string | null;
 }
 
 export interface PiDiagnostics {
   readonly ignoredEvents: number;
   readonly warnings: readonly string[];
+  // What the run was launched with (phase F7): the runtime records it with the run.
+  readonly launch: PiLaunch;
 }
 
 export interface PiAgentHandle extends AgentHandle {
@@ -106,6 +153,40 @@ const MAX_READ_BYTES = 1024 * 1024;
 // The bridge tool of a plan task and its operation (LD-T4). Core values stay out of this adapter, so the name is local.
 const PROPOSE_PLAN_TOOL = "haril_propose_plan";
 const PLAN_PROPOSE_OP = "plan.propose";
+// The delegation tools the bridge serves to a workflow turn and their one operation (phase F2b). Kept local like the
+// plan tool's name; the host's handler checks the tool against the turn's archetype again.
+const DELEGATION_CALL_OP = "delegation.call";
+const DELEGATION_TOOLS: ReadonlySet<string> = new Set([
+  "haril_delegate",
+  "haril_assign",
+  "haril_report",
+  "haril_verdict",
+  "haril_request_audit",
+  "haril_abort",
+]);
+// What a turn of a read-only workflow may be offered: read and the delegation tools. Nothing that writes, edits or runs
+// a command launches.
+const WORKFLOW_TOOLS: ReadonlySet<string> = new Set(["read", ...DELEGATION_TOOLS]);
+// The workspace tools of a turn that runs in a git worktree (phase F8), by role, as the archetype table of the Core
+// offers them (packages/core/src/delegation/archetypes.ts; a value import of core is not allowed here, so it is mirrored
+// as the store mirrors the roles): the executor writes and runs commands, the delegator merges and resolves conflicts,
+// the auditor runs commands, the orchestrator none. The host checks every call again against the turn's archetype.
+const WORKSPACE_TOOLS_BY_ROLE: Readonly<Record<string, ReadonlySet<string>>> = {
+  executor: new Set(["write", "edit", "haril_run"]),
+  delegator: new Set([
+    "haril_run",
+    "haril_merge",
+    "haril_merge_continue",
+    "haril_merge_abort",
+    "write",
+    "edit",
+  ]),
+  auditor: new Set(["haril_run"]),
+  orchestrator: new Set(),
+};
+const WORKSPACE_TOOLS: ReadonlySet<string> = new Set(
+  Object.values(WORKSPACE_TOOLS_BY_ROLE).flatMap((tools) => [...tools]),
+);
 // Pi waits for an answer only to these extension dialogs; every other extension_ui_request is fire-and-forget.
 const DIALOG_METHODS: ReadonlySet<unknown> = new Set(["select", "confirm", "input", "editor"]);
 const DEFAULT_HELLO_TIMEOUT_MS = 15_000;
@@ -185,6 +266,24 @@ function validate(spec: AgentSpec, options: PiAgentRuntimeOptions): HarilError |
   if (!spec.allowedTools.every((tool) => tool.length > 0 && !tool.includes(","))) {
     return invalid("allowedTools must be non-empty names without commas");
   }
+  if (spec.delegation !== undefined) {
+    const workspace = spec.workspace;
+    if (workspace !== undefined && !isAbsolutePath(workspace.root)) {
+      return invalid("workspace.root must be an absolute path");
+    }
+    const extra =
+      workspace === undefined
+        ? new Set<string>()
+        : (WORKSPACE_TOOLS_BY_ROLE[spec.delegation.role] ?? new Set<string>());
+    const unsafe = spec.allowedTools.find((tool) => !WORKFLOW_TOOLS.has(tool) && !extra.has(tool));
+    if (unsafe !== undefined) {
+      return invalid(
+        workspace === undefined
+          ? `a workflow agent of a read-only workflow is offered only read and the delegation tools: ${unsafe} is not one of them`
+          : `a ${spec.delegation.role} turn in a worktree is not offered ${unsafe}`,
+      );
+    }
+  }
   if (!(spec.timeoutMs > 0) || !Number.isFinite(spec.timeoutMs)) {
     return invalid("timeoutMs must be a positive number");
   }
@@ -194,7 +293,34 @@ function validate(spec: AgentSpec, options: PiAgentRuntimeOptions): HarilError |
   if (options.modelMaxTokens !== undefined && !isPositiveInteger(options.modelMaxTokens)) {
     return invalid("modelMaxTokens must be a positive integer");
   }
+  if (options.thinkingLevel !== undefined && !PI_THINKING_LEVELS.includes(options.thinkingLevel)) {
+    return invalid(`thinkingLevel must be one of ${PI_THINKING_LEVELS.join(", ")}`);
+  }
+  if (options.modelLevels?.some((level) => !/^[a-z]+$/.test(level)) === true) {
+    return invalid("modelLevels must be lower-case level names");
+  }
+  if (options.compactAtTokens !== undefined && !isPositiveInteger(options.compactAtTokens)) {
+    return invalid("compactAtTokens must be a positive integer");
+  }
   return undefined;
+}
+
+// What a run is launched with: the model's limits (the catalog's, else the documented fallback), the compaction reserve
+// of its layer's threshold and the level Pi runs at, null when Pi's own reserve or the gateway's default level applies.
+function launchOf(options: PiAgentRuntimeOptions): PiLaunch {
+  const contextWindow = options.modelContextWindow ?? DEFAULT_MODEL_CONTEXT_WINDOW;
+  return {
+    contextWindow,
+    maxTokens: options.modelMaxTokens ?? DEFAULT_MODEL_MAX_TOKENS,
+    compactionReserveTokens:
+      options.compactAtTokens === undefined
+        ? null
+        : compactionReserveTokens(contextWindow, options.compactAtTokens),
+    thinkingLevel:
+      options.thinkingLevel === undefined || options.modelLevels === undefined
+        ? null
+        : (thinkingLevelFor(options.modelLevels, options.thinkingLevel) ?? null),
+  };
 }
 
 function isPositiveInteger(value: number): boolean {
@@ -206,6 +332,29 @@ function proposalText(approvalId: string, created: boolean): string {
   return created
     ? `proposed plan ${approvalId}; it waits for a person (haril approve ${approvalId})`
     : `plan ${approvalId} was already proposed; it waits for a person (haril approve ${approvalId})`;
+}
+
+// What the agent reads after an accepted delegation call: the host's typed reply, its fields as JSON, then the rule that
+// a turn decides once.
+function delegationText(result: Extract<DelegationToolResult, { ok: true }>): string {
+  const { ok: _ok, ...fields } = result;
+  return `accepted: ${JSON.stringify(fields)}. This call decides your turn: end it now with a short final message.`;
+}
+
+// What the agent reads after a workspace tool (phase F8), which never decides the turn: a command's exit code and the
+// end of its output as text, any other reply's fields as JSON.
+function workspaceText(tool: string, result: Extract<DelegationToolResult, { ok: true }>): string {
+  const { ok: _ok, ...fields } = result;
+  if (tool !== "haril_run") return `${tool}: ${JSON.stringify(fields)}`;
+  const exit = fields.timedOut === true ? "timed out" : `exit code ${String(fields.exitCode)}`;
+  const out = typeof fields.stdout === "string" ? fields.stdout : "";
+  const err = typeof fields.stderr === "string" ? fields.stderr : "";
+  const cut = fields.truncated === true ? " (only the end of the output is shown)" : "";
+  return [
+    `haril_run: ${exit} after ${String(fields.durationMs)} ms${cut}`,
+    out === "" ? "stdout: (empty)" : `stdout:\n${out}`,
+    err === "" ? "stderr: (empty)" : `stderr:\n${err}`,
+  ].join("\n");
 }
 
 // The longest refusal reason a plan.propose record keeps, in code points (LD-T7c).
@@ -274,10 +423,13 @@ class PiRun implements PiAgentHandle {
   >();
   private readonly warnings: string[] = [];
   private readonly osEnv: NodeJS.ProcessEnv = process.env;
+  private readonly launch: PiLaunch;
 
   private server: Server | undefined;
   private bridgeSocket: Socket | undefined;
   private child: ChildProcess | undefined;
+  private spawnedAt: number | undefined;
+  private spawnBoot: BootStart | undefined;
   private stderrLog: WriteStream | undefined;
   private stdoutReader: JsonlReader | undefined;
   private stdinOpen = false;
@@ -311,8 +463,10 @@ class PiRun implements PiAgentHandle {
     this.helloTimeoutMs = options.timings?.helloTimeoutMs ?? DEFAULT_HELLO_TIMEOUT_MS;
     this.startupTimeoutMs = options.timings?.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS;
     this.graceMs = options.timings?.graceMs ?? DEFAULT_GRACE_MS;
-    this.guard = options.pathGuard ?? createPathGuard(options.projectRoot);
+    // A turn of a workflow that writes reads its own worktree (phase F8); every other run reads the project.
+    this.guard = options.pathGuard ?? createPathGuard(spec.workspace?.root ?? options.projectRoot);
     this.runDir = join(options.runsDir, spec.runId);
+    this.launch = launchOf(options);
     const suffix = randomBytes(8).toString("hex");
     this.pipeName =
       process.platform === "win32"
@@ -326,12 +480,25 @@ class PiRun implements PiAgentHandle {
   }
 
   get diagnostics(): PiDiagnostics {
-    return { ignoredEvents: this.ignoredEvents, warnings: [...this.warnings] };
+    return {
+      ignoredEvents: this.ignoredEvents,
+      warnings: [...this.warnings],
+      launch: this.launch,
+    };
   }
 
   async init(): Promise<void> {
     mkdirSync(join(this.runDir, "agent"), { recursive: true });
     mkdirSync(join(this.runDir, "pi"), { recursive: true });
+    // The layer's compaction point (3.12): Pi reads its agent directory's settings.json; only this key is set.
+    if (this.launch.compactionReserveTokens !== null) {
+      const settings = { compaction: { reserveTokens: this.launch.compactionReserveTokens } };
+      writeFileSync(
+        join(this.runDir, "agent", "settings.json"),
+        `${JSON.stringify(settings, null, 2)}\n`,
+        "utf8",
+      );
+    }
     this.stderrLog = createWriteStream(join(this.runDir, "pi", "stderr.log"), { flags: "a" });
     this.stderrLog.on("error", () => {});
 
@@ -354,8 +521,11 @@ class PiRun implements PiAgentHandle {
       tools: this.spec.allowedTools,
       brokerUrl: this.options.brokerUrl,
       model: this.options.model,
-      modelContextWindow: this.options.modelContextWindow ?? DEFAULT_MODEL_CONTEXT_WINDOW,
-      modelMaxTokens: this.options.modelMaxTokens ?? DEFAULT_MODEL_MAX_TOKENS,
+      modelContextWindow: this.launch.contextWindow,
+      modelMaxTokens: this.launch.maxTokens,
+      ...(this.launch.thinkingLevel === null || this.options.modelLevels === undefined
+        ? {}
+        : { modelLevels: this.options.modelLevels }),
       virtualKey: this.options.virtualKey,
       osEnv: this.osEnv,
     });
@@ -364,6 +534,7 @@ class PiRun implements PiAgentHandle {
       bridgePath: this.options.bridgePath,
       sessionDir: join(this.runDir, "pi"),
       model: this.options.model,
+      ...(this.launch.thinkingLevel === null ? {} : { thinking: this.launch.thinkingLevel }),
     });
     const child = this.spawnFn(this.options.nodePath, argv, {
       cwd: this.runDir,
@@ -373,6 +544,10 @@ class PiRun implements PiAgentHandle {
       stdio: ["pipe", "pipe", "pipe"],
       detached: process.platform !== "win32",
     });
+    // Read right after the spawn returned: the OS created the process during the call, so its own start time is within
+    // milliseconds of this one, which the startup sweep compares before it kills a recorded pid (3.14.5).
+    this.spawnedAt = Date.now();
+    this.spawnBoot = child.pid === undefined ? undefined : this.bootOf(child.pid);
     this.child = child;
     this.stdinOpen = child.stdin !== null;
     this.wireChild(child);
@@ -403,6 +578,43 @@ class PiRun implements PiAgentHandle {
 
   async dispose(): Promise<void> {
     this.stop("abort");
+    await this.exitedD.promise;
+  }
+
+  // The process serving the run (3.14): its pid and the time taken right after the spawn returned it, with its boot
+  // ticks on Linux.
+  get process(): AgentProcess | undefined {
+    const pid = this.child?.pid;
+    if (pid === undefined || this.spawnedAt === undefined) return undefined;
+    return {
+      pid,
+      startedAt: this.spawnedAt,
+      ...(this.spawnBoot === undefined ? {} : { boot: this.spawnBoot }),
+    };
+  }
+
+  // The host's reading of the boot ticks; a failed reading records none.
+  private bootOf(pid: number): BootStart | undefined {
+    try {
+      return this.options.bootStartOf?.(pid);
+    } catch {
+      return undefined;
+    }
+  }
+
+  // The emergency stop and the watchdog's close (3.14, 3.16): no abort request and no grace period, the tree is killed
+  // now. An unsettled run settles as aborted once Pi is gone.
+  async kill(): Promise<void> {
+    if (!this.finished && this.stopRequest === undefined) {
+      this.stopRequest = "abort";
+      clearTimeout(this.deadlineTimer);
+    }
+    if (this.stdinOpen) {
+      this.stdinOpen = false;
+      this.child?.stdin?.end();
+    }
+    clearTimeout(this.graceTimer);
+    this.killNow();
     await this.exitedD.promise;
   }
 
@@ -570,6 +782,10 @@ class PiRun implements PiAgentHandle {
       this.onProposePlan(id, message.plan);
       return;
     }
+    if (message.op === DELEGATION_CALL_OP) {
+      await this.onDelegationCall(id, message.tool, message.input);
+      return;
+    }
     if (message.op !== "read") {
       this.recordOperation(String(message.op), sha256(""), "unsupported");
       this.replyBridge(id, { ok: false, error: "unsupported" });
@@ -641,6 +857,59 @@ class PiRun implements PiAgentHandle {
       approvalId: result.approvalId,
     });
     this.replyBridge(id, { ok: true, content: proposalText(result.approvalId, result.created) });
+  }
+
+  // A delegation tool (phase F2b): the call goes to the host's handler untouched, with the run's own context, only for a
+  // tool this run was offered; the handler checks it and its typed reply goes back, a refusal with its reason, so the
+  // agent can fix the call in the same turn. A host failure is a fixed reason, never the host's error. A workspace tool
+  // (phase F8) is answered once the host finished it.
+  private async onDelegationCall(
+    id: string | number,
+    tool: unknown,
+    input: unknown,
+  ): Promise<void> {
+    const name = typeof tool === "string" ? tool : "";
+    const body = JSON.stringify(input) ?? "";
+    const fingerprint = {
+      tool: name,
+      inputSha256: sha256(body),
+      inputBytes: Buffer.byteLength(body, "utf8"),
+    };
+    const handler = this.options.delegationTools;
+    const projectId = this.spec.projectId;
+    if (
+      handler === undefined ||
+      projectId === undefined ||
+      !(DELEGATION_TOOLS.has(name) || WORKSPACE_TOOLS.has(name)) ||
+      !this.spec.allowedTools.includes(name)
+    ) {
+      this.recordOperation(DELEGATION_CALL_OP, sha256(""), "unsupported", fingerprint);
+      this.replyBridge(id, { ok: false, error: "unsupported" });
+      return;
+    }
+    let result: DelegationToolResult;
+    try {
+      result = await handler(
+        { projectId, taskId: this.spec.taskId, runId: this.runId },
+        name,
+        input,
+      );
+    } catch {
+      result = { ok: false, reason: "the call could not be recorded" };
+    }
+    if (!result.ok) {
+      this.recordOperation(DELEGATION_CALL_OP, sha256(""), "delegation_refused", {
+        ...fingerprint,
+        reason: cappedReason(result.reason),
+      });
+      this.replyBridge(id, { ok: false, error: result.reason, reply: result });
+      return;
+    }
+    this.recordOperation(DELEGATION_CALL_OP, sha256(""), "ok", fingerprint);
+    const content = WORKSPACE_TOOLS.has(name)
+      ? workspaceText(name, result)
+      : delegationText(result);
+    this.replyBridge(id, { ok: true, content, reply: result });
   }
 
   private recordOperation(
@@ -814,10 +1083,27 @@ class PiRun implements PiAgentHandle {
     }
   }
 
+  // Every kill of the run (the emergency stop, the watchdog's close, the end of the grace period, a failure) goes through
+  // the host's verified tree kill when it has one. taskkill /T walks the tree by parent pid alone, and Windows keeps a dead
+  // parent's pid in its children's ParentProcessId, so a stranger under a reused pid could be taken along; that path stays
+  // only as the fallback for a process table that cannot be read. The child's own handle is killed at the end either way:
+  // it names this process and no other.
   private killNow(): void {
     if (this.childClosed || this.child === undefined) return;
     this.killedByUs = true;
-    killProcessTree(this.child, this.osEnv);
+    const child = this.child;
+    const target = this.process;
+    const verified = this.options.killTree;
+    if (verified === undefined || target === undefined) {
+      killProcessTree(child, this.osEnv);
+      return;
+    }
+    const finish = (result: "killed" | "gone" | "unreadable"): void => {
+      if (this.childClosed) return;
+      if (result === "unreadable") killProcessTree(child, this.osEnv);
+      else child.kill("SIGKILL");
+    };
+    verified(target).then(finish, () => finish("unreadable"));
   }
 
   private fail(code: string, message: string): void {

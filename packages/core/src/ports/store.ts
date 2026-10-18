@@ -12,7 +12,13 @@ import type {
   TaskKind,
   TaskState,
 } from "@haril/contracts";
+import type { AgentProcess } from "./agent-runtime.js";
+import type { WorkflowsPort } from "./delegation.js";
+import type { BootStart } from "./process-control.js";
+import type { QuotaStorePort } from "./quota.js";
 import type { HarilError, Result } from "./result.js";
+import type { UsageLogPort } from "./usage-log.js";
+import type { WorktreesPort } from "./worktrees.js";
 
 export type GateStatus = "ok" | "warn" | "error";
 
@@ -306,10 +312,86 @@ export interface CommandRecord {
 export interface AppliedCommand {
   readonly commandId: string;
   readonly type: string;
+  // The command's arguments as they were queued (runtime.stop's mode, workflow.stop's workflow).
+  readonly args: Readonly<Record<string, unknown>>;
   readonly outcome: "applied" | "rejected";
   readonly reason?: string;
+  // The tasks the command created, or the tasks a stop cancelled.
   readonly taskIds: readonly string[];
   readonly planId?: string;
+  // The workflow a workflow.start created.
+  readonly workflowId?: string;
+  // The workflows a stop ended (haril stop --now, haril workflow stop); absent for every other command.
+  readonly workflowIds?: readonly string[];
+}
+
+// One queued command as the CLI reads it back (haril stop --now waits for its own command).
+export interface CommandStatus {
+  readonly commandId: string;
+  readonly type: string;
+  readonly status: "queued" | "applied" | "rejected";
+  readonly taskIds: readonly string[];
+  readonly workflowIds: readonly string[];
+  readonly reason: string | null;
+  readonly appliedAt: number | null;
+}
+
+// Why the runtime ended a task before it finished (docs/modos-y-delegacion.md 3.14, 3.16): the human's stop (haril stop
+// --now, haril workflow stop) or the watchdog's residual verdict (nobody will consume its result). A cancelled task is
+// never retried, and its run's keys and open reservations end with it.
+export type CancelReason = "user_stop" | "residual";
+
+export interface CancelledTask {
+  readonly taskId: string;
+  readonly projectId: string;
+  readonly goal: string;
+  readonly workflowId: string | null;
+  // The state the task left.
+  readonly from: "pending" | "ready" | "running" | "blocked";
+  // The run it was in, now closed as cancelled; null when it was not running.
+  readonly runId: string | null;
+}
+
+// A process an attempt recorded (3.14): the run, the lease epoch that owned it and the process's pid and start time.
+export interface RecordedProcess {
+  readonly runId: string;
+  readonly taskId: string;
+  readonly projectId: string;
+  readonly runtimeEpoch: number;
+  readonly runStatus: string;
+  readonly pid: number;
+  readonly startedAt: number;
+  // Linux: the boot ticks recorded with it (process-control.ts); null when none was recorded.
+  readonly boot: BootStart | null;
+}
+
+export interface RecordedProcessFilter {
+  // Open runs (prepared, running, settled) of every epoch but this one: the attempts a dead runtime left behind. With
+  // unverified, the open runs of this epoch are left out (the runtime's own attempts in flight).
+  readonly excludeEpoch?: number;
+  // Every run, open or ended, whose recorded process was not verified gone yet (3.14): what the startup sweep and the
+  // emergency stop check, so a run a stop cancelled while its kill failed is never forgotten.
+  readonly unverified?: boolean;
+  // Also the runs that ended at or after this time (a stop that just cancelled them): their processes may still be
+  // dying.
+  readonly endedSince?: number;
+}
+
+// What a run did since a time, for the watchdog (3.16): objective progress signals, never a model's word.
+export interface RunActivity {
+  // Tokens of the run's settled model calls since then (input plus output, counted once per call).
+  readonly tokens: number;
+  // Model calls of the run still open: reserved by the Broker and not yet settled.
+  readonly openRequests: number;
+  // The newest tool call of the run (a tool.* event), or null when it made none.
+  readonly lastToolCallAt: number | null;
+}
+
+// The emergency stop leaves the runtime halted (3.14): nothing is claimed until haril resume.
+export interface HaltState {
+  readonly halted: boolean;
+  // When the stop that halted it was applied; null when not halted.
+  readonly since: number | null;
 }
 
 export interface PromotedTask {
@@ -323,12 +405,19 @@ export interface PromoteResult {
 }
 
 // The stored result of a task that a claimed task depends on (AGENTS.md 6.1, source 4; MC-T1). Another agent wrote it,
-// so the prompt that carries it labels it as data. `result` is the task's result as completed (never null: a task is
-// ready only once every dependency completed, and a completed task has a result).
+// so the prompt that carries it labels it as data. `result` is the task's result as completed. A dependency of kind
+// settled (3.7) is met by a task that will never complete too: then `result` is null and `failure` says how it ended
+// (failed with its newest error, cancelled, or blocked by an earlier failure), so a continuation knows which child
+// failed and why.
 export interface DependencyResult {
   readonly taskId: string;
   readonly goal: string;
-  readonly result: JsonObject;
+  readonly result: JsonObject | null;
+  readonly failure?: {
+    readonly state: "failed" | "cancelled" | "blocked";
+    readonly code: string;
+    readonly message: string;
+  };
 }
 
 // One acceptance check of a rejected attempt (MC-T2): the check as the task states it (kind, path, expected text), and
@@ -400,7 +489,8 @@ export interface CompletedRun {
   readonly taskId: string;
   readonly goal: string;
   readonly attempt: number;
-  readonly taskState: "completed" | "ready" | "failed";
+  // cancelled only from runs.cancel with a CancelReason (3.14): the task ends without a retry.
+  readonly taskState: "completed" | "ready" | "failed" | "cancelled";
   readonly attemptsUsed: number;
   readonly maxAttempts: number;
   readonly retryReason: RetryReason | null;
@@ -505,6 +595,8 @@ export type ReleaseStatus = "released" | "already_settled" | "unknown_reservatio
 export interface UsageSummaryFilter {
   readonly projectId?: string;
   readonly taskId?: string;
+  // One attempt's own spend: a rerun of the task (after a recovery or a retry) has its own run and is not counted here.
+  readonly runId?: string;
 }
 
 // Settled token totals from the ledger; `unreconciled` counts commits that charged an upper bound.
@@ -723,22 +815,39 @@ export interface Store {
     enqueue(input: EnqueueCommandInput): EnqueueResult;
     listQueued(): readonly CommandRecord[];
     // Applies the oldest queued command in one transaction; undefined when the queue is empty.
+    // runtime.stop with {mode: "now"} is the emergency stop (3.14): in that one transaction the runtime is halted,
+    // every running or waiting workflow is stopped (reason user_stop), every non-terminal turn of a workflow and every
+    // running standalone task is cancelled, and each cancelled run's keys and open reservations end. Standalone tasks
+    // that wait (ready, pending) keep waiting. runtime.resume lifts the halt; workflow.stop stops one workflow the same
+    // way. Repeating a stop changes nothing.
     applyNext(epoch: number): AppliedCommand | undefined;
+    get(commandId: string): CommandStatus | undefined;
   };
   readonly tasks: {
     list(filter?: TaskFilter): readonly TaskRecord[];
     get(taskId: string): TaskDetail | undefined;
     // pending -> ready when every dependency completed; pending -> blocked(dep_failed) when one dependency
-    // failed, was cancelled or is blocked(dep_failed). Propagates transitively within the call.
+    // failed, was cancelled or is blocked(dep_failed). Propagates transitively within the call. A turn blocked by a
+    // cooldown whose end passed is ready again (3.11).
     promote(): PromoteResult;
     // Highest priority, then oldest ready task: ready -> running, one run row, one claim epoch. Tasks whose
     // agentRef is in excludeAgentRefs are not claimed (M2-T6: a real agent without its prerequisites). Tasks whose
     // id is in excludeTaskIds stay ready and are not claimed (M3-T7: a task whose model cannot run yet).
+    // A turn of a workflow that is not running is never claimed (3.14); standaloneOnly leaves every workflow turn to
+    // the workflow scheduler, which claims them one by one with claimTask under its limits (3.9).
     claimNext(
       epoch: number,
       excludeAgentRefs?: readonly string[],
       excludeTaskIds?: readonly string[],
+      options?: { readonly standaloneOnly?: boolean },
     ): ClaimedTask | undefined;
+    // Claims one named task the same way: ready -> running, one run row, one claim epoch, in one transaction.
+    // Undefined when the task is not ready or belongs to a workflow that is not running. Neither claim takes anything
+    // while the runtime is halted (3.14).
+    claimTask(epoch: number, taskId: string): ClaimedTask | undefined;
+    // Cancels a task that has not ended (pending, ready, running or blocked), in one transaction: a running task's run
+    // closes as cancelled and its keys and open reservations end. Undefined when the task had already ended.
+    cancel(epoch: number, taskId: string, reason: CancelReason): CancelledTask | undefined;
   };
   readonly runtime: {
     leaseSummary(): RuntimeLeaseSummary;
@@ -753,14 +862,32 @@ export interface Store {
     // charged, infra_restarts + 1) or failed when infra_restarts would exceed maxInfraRestarts. The orphaned run's
     // virtual keys are revoked and its open budget reservations settled (ARCH 13.2 CP1, CP4). One transaction.
     reconcile(epoch: number, maxInfraRestarts: number): readonly RecoveredTask[];
+    // Whether an emergency stop halted the runtime (3.14).
+    haltState(): HaltState;
   };
   readonly runs: {
     // Closes the run and its task in one transaction. Success persists the result before `completed`.
     complete(completion: RunCompletion): CompletedRun;
-    // Ends the run of a stopping runtime (ARCH 4.2, step 3): the run closes as cancelled, the task returns to ready
-    // with retryReason orphaned, no attempt and no infra restart is charged, and the run's keys and open reservations
-    // end. One transaction.
-    cancel(runId: string, reason: "shutdown"): CompletedRun;
+    // Ends a run in flight as cancelled; its keys and open reservations end with it. One transaction.
+    // shutdown (ARCH 4.2, step 3): a stopping runtime's run; the task returns to ready with retryReason orphaned, and
+    // no attempt and no infra restart is charged. user_stop or residual (3.14, 3.16): the task is cancelled too.
+    cancel(runId: string, reason: "shutdown" | CancelReason): CompletedRun;
+    // Records the process that serves a running run of this epoch (3.14).
+    recordProcess(epoch: number, runId: string, process: AgentProcess): void;
+    // Records a command a running run of this epoch started through haril_run (phase F8): the host runs it, outside the
+    // agent's process tree, so a stop and the sweeps find it here, listed with the run's processes.
+    recordCommand(epoch: number, runId: string, process: AgentProcess): void;
+    // The processes runs recorded, as the filter selects them; with no filter, those of every open run.
+    processes(filter?: RecordedProcessFilter): readonly RecordedProcess[];
+    // Marks recorded processes verified gone (not running, or their pid now names another process). A mark names the
+    // run, pid and start time it verified, so it never marks a process recorded since; returns how many it marked. An
+    // observation, not a change of the run: the CLI writes it without the lease.
+    markProcessesGone(
+      verified: readonly Pick<RecordedProcess, "runId" | "pid" | "startedAt">[],
+      at: number,
+    ): number;
+    // The run's progress signals since a time (3.16).
+    activity(runId: string, since: number): RunActivity;
   };
   readonly events: {
     append(input: AppendEventInput): EventRecord;
@@ -773,5 +900,17 @@ export interface Store {
   readonly virtualKeys: VirtualKeysPort;
   readonly approvals: ApprovalsPort;
   readonly memory: MemoryStorePort;
+  // Workflows of the Delegation mode, their turns, proposals and verdicts (4.2, 4.3).
+  readonly workflows: WorkflowsPort;
+  // The orders and usage logs (4.5): append-only, hash-chained, written without a lease (P14).
+  readonly usageLog: UsageLogPort;
+  // Quota samples and model cooldowns (3.11): observations of the providers, written without a lease.
+  readonly quota: QuotaStorePort;
+  // The git worktrees of workflows that write (3.10, phase F8).
+  readonly worktrees: WorktreesPort;
+  // Runs `work` in one transaction: the store's own writes inside it join it, so they commit together or, when `work`
+  // throws, none of them does. The runtime closes an attempt this way: its run, its verdict, the turns that follow it
+  // and its usage row (3.8 rule 6: a restart never finds half of it).
+  transaction<T>(work: () => T): T;
   close(): void;
 }

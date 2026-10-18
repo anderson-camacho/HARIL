@@ -49,17 +49,30 @@ function cutNote(shown: number, total: number): string {
   return `[result cut: the first ${shown} of its ${total} characters are shown]`;
 }
 
-// The header, the result and the blank line after them, or undefined when not even a cut result fits in `room`.
+// The header, the result and the blank line after them, or undefined when not even a cut result fits in `room`. A
+// settled dependency that never completed (3.7) shows how it ended instead of a result: its error's code and message,
+// which may carry agent text, so they are prefixed like a result.
 function blockOf(dependency: DependencyResult, room: number): string[] | undefined {
   const header = headerOf(dependency);
-  const body = bodyOf(dependency.result, room - linesCost([header, ""]));
+  const left = room - linesCost([header, ""]);
+  const body =
+    dependency.failure !== undefined
+      ? prefixedText(
+          `${dependency.failure.code}: ${dependency.failure.message}`,
+          DEPENDENCY_RESULT_MAX_CHARS,
+          left,
+          cutNote,
+        )
+      : bodyOf(dependency.result ?? {}, left);
   return body === undefined ? undefined : [header, ...body, ""];
 }
 
 // A goal is one line: its line breaks show as "?". A long one is cut and marked.
 function headerOf(dependency: DependencyResult): string {
   const goal = visibleLine(dependency.goal, DEPENDENCY_GOAL_MAX_CHARS);
-  return `[${visibleText(dependency.taskId)}] ${goal.text}${goal.cut ? " [goal cut]" : ""}`;
+  const ended =
+    dependency.failure === undefined ? "" : ` [did not complete: ${dependency.failure.state}]`;
+  return `[${visibleText(dependency.taskId)}] ${goal.text}${goal.cut ? " [goal cut]" : ""}${ended}`;
 }
 
 function bodyOf(result: JsonObject, room: number): string[] | undefined {

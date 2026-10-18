@@ -72,6 +72,13 @@ describe("PathGuard (lexical)", () => {
     expect(guard(requested)).toEqual({ ok: false, reason: "denied_path" });
   });
 
+  it.each(["GIT~1/config", "src/HARIL~1/state.db", "ENV~1", "x/PI~1/settings.json"])(
+    "denies the Windows short name %j",
+    (requested) => {
+      expect(guard(requested)).toEqual({ ok: false, reason: "short_name" });
+    },
+  );
+
   it.each(["notes.env", "src/env.ts", ".gitignore", ".github/workflows/ci.yml", ".pitch/notes.md"])(
     "allows the near-miss name %j",
     (requested) => {
@@ -123,6 +130,14 @@ describe("PathGuard (links, fake fs port)", () => {
     const result = createPathGuard(ROOT, fs)("src/new/deep/a.ts");
     expect(result.ok).toBe(true);
     expect(fs.lstatCalls).toEqual([join(ROOT, "src"), join(ROOT, "src", "new")]);
+  });
+
+  it("denies a component whose real name is not the name asked for (a short-name alias)", () => {
+    const fs = fakeFs(
+      { [ROOT]: "dir", [join(ROOT, "GITALIAS")]: "dir" },
+      { [join(ROOT, "GITALIAS")]: join(ROOT, ".git") },
+    );
+    expect(createPathGuard(ROOT, fs)("GITALIAS/config")).toEqual({ ok: false, reason: "alias" });
   });
 
   it("denies a real directory whose canonical path leaves the root", () => {

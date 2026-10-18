@@ -9,6 +9,7 @@ export type {
   UpstreamBody,
   UpstreamChunk,
   UpstreamClient,
+  UpstreamFailure,
   UpstreamResolver,
 } from "./broker/types.js";
 
@@ -18,6 +19,8 @@ export {
   type ChatMessage,
   type ChatRequest,
   createOpenAiCompatibleClient,
+  type ModelDetail,
   type OpenAiCompatibleClient,
   type OpenAiCompatibleOptions,
 } from "./providers/openai-compatible.js";
+export { createCliProxyQuotaProvider } from "./quota/cliproxyapi-quota.js";

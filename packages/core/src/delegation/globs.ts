@@ -1,0 +1,162 @@
+import { GLOB_MAX_LENGTH } from "@haril/contracts";
+
+// Write-surface overlap (docs/modos-y-delegacion.md 3.10, spike S5 in ADR-0021). Two patterns overlap unless they
+// provably match no common path, so a wrong answer can only serialize two tasks that could have run together, never
+// let two writers touch the same file. When unsure, the answer is "overlap".
+//
+// Supported syntax: literal characters, "?" (one character, not "/"), "*" (zero or more characters, not "/") and
+// "**" as a whole segment (zero or more segments). Anything else answers "they overlap": character classes, braces,
+// a leading "!", backslashes (separator or escape), ".." segments and "**" inside a segment such as "a**b".
+// A pattern ending in "/" names the folder's subtree; "." and "./" name the whole tree. S5 also treats an existing
+// folder as "folder/**"; without the filesystem, a literal path (no wildcard) may be such a folder, so it also names
+// its subtree: "src" overlaps "src/a.ts". ASCII letters compare without case (Windows paths are case-insensitive),
+// which only widens the overlap. A pattern with any non-ASCII character answers "overlap": normalization forms and case
+// folding can change a name's length ("é" against "e" plus a combining accent, "İ" lowercased), so no character
+// rule can prove two such names apart. A pattern longer than GLOB_MAX_LENGTH (the contract's bound) answers "overlap"
+// without being parsed, a pair of surfaces whose comparison would pass SURFACE_WORK_BUDGET answers "overlap" without
+// comparing, and the check never throws: any failure also answers "overlap".
+
+const UNSUPPORTED = /[[\]{}!\\]/;
+// Anything outside printable ASCII (non-ASCII letters, and control characters too, which no real path holds).
+const NON_ASCII = /[^ -~]/;
+const WILDCARD = /[*?]/;
+// The most work one surface pair may cost: the sum, over its pattern pairs, of the product of their lengths. The
+// character comparison of two patterns is bounded by that product, so two contract-valid surfaces of 64 patterns of
+// 512 characters answer at once instead of after seconds; everyday surfaces stay far below it.
+const SURFACE_WORK_BUDGET = 2_000_000;
+
+// How a surface is matched against a path: with `caseSensitive`, letter case must agree, as on a case-sensitive file
+// system (the host passes it everywhere but Windows); without it, ASCII letters compare without case.
+export interface SurfaceMatchOptions {
+  readonly caseSensitive?: boolean;
+}
+
+// Segments of a supported pattern, or null when it cannot be reasoned about. ASCII letters are lowercased unless `keepCase`.
+function segmentsOf(glob: string, keepCase = false): string[] | null {
+  const text = glob.trim();
+  if (UNSUPPORTED.test(text) || NON_ASCII.test(text)) return null;
+  let path = text.replace(/^(\.\/)+/, "").replace(/\/{2,}/g, "/");
+  if (path.endsWith("/")) path += "**";
+  const segments = path.split("/").filter((segment) => segment !== "" && segment !== ".");
+  if (segments.some((segment) => segment === "..")) return null;
+  if (segments.some((segment) => segment !== "**" && segment.includes("**"))) return null;
+  if (segments.length === 0) return ["**"];
+  const out: string[] = [];
+  for (const segment of segments) {
+    if (!(segment === "**" && out[out.length - 1] === "**")) {
+      out.push(keepCase ? segment : segment.toLowerCase());
+    }
+  }
+  // A literal path may name an existing folder: it covers its subtree too.
+  if (!out.some((segment) => WILDCARD.test(segment))) out.push("**");
+  return out;
+}
+
+// Whether two token sequences share a match, where `wild` absorbs zero or more tokens of the other side and `meet`
+// decides whether two plain tokens can match the same text. Bottom-up over the pairs of positions, so the work is
+// bounded by the product of the lengths and nothing recurses. The same rule runs on characters inside a segment ("*")
+// and on segments of a path ("**").
+function sequencesMeet(
+  left: readonly string[],
+  right: readonly string[],
+  wild: string,
+  meet: (a: string, b: string) => boolean,
+): boolean {
+  const width = right.length + 1;
+  // can[i * width + j]: left[i..] and right[j..] share a match.
+  const can = new Uint8Array((left.length + 1) * width);
+  for (let i = left.length; i >= 0; i--) {
+    for (let j = right.length; j >= 0; j--) {
+      const index = i * width + j;
+      const leftToken = left[i];
+      const rightToken = right[j];
+      let result: boolean;
+      if (leftToken === undefined && rightToken === undefined) result = true;
+      else if (leftToken === wild) {
+        result = can[index + width] === 1 || (rightToken !== undefined && can[index + 1] === 1);
+      } else if (rightToken === wild) {
+        result = can[index + 1] === 1 || (leftToken !== undefined && can[index + width] === 1);
+      } else if (leftToken === undefined || rightToken === undefined) result = false;
+      else result = can[index + width + 1] === 1 && meet(leftToken, rightToken);
+      can[index] = result ? 1 : 0;
+    }
+  }
+  return can[0] === 1;
+}
+
+// Two single-segment patterns (characters, "?", "*") share a string.
+function segmentsMeet(left: string, right: string): boolean {
+  return sequencesMeet(
+    Array.from(left),
+    Array.from(right),
+    "*",
+    (a, b) => a === "?" || b === "?" || a === b,
+  );
+}
+
+export function globsMayOverlap(left: string, right: string): boolean {
+  if (left.length > GLOB_MAX_LENGTH || right.length > GLOB_MAX_LENGTH) return true;
+  try {
+    const a = segmentsOf(left);
+    const b = segmentsOf(right);
+    if (a === null || b === null) return true;
+    return sequencesMeet(a, b, "**", segmentsMeet);
+  } catch {
+    return true;
+  }
+}
+
+// Two write surfaces overlap when any pattern of one may overlap any pattern of the other. An empty surface (a
+// read-only task) locks nothing.
+export function surfacesMayOverlap(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length === 0 || right.length === 0) return false;
+  let work = 0;
+  for (const a of left) for (const b of right) work += a.length * b.length;
+  if (work > SURFACE_WORK_BUDGET) return true;
+  return left.some((a) => right.some((b) => globsMayOverlap(a, b)));
+}
+
+// Whether a pattern matches one concrete path (phase F8: a write must fall inside its task's surface). Same syntax and
+// rules as the overlap check, with the opposite caution: when unsure the answer is "no match", so a write that cannot be
+// proved inside the surface is refused. A pattern with unsupported syntax or a non-ASCII character, or longer than
+// GLOB_MAX_LENGTH, matches nothing. `path` is a normalized relative path ("/" separators, no "." or ".." segment), as
+// checkWorkspacePath returns it.
+export function globMatches(
+  glob: string,
+  path: string,
+  options: SurfaceMatchOptions = {},
+): boolean {
+  if (glob.length > GLOB_MAX_LENGTH) return false;
+  const keepCase = options.caseSensitive === true;
+  try {
+    const pattern = segmentsOf(glob, keepCase);
+    if (pattern === null) return false;
+    const segments = path
+      .split("/")
+      .filter((segment) => segment !== "")
+      .map((segment) => (keepCase || NON_ASCII.test(segment) ? segment : segment.toLowerCase()));
+    if (segments.length === 0) return false;
+    return sequencesMeet(pattern, segments, "**", (a, b) => segmentMatches(a, b));
+  } catch {
+    return false;
+  }
+}
+
+// A single-segment pattern ("*", "?", literal characters) against one literal segment.
+function segmentMatches(pattern: string, segment: string): boolean {
+  return sequencesMeet(
+    Array.from(pattern),
+    Array.from(segment),
+    "*",
+    (a, b) => a === "?" || a === b,
+  );
+}
+
+// A path falls inside a surface when any of its patterns matches it; an empty surface (a read-only task) holds nothing.
+export function pathMatchesSurface(
+  path: string,
+  surface: readonly string[],
+  options: SurfaceMatchOptions = {},
+): boolean {
+  return surface.some((glob) => globMatches(glob, path, options));
+}

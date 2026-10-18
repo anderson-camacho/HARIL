@@ -9,6 +9,16 @@ import { MIGRATION_0003 } from "./migrations/0003_task_model.js";
 import { MIGRATION_0004 } from "./migrations/0004_approvals.js";
 import { MIGRATION_0005 } from "./migrations/0005_approval_model.js";
 import { MIGRATION_0006 } from "./migrations/0006_memory.js";
+import { MIGRATION_0007 } from "./migrations/0007_delegation.js";
+import { MIGRATION_0008 } from "./migrations/0008_settled_deps.js";
+import { MIGRATION_0009 } from "./migrations/0009_model_stats_once.js";
+import { MIGRATION_0010 } from "./migrations/0010_delegation_runtime.js";
+import { MIGRATION_0011 } from "./migrations/0011_process_gone.js";
+import { MIGRATION_0012 } from "./migrations/0012_process_identity.js";
+import { MIGRATION_0013 } from "./migrations/0013_quota_batches.js";
+import { MIGRATION_0014 } from "./migrations/0014_worktrees.js";
+import { MIGRATION_0015 } from "./migrations/0015_run_commands.js";
+import { MIGRATION_0016 } from "./migrations/0016_worktree_verified.js";
 import type { Migration } from "./migrations/types.js";
 
 // Known migrations, in order. Adding one is an additive change; never edit an applied one (INV-12).
@@ -19,6 +29,16 @@ const KNOWN_MIGRATIONS: readonly Migration[] = [
   MIGRATION_0004,
   MIGRATION_0005,
   MIGRATION_0006,
+  MIGRATION_0007,
+  MIGRATION_0008,
+  MIGRATION_0009,
+  MIGRATION_0010,
+  MIGRATION_0011,
+  MIGRATION_0012,
+  MIGRATION_0013,
+  MIGRATION_0014,
+  MIGRATION_0015,
+  MIGRATION_0016,
 ];
 export const KNOWN_SCHEMA_VERSION = Math.max(...KNOWN_MIGRATIONS.map((m) => m.version));
 const STORE_RELEASE = "0.1.0";

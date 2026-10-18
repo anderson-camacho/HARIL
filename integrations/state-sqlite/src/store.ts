@@ -4,9 +4,11 @@ import type {
   AgentMetrics,
   AppendEventInput,
   AppliedCommand,
+  CancelReason,
   ClaimedTask,
   Clock,
   CommandRecord,
+  CommandStatus,
   CompletedRun,
   CreatableTaskKind,
   DependencyResult,
@@ -49,6 +51,11 @@ import { StoreError } from "./errors.js";
 import { readLeaseSummary } from "./lease.js";
 import { createMaintenance } from "./maintenance.js";
 import { createMemoryFacet } from "./memory.js";
+import { createQuotaFacet } from "./quota.js";
+import { createStopsFacet, type StopsFacet, stopModeOf } from "./stops.js";
+import { createUsageLogFacet } from "./usage-log.js";
+import { createWorkflowsFacet, type WorkflowCommandHandler } from "./workflows.js";
+import { createWorktreesFacet } from "./worktrees.js";
 
 // Implementation of the Store port over one node:sqlite connection. Writes run in BEGIN IMMEDIATE.
 // Core rules (transition table, plan checks) arrive through `rules`; this file never imports Core values.
@@ -95,6 +102,11 @@ const EVENT_COLUMNS =
 
 const PRIORITY_MIN = 0;
 const PRIORITY_MAX = 9;
+const READY_COLUMNS =
+  "task_id AS taskId, project_id AS projectId, goal, description, kind, agent_ref AS agentRef, model, budget_max_tokens AS maxTokens, acceptance, surface_read AS surfaceRead, attempt, attempts_used AS attemptsUsed, max_attempts AS maxAttempts, timeout_ms AS timeoutMs, claim_epoch AS claimEpoch";
+// A turn of a workflow is claimable only while its workflow runs (3.14).
+const RUNNING_WORKFLOW_ONLY =
+  " AND (workflow_id IS NULL OR workflow_id IN (SELECT workflow_id FROM workflows WHERE state = 'running'))";
 
 interface EventRow
   extends Omit<
@@ -163,11 +175,32 @@ const MAX_VERIFY_RETRIES = 2;
 type AcceptanceCheckEntry = Extract<ClaimedTask["acceptance"][number], { readonly kind: string }>;
 
 // Outcome of applying one command: applied with the ids it created, or rejected with a reason.
-type ApplyVerdict =
-  | { readonly ok: true; readonly taskIds: readonly string[]; readonly planId?: string }
+export type ApplyVerdict =
+  | {
+      readonly ok: true;
+      readonly taskIds: readonly string[];
+      readonly planId?: string;
+      readonly workflowId?: string;
+      // The workflows a stop ended (3.14).
+      readonly workflowIds?: readonly string[];
+    }
   | { readonly ok: false; readonly reason: string };
 
-interface NewTask {
+// The delegation columns of a turn (migration 0007); absent for every other task.
+interface TaskDelegationColumns {
+  readonly workflowId: string;
+  readonly layer: number;
+  readonly role: string;
+  readonly threadId: string;
+  readonly parentTaskId: string | null;
+  readonly difficulty: string | null;
+  readonly difficultyReason: string | null;
+  readonly modelPinned: boolean;
+  readonly localId: string | null;
+  readonly delegationId: string | null;
+}
+
+export interface NewTask {
   readonly taskId: string;
   readonly projectId: string;
   readonly planId: string | null;
@@ -191,6 +224,7 @@ interface NewTask {
   readonly maxAttempts: number;
   readonly acceptance: readonly unknown[];
   readonly state: "pending" | "ready";
+  readonly delegation?: TaskDelegationColumns;
 }
 
 export class SqliteStore implements Store {
@@ -214,6 +248,12 @@ export class SqliteStore implements Store {
   readonly virtualKeys: Store["virtualKeys"];
   readonly approvals: Store["approvals"];
   readonly memory: Store["memory"];
+  readonly usageLog: Store["usageLog"];
+  readonly quota: Store["quota"];
+  readonly workflows: Store["workflows"];
+  readonly worktrees: Store["worktrees"];
+  private readonly applyWorkflowCommand: WorkflowCommandHandler;
+  private readonly stops: StopsFacet;
   readonly maintenance: Store["maintenance"];
 
   constructor(options: StoreOptions) {
@@ -235,13 +275,25 @@ export class SqliteStore implements Store {
       enqueue: (input) => this.enqueueCommand(input),
       listQueued: () => this.listQueuedCommands(),
       applyNext: (epoch) => this.applyNextCommand(epoch),
+      get: (commandId) => this.commandStatus(commandId),
     };
     this.tasks = {
       list: (filter) => this.listTasks(filter),
       get: (taskId) => this.getTask(taskId),
       promote: () => this.promoteTasks(),
-      claimNext: (epoch, excludeAgentRefs, excludeTaskIds) =>
-        this.claimNextTask(epoch, excludeAgentRefs, excludeTaskIds),
+      claimNext: (epoch, excludeAgentRefs, excludeTaskIds, options) =>
+        this.claimNextTask(
+          epoch,
+          excludeAgentRefs,
+          excludeTaskIds,
+          options?.standaloneOnly === true,
+        ),
+      claimTask: (epoch, taskId) => this.claimNamedTask(epoch, taskId),
+      cancel: (epoch, taskId, reason) =>
+        this.inTransaction(() => {
+          this.assertActiveEpoch(epoch);
+          return this.stops.cancelTask(taskId, reason, this.clock.now());
+        }),
     };
     this.runtime = {
       leaseSummary: () => this.leaseSummary(),
@@ -250,10 +302,28 @@ export class SqliteStore implements Store {
       release: (epoch, cleanExit) => this.releaseLease(epoch, cleanExit),
       releaseIfIdle: (epoch) => this.releaseLeaseIfIdle(epoch),
       reconcile: (epoch, maxInfraRestarts) => this.reconcileOrphans(epoch, maxInfraRestarts),
+      haltState: () => this.stops.haltState(),
     };
     this.runs = {
       complete: (completion) => this.completeRun(completion),
-      cancel: (runId, reason) => this.cancelRun(runId, reason),
+      cancel: (runId, reason) =>
+        reason === "shutdown"
+          ? this.cancelRun(runId, reason)
+          : this.cancelRunAndTask(runId, reason),
+      recordProcess: (epoch, runId, process) =>
+        this.inTransaction(() => {
+          this.assertActiveEpoch(epoch);
+          this.stops.recordProcess(epoch, runId, process);
+        }),
+      recordCommand: (epoch, runId, process) =>
+        this.inTransaction(() => {
+          this.assertActiveEpoch(epoch);
+          this.stops.recordCommand(epoch, runId, process);
+        }),
+      processes: (filter) => this.stops.processes(filter),
+      markProcessesGone: (verified, at) =>
+        this.inTransaction(() => this.stops.markProcessesGone(verified, at)),
+      activity: (runId, since) => this.stops.activity(runId, since),
     };
     this.events = {
       append: (input) => this.appendEvent(input),
@@ -270,6 +340,17 @@ export class SqliteStore implements Store {
     });
     this.budgets = facets.budgets;
     this.virtualKeys = facets.virtualKeys;
+    this.stops = createStopsFacet({
+      db: this.db,
+      appendEvent: (input) => this.appendEvent(input),
+      transition: (from, to) => this.transition(from, to),
+      revokeKeys: (runId, reason) => {
+        this.virtualKeys.revoke(runId, reason);
+      },
+      settleOpenReservations: (runId) => {
+        this.budgets.settleOpenForRun(runId);
+      },
+    });
     this.approvals = createApprovalsFacet({
       db: this.db,
       clock: this.clock,
@@ -288,6 +369,46 @@ export class SqliteStore implements Store {
       appendEvent: (input) => this.appendEvent(input),
       assertActiveEpoch: (epoch) => this.assertActiveEpoch(epoch),
     });
+    const workflows = createWorkflowsFacet({
+      db: this.db,
+      clock: this.clock,
+      ids: this.ids,
+      transaction: (work) => this.inTransaction(work),
+      appendEvent: (input) => this.appendEvent(input),
+      assertActiveEpoch: (epoch) => this.assertActiveEpoch(epoch),
+      insertTask: (task, now) => this.insertTask(task, now),
+      insertDependency: (taskId, dependsOn, kind) => this.insertDependency(taskId, dependsOn, kind),
+      appendTaskCreated: (taskId, projectId, goal, state, extra) =>
+        this.appendTaskCreated(taskId, projectId, goal, state, extra),
+      transition: (from, to) => this.transition(from, to),
+      endRunAuthority: (runId, reason) => {
+        this.virtualKeys.revoke(runId, reason);
+        this.budgets.settleOpenForRun(runId);
+      },
+    });
+    this.workflows = workflows.port;
+    this.applyWorkflowCommand = workflows.applyCommand;
+    this.usageLog = createUsageLogFacet({
+      db: this.db,
+      clock: this.clock,
+      ids: this.ids,
+      rules: this.rules,
+      transaction: (work) => this.inTransaction(work),
+    });
+    this.quota = createQuotaFacet({
+      db: this.db,
+      clock: this.clock,
+      ids: this.ids,
+      transaction: (work) => this.inTransaction(work),
+    });
+    this.worktrees = createWorktreesFacet({
+      db: this.db,
+      clock: this.clock,
+      ids: this.ids,
+      transaction: (work) => this.inTransaction(work),
+      appendEvent: (input) => this.appendEvent(input),
+      assertActiveEpoch: (epoch) => this.assertActiveEpoch(epoch),
+    });
     this.maintenance = createMaintenance({ db: this.db, walPath: options.walPath });
   }
 
@@ -299,6 +420,11 @@ export class SqliteStore implements Store {
       pragmas: readPragmas(this.db),
       gates: this.gates,
     };
+  }
+
+  // Store.transaction: the work's own store writes join this one transaction (inTransaction joins an open one).
+  transaction<T>(work: () => T): T {
+    return this.inTransaction(work);
   }
 
   close(): void {
@@ -578,7 +704,12 @@ export class SqliteStore implements Store {
           .run(
             now,
             epoch,
-            JSON.stringify({ taskIds: verdict.taskIds, planId: verdict.planId ?? null }),
+            JSON.stringify({
+              taskIds: verdict.taskIds,
+              planId: verdict.planId ?? null,
+              workflowId: verdict.workflowId ?? null,
+              ...(verdict.workflowIds === undefined ? {} : { workflowIds: verdict.workflowIds }),
+            }),
             command.commandId,
           );
         this.appendEvent({
@@ -592,9 +723,12 @@ export class SqliteStore implements Store {
         return {
           commandId: command.commandId,
           type: command.type,
+          args: command.args,
           outcome: "applied",
           taskIds: verdict.taskIds,
           planId: verdict.planId,
+          workflowId: verdict.workflowId,
+          ...(verdict.workflowIds === undefined ? {} : { workflowIds: verdict.workflowIds }),
         };
       }
       this.db
@@ -613,6 +747,7 @@ export class SqliteStore implements Store {
       return {
         commandId: command.commandId,
         type: command.type,
+        args: command.args,
         outcome: "rejected",
         reason: verdict.reason,
         taskIds: [],
@@ -620,16 +755,58 @@ export class SqliteStore implements Store {
     });
   }
 
+  // A queued command and what became of it (haril stop --now reads its own back).
+  private commandStatus(commandId: string): CommandStatus | undefined {
+    const row = this.db
+      .prepare(
+        "SELECT command_id AS commandId, type, status, result, reject_reason AS reason, applied_at AS appliedAt FROM commands WHERE command_id = ?",
+      )
+      .get(commandId) as
+      | {
+          commandId: string;
+          type: string;
+          status: CommandStatus["status"];
+          result: string | null;
+          reason: string | null;
+          appliedAt: number | null;
+        }
+      | undefined;
+    if (row === undefined) return undefined;
+    const result =
+      row.result === null
+        ? {}
+        : (JSON.parse(row.result) as { taskIds?: unknown; workflowIds?: unknown });
+    const ids = (value: unknown): string[] =>
+      Array.isArray(value) ? value.filter((id): id is string => typeof id === "string") : [];
+    return {
+      commandId: row.commandId,
+      type: row.type,
+      status: row.status,
+      taskIds: ids(result.taskIds),
+      workflowIds: ids(result.workflowIds),
+      reason: row.reason,
+      appliedAt: row.appliedAt,
+    };
+  }
+
   private applyCommandBody(command: CommandRecord, now: number): ApplyVerdict {
     // runtime.stop belongs to the runtime, not to a project: the runtime itself acts on it after this commit (ARCH 4.2).
+    // With {mode: "now"} it is the emergency stop (3.14): the store halts, stops and cancels in this transaction, and the
+    // runtime kills the processes after it.
     if (command.type === "runtime.stop") {
-      return Object.keys(command.args).length === 0
-        ? { ok: true, taskIds: [] }
-        : { ok: false, reason: "runtime.stop takes no arguments" };
+      const mode = stopModeOf(command.args);
+      if (mode === null) {
+        return { ok: false, reason: 'runtime.stop takes no arguments, or {mode: "now"}' };
+      }
+      return mode === "now" ? this.stops.emergencyStop(command, now) : { ok: true, taskIds: [] };
     }
+    if (command.type === "runtime.resume") return this.stops.resume(command);
     if (command.projectId === null) return { ok: false, reason: "command has no project" };
     if (command.type === "task.create") return this.applyTaskCreate(command, now);
     if (command.type === "plan.submit") return this.applyPlanSubmit(command, now);
+    if (command.type === "workflow.stop") return this.stops.workflowStop(command, now);
+    const workflowVerdict = this.applyWorkflowCommand(command, now);
+    if (workflowVerdict !== undefined) return workflowVerdict;
     return { ok: false, reason: `unsupported command type "${command.type}"` };
   }
 
@@ -806,41 +983,98 @@ export class SqliteStore implements Store {
         now,
         now,
       );
-  }
-
-  private insertDependency(taskId: string, dependsOn: string): void {
+    const turn = task.delegation;
+    if (turn === undefined) return;
     this.db
-      .prepare("INSERT INTO task_dependencies (task_id, depends_on_task_id) VALUES (?, ?)")
-      .run(taskId, dependsOn);
+      .prepare(
+        "UPDATE tasks SET workflow_id = ?, layer = ?, role = ?, thread_id = ?, parent_task_id = ?, difficulty = ?, difficulty_reason = ?, model_pinned = ?, local_id = ?, delegation_id = ? WHERE task_id = ?",
+      )
+      .run(
+        turn.workflowId,
+        turn.layer,
+        turn.role,
+        turn.threadId,
+        turn.parentTaskId,
+        turn.difficulty,
+        turn.difficultyReason,
+        turn.modelPinned ? 1 : 0,
+        turn.localId,
+        turn.delegationId,
+        task.taskId,
+      );
   }
 
-  private appendTaskCreated(taskId: string, projectId: string, goal: string, state: string): void {
+  private insertDependency(
+    taskId: string,
+    dependsOn: string,
+    kind: "completed" | "settled" = "completed",
+  ): void {
+    this.db
+      .prepare("INSERT INTO task_dependencies (task_id, depends_on_task_id, kind) VALUES (?, ?, ?)")
+      .run(taskId, dependsOn, kind);
+  }
+
+  private appendTaskCreated(
+    taskId: string,
+    projectId: string,
+    goal: string,
+    state: string,
+    extra: Readonly<Record<string, unknown>> = {},
+  ): void {
     this.appendEvent({
       aggregateType: "task",
       aggregateId: taskId,
       type: "task.created",
       actorKind: "system",
       actorId: "runtime",
-      payload: { goal, state },
+      payload: { goal, state, ...extra },
       projectId,
       taskId,
     });
   }
 
-  // pending -> ready (all dependencies completed) or pending -> blocked(dep_failed) (a dependency failed, was
-  // cancelled or is blocked(dep_failed)). Rounds repeat until nothing changes, so the block propagates down any
-  // chain inside this one transaction (M1 fix b).
+  // pending -> ready (every dependency met) or pending -> blocked(dep_failed) (a dependency of kind completed failed, was
+  // cancelled or is blocked(dep_failed)). A completed dependency is met when its task completed; a settled one (3.7)
+  // when its task completed or can never complete, so a continuation runs after a failed child and is never blocked by
+  // it. Rounds repeat until nothing changes, so the block propagates down any chain inside this one transaction (M1 fix
+  // b).
   private promoteTasks(): PromoteResult {
     return this.inTransaction(() => {
       const pendingTasks = this.db.prepare(
         "SELECT task_id AS taskId, goal, project_id AS projectId FROM tasks WHERE state = 'pending' ORDER BY created_seq",
       );
       const dependencyStates = this.db.prepare(
-        "SELECT t.state AS state, t.block_reason AS blockReason FROM task_dependencies d JOIN tasks t ON t.task_id = d.depends_on_task_id WHERE d.task_id = ?",
+        "SELECT d.kind AS kind, t.state AS state, t.block_reason AS blockReason FROM task_dependencies d JOIN tasks t ON t.task_id = d.depends_on_task_id WHERE d.task_id = ?",
       );
       const ready: Array<{ taskId: string; goal: string }> = [];
       const blocked: Array<{ taskId: string; goal: string }> = [];
       const now = this.clock.now();
+      // A turn blocked by a cooldown (3.11) runs again once the cooldown ended; the runtime checks its model again at
+      // the claim.
+      const cooled = this.db
+        .prepare(
+          "SELECT task_id AS taskId, goal, project_id AS projectId FROM tasks WHERE state = 'blocked' AND block_reason = 'cooldown' AND cooldown_until IS NOT NULL AND cooldown_until <= ? ORDER BY created_seq",
+        )
+        .all(now) as unknown as Array<{ taskId: string; goal: string; projectId: string }>;
+      for (const task of cooled) {
+        this.transition("blocked", "ready");
+        this.db
+          .prepare(
+            "UPDATE tasks SET state = 'ready', block_reason = NULL, cooldown_until = NULL, updated_at = ? WHERE task_id = ?",
+          )
+          .run(now, task.taskId);
+        this.appendEvent({
+          aggregateType: "task",
+          aggregateId: task.taskId,
+          type: "task.ready",
+          actorKind: "system",
+          actorId: "runtime",
+          payload: { from: "cooldown" },
+          projectId: task.projectId,
+          taskId: task.taskId,
+        });
+        ready.push({ taskId: task.taskId, goal: task.goal });
+      }
       let changed = true;
       while (changed) {
         changed = false;
@@ -851,10 +1085,15 @@ export class SqliteStore implements Store {
         }>;
         for (const task of pending) {
           const dependencies = dependencyStates.all(task.taskId) as Array<{
+            kind: string;
             state: string;
             blockReason: string | null;
           }>;
-          if (dependencies.some(isDependencyFailure)) {
+          if (
+            dependencies.some(
+              (dependency) => dependency.kind === "completed" && isDependencyFailure(dependency),
+            )
+          ) {
             this.transition("pending", "blocked");
             this.db
               .prepare(
@@ -873,7 +1112,7 @@ export class SqliteStore implements Store {
             });
             blocked.push({ taskId: task.taskId, goal: task.goal });
             changed = true;
-          } else if (dependencies.every((dependency) => dependency.state === "completed")) {
+          } else if (dependencies.every(isDependencyMet)) {
             this.transition("pending", "ready");
             this.db
               .prepare("UPDATE tasks SET state = 'ready', updated_at = ? WHERE task_id = ?")
@@ -897,14 +1136,18 @@ export class SqliteStore implements Store {
     });
   }
 
-  // ready -> running in one transaction, with the run row and the next claim epoch (M1-D4: no budget held).
+  // ready -> running in one transaction, with the run row and the next claim epoch (M1-D4: no budget held). A turn of a
+  // workflow that is not running (3.14) is never claimed; standaloneOnly leaves every workflow turn to claimNamedTask.
   private claimNextTask(
     epoch: number,
     excludeAgentRefs: readonly string[] = [],
     excludeTaskIds: readonly string[] = [],
+    standaloneOnly = false,
   ): ClaimedTask | undefined {
     return this.inTransaction(() => {
       this.assertActiveEpoch(epoch);
+      // A halted runtime claims nothing until haril resume (3.14).
+      if (this.stops.haltState().halted) return undefined;
       // Excluded agents and tasks are skipped in SQL, so the claim never touches a task that cannot run (M2-T6, M3-T7).
       const excludedAgents = [...new Set(excludeAgentRefs)];
       const excludedTasks = [...new Set(excludeTaskIds)];
@@ -916,13 +1159,36 @@ export class SqliteStore implements Store {
         excludedTasks.length === 0
           ? ""
           : ` AND task_id NOT IN (${excludedTasks.map(() => "?").join(", ")})`;
+      const workflows = standaloneOnly ? " AND workflow_id IS NULL" : RUNNING_WORKFLOW_ONLY;
       const row = this.db
         .prepare(
-          `SELECT task_id AS taskId, project_id AS projectId, goal, description, kind, agent_ref AS agentRef, model, budget_max_tokens AS maxTokens, acceptance, surface_read AS surfaceRead, attempt, attempts_used AS attemptsUsed, max_attempts AS maxAttempts, timeout_ms AS timeoutMs, claim_epoch AS claimEpoch FROM tasks WHERE state = 'ready'${notExcludedAgents}${notExcludedTasks} ORDER BY priority DESC, created_seq LIMIT 1`,
+          `SELECT ${READY_COLUMNS} FROM tasks WHERE state = 'ready'${workflows}${notExcludedAgents}${notExcludedTasks} ORDER BY priority DESC, created_seq LIMIT 1`,
         )
         .get(...excludedAgents, ...excludedTasks) as unknown as ReadyRow | undefined;
       if (row === undefined) return undefined;
+      return this.claimReadyRow(epoch, row);
+    });
+  }
 
+  // The same claim for one named task, as the workflow scheduler picks it (3.9): undefined when it is not ready or its
+  // workflow is not running.
+  private claimNamedTask(epoch: number, taskId: string): ClaimedTask | undefined {
+    return this.inTransaction(() => {
+      this.assertActiveEpoch(epoch);
+      if (this.stops.haltState().halted) return undefined;
+      const row = this.db
+        .prepare(
+          `SELECT ${READY_COLUMNS} FROM tasks WHERE state = 'ready' AND task_id = ?${RUNNING_WORKFLOW_ONLY}`,
+        )
+        .get(taskId) as unknown as ReadyRow | undefined;
+      if (row === undefined) return undefined;
+      return this.claimReadyRow(epoch, row);
+    });
+  }
+
+  // ready -> running for a row read inside the caller's transaction.
+  private claimReadyRow(epoch: number, row: ReadyRow): ClaimedTask {
+    {
       this.transition("ready", "running");
       const acceptance = JSON.parse(row.acceptance) as ClaimedTask["acceptance"];
       const now = this.clock.now();
@@ -987,23 +1253,61 @@ export class SqliteStore implements Store {
         claimEpoch,
         runtimeEpoch: epoch,
       };
-    });
+    }
   }
 
   // The results of a task's direct dependencies, in the order the dependencies were created, which for a plan is its
-  // dependency order (MC-T1). A ready task's dependencies all completed (promote), and a completed task always has a
-  // result (schema CHECK); the filter only keeps any other dependency out of the prompt.
+  // dependency order (MC-T1). A completed dependency gives its result (a completed task always has one: schema CHECK). A
+  // settled dependency (3.7) is also met by a task that will never complete: it is listed with how it ended, the newest
+  // run error of a failed task, so a continuation woken by a failed child knows which one and why. Any other
+  // dependency (one still running, which only a settled link could leave behind) stays out of the prompt.
   private dependencyResultsOf(taskId: string): DependencyResult[] {
     const rows = this.db
       .prepare(
-        "SELECT t.task_id AS taskId, t.goal AS goal, t.result AS result FROM task_dependencies d JOIN tasks t ON t.task_id = d.depends_on_task_id WHERE d.task_id = ? AND t.state = 'completed' AND t.result IS NOT NULL ORDER BY t.created_seq",
+        "SELECT t.task_id AS taskId, t.goal AS goal, t.state AS state, t.block_reason AS blockReason, t.result AS result, d.kind AS kind FROM task_dependencies d JOIN tasks t ON t.task_id = d.depends_on_task_id WHERE d.task_id = ? ORDER BY t.created_seq",
       )
-      .all(taskId) as unknown as Array<{ taskId: string; goal: string; result: string }>;
-    return rows.map((row) => ({
-      taskId: row.taskId,
-      goal: row.goal,
-      result: JSON.parse(row.result) as JsonObject,
-    }));
+      .all(taskId) as unknown as Array<{
+      taskId: string;
+      goal: string;
+      state: string;
+      blockReason: string | null;
+      result: string | null;
+      kind: string;
+    }>;
+    const newestError = this.db.prepare(
+      "SELECT error FROM runs WHERE task_id = ? AND status = 'failed' AND error IS NOT NULL ORDER BY attempt DESC, rowid DESC LIMIT 1",
+    );
+    const results: DependencyResult[] = [];
+    for (const row of rows) {
+      if (row.state === "completed" && row.result !== null) {
+        results.push({
+          taskId: row.taskId,
+          goal: row.goal,
+          result: JSON.parse(row.result) as JsonObject,
+        });
+        continue;
+      }
+      if (row.kind !== "settled" || !isDependencyFailure(row)) continue;
+      let failure: NonNullable<DependencyResult["failure"]>;
+      if (row.state === "failed") {
+        const stored = newestError.get(row.taskId) as { error: string } | undefined;
+        const error =
+          stored === undefined
+            ? {}
+            : (JSON.parse(stored.error) as { code?: unknown; message?: unknown });
+        failure = {
+          state: "failed",
+          code: typeof error.code === "string" ? error.code : "failed",
+          message: typeof error.message === "string" ? error.message : "the task failed",
+        };
+      } else if (row.state === "cancelled") {
+        failure = { state: "cancelled", code: "cancelled", message: "the task was cancelled" };
+      } else {
+        failure = { state: "blocked", code: "dep_failed", message: "a task it depends on failed" };
+      }
+      results.push({ taskId: row.taskId, goal: row.goal, result: null, failure });
+    }
+    return results;
   }
 
   // The newest attempt of a task that its acceptance checks rejected (MC-T2): the newest failed run whose error holds the
@@ -1290,6 +1594,53 @@ export class SqliteStore implements Store {
     });
   }
 
+  // 3.14 and 3.16: a run in flight ends as cancelled together with its task, which is never retried (user_stop or
+  // residual). Nothing is charged; the run's keys and open reservations end with it.
+  private cancelRunAndTask(runId: string, reason: CancelReason): CompletedRun {
+    return this.inTransaction(() => {
+      const run = this.db
+        .prepare(
+          "SELECT task_id AS taskId, status, claim_epoch AS claimEpoch, attempt FROM runs WHERE run_id = ?",
+        )
+        .get(runId) as
+        | { taskId: string; status: string; claimEpoch: number; attempt: number }
+        | undefined;
+      if (run === undefined || run.status !== "running") {
+        throw new StoreError("store.stale", `run ${runId} is not running`, { runId });
+      }
+      const task = this.db
+        .prepare(
+          "SELECT state, claim_epoch AS claimEpoch, attempts_used AS attemptsUsed, max_attempts AS maxAttempts, verify_retries AS verifyRetries FROM tasks WHERE task_id = ?",
+        )
+        .get(run.taskId) as
+        | {
+            state: string;
+            claimEpoch: number;
+            attemptsUsed: number;
+            maxAttempts: number;
+            verifyRetries: number;
+          }
+        | undefined;
+      if (task === undefined || task.state !== "running" || task.claimEpoch !== run.claimEpoch) {
+        throw new StoreError("store.stale", `task of run ${runId} is no longer claimed by it`, {
+          runId,
+        });
+      }
+      const cancelled = this.stops.cancelTask(run.taskId, reason, this.clock.now());
+      return {
+        taskId: run.taskId,
+        goal: cancelled?.goal ?? "",
+        attempt: run.attempt,
+        taskState: "cancelled",
+        attemptsUsed: task.attemptsUsed,
+        maxAttempts: task.maxAttempts,
+        retryReason: null,
+        failureReason: null,
+        verifyRetries: task.verifyRetries,
+      };
+    });
+  }
+
   // ARCH 7.5 (M1-T7): tasks still running under another epoch lost their runtime. The attempt is orphaned:
   // its run is closed as orphaned and the task returns to ready without charging attempts_used, or fails once
   // infra_restarts would exceed maxInfraRestarts. Events carry the time of the reconciliation.
@@ -1564,6 +1915,17 @@ function isDependencyFailure(dependency: { state: string; blockReason: string | 
     dependency.state === "cancelled" ||
     (dependency.state === "blocked" && dependency.blockReason === "dep_failed")
   );
+}
+
+// A dependency of kind completed is met by a completed task; one of kind settled (3.7) also by a task that can never
+// complete.
+function isDependencyMet(dependency: {
+  kind: string;
+  state: string;
+  blockReason: string | null;
+}): boolean {
+  if (dependency.state === "completed") return true;
+  return dependency.kind === "settled" && isDependencyFailure(dependency);
 }
 
 function parseCommand(row: CommandRow): CommandRecord {

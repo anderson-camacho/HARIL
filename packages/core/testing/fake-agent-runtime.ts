@@ -8,14 +8,23 @@ import type {
   AgentSpec,
   Cancel,
   Clock,
+  DelegationToolHandler,
   HarilError,
   PlanProposer,
   Result,
 } from "../src/ports/index.js";
+import { type FakeTurnCost, isFakeDelegationAgentRef } from "./fake-delegation-agents.js";
+import {
+  fakeWorkflowTurn,
+  fakeWritingTurn,
+  type WorkflowTurnResult,
+} from "./fake-workflow-turn.js";
 
 // Simulated agent (M1-D7). The behaviour is chosen by agentRef:
 //   fake:succeed (default), fake:fail, fake:slow:<ms>, fake:say:<text> (its final output is <text>, M3-T6a),
 //   fake:plan (proposes a fixed plan through the injected proposer, LD-T4);
+//   fake:orchestrate, fake:delegate, fake:execute and fake:audit (a workflow turn, phase F2): they read the turn input
+//   of their spec and call the injected delegation tools, as the real agents will through Pi's bridge;
 //   any other ref succeeds as a simulated run until M2.
 // Work starts when prompt() is accepted; a slow run settles at its completion time or at timeoutMs.
 
@@ -25,6 +34,11 @@ export interface FakeAgentRuntimeOptions {
   readonly helloTools?: (allowedTools: readonly string[]) => readonly string[];
   // The host handler of haril_propose_plan (LD-T4). Without it, fake:plan fails its attempt.
   readonly proposePlan?: PlanProposer;
+  // The host handler of the delegation tools (phase F2). Without it, a fake workflow agent that must call one fails.
+  readonly delegationTools?: DelegationToolHandler;
+  // How long a fake workflow turn takes, from the cost it draws (minutes of model time); default 0, so a test runs
+  // fast while several turns are still in flight together.
+  readonly delegationDelayMs?: (cost: FakeTurnCost) => number;
 }
 
 type Behaviour =
@@ -33,7 +47,8 @@ type Behaviour =
   | { readonly kind: "slow"; readonly ms: number }
   | { readonly kind: "simulated" }
   | { readonly kind: "say"; readonly text: string }
-  | { readonly kind: "plan" };
+  | { readonly kind: "plan" }
+  | { readonly kind: "delegation" };
 
 const SLOW_REF = /^fake:slow:(\d+)$/;
 const SAY_REF = /^fake:say:(.+)$/s;
@@ -43,6 +58,7 @@ function parseAgentRef(agentRef: string): Behaviour {
   if (agentRef === "fake:succeed") return { kind: "succeed" };
   if (agentRef === "fake:fail") return { kind: "fail" };
   if (agentRef === "fake:plan") return { kind: "plan" };
+  if (isFakeDelegationAgentRef(agentRef)) return { kind: "delegation" };
   const slow = SLOW_REF.exec(agentRef);
   if (slow !== null) return { kind: "slow", ms: Number(slow[1]) };
   const say = SAY_REF.exec(agentRef);
@@ -128,6 +144,8 @@ class FakeAgentHandle implements AgentHandle {
       });
     } else if (behaviour.kind === "plan") {
       this.finish(this.proposePlan());
+    } else if (behaviour.kind === "delegation") {
+      this.runWorkflowTurn();
     } else if (behaviour.kind === "fail") {
       this.finish({
         status: "failed",
@@ -179,6 +197,46 @@ class FakeAgentHandle implements AgentHandle {
         ? `proposed plan ${proposed.approvalId} (${count}); it waits for haril approve ${proposed.approvalId}`
         : `plan ${proposed.approvalId} (${count}) was already requested; it waits for haril approve ${proposed.approvalId}`,
     };
+  }
+
+  // A fake workflow turn: its calls go to the host at once; it settles after its drawn time (delegationDelayMs), or at
+  // its timeout when it stalls (no progress at all, for the watchdog of 3.16 or the timeout to end). A turn of a workflow
+  // that writes (phase F8) waits for the replies of its workspace tools first.
+  private runWorkflowTurn(): void {
+    const { options, spec } = this;
+    const failed = (error: unknown): void => {
+      const message = error instanceof Error ? error.message : String(error);
+      this.finish({ status: "failed", code: "fake.turn_failed", message });
+    };
+    if ((spec.delegation?.workspace ?? null) !== null) {
+      fakeWritingTurn(spec, options.delegationTools).then((turn) => this.settleTurn(turn), failed);
+      return;
+    }
+    let turn: WorkflowTurnResult;
+    try {
+      turn = fakeWorkflowTurn(spec, options.delegationTools);
+    } catch (error) {
+      failed(error);
+      return;
+    }
+    this.settleTurn(turn);
+  }
+
+  private settleTurn(turn: WorkflowTurnResult): void {
+    const { options, spec } = this;
+    if (this.finished) return;
+    if (turn === "stalled") {
+      this.cancels.push(
+        options.clock.schedule(spec.timeoutMs, () => this.finish({ status: "timed_out" })),
+      );
+      return;
+    }
+    const settled = turn.outcome;
+    const delay = Math.max(0, options.delegationDelayMs?.(turn.cost) ?? 0);
+    this.cancels.push(
+      options.clock.schedule(delay, () => this.finish(settled)),
+      options.clock.schedule(spec.timeoutMs, () => this.finish({ status: "timed_out" })),
+    );
   }
 
   private finish(outcome: AgentOutcome): void {

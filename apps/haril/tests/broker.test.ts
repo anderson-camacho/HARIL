@@ -716,3 +716,102 @@ describe("haril metrics with the ledger", () => {
     });
   });
 });
+
+describe("upstream refusals (3.11, phase F6)", () => {
+  async function brokerWithHook() {
+    const failures: unknown[] = [];
+    const hooked = await startHarilBroker({
+      store,
+      clock,
+      providers: [
+        { id: "upstream", baseUrl: upstream.baseUrl, credential: sealSecret(UPSTREAM_KEY) },
+      ],
+      timeoutMs: 5000,
+      onUpstreamFailure: (failure) => failures.push(failure),
+    });
+    return { hooked, failures, port: Number(new URL(hooked.url).port) };
+  }
+
+  it("answers a 429 with the upstream's Retry-After and tells the runtime the run's model and the wait", async () => {
+    upstream.setCompletion({
+      status: 429,
+      headers: { "retry-after": "30" },
+      body: { error: { message: "slow down" } },
+    });
+    const { hooked, failures, port } = await brokerWithHook();
+    const scope = scopeFor(100);
+    const key = hooked.issueKey({
+      runId: scope.runId,
+      providerId: "upstream",
+      taskId: scope.taskId,
+      projectId,
+      models: ["m1"],
+      maxTokensPerRequest: 50,
+      budgetIds: [scope.taskBudget, projectBudget],
+      ttlMs: 60_000,
+    });
+    const reply = await send(port, {
+      path: "/v1/chat/completions",
+      headers: bearer(key),
+      body: chatBody({ stream: false, max_tokens: 10 }),
+    });
+    expect(reply.status).toBe(429);
+    expect(reply.headers["retry-after"]).toBe("30");
+    expect(failures).toEqual([
+      {
+        runId: scope.runId,
+        taskId: scope.taskId,
+        providerId: "upstream",
+        model: "upstream/m1",
+        code: "rate_limited",
+        httpStatus: 429,
+        retryAfterMs: 30_000,
+      },
+    ]);
+    await hooked.close();
+  });
+
+  it("tells the runtime of an upstream 402, and never of its own budget refusal", async () => {
+    upstream.setCompletion({ status: 402, body: { error: { message: "quota exhausted" } } });
+    const { hooked, failures, port } = await brokerWithHook();
+    const scope = scopeFor(100);
+    const issueOn = (maxTokensPerRequest: number) =>
+      hooked.issueKey({
+        runId: scope.runId,
+        providerId: "upstream",
+        taskId: scope.taskId,
+        projectId,
+        models: ["m1"],
+        maxTokensPerRequest,
+        budgetIds: [scope.taskBudget, projectBudget],
+        ttlMs: 60_000,
+      });
+    const reply = await send(port, {
+      path: "/v1/chat/completions",
+      headers: bearer(issueOn(10)),
+      body: chatBody({ stream: false, max_tokens: 10 }),
+    });
+    expect(reply.status).toBe(502);
+    expect(failures).toMatchObject([{ code: "quota", httpStatus: 402, retryAfterMs: null }]);
+    // HARIL's own token budget refuses before the upstream: that is no provider failure.
+    const scopeSmall = scopeFor(1);
+    const small = hooked.issueKey({
+      runId: scopeSmall.runId,
+      providerId: "upstream",
+      taskId: scopeSmall.taskId,
+      projectId,
+      models: ["m1"],
+      maxTokensPerRequest: 10,
+      budgetIds: [scopeSmall.taskBudget, projectBudget],
+      ttlMs: 60_000,
+    });
+    const refused = await send(port, {
+      path: "/v1/chat/completions",
+      headers: bearer(small),
+      body: chatBody({ stream: false, max_tokens: 10 }),
+    });
+    expect(refused.status).toBe(402);
+    expect(failures).toHaveLength(1);
+    await hooked.close();
+  });
+});

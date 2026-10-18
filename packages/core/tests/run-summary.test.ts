@@ -26,9 +26,18 @@ describe("summarizeRun", () => {
       failed: ["b"],
       blocked: ["c"],
       skipped: [],
+      cancelled: [],
       commandsApplied: 1,
       commandsRejected: 0,
     });
+  });
+
+  it("counts a task a stop cancelled (3.14) without failing the run", () => {
+    const summary = summarizeRun([
+      { type: "task.cancelled", taskId: "x", goal: "X", reason: "user_stop" },
+    ]);
+    expect(summary.cancelled).toEqual(["x"]);
+    expect(runExitCode(summary)).toBe(0);
   });
 
   it("counts a task skipped for missing setup (M2-T6) and maps it to exit 1", () => {

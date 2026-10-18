@@ -1,7 +1,10 @@
+import { readFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { StoreError } from "@haril/state-sqlite";
 import { approvals, approve, deny } from "./commands/approvals.js";
+import { config } from "./commands/config.js";
 import { consoleCommand } from "./commands/console.js";
+import { difficulty } from "./commands/difficulty.js";
 import { doctor } from "./commands/doctor.js";
 import { events } from "./commands/events.js";
 import { memory } from "./commands/memory.js";
@@ -10,12 +13,16 @@ import { metrics } from "./commands/metrics.js";
 import { models } from "./commands/models.js";
 import { plan } from "./commands/plan.js";
 import { project } from "./commands/project.js";
+import { quota } from "./commands/quota.js";
+import { resume } from "./commands/resume.js";
 import { shell } from "./commands/shell.js";
 import { runQueue, start } from "./commands/start.js";
 import { states } from "./commands/states.js";
 import { status } from "./commands/status.js";
 import { stop } from "./commands/stop.js";
 import { task } from "./commands/task.js";
+import { usage } from "./commands/usage.js";
+import { workflow } from "./commands/workflow.js";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "./context.js";
 import { VERSION } from "./version.js";
 
@@ -32,6 +39,8 @@ function currentHost(): HostInfo {
     cwd: process.cwd(),
     interactive: process.stdin.isTTY === true && process.stdout.isTTY === true,
     user: operatorName(),
+    // File descriptor 0: the whole of stdin, read only by the commands that ask for it.
+    readStdin: () => readFileSync(0, "utf8"),
   };
 }
 
@@ -50,8 +59,16 @@ const HELP_LINES = [
   "usage:",
   "  haril                            in a terminal, open the HARIL console (haril console); otherwise print this help",
   "  haril --version | version        print the CLI version",
-  "  haril doctor [--json] [--data-dir <path>]   check the runtime and the store",
+  "  haril doctor [--json] [--data-dir <path>]   check the runtime, the store, the providers and the delegation settings",
+  "  haril config get [<path>] [--json]   a setting or a group of haril.json (default: delegation) with its source",
+  "  haril config set <path> <value> | --reset [--json]   change one delegation setting (checked, other keys kept)",
   "  haril models [--json] [--provider <id>]   list the models of every provider as <provider>/<model> (haril.json)",
+  "  haril quota [--json] [--provider <id>]   5-hour and weekly quota of each account (CLIProxyAPI management API,",
+  "    key in CLIPROXYAPI_MANAGEMENT_KEY or delegation.quota.managementKeyEnv) and the model cooldowns; sin dato if unknown",
+  "  haril difficulty show [--json]   the difficulty table: per class its recommended models and cost levels, and the",
+  "    source of each value (config/difficulty.json or the provisional defaults)",
+  "  haril difficulty calibrate [--yes] [--json]   recompute the success rates from real runs (model_stats), show the",
+  "    change and write config/difficulty.json only with --yes; nothing else updates the table",
   "  haril states                     print the task states and legal transitions",
   "  haril plan validate <file> [--json]   validate a plan file",
   "  haril plan import <file> [--project <slug>] [--json]   queue a plan (applied by start)",
@@ -71,12 +88,35 @@ const HELP_LINES = [
   "  haril start [--project <slug>] [--json] [--idle-exit-sec <n>]   stay up for new work: apply the queue, run the ready tasks, exit after n idle seconds (default 120)",
   "  haril run [--project <slug>] [--json]   apply the queue, run the ready tasks and exit as soon as nothing is claimable",
   "  haril stop                       ask the running runtime to stop: its in-flight run returns to ready, uncharged",
+  "  haril stop --now [--json]        emergency stop of every agent in every mode: kill every agent process (pid and",
+  "    start time checked), cancel the tasks in flight, stop every workflow, settle their budgets; the runtime exits",
+  "    and stays halted (it claims nothing) until haril resume; repeating it is harmless",
+  "  haril resume [--json]            lift the halt of haril stop --now; cancelled work stays cancelled",
   "  start and run exit 0 when idle or stopped with nothing failed, 1 when a task failed, was blocked or was skipped,",
-  "  2 when another runtime holds the lease; Ctrl+C or SIGTERM stops gracefully, and a second signal exits 130 at once",
+  "  2 when another runtime holds the lease; Ctrl+C or SIGTERM stops gracefully, and a second signal kills the agents",
+  "  in flight and exits 130",
   "  haril status [--project <slug>] [--json]   projects, tasks, queued commands and runtime",
   "  haril metrics [--project <slug>] [--json]   runs, retries and success rate from the event log",
   "  haril events [--project <slug>] [--task <id>] [--limit <n>] [--json]   the newest events, oldest first",
   "  haril memory status [--json]     the memory provider, its health, whether memory is degraded and the outbox depth",
+  "  haril workflow start <goal> --model <ref> [--autonomous | --stop-at <stops>] [--agent <ref>] [--json]",
+  "    queue a three-layer workflow (orchestrator, delegators, executors, auditors) that haril start runs; it stops",
+  "    after the first plan unless --autonomous or --stop-at; --agent defaults to fake:orchestrate (simulated agents)",
+  "  haril workflow list | show <workflowId> [--json]   workflows, and one workflow's tree (--json: WorkflowSnapshot v1)",
+  "  haril workflow watch <workflowId>   WorkflowSnapshot v1 as JSON lines: one now, one per change, until it ends",
+  "  haril workflow tail <workflowId> <node> [--follow] [--json]   what a node's agent writes and calls (its Pi session)",
+  "  haril workflow continue <workflowId> [--remove-stop <stop>]...   lift the stop a workflow waits at",
+  "  haril workflow stop <workflowId> [--json]   stop one workflow now: its turns cancelled, its agents killed",
+  "  haril workflow demo [--seed <n>] [--delegators <n>] [--executors <n>] [--stop-at <stops>] [--json]",
+  "    run a simulated three-layer workflow with fake agents on a temporary store and print its tree and totals;",
+  "    --data-dir <path> keeps its rows there (the default data dir only with --allow-real-data-dir); no model is called",
+  "  haril usage log [--since 2h | --from <time> --to <time>] [--kind order|chat|agent_run] [--model <id>] [--json]",
+  "    every order and every model use, one line per row; also --workflow, --layer, --mode, --difficulty, --limit",
+  "  haril usage summary [--by day|model|layer|difficulty|workflow|mode|role] [--json]   token and time totals",
+  "  haril usage verify [--json]      walk the hash chains of the orders and usage logs; exit 1 if a row was edited",
+  "  haril usage export --format jsonl|csv [--table usage|orders] [--out <file>]   export the log, hashes included",
+  "  haril usage record --stdin [--project <slug>] [--json]   append one order or chat usage row given as JSON on",
+  "    stdin (how the console logs its chat); the order keeps its hash, length and a redacted preview, never its text",
   "  haril console [--data-dir <path>]   open Pi in this folder with the HARIL extension: Pi's own commands, logins",
   "    and models, plus the HARIL bar and /haril, /goal, /plans, /approve, /deny, /tasks; needs npm run runtime:install",
   "  haril shell [--data-dir <path>] [--no-runtime]   open the previous terminal UI; it starts haril start",
@@ -84,7 +124,7 @@ const HELP_LINES = [
   "  haril help                       print this help",
 ];
 
-// `start` is the only asynchronous command, so the result is a promise only for it.
+// The commands that wait (start, run, stop --now, workflow stop and a few others) return a promise; the rest a number.
 export function run(
   argv: readonly string[],
   io: CliIo,
@@ -128,6 +168,12 @@ function dispatch(argv: readonly string[], io: CliIo, host: HostInfo): number | 
       return EXIT_OK;
     case "doctor":
       return doctor(rest, io, host);
+    case "config":
+      return config(rest, io, host);
+    case "difficulty":
+      return difficulty(rest, io, host);
+    case "quota":
+      return quota(rest, io, host);
     case "models":
       return models(rest, io, host);
     case "states":
@@ -154,12 +200,18 @@ function dispatch(argv: readonly string[], io: CliIo, host: HostInfo): number | 
       return events(rest, io, host);
     case "memory":
       return memory(rest, io, host);
+    case "usage":
+      return usage(rest, io, host);
+    case "workflow":
+      return workflow(rest, io, host);
     case "start":
       return start(rest, io, host);
     case "run":
       return runQueue(rest, io, host);
     case "stop":
       return stop(rest, io, host);
+    case "resume":
+      return resume(rest, io, host);
     case "console":
       return consoleCommand(rest, io, host);
     case "shell":

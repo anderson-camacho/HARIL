@@ -4,6 +4,8 @@ import type { DashboardData } from "./dashboard-data.js";
 export type DashboardAction =
   | "refresh"
   | "model"
+  | "model-level"
+  | "level"
   | "tasks"
   | "approvals"
   | "events"
@@ -12,11 +14,15 @@ export type DashboardAction =
   | "start-runtime"
   | "stop-runtime"
   | "toggle-tools"
+  | "delegation"
   | "methodologies"
   | "commands"
   | "memory"
   | "details"
-  | "register-project";
+  | "register-project"
+  | "orchestration-view"
+  | "orchestration-pick"
+  | "orchestration-demo";
 
 export interface DashboardControl {
   readonly action: DashboardAction;
@@ -29,6 +35,7 @@ export function controlsFor(
   data: DashboardData,
   runtime: string,
   runtimeAvailable = true,
+  orchestrationDemo = false,
 ): DashboardControl[] {
   const refresh: DashboardControl = { action: "refresh", label: "Refresh data", hint: "R" };
   switch (area) {
@@ -50,6 +57,13 @@ export function controlsFor(
           ? [{ action: "register-project" as const, label: "Register this folder", hint: "I" }]
           : []),
         { action: "details", label: "View complete details", hint: "D" },
+        { action: "orchestration-view", label: "Open orchestration view", hint: "V" },
+        { action: "orchestration-pick", label: "Pick the workflow to follow", hint: "P" },
+        {
+          action: "orchestration-demo",
+          label: orchestrationDemo ? "Demo off (sample data)" : "Demo on (sample data)",
+          hint: "M",
+        },
         ...(data.projectSlug === undefined
           ? []
           : [
@@ -93,15 +107,9 @@ export function controlsFor(
     case "tools":
       return [
         { action: "details", label: "View complete details", hint: "D" },
+        { action: "model-level", label: "Model and level", hint: "M" },
+        { action: "delegation", label: "Delegation settings", hint: "S" },
         { action: "toggle-tools", label: "Enable or disable Pi tools", hint: "T" },
-        refresh,
-      ];
-    case "workflows":
-      return [
-        ...(data.projectSlug === undefined
-          ? [{ action: "register-project" as const, label: "Register this folder", hint: "I" }]
-          : []),
-        { action: "details", label: "View complete details", hint: "D" },
         { action: "methodologies", label: "Browse HARIL methodologies", hint: "B" },
         { action: "commands", label: "Browse HARIL commands", hint: "C" },
         refresh,

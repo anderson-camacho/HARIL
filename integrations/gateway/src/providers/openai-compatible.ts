@@ -37,8 +37,22 @@ export interface OpenAiCompatibleOptions {
   readonly fetch?: typeof fetch;
 }
 
+// One model as CLIProxyAPI's `GET /models?client_version=` listing describes it (ADR-0021 S8, P24): its reasoning levels
+// (the gateway's names, lower case, only the known ones; empty when the listing publishes none), its default level and
+// its real context and output limits. The plain listing has none of these.
+export interface ModelDetail {
+  readonly id: string;
+  readonly displayName?: string;
+  readonly contextWindow?: number;
+  readonly maxTokens?: number;
+  readonly levels: readonly string[];
+  readonly defaultLevel?: string;
+}
+
 export interface OpenAiCompatibleClient {
   listModels(signal?: AbortSignal): Promise<ModelDescriptor[]>;
+  // The `?client_version=` listing; ProviderError upstream when the answer is not a listing.
+  listModelDetails(clientVersion: string, signal?: AbortSignal): Promise<ModelDetail[]>;
   // The chat completions body as sent (stream true: one chunk per SSE event; false: one chunk, the reply).
   chatRaw(body: UpstreamBody, signal?: AbortSignal): AsyncGenerator<UpstreamChunk, void, undefined>;
   // The text-only view of chatRaw: text deltas, then one done event.
@@ -232,6 +246,65 @@ function parseModels(body: unknown): ModelDescriptor[] {
   return [...byId.values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
+const GATEWAY_LEVELS: ReadonlySet<string> = new Set([
+  "none",
+  "auto",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+]);
+
+function textOfField(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
+}
+
+function gatewayLevel(value: unknown): string | undefined {
+  const level = textOfField(value)?.toLowerCase();
+  return level !== undefined && GATEWAY_LEVELS.has(level) ? level : undefined;
+}
+
+// The listing's array is `models` (CLIProxyAPI) or `data`; the id is `slug` or `id`; the first entry of an id wins.
+function parseModelDetails(body: unknown): ModelDetail[] {
+  const listing = isRecord(body) ? body : undefined;
+  const items = Array.isArray(listing?.models)
+    ? listing.models
+    : Array.isArray(listing?.data)
+      ? listing.data
+      : undefined;
+  if (items === undefined) {
+    throw new ProviderError("upstream", "gateway returned an unexpected model listing");
+  }
+  const byId = new Map<string, ModelDetail>();
+  for (const item of items) {
+    if (!isRecord(item)) continue;
+    const id = textOfField(item.slug) ?? textOfField(item.id);
+    if (id === undefined || byId.has(id)) continue;
+    const levels: string[] = [];
+    for (const entry of Array.isArray(item.supported_reasoning_levels)
+      ? item.supported_reasoning_levels
+      : []) {
+      const level = gatewayLevel(isRecord(entry) ? entry.effort : entry);
+      if (level !== undefined && !levels.includes(level)) levels.push(level);
+    }
+    const contextWindow = count(item.context_window) ?? count(item.context_length);
+    const maxTokens = count(item.max_tokens) ?? count(item.max_output_tokens);
+    const displayName = textOfField(item.display_name);
+    const defaultLevel = gatewayLevel(item.default_reasoning_level);
+    byId.set(id, {
+      id,
+      ...(displayName === undefined ? {} : { displayName }),
+      ...(contextWindow === null || contextWindow < 1 ? {} : { contextWindow }),
+      ...(maxTokens === null || maxTokens < 1 ? {} : { maxTokens }),
+      levels,
+      ...(defaultLevel === undefined ? {} : { defaultLevel }),
+    });
+  }
+  return [...byId.values()];
+}
+
 export function createOpenAiCompatibleClient(
   options: OpenAiCompatibleOptions,
 ): OpenAiCompatibleClient {
@@ -403,6 +476,21 @@ export function createOpenAiCompatibleClient(
         );
         if (!response.ok) throw await httpFailure(response);
         return parseModels(await readJson(response, deadline));
+      } finally {
+        deadline.dispose();
+      }
+    },
+
+    async listModelDetails(clientVersion, signal) {
+      const deadline = openDeadline(timeoutMs, signal);
+      try {
+        const response = await send(
+          `${base}/models?client_version=${encodeURIComponent(clientVersion)}`,
+          { method: "GET", headers: headers({ accept: "application/json" }) },
+          deadline,
+        );
+        if (!response.ok) throw await httpFailure(response);
+        return parseModelDetails(await readJson(response, deadline));
       } finally {
         deadline.dispose();
       }

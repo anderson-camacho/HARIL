@@ -1,4 +1,4 @@
-import { execFile, spawn } from "node:child_process";
+import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync } from "node:fs";
 import { join, relative } from "node:path";
 
@@ -40,17 +40,18 @@ export function cliAvailable(): boolean {
   return launcher() !== undefined;
 }
 
-// Runs `haril <args>` and collects its output. Never rejects: a CLI that cannot run is a failed result.
+// Runs `haril <args>` and collects its output. Never rejects: a CLI that cannot run is a failed result. `input` goes to
+// the CLI's stdin (haril usage record --stdin), which keeps text out of argv and the process list.
 export function runHaril(
   args: readonly string[],
-  options: { readonly cwd?: string; readonly timeoutMs?: number } = {},
+  options: { readonly cwd?: string; readonly timeoutMs?: number; readonly input?: string } = {},
 ): Promise<CliResult> {
   const found = launcher();
   if (found === undefined) {
     return Promise.resolve({ ok: false, code: null, stdout: "", stderr: NOT_LAUNCHED });
   }
   return new Promise((resolve) => {
-    execFile(
+    const child = execFile(
       found.node,
       [found.cli, ...args],
       {
@@ -67,6 +68,11 @@ export function runHaril(
         resolve({ ok: error === null, code, stdout, stderr: detail });
       },
     );
+    if (options.input !== undefined) {
+      // A child that exits before reading all of it closes the pipe: that is its answer, not a crash here.
+      child.stdin?.on("error", () => undefined);
+      child.stdin?.end(options.input, "utf8");
+    }
   });
 }
 
@@ -83,6 +89,77 @@ export async function runHarilJson(
   } catch {
     return undefined;
   }
+}
+
+// A `haril` command whose output is read line by line while it runs (haril workflow watch and tail).
+export interface HarilStream {
+  // False once the child exited (or could not start).
+  readonly running: boolean;
+  // Ends the child, through its own handle (the console spawned it); safe to call more than once.
+  close(): void;
+}
+
+// Longest line kept: a line that never ends is dropped, not grown without bound.
+const MAX_LINE_CHARS = 4 * 1024 * 1024;
+
+// Runs `haril <args>` and calls onLine with each line of its stdout as it arrives (stderr is ignored), and onExit once
+// when it ends. Same launcher as runHaril: execFile's pair, no shell, the inherited environment. Undefined when this
+// Pi was not opened by haril. The child's stdin is a pipe the console holds and never writes: when the console goes
+// away, even without a chance to end its children, the pipe closes, and a command run with --exit-on-stdin-end exits.
+export function streamHaril(
+  args: readonly string[],
+  options: {
+    readonly cwd?: string;
+    readonly onLine: (line: string) => void;
+    readonly onExit?: (code: number | null) => void;
+  },
+): HarilStream | undefined {
+  const found = launcher();
+  if (found === undefined) return undefined;
+  let running = true;
+  let exited = false;
+  const exit = (code: number | null): void => {
+    running = false;
+    if (exited) return;
+    exited = true;
+    options.onExit?.(code);
+  };
+  let child: ChildProcess;
+  try {
+    child = spawn(found.node, [found.cli, ...args], {
+      cwd: options.cwd,
+      windowsHide: true,
+      stdio: ["pipe", "pipe", "ignore"],
+    });
+  } catch {
+    exit(null);
+    return { running: false, close: () => undefined };
+  }
+  // A child that exits closes its end of the pipe: nothing is ever written, so the error is only that.
+  child.stdin?.on("error", () => undefined);
+  let partial = "";
+  child.stdout?.setEncoding("utf8");
+  child.stdout?.on("data", (chunk: string) => {
+    partial += chunk;
+    const lines = partial.split(/\r?\n/);
+    partial = lines.pop() ?? "";
+    if (partial.length > MAX_LINE_CHARS) partial = "";
+    for (const line of lines) if (line.trim() !== "") options.onLine(line);
+  });
+  child.once("error", () => exit(null));
+  child.once("close", (code) => {
+    if (partial.trim() !== "") options.onLine(partial);
+    partial = "";
+    exit(typeof code === "number" ? code : null);
+  });
+  return {
+    get running() {
+      return running;
+    },
+    close() {
+      if (running && child.exitCode === null && child.signalCode === null) child.kill();
+    },
+  };
 }
 
 // The runtime the console started. `running` turns false when the child exits.

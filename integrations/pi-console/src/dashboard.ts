@@ -2,15 +2,20 @@ import { renderNeuralProfile, renderWordmark } from "./dashboard-art.js";
 import { controlsFor, type DashboardAction } from "./dashboard-controls.js";
 import type { DashboardData } from "./dashboard-data.js";
 import { frameGlyph, paddedCell, visualText } from "./dashboard-theme.js";
+import { delegationSummary } from "./delegation-settings.js";
+import { ASCII_GLYPHS, UNICODE_GLYPHS } from "./orchestration-draw.js";
+import type { OrchestrationState, OrchestrationTarget } from "./orchestration-state.js";
+import { renderOrchestrationSummary } from "./orchestration-view.js";
 import type { ConsoleTheme, ThemeColor } from "./pi-types.js";
 import { plainText, textWidth, truncate, wrap } from "./text.js";
 
+// The five modules (spec 7.8): WORKFLOWS retired, its methodologies are in TOOLS (P19) and a workflow is seen in
+// ORCHESTRATION.
 export const DASHBOARD_AREAS = [
   "agents",
   "orchestration",
   "automation",
   "tools",
-  "workflows",
   "everywhere",
 ] as const;
 export type DashboardArea = (typeof DASHBOARD_AREAS)[number];
@@ -19,9 +24,9 @@ export interface DashboardFacts {
   readonly project: string;
   readonly cwd: string;
   readonly branch: string | null | undefined;
-  readonly model: string;
+  // The model and its reasoning level ("<model> · <level>", "<model> · no reasoning" or "no model selected").
+  readonly modelLevel: string;
   readonly providers: readonly string[];
-  readonly thinking: string;
   readonly runtime: string;
   readonly runtimeAvailable: boolean;
   readonly pending: number | undefined;
@@ -39,6 +44,9 @@ export interface DashboardFacts {
   readonly memory: string;
   readonly data: DashboardData;
   readonly loading: boolean;
+  // The ORCHESTRATION view's state (shared with its full-view overlay) and the glyph set it draws with.
+  readonly orchestration: OrchestrationState;
+  readonly asciiGlyphs: boolean;
 }
 
 export interface HeaderLayout {
@@ -59,6 +67,13 @@ export interface DashboardLayout {
     readonly end: number;
     readonly action: DashboardAction;
   }[];
+  // Hit-boxes of the ORCHESTRATION summary: its rows, view buttons, "Open full view" and "Stop all".
+  readonly orchestrationHits: readonly {
+    readonly row: number;
+    readonly start: number;
+    readonly end: number;
+    readonly target: OrchestrationTarget;
+  }[];
 }
 
 export interface FooterNavigationLayout {
@@ -71,7 +86,6 @@ const LABELS: Readonly<Record<DashboardArea, string>> = {
   orchestration: "ORCHESTRATION",
   automation: "AUTOMATION",
   tools: "TOOLS",
-  workflows: "WORKFLOWS",
   everywhere: "EVERYWHERE",
 };
 const YELLOW: ThemeColor = "warning";
@@ -201,7 +215,7 @@ function wideHeader(
     ),
     statusRow("PATH", facts.cwd, rightWidth),
     statusRow("RUNTIME", facts.runtime, rightWidth),
-    statusRow("MODEL", facts.model, rightWidth),
+    statusRow("MODEL", facts.modelLevel, rightWidth),
     statusRow(
       "TOOLS",
       `${facts.activeTools.length} active / ${facts.tools.length} observed`,
@@ -256,7 +270,7 @@ export function renderHeaderLayout(
   const rows = [
     border(width, "┌", "─", "┐"),
     `${frameGlyph("│")}${paddedCell(` ◆ HARIL ${version ?? ""} · MANY MINDS. ONE FLOW.`, width - 2, "yellow")}${frameGlyph("│")}`,
-    `${frameGlyph("│")}${paddedCell(` ${facts.project} · ${facts.model} · ${facts.runtime} · TOOLS ${facts.activeTools.length}/${facts.tools.length} · MCP ${facts.mcpServers.length}`, width - 2, "teal")}${frameGlyph("│")}`,
+    `${frameGlyph("│")}${paddedCell(` ${facts.project} · ${facts.modelLevel} · ${facts.runtime} · TOOLS ${facts.activeTools.length}/${facts.tools.length} · MCP ${facts.mcpServers.length}`, width - 2, "teal")}${frameGlyph("│")}`,
     ...tabLayout.lines.map(
       (line) =>
         `${frameGlyph("│")}${paddedCell(line.trimEnd(), width - 2, "cyan")}${frameGlyph("│")}`,
@@ -290,20 +304,18 @@ function linesFor(area: DashboardArea, facts: DashboardFacts): string[] {
   switch (area) {
     case "agents":
       return [
-        `Pi model: ${facts.model} · thinking ${facts.thinking}`,
+        `Pi model: ${facts.modelLevel}`,
         data.projectSlug === undefined
           ? "Project agents are unavailable until this folder is registered."
           : `${observed.size} observed task agents · ${data.tasks.length} project tasks`,
         "No separate HARIL agent-profile registry is exposed.",
       ];
     case "orchestration":
+      // The workflow summary is drawn above (renderOrchestrationSummary); this is the project's secondary line.
       return [
         data.projectSlug === undefined
           ? "Project tasks, approvals, queue and events require registering this folder."
-          : `Project ${facts.project} · ${data.tasks.length} tasks · ${data.queued.length} queued commands`,
-        data.projectSlug === undefined
-          ? "Register this folder to load project-scoped orchestration data."
-          : `Approvals: ${facts.pending === undefined ? "unavailable" : facts.pending} pending · ${data.events.length} recent events`,
+          : `Project ${facts.project} · ${data.tasks.length} tasks · ${data.queued.length} queued commands · approvals ${facts.pending === undefined ? "unavailable" : `${facts.pending} pending`} · ${data.events.length} recent events`,
       ];
     case "automation":
       return [
@@ -323,11 +335,7 @@ function linesFor(area: DashboardArea, facts: DashboardFacts): string[] {
         facts.tools.length
           ? `${facts.activeTools.length}/${facts.tools.length} configured Pi tools active`
           : "Pi reports no configured tools in this session.",
-      ];
-    case "workflows":
-      return [
-        "Select a methodology to inspect its complete bundled definition; project registration can bind one.",
-        `${data.methodologies.length} HARIL methodologies · ${facts.commands.length} Pi commands reported`,
+        `Methodologies: ${data.methodologies.length} HARIL methodologies · ${facts.commands.length} Pi commands reported`,
         ...(!data.methodologiesAvailable
           ? ["The global methodology registry could not be read; use Refresh to retry."]
           : data.methodologies.length === 0
@@ -335,15 +343,19 @@ function linesFor(area: DashboardArea, facts: DashboardFacts): string[] {
                 "The local registry successfully returned no methodologies; the CLI has no import command.",
               ]
             : []),
-        "HARIL task add has no methodology selector; browsing a definition does not execute it.",
-        "Pi's native slash commands remain available separately.",
+        ...(data.delegation !== undefined
+          ? delegationSummary(data.delegation)
+          : data.delegationError === undefined
+            ? []
+            : [`Delegation settings unavailable: ${data.delegationError}`]),
+        "Browse a methodology to read its complete bundled definition; browsing does not execute it.",
       ];
     case "everywhere":
       return [
         `Project: ${facts.project}`,
         `Workspace: ${facts.cwd}`,
         `Git: ${facts.branch === undefined ? "unavailable" : (facts.branch ?? "not a Git repository")}`,
-        `Session: ${facts.model} · ${facts.thinking} · context ${facts.context} · cost ${facts.cost}`,
+        `Session: ${facts.modelLevel} · context ${facts.context} · cost ${facts.cost}`,
         `Resources: ${facts.providers.length} providers · ${facts.mcpServers.length} MCP servers · ${facts.extensionStatuses.length} extension statuses`,
         `Runtime ${facts.runtime} · approvals ${facts.pending === undefined ? "unavailable" : facts.pending} · memory ${facts.memory}`,
       ];
@@ -379,7 +391,7 @@ export function renderDashboardLayout(
   theme: ConsoleTheme,
   height = 24,
 ): DashboardLayout {
-  if (width < 10) return { lines: [fit("HARIL", width)], controlHits: [] };
+  if (width < 10) return { lines: [fit("HARIL", width)], controlHits: [], orchestrationHits: [] };
   const lines = [
     border(width, "┌", "─", "┐"),
     boxRow(
@@ -414,6 +426,27 @@ export function renderDashboardLayout(
         "error",
       ),
     );
+  const orchestrationHits: DashboardLayout["orchestrationHits"][number][] = [];
+  if (area === "orchestration") {
+    // The summary's lines are already colored and exactly rowWidth wide: framed as they are, one space each side.
+    const summary = renderOrchestrationSummary(
+      facts.orchestration,
+      rowWidth,
+      height < 30 ? 4 : 8,
+      facts.asciiGlyphs ? ASCII_GLYPHS : UNICODE_GLYPHS,
+    );
+    const first = lines.length;
+    const space = paddedCell(" ", 1);
+    for (const line of summary.lines)
+      lines.push(`${frameGlyph("│")}${space}${line}${space}${frameGlyph("│")}`);
+    for (const hit of summary.hits)
+      orchestrationHits.push({
+        ...hit,
+        row: hit.row + first,
+        start: hit.start + 2,
+        end: hit.end + 2,
+      });
+  }
   const wrapped = body.flatMap((item) => wrap(plainText(item), rowWidth));
   const bodyBudget = height < 30 ? 3 : 6;
   const room = Math.max(1, bodyBudget - visibleWarnings.length - (warningLines.length > 2 ? 1 : 0));
@@ -422,7 +455,13 @@ export function renderDashboardLayout(
     lines.push(
       boxRow(`… ${wrapped.length - room} more lines; open Details`, width, theme, "warning"),
     );
-  const controls = controlsFor(area, facts.data, facts.runtime, facts.runtimeAvailable);
+  const controls = controlsFor(
+    area,
+    facts.data,
+    facts.runtime,
+    facts.runtimeAvailable,
+    facts.orchestration.demo,
+  );
   const controlHits: DashboardLayout["controlHits"][number][] = [];
   const rowIndex = lines.length;
   for (const [index, control] of controls.entries()) {
@@ -434,12 +473,12 @@ export function renderDashboardLayout(
   }
   lines.push(
     boxRow(
-      "Click a control · /haril for keyboard menu · Ctrl+Shift+1..6 for areas",
+      `Click a control · /haril for keyboard menu · Ctrl+Shift+1..${DASHBOARD_AREAS.length} for areas`,
       width,
       theme,
       "dim",
     ),
   );
   lines.push(border(width, "└", "─", "┘"));
-  return { lines, controlHits };
+  return { lines, controlHits, orchestrationHits };
 }

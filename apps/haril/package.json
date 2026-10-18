@@ -1,6 +1,6 @@
 {
   "name": "@haril/haril",
-  "version": "0.8.0",
+  "version": "0.20.2",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
@@ -17,6 +17,7 @@
     "@haril/control": "workspace:*",
     "@haril/core": "workspace:*",
     "@haril/gateway": "workspace:*",
+    "@haril/git": "workspace:*",
     "@haril/os": "workspace:*",
     "@haril/state-sqlite": "workspace:*"
   },

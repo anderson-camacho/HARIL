@@ -45,6 +45,9 @@ const CORE_LAYERS = {
   taxis: 2,
   telemetry: 2,
   domain: 2,
+  // Delegation rules (docs/modos-y-delegacion.md 3.9.5): pure rules over contracts like domain. Layer 2 so the
+  // executor and orchestrator (layer 3) can read the archetype table for the bridge's tool handshake.
+  delegation: 2,
   supervisor: 3,
   executor: 3,
   orchestrator: 3,

@@ -7,6 +7,7 @@ import {
 } from "@haril/core";
 import type {
   CommandRecord,
+  HaltState,
   ProjectRecord,
   RuntimeLeaseSummary,
   Store,
@@ -37,6 +38,8 @@ interface StatusReport {
   readonly taskList: readonly TaskRecord[];
   readonly queuedCommands: readonly QueuedView[];
   readonly runtime: RuntimeLeaseSummary;
+  // An emergency stop's halt (3.14): nothing is claimed until haril resume.
+  readonly halted: HaltState;
   readonly memory: MemoryStatusView;
 }
 
@@ -79,6 +82,7 @@ function emptyReport(dataDir: string): StatusReport {
     taskList: [],
     queuedCommands: [],
     runtime: { status: "none" },
+    halted: { halted: false, since: null },
     memory: describeMemory(UNRECORDED_MEMORY_STATUS, false),
   };
 }
@@ -125,6 +129,7 @@ function readReport(
       taskList,
       queuedCommands,
       runtime,
+      halted: store.runtime.haltState(),
       memory: describeMemory(store.memory.status(), leaseHolderAlive(runtime, host)),
     },
   };
@@ -155,6 +160,11 @@ function printText(io: CliIo, report: StatusReport): void {
   io.out(`  queued    ${report.queuedCommands.length}`);
   for (const command of report.queuedCommands) io.out(`    ${command.commandId}  ${command.type}`);
   io.out(`  runtime   ${runtimeText(report.runtime)}`);
+  if (report.halted.halted) {
+    const since =
+      report.halted.since === null ? "" : ` since ${new Date(report.halted.since).toISOString()}`;
+    io.out(`  halted    yes${since}: nothing is claimed until haril resume`);
+  }
   io.out(visibleText(`  memory    ${memoryLine(report.memory)}`));
 }
 

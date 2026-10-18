@@ -4,6 +4,7 @@ import {
   type BrokerLedger,
   createOpenAiCompatibleClient,
   startBroker,
+  type UpstreamFailure,
   type UpstreamResolver,
 } from "@haril/gateway";
 import type { ProviderEntry } from "./providers.js";
@@ -18,6 +19,8 @@ export interface HarilBrokerOptions {
   readonly clock: Clock;
   readonly providers: readonly ProviderEntry[];
   readonly timeoutMs: number;
+  // Hears each failed upstream call (3.11): real-agent.ts attaches it to the run's outcome.
+  readonly onUpstreamFailure?: (failure: UpstreamFailure) => void;
 }
 
 export function startHarilBroker(options: HarilBrokerOptions): Promise<Broker> {
@@ -46,5 +49,8 @@ export function startHarilBroker(options: HarilBrokerOptions): Promise<Broker> {
     clock: options.clock,
     host: "127.0.0.1",
     port: 0,
+    ...(options.onUpstreamFailure === undefined
+      ? {}
+      : { onUpstreamFailure: options.onUpstreamFailure }),
   });
 }

@@ -4,8 +4,9 @@
 // CLI on the project of the folder Pi opened in. Self-contained: node:* imports and local types only, so it bundles
 // into one file next to the bridge.
 
-import { cliAvailable } from "./cli.js";
-import { type CommandHost, registerCommands } from "./commands.js";
+import { createChatLog } from "./chat-log.js";
+import { cliAvailable, NOT_LAUNCHED, runHaril, runHarilJson } from "./cli.js";
+import { type CommandHost, chooseMode, delegationHost, registerCommands } from "./commands.js";
 import {
   DASHBOARD_AREAS,
   type DashboardArea,
@@ -17,12 +18,32 @@ import {
 import { openDashboardActionMenu, runDashboardAction } from "./dashboard-actions.js";
 import type { DashboardAction } from "./dashboard-controls.js";
 import { type DashboardData, emptyDashboardData, loadDashboardData } from "./dashboard-data.js";
+import { delegateFromChat } from "./delegation.js";
+import { effectText, sourceText, valueText } from "./delegation-settings.js";
+import { stopAll } from "./emergency.js";
+import { installModes } from "./mode-controller.js";
+import { levelLabel } from "./model-levels.js";
+import { chooseLevel, chooseModel, createLevelMemory, type LevelMemory } from "./model-picker.js";
 import {
   harilRef,
   type ModelRegistration,
   registerHarilModels,
   restoreHarilModel,
 } from "./models.js";
+import { modeLabel } from "./modes.js";
+import { ASCII_GLYPHS, orchestrationGlyphs } from "./orchestration-draw.js";
+import { createWorkflowFeed, type WorkflowFeed } from "./orchestration-feed.js";
+import { openOrchestrationOverlay } from "./orchestration-overlay.js";
+import {
+  initialOrchestrationState,
+  type OrchestrationAction,
+  type OrchestrationState,
+  type OrchestrationTarget,
+  orchestrationClick,
+  reduceOrchestration,
+  selectedNode,
+} from "./orchestration-state.js";
+import { EMPTY_MESSAGE } from "./orchestration-view.js";
 import type {
   AgentMessage,
   ConsoleContext,
@@ -34,7 +55,14 @@ import type {
 } from "./pi-types.js";
 import { type BoundProject, findProject, folderName } from "./project.js";
 import { type PendingApproval, readStatus } from "./status.js";
-import { type BarFacts, type RuntimeState, renderBar, renderOutput } from "./view.js";
+import { clipText, plainText } from "./text.js";
+import {
+  type BarFacts,
+  type BarLayout,
+  type RuntimeState,
+  renderBarLayout,
+  renderOutput,
+} from "./view.js";
 
 const VERSION_ENV = "HARIL_VERSION";
 const OUTPUT_WIDGET = "haril-output";
@@ -53,6 +81,8 @@ interface Session extends CommandHost {
   model: PiModel | undefined;
   // HARIL's providers as registered in Pi; undefined until `haril models` answers.
   registration: ModelRegistration | undefined;
+  // The reasoning level kept per model for this session (model-picker.ts).
+  readonly levels: LevelMemory;
   cost: number;
   runtimeAlive: boolean | undefined;
   runtimeStatusAvailable: boolean;
@@ -63,6 +93,12 @@ interface Session extends CommandHost {
   dashboardData: DashboardData;
   dashboardLoading: boolean;
   dashboardRefresh: Promise<void> | undefined;
+  // The ORCHESTRATION view's state, shared by the module panel and its full-view overlay, and its real data: the
+  // children haril workflow watch and tail (orchestration-feed.ts).
+  orchestration: OrchestrationState;
+  orchestrationOpen: boolean;
+  readonly feed: WorkflowFeed;
+  orchestrationDemo(): boolean;
   runtime(): string;
   runtimeAvailable(): boolean;
   modelRef(): string | undefined;
@@ -122,6 +158,32 @@ export default function harilConsole(pi: ConsolePi): void {
 
   const redraw = (): void => session?.tui?.requestRender();
 
+  // The console modes and their read-only guard (F4): registered once, before any session, so the guard is in place
+  // for the first tool call. Research files go under the bound project's root, else the folder Pi opened in.
+  const modes = installModes(pi, {
+    researchRoot: () => session?.project?.rootPath ?? session?.cwd ?? process.cwd(),
+    // P18: haril.json names the research folder (delegation.research.folder); without haril, docs/investigacion.
+    researchFolder: async () => {
+      if (!cliAvailable()) return undefined;
+      const read = await runHarilJson(["config", "get", "delegation.research.folder", "--json"], {
+        timeoutMs: 10_000,
+      });
+      const value = (read as { value?: unknown } | undefined)?.value;
+      return typeof value === "string" ? value : undefined;
+    },
+    now: () => Date.now(),
+    redraw,
+  });
+
+  // Every prompt and every reply of the chat, logged through haril usage record (4.5, P14); only when this Pi was
+  // opened by haril, and never in the way of the chat: failures show as "log ✗ n" in the bar.
+  const chatLog = createChatLog({
+    run: (args, input) => runHaril(args, { cwd: session?.cwd, input, timeoutMs: 10_000 }),
+    projectSlug: () => session?.project?.slug,
+    sessionId: () => session?.ctx.sessionManager.getSessionId(),
+    onChange: redraw,
+  });
+
   function runtimeState(current: Session): RuntimeState {
     if (current.runtimeAlive === true) return "running";
     if (current.started?.running === true) return "starting";
@@ -133,12 +195,10 @@ export default function harilConsole(pi: ConsolePi): void {
     const model = current.model;
     const usage =
       model === undefined ? undefined : safely(() => current.ctx.getContextUsage(), undefined);
-    const level =
-      model?.reasoning === true ? safely(() => pi.getThinkingLevel(), undefined) : undefined;
     return {
       place: current.project?.slug ?? folderName(current.cwd),
       model: model?.id,
-      level,
+      level: modelLevelOf(current).level,
       contextPercent: usage === undefined ? undefined : usage.percent,
       cost: current.cost,
       pending: current.pendingAvailable ? current.pending.length : undefined,
@@ -146,6 +206,22 @@ export default function harilConsole(pi: ConsolePi): void {
       cwd: current.cwd,
       branch,
       statuses,
+      mode: modeLabel(modes.mode()),
+      logFailures: chatLog.status().failed,
+    };
+  }
+
+  // The model and its level as the bar and the headers show them: "<model> · <level>", "<model> · no reasoning" or
+  // "no model selected".
+  function modelLevelOf(current: Session): { level: string | undefined; text: string } {
+    const model = current.model;
+    const level = levelLabel(
+      model,
+      model?.reasoning === true ? safely(() => pi.getThinkingLevel(), undefined) : undefined,
+    );
+    return {
+      level,
+      text: model === undefined ? "no model selected" : `${model.id} · ${level ?? "unknown"}`,
     };
   }
 
@@ -162,14 +238,12 @@ export default function harilConsole(pi: ConsolePi): void {
       project: current.project?.slug ?? folderName(current.cwd),
       cwd: current.cwd,
       branch: current.branch,
-      model: current.model?.id ?? "no model selected",
+      modelLevel: modelLevelOf(current).text,
       providers: [
         ...new Set(
           safely(() => current.ctx.modelRegistry.getAll(), []).map((model) => model.provider),
         ),
       ].sort(),
-      thinking:
-        current.model?.reasoning === true ? safely(() => pi.getThinkingLevel(), "unknown") : "n/a",
       runtime: runtimeState(current),
       runtimeAvailable: current.runtimeStatusAvailable && current.dashboardData.runtimeAvailable,
       pending: current.pendingAvailable ? current.pending.length : undefined,
@@ -190,7 +264,65 @@ export default function harilConsole(pi: ConsolePi): void {
       memory: current.dashboardData.memorySummary,
       data: current.dashboardData,
       loading: current.dashboardLoading,
+      orchestration: current.orchestration,
+      asciiGlyphs: orchestrationGlyphs() === ASCII_GLYPHS,
     };
+  }
+
+  // ■ STOP ALL (3.14.6, P20): the bar button, Alt+X and the ORCHESTRATION "Stop all" outside demo. No confirmation:
+  // it aborts the chat turn, then runs haril stop --now and reports what the CLI says. A second press while one runs
+  // aborts the chat again and says the stop is under way.
+  let stopping = false;
+  async function runStopAll(ctx: ConsoleContext): Promise<void> {
+    if (stopping) {
+      safely(() => ctx.abort(), undefined);
+      if (ctx.hasUI) ctx.ui.notify("STOP ALL is already under way", "warning");
+      return;
+    }
+    stopping = true;
+    if (ctx.hasUI) ctx.ui.notify("STOP ALL: stopping every agent…", "warning");
+    try {
+      const outcome = await stopAll({
+        abort: () => ctx.abort(),
+        cliAvailable,
+        run: (args, options) => runHaril(args, { cwd: session?.cwd, timeoutMs: options.timeoutMs }),
+      });
+      if (ctx.hasUI) ctx.ui.notify(outcome.message, outcome.level);
+    } finally {
+      stopping = false;
+      if (session !== undefined && cliAvailable()) void session.refresh();
+    }
+  }
+
+  function orchestrate(current: Session, action: OrchestrationAction): void {
+    current.orchestration = reduceOrchestration(current.orchestration, action).state;
+  }
+
+  // The live view's tail runs only while the full view shows a real agent live; anything else ends it.
+  function syncLive(current: Session): void {
+    const state = current.orchestration;
+    const snapshot = state.snapshot;
+    const node =
+      current.orchestrationOpen && state.screen === "live" && !state.demo && snapshot !== undefined
+        ? selectedNode(state)
+        : undefined;
+    current.feed.follow(
+      node === undefined || snapshot === undefined
+        ? undefined
+        : { workflowId: snapshot.workflow.id, nodeId: node.id },
+    );
+  }
+
+  // A click on the ORCHESTRATION summary: a row, a view or "Open full view" opens the overlay there; "Stop all"
+  // simulates in demo and otherwise is STOP ALL.
+  function orchestrationPanelClick(current: Session, target: OrchestrationTarget): void {
+    const transition = orchestrationClick(current.orchestration, target, Date.now(), "panel");
+    current.orchestration = transition.state;
+    if (transition.effect === "open-view") void current.openOrchestrationView(current.ctx);
+    else if (transition.effect === "emergency-stop") void runStopAll(current.ctx);
+    else if (target.kind === "stop" && transition.state.status !== undefined)
+      current.ctx.ui.notify(transition.state.status, "info");
+    redraw();
   }
 
   async function refreshDashboard(current: Session): Promise<void> {
@@ -221,10 +353,14 @@ export default function harilConsole(pi: ConsolePi): void {
     void runDashboardAction(action, current.ctx, pi, current);
   }
 
-  // The light timer runs only while there is something to follow, and never keeps Pi alive.
+  // The light timer runs only while there is something to follow, and never keeps Pi alive. A real workflow on screen
+  // (the ORCHESTRATION panel or the full view) is something to follow: its relative times move with the timer.
   function followTimer(current: Session): void {
     const busy = current.runtimeAlive === true || current.started?.running === true;
-    const wanted = !current.closed && (busy || current.pending.length > 0);
+    const watching =
+      (current.area === "orchestration" || current.orchestrationOpen) &&
+      current.orchestration.real !== undefined;
+    const wanted = !current.closed && (busy || watching || current.pending.length > 0);
     if (wanted && current.timer === undefined) {
       current.timer = setInterval(() => void current.refresh(), REFRESH_MS);
       current.timer.unref();
@@ -248,6 +384,7 @@ export default function harilConsole(pi: ConsolePi): void {
       extensionStatuses: [],
       model: ctx.model,
       registration: undefined,
+      levels: createLevelMemory(pi, () => current.registration?.defaultLevels ?? new Map()),
       cost: safely(() => sessionCost(ctx.sessionManager.getEntries()), 0),
       runtimeAlive: undefined,
       runtimeStatusAvailable: false,
@@ -257,8 +394,119 @@ export default function harilConsole(pi: ConsolePi): void {
       dashboardData: emptyDashboardData(),
       dashboardLoading: false,
       dashboardRefresh: undefined,
+      orchestration: initialOrchestrationState(),
+      orchestrationOpen: false,
+      feed: createWorkflowFeed({
+        cwd: () => current.cwd,
+        projectSlug: () => current.project?.slug,
+        onWorkflows: (rows) => {
+          orchestrate(current, { type: "workflows", rows });
+          redraw();
+        },
+        onSnapshot: (snapshot) => {
+          orchestrate(current, { type: "real-snapshot", snapshot, now: Date.now() });
+          syncLive(current);
+          // A real workflow on screen keeps the light timer running, so its relative times move.
+          followTimer(current);
+          redraw();
+        },
+        onTail: (nodeId, lines) => {
+          orchestrate(current, { type: "tail", nodeId, lines });
+          redraw();
+        },
+        onTailReset: (nodeId) => {
+          orchestrate(current, { type: "tail-reset", nodeId });
+          redraw();
+        },
+        onTailEnded: (nodeId) => {
+          orchestrate(current, { type: "tail-ended", nodeId });
+          redraw();
+        },
+      }),
+      orchestrationDemo: () => current.orchestration.demo,
+      toggleOrchestrationDemo() {
+        current.orchestration = reduceOrchestration(current.orchestration, {
+          type: "toggle-demo",
+          now: Date.now(),
+        }).state;
+        redraw();
+        return current.orchestration.demo;
+      },
+      async openOrchestrationView(viewCtx) {
+        if (!viewCtx.hasUI || viewCtx.mode !== "tui") {
+          if (viewCtx.hasUI)
+            viewCtx.ui.notify("The orchestration view needs the interactive console.", "warning");
+          return;
+        }
+        if (current.orchestrationOpen) return;
+        current.orchestrationOpen = true;
+        if (cliAvailable()) void current.feed.refresh();
+        let effect: Awaited<ReturnType<typeof openOrchestrationOverlay>>;
+        try {
+          effect = await openOrchestrationOverlay(viewCtx, {
+            get: () => current.orchestration,
+            set: (state) => {
+              current.orchestration = state;
+              syncLive(current);
+            },
+            glyphs: orchestrationGlyphs(),
+          });
+          current.orchestration = { ...current.orchestration, screen: "workflow" };
+        } finally {
+          current.orchestrationOpen = false;
+          syncLive(current);
+          redraw();
+        }
+        // STOP ALL runs once the overlay is gone, so its report is seen; the workflow choice too, then the view
+        // opens again on the chosen workflow.
+        if (effect === "emergency-stop") await runStopAll(viewCtx);
+        else if (effect === "pick-workflow" && (await current.pickWorkflow(viewCtx)))
+          await current.openOrchestrationView(viewCtx);
+      },
+      async pickWorkflow(pickCtx) {
+        if (!cliAvailable()) {
+          if (pickCtx.hasUI) pickCtx.ui.notify(NOT_LAUNCHED, "error");
+          return false;
+        }
+        await current.feed.refresh();
+        const rows = current.orchestration.workflows;
+        if (rows.length === 0) {
+          pickCtx.ui.notify(EMPTY_MESSAGE, "info");
+          return false;
+        }
+        const labels = rows.map(
+          (row) =>
+            `${plainText(row.id)} · ${plainText(row.state)}${row.stopReason === null ? "" : ` (${clipText(plainText(row.stopReason), 60)})`} · ${clipText(plainText(row.goal), 60)}`,
+        );
+        const choice = await pickCtx.ui.select("Follow which workflow?", labels);
+        const row = rows[labels.indexOf(choice ?? "")];
+        if (row === undefined) return false;
+        // The real workflow is what the user asked for: the demo's sample data steps aside.
+        if (current.orchestration.demo)
+          orchestrate(current, { type: "toggle-demo", now: Date.now() });
+        await current.feed.pick(row.id);
+        redraw();
+        return true;
+      },
       closed: false,
+      mode: () => modes.mode(),
+      switchMode(mode, modeCtx) {
+        modes.switchTo(mode, modeCtx);
+      },
+      lastPlan: () => modes.lastPlan(),
+      recordOrder(text) {
+        if (cliAvailable()) chatLog.order(text, modes.mode());
+      },
       harilModelRef: () => harilRef(current.model, current.registration),
+      harilModels: () => {
+        const registration = current.registration;
+        if (registration === undefined) return [];
+        const refs = safely(() => ctx.modelRegistry.getAvailable(), []).flatMap((model) => {
+          const harilId = registration.harilIdOf.get(model.provider);
+          return harilId === undefined ? [] : [`${harilId}/${model.id}`];
+        });
+        return [...new Set(refs)].sort();
+      },
       modelRef: () => harilRef(current.model, current.registration),
       runtime: () => runtimeState(current),
       runtimeAvailable: () =>
@@ -301,6 +549,8 @@ export default function harilConsole(pi: ConsolePi): void {
       },
       openArea(area) {
         current.area = area;
+        // ORCHESTRATION follows the project's real workflow (haril workflow list and watch).
+        if (area === "orchestration" && cliAvailable()) void current.feed.refresh();
         if (!ctx.hasUI || ctx.mode !== "tui") return;
         if (
           current.dashboardData.projectSlug !== current.project?.slug ||
@@ -332,11 +582,16 @@ export default function harilConsole(pi: ConsolePi): void {
               },
               handleMouse(event: ConsoleMouseEvent) {
                 if (event.type !== "click" || event.button !== "left") return undefined;
-                const hit = layout.controlHits.find(
-                  (item) => item.row === event.y && event.x >= item.start && event.x < item.end,
-                );
-                if (hit === undefined) return undefined;
-                openDashboardAction(current, hit.action);
+                const inside = (item: { row: number; start: number; end: number }): boolean =>
+                  item.row === event.y && event.x >= item.start && event.x < item.end;
+                const hit = layout.controlHits.find(inside);
+                if (hit !== undefined) {
+                  openDashboardAction(current, hit.action);
+                  return { handled: true, render: true };
+                }
+                const panelHit = layout.orchestrationHits.find(inside);
+                if (panelHit === undefined) return undefined;
+                orchestrationPanelClick(current, panelHit.target);
                 return { handled: true, render: true };
               },
               invalidate() {},
@@ -372,6 +627,12 @@ export default function harilConsole(pi: ConsolePi): void {
             current.pendingAvailable = status.pending !== undefined;
             if (status.pending !== undefined) current.pending = status.pending;
           } while (current.refreshAgain);
+          // A workflow started elsewhere (another terminal) is found while ORCHESTRATION shows, and the real view's
+          // relative times move on even when no snapshot came.
+          if (current.area === "orchestration" || current.orchestrationOpen) {
+            orchestrate(current, { type: "tick", now: Date.now() });
+            void current.feed.refresh();
+          }
           followTimer(current);
           redraw();
         })().finally(() => {
@@ -415,19 +676,29 @@ export default function harilConsole(pi: ConsolePi): void {
       current.tui = tui;
       const unsubscribe = footerData.onBranchChange(() => tui.requestRender());
       let navigation = renderFooterNavigation(80, current.area, theme);
+      let bar: BarLayout = { lines: [], hits: [] };
       return {
         render(width) {
           const statuses = [...footerData.getExtensionStatuses().values()];
           current.branch = footerData.getGitBranch();
           current.extensionStatuses = statuses;
           navigation = renderFooterNavigation(width, current.area, theme);
-          return [
-            ...renderBar(facts(current, statuses, footerData.getGitBranch()), width, theme),
-            ...navigation.lines,
-          ];
+          bar = renderBarLayout(facts(current, statuses, footerData.getGitBranch()), width, theme);
+          return [...bar.lines, ...navigation.lines];
         },
         handleMouse(event: ConsoleMouseEvent) {
           if (event.type !== "click" || event.button !== "left") return undefined;
+          // The model and the level in the bar open their selectors.
+          const barHit = bar.hits.find(
+            (item) => item.row === event.y && event.x >= item.start && event.x < item.end,
+          );
+          if (barHit !== undefined) {
+            if (barHit.target === "model") void chooseModel(current.ctx, pi);
+            else if (barHit.target === "mode") void chooseMode(current, current.ctx);
+            else if (barHit.target === "stop") void runStopAll(current.ctx);
+            else void chooseLevel(current.ctx, pi, current.levels);
+            return { handled: true, render: true };
+          }
           const hit = navigation.tabHits.find(
             (item) => item.row === event.y && event.x >= item.start && event.x < item.end,
           );
@@ -452,10 +723,7 @@ export default function harilConsole(pi: ConsolePi): void {
       lines.push("DATA WARNINGS", ...data.errors.map((error) => `! ${error}`), "");
     switch (area) {
       case "agents":
-        lines.push(
-          `Pi model: ${facts.model} · thinking ${facts.thinking}`,
-          "Observed agents in task records:",
-        );
+        lines.push(`Pi model: ${facts.modelLevel}`, "Observed agents in task records:");
         lines.push(
           ...(data.tasks.length
             ? data.tasks.map(
@@ -519,16 +787,13 @@ export default function harilConsole(pi: ConsolePi): void {
         break;
       case "tools":
         lines.push(
+          "PI TOOLS",
           ...(facts.tools.length
             ? facts.tools.map(
                 (tool) =>
                   `${tool.active ? "ACTIVE" : "OFF"} · ${tool.name}${tool.description ? ` — ${tool.description}` : ""}`,
               )
             : ["Pi reports no configured tools."]),
-        );
-        break;
-      case "workflows":
-        lines.push(
           "GLOBAL HARIL METHODOLOGIES",
           ...(!data.methodologiesAvailable
             ? [
@@ -549,14 +814,22 @@ export default function harilConsole(pi: ConsolePi): void {
             ? facts.commands.map((command) => `/${command}`)
             : ["No command list available."]),
           "Native Pi slash commands remain separate and available.",
+          "DELEGATION SETTINGS (haril.json; change them with Delegation settings or /delegation)",
+          ...(data.delegation === undefined
+            ? [data.delegationError ?? "Not loaded yet; refresh to read them."]
+            : data.delegation.fields.map(
+                (field) =>
+                  `${field.path} = ${valueText(field)} · ${sourceText(field)} · ${effectText(field)}`,
+              )),
         );
         break;
-      case "everywhere":
+      case "everywhere": {
+        const log = chatLog.status();
         lines.push(
           `Project: ${facts.project}`,
           `Workspace: ${facts.cwd}`,
           `Git: ${facts.branch === undefined ? "unavailable" : (facts.branch ?? "not a Git repository")}`,
-          `Session: ${facts.model} · ${facts.thinking} · context ${facts.context} · cost ${facts.cost}`,
+          `Session: ${facts.modelLevel} · context ${facts.context} · cost ${facts.cost}`,
           `Providers (${facts.providers.length}):`,
           ...(facts.providers.length ? facts.providers : ["None reported"]),
           `Memory: ${facts.memory}`,
@@ -565,8 +838,13 @@ export default function harilConsole(pi: ConsolePi): void {
           "Extension statuses:",
           ...(facts.extensionStatuses.length ? facts.extensionStatuses : ["No status reported"]),
           `Runtime: ${facts.runtime} · pending approvals: ${facts.pending === undefined ? "unavailable" : facts.pending}`,
+          `Mode: ${modeLabel(modes.mode())}`,
+          !cliAvailable()
+            ? "Usage log: off (this Pi was not opened by haril)"
+            : `Usage log: ${log.recorded} rows recorded this session${log.failed === 0 ? "" : `, ${log.failed} failed (last: ${log.lastError ?? "unknown"})`}`,
         );
         break;
+      }
     }
     return { title: `${area.toUpperCase()} details · ${facts.project}`, lines };
   }
@@ -594,10 +872,47 @@ export default function harilConsole(pi: ConsolePi): void {
       handler: () => session?.openArea(area),
     });
   });
+  // Alt+O is free in Pi 1.2.0's default keybindings (docs/keybindings.md and the pi-tui/coding-agent defaults).
+  pi.registerShortcut("alt+o", {
+    description: "Open the HARIL orchestration view",
+    handler: (ctx) => {
+      if (session === undefined) return;
+      session.openArea("orchestration");
+      void session.openOrchestrationView(ctx);
+    },
+  });
+
+  // Alt+X and Alt+M are free in Pi 1.2.0's default keybindings (docs/keybindings.md), on Windows too.
+  pi.registerShortcut("alt+x", {
+    description:
+      "■ STOP ALL: abort the chat turn and stop every HARIL agent now (haril stop --now)",
+    handler: (ctx) => {
+      void runStopAll(ctx);
+    },
+  });
+
+  pi.registerShortcut("alt+m", {
+    description: "Cycle the HARIL console mode (ACTION, CONSULT, PLAN, DELEGATION)",
+    handler: (ctx) => {
+      modes.cycle(ctx);
+    },
+  });
+
+  // A session ends: its timer stops and its watch and tail children end with it.
+  function closeSession(ended: Session): void {
+    ended.closed = true;
+    followTimer(ended);
+    ended.feed.close();
+  }
 
   pi.on("session_start", (event, ctx) => {
+    // Pi may start a session again without shutting the last one down (/new, /resume, a reload): the last one's
+    // children end first, so none outlives the session that started it.
+    if (session !== undefined) closeSession(session);
     const current = openSession(ctx);
     session = current;
+    // The mode kept in the session comes back (resume, reload); a new session starts in ACTION.
+    modes.restore(ctx);
     installUi(current);
     current.openArea("agents");
     if (!cliAvailable()) return;
@@ -608,18 +923,29 @@ export default function harilConsole(pi: ConsolePi): void {
 
   pi.on("session_shutdown", () => {
     if (session === undefined) return;
-    session.closed = true;
-    followTimer(session);
+    closeSession(session);
     session = undefined;
   });
 
+  // A switch puts back the level kept for the new model (or the gateway's default); the console's model follows
+  // first, so the level event that a switch causes is not taken for a choice on the old model.
   pi.on("model_select", (event) => {
     if (session === undefined) return;
     session.model = event.model;
+    session.levels.modelSelected(event.model);
     redraw();
   });
 
-  pi.on("thinking_level_select", () => redraw());
+  // /thinking and Shift+Tab: the new level is kept for the model, unless the event belongs to a model switch.
+  pi.on("thinking_level_select", (event, ctx) => {
+    if (session !== undefined)
+      session.levels.levelSelected(
+        safely(() => ctx.model, undefined),
+        session.model,
+        event.level,
+      );
+    redraw();
+  });
 
   // The cost follows every reply: at its end with the message that ended, and again at the end of each turn and
   // run, once Pi has appended everything to the session.
@@ -633,7 +959,10 @@ export default function harilConsole(pi: ConsolePi): void {
     redraw();
   }
 
-  pi.on("message_end", (event) => recountCost(event.message));
+  pi.on("message_end", (event) => {
+    recountCost(event.message);
+    if (session !== undefined && cliAvailable()) chatLog.usage(event.message, modes.mode());
+  });
 
   pi.on("turn_end", () => recountCost());
 
@@ -643,8 +972,20 @@ export default function harilConsole(pi: ConsolePi): void {
     void session.refresh();
   });
 
-  // A new prompt replaces the answer of the last HARIL command.
-  pi.on("input", () => {
-    session?.clearOutput();
+  // A new prompt replaces the answer of the last HARIL command. In DELEGATION mode the text never reaches the model:
+  // it opens the /delegate card as the goal (or a hint while a workflow runs, P5). Pi stops at a handled input, so
+  // everything the console does with an input happens here.
+  pi.on("input", (event, ctx) => {
+    const current = session;
+    current?.clearOutput();
+    if (current === undefined || event.source === "extension") return undefined;
+    const text = event.text.trim();
+    if (text === "") return undefined;
+    // Every order typed in the console is logged, whatever happens to it next.
+    if (cliAvailable()) chatLog.order(event.text, modes.mode());
+    if (modes.mode() !== "delegation") return undefined;
+    if (!cliAvailable()) ctx.ui.notify(NOT_LAUNCHED, "error");
+    else void delegateFromChat(text, ctx, delegationHost(current));
+    return { action: "handled" };
   });
 }
