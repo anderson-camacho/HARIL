@@ -45,12 +45,14 @@ interface ContextUsage {
   readonly percent: number | null;
 }
 
+export interface AgentMessage {
+  readonly role?: string;
+  readonly usage?: { readonly cost?: { readonly total?: number } };
+}
+
 export interface SessionEntry {
   readonly type: string;
-  readonly message?: {
-    readonly role?: string;
-    readonly usage?: { readonly cost?: { readonly total?: number } };
-  };
+  readonly message?: AgentMessage;
 }
 
 interface ConsoleUi {
@@ -108,6 +110,10 @@ interface ModelSelectEvent {
   readonly model: PiModel;
 }
 
+interface MessageEndEvent {
+  readonly message: AgentMessage;
+}
+
 export interface ProviderModelConfig {
   readonly id: string;
   readonly name: string;
@@ -140,7 +146,8 @@ export interface ConsolePi {
   on(event: "session_shutdown", handler: Handler<unknown>): () => void;
   on(event: "model_select", handler: Handler<ModelSelectEvent>): () => void;
   on(event: "thinking_level_select", handler: Handler<unknown>): () => void;
-  on(event: "message_end", handler: Handler<unknown>): () => void;
+  on(event: "message_end", handler: Handler<MessageEndEvent>): () => void;
+  on(event: "turn_end", handler: Handler<unknown>): () => void;
   on(event: "agent_end", handler: Handler<unknown>): () => void;
   on(event: "input", handler: Handler<unknown>): () => void;
   registerCommand(name: string, options: CommandOptions): void;

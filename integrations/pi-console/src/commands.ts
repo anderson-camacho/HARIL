@@ -13,6 +13,8 @@ const PLANNER = "planner";
 const SIMULATED_PLANNER = "fake:plan";
 const EVENTS_LIMIT = "20";
 const NO_PROJECT = "this folder is not a HARIL project: /init registers it";
+// What the plan commands of a folder that is not a project cover, said in their titles and notifications.
+const ALL_PROJECTS = "all projects (this folder is not a HARIL project)";
 
 // What the commands need from the console: its project, its pending plans and its output area.
 export interface CommandHost {
@@ -40,11 +42,12 @@ interface CommandSpec {
   run(args: string, host: CommandHost, ctx: ConsoleContext): Promise<void>;
 }
 
+// The lines of an answer without the blank lines around them.
 function lines(text: string): string[] {
-  return text
-    .split(/\r?\n/)
-    .map((line) => line.trimEnd())
-    .filter((line, index, all) => line !== "" || (index > 0 && index < all.length - 1));
+  const all = text.split(/\r?\n/).map((line) => line.trimEnd());
+  while (all.length > 0 && all[0] === "") all.shift();
+  while (all.length > 0 && all[all.length - 1] === "") all.pop();
+  return all;
 }
 
 function firstLine(text: string): string {
@@ -56,11 +59,12 @@ function projectArgs(host: CommandHost): string[] {
 }
 
 // Runs one CLI command and shows its answer: the error line on a failure, the output otherwise. True on success.
+// `scope` names what the answer covers, in the title and after a one-line answer.
 async function runAndShow(
   ctx: ConsoleContext,
   host: CommandHost,
   args: readonly string[],
-  options: { readonly title?: string; readonly widget?: boolean } = {},
+  options: { readonly title?: string; readonly widget?: boolean; readonly scope?: string } = {},
 ): Promise<boolean> {
   const result = await runHaril(args, { cwd: host.cwd });
   if (!result.ok) {
@@ -68,12 +72,32 @@ async function runAndShow(
     return false;
   }
   const output = lines(result.stdout);
+  const scope = options.scope === undefined ? "" : ` · ${options.scope}`;
   if (options.widget === true || output.length > 1) {
-    host.showOutput(options.title ?? args.join(" "), output);
+    host.showOutput(`${options.title ?? args.join(" ")}${scope}`, output);
   } else {
-    ctx.ui.notify(firstLine(result.stdout) || "done", "info");
+    ctx.ui.notify(`${firstLine(result.stdout) || "done"}${scope}`, "info");
   }
   return true;
+}
+
+// What the plan commands cover: the folder's project, else every project.
+function planScope(host: CommandHost): string {
+  return host.project === undefined ? ALL_PROJECTS : `project ${host.project.slug}`;
+}
+
+function planLine(plan: PendingApproval): string {
+  return `${plan.approvalId}  ${plan.projectSlug}  ${plan.tasks} tasks  model ${plan.model ?? "none"}`;
+}
+
+// Says why a plan command needs an id, with the pending plans to choose from and their projects.
+function askForId(
+  host: CommandHost,
+  title: string,
+  reason: string,
+  plans: readonly PendingApproval[],
+): void {
+  host.showOutput(title, [reason, "", ...plans.map(planLine)]);
 }
 
 // Starts a runtime when none holds the lease and the console did not just start one (LD-T6, as haril shell does).
@@ -90,33 +114,44 @@ async function ensureRuntime(host: CommandHost): Promise<string | undefined> {
 }
 
 // The pending plan an /approve, /deny or /plan names: the one whose id starts with `id`, or without one the only
-// pending plan. Anything else is a message and nothing runs.
+// pending plan of the folder's project. A folder that is not a project sees every project's plans, so there a
+// decision needs the id: nothing is approved or denied in a project the folder did not name. Anything else is a
+// message, with the pending plans and their projects, and nothing runs.
 async function choosePlan(
-  verb: string,
+  verb: "approve" | "deny" | "plan",
   id: string,
   host: CommandHost,
   ctx: ConsoleContext,
-): Promise<string | undefined> {
+): Promise<PendingApproval | undefined> {
   const plans = (await readPending(host.project?.slug)) ?? host.pending;
+  const scope = planScope(host);
+  const title = `/${verb} · ${scope}`;
   if (id !== "") {
     const wanted = id.toLowerCase();
     const found = plans.filter((plan) => plan.approvalId.toLowerCase().startsWith(wanted));
-    if (found.length === 1) return found[0]?.approvalId;
-    ctx.ui.notify(
-      found.length === 0
-        ? `no pending plan matches ${id}`
-        : `several pending plans start with ${id}: type more of the id`,
-      "warning",
+    if (found.length === 1) return found[0];
+    if (found.length === 0) {
+      ctx.ui.notify(`no pending plan matches ${id} · ${scope}`, "warning");
+    } else {
+      askForId(host, title, `several pending plans start with ${id}: type more of the id`, found);
+    }
+    return undefined;
+  }
+  if (plans.length === 0) {
+    ctx.ui.notify(`no plan waits for approval · ${scope}`, "warning");
+    return undefined;
+  }
+  if (host.project === undefined && verb !== "plan") {
+    askForId(
+      host,
+      title,
+      `this folder is not a HARIL project: name the plan, /${verb} <id>`,
+      plans,
     );
     return undefined;
   }
-  if (plans.length === 1) return plans[0]?.approvalId;
-  ctx.ui.notify(
-    plans.length === 0
-      ? "no plan waits for approval"
-      : `${plans.length} plans wait for approval: /${verb} <id> (see /plans)`,
-    "warning",
-  );
+  if (plans.length === 1) return plans[0];
+  askForId(host, title, `${plans.length} plans wait for approval: /${verb} <id>`, plans);
   return undefined;
 }
 
@@ -126,15 +161,17 @@ async function decide(
   host: CommandHost,
   ctx: ConsoleContext,
 ): Promise<void> {
-  const approvalId = await choosePlan(verb, args.trim(), host, ctx);
-  if (approvalId === undefined) return;
-  const result = await runHaril([verb, approvalId], { cwd: host.cwd });
+  const plan = await choosePlan(verb, args.trim(), host, ctx);
+  if (plan === undefined) return;
+  const result = await runHaril([verb, plan.approvalId], { cwd: host.cwd });
   if (!result.ok) {
     ctx.ui.notify(firstLine(result.stderr) || `haril ${verb} failed`, "error");
     return;
   }
   const note = verb === "approve" ? await ensureRuntime(host) : undefined;
-  const message = firstLine(result.stdout) || `plan ${approvalId.slice(0, 8)} ${verb}d`;
+  // Every decision names the project it was made in.
+  const decided = firstLine(result.stdout) || `plan ${plan.approvalId} ${verb}d`;
+  const message = `project ${plan.projectSlug}: ${decided}`;
   ctx.ui.notify(note === undefined ? message : `${message} · ${note}`, "info");
 }
 
@@ -214,7 +251,10 @@ const COMMANDS: readonly CommandSpec[] = [
     usage: "/plans",
     description: "The plans that wait for approval",
     async run(_args, host, ctx) {
-      await runAndShow(ctx, host, ["approvals", ...projectArgs(host)], { title: "approvals" });
+      await runAndShow(ctx, host, ["approvals", ...projectArgs(host)], {
+        title: "approvals",
+        scope: planScope(host),
+      });
     },
   },
   {
@@ -223,22 +263,28 @@ const COMMANDS: readonly CommandSpec[] = [
     description: "One plan with every task, to read before /approve",
     completesApprovals: true,
     async run(args, host, ctx) {
-      const approvalId = await choosePlan("plan", args.trim(), host, ctx);
-      if (approvalId === undefined) return;
-      await runAndShow(ctx, host, ["approvals", "show", approvalId], { widget: true });
+      const plan = await choosePlan("plan", args.trim(), host, ctx);
+      if (plan === undefined) return;
+      await runAndShow(ctx, host, ["approvals", "show", plan.approvalId], {
+        widget: true,
+        scope:
+          host.project === undefined
+            ? `project ${plan.projectSlug}, ${ALL_PROJECTS}`
+            : `project ${plan.projectSlug}`,
+      });
     },
   },
   {
     name: "approve",
     usage: "/approve [id]",
-    description: "Approve a plan (the only pending one without an id)",
+    description: "Approve a plan (without an id: the project's only pending one)",
     completesApprovals: true,
     run: (args, host, ctx) => decide("approve", args, host, ctx),
   },
   {
     name: "deny",
     usage: "/deny [id]",
-    description: "Deny a plan (the only pending one without an id)",
+    description: "Deny a plan (without an id: the project's only pending one)",
     completesApprovals: true,
     run: (args, host, ctx) => decide("deny", args, host, ctx),
   },

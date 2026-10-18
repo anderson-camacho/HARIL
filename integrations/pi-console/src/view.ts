@@ -1,4 +1,5 @@
 import { homedir } from "node:os";
+import { sep } from "node:path";
 import type { ConsoleTheme, ThemeColor, ThinkingLevel } from "./pi-types.js";
 import { plainText, stripAnsi, textWidth, truncate, wrap } from "./text.js";
 
@@ -130,12 +131,14 @@ function barLine(facts: BarFacts, width: number, theme: ConsoleTheme): string {
   return paint(left, theme) + " ".repeat(width - leftWidth - rightWidth) + paint(shownRight, theme);
 }
 
+// The folder with the home directory shown as ~, only when the folder is the home directory or inside it. Windows
+// paths compare without case, as its file system does.
 function homeRelative(path: string): string {
-  const home = homedir();
-  if (home !== "" && path.toLowerCase().startsWith(home.toLowerCase())) {
-    return `~${path.slice(home.length)}`;
-  }
-  return path;
+  const home = homedir().replace(/[\\/]+$/, "");
+  if (home === "") return path;
+  const fold = (text: string): string => (process.platform === "win32" ? text.toLowerCase() : text);
+  const inside = fold(path) === fold(home) || fold(path).startsWith(fold(`${home}${sep}`));
+  return inside ? `~${path.slice(home.length)}` : path;
 }
 
 function placeLine(facts: BarFacts, width: number, theme: ConsoleTheme): string {

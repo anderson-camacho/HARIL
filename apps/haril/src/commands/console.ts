@@ -61,7 +61,9 @@ export async function consoleCommand(
     return EXIT_USAGE;
   }
 
-  const root = runtimeRootFor(host);
+  // Every path handed to Pi is absolute: the extension starts the runtime from the runtime root, not from this folder.
+  const cwd = host.cwd ?? process.cwd();
+  const root = resolve(cwd, runtimeRootFor(host));
   const runtime = readRuntime(root, host.platform);
   if (runtime.status !== "ok" || runtime.node === undefined || runtime.pi === undefined) {
     io.err(
@@ -77,9 +79,16 @@ export async function consoleCommand(
 
   const ops = host.platform === "win32" ? win32 : posix;
   const agentDir = ops.join(root, AGENT_DIR);
-  mkdirSync(agentDir, { recursive: true });
-  const cwd = host.cwd ?? process.cwd();
+  try {
+    mkdirSync(agentDir, { recursive: true });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    io.err(`haril: could not create Pi's agent directory ${agentDir}: ${reason}`);
+    return EXIT_USAGE;
+  }
   const dataDir = lastValue(parsed, "--data-dir");
+  const harilHome = nonEmpty(host.env?.HARIL_HOME);
+  const config = nonEmpty(host.env?.HARIL_CONFIG);
   const env: NodeJS.ProcessEnv = {
     ...(host.env ?? process.env),
     // HARIL's own Pi configuration: its logins, settings and sessions live under the runtime root.
@@ -90,9 +99,11 @@ export async function consoleCommand(
     HARIL_CLI: ports.harilEntry,
     HARIL_RUNTIME_DIR: root,
     HARIL_VERSION: VERSION,
-    // --data-dir reaches every command the extension runs the way HARIL_HOME does, as an absolute path: the runtime
-    // the console starts works from the runtime root, not from this folder.
-    ...(dataDir === undefined ? {} : { HARIL_HOME: resolve(cwd, dataDirFor(host, dataDir)) }),
+    // --data-dir reaches every command the extension runs the way HARIL_HOME does.
+    ...(dataDir === undefined && harilHome === undefined
+      ? {}
+      : { HARIL_HOME: resolve(cwd, dataDirFor(host, dataDir)) }),
+    ...(config === undefined ? {} : { HARIL_CONFIG: resolve(cwd, config) }),
   };
   return runPi(runtime.node.path, [runtime.pi.cliPath, "-e", extension], {
     cwd,

@@ -12,7 +12,14 @@ import {
   registerHarilModels,
   restoreHarilModel,
 } from "./models.js";
-import type { ConsoleContext, ConsolePi, ConsoleTui, PiModel, SessionEntry } from "./pi-types.js";
+import type {
+  AgentMessage,
+  ConsoleContext,
+  ConsolePi,
+  ConsoleTui,
+  PiModel,
+  SessionEntry,
+} from "./pi-types.js";
 import { type BoundProject, findProject, folderName } from "./project.js";
 import { type PendingApproval, readStatus } from "./status.js";
 import { type BarFacts, type RuntimeState, renderBar, renderHeader, renderOutput } from "./view.js";
@@ -40,14 +47,23 @@ interface Session extends CommandHost {
 }
 
 // The session's spend: the cost Pi recorded on every assistant message of the session file, every branch included.
-function sessionCost(entries: readonly SessionEntry[]): number {
+// `ended` is a message that just ended: Pi 1.2.0 tells extensions before it appends the message to the session, so
+// its cost is added unless the entries already hold that same message.
+function sessionCost(entries: readonly SessionEntry[], ended?: AgentMessage): number {
   let total = 0;
+  let endedSeen = false;
   for (const entry of entries) {
     if (entry.type !== "message" || entry.message?.role !== "assistant") continue;
-    const cost = entry.message.usage?.cost?.total;
-    if (typeof cost === "number" && Number.isFinite(cost)) total += cost;
+    if (entry.message === ended) endedSeen = true;
+    total += costOf(entry.message);
   }
+  if (ended?.role === "assistant" && !endedSeen) total += costOf(ended);
   return total;
+}
+
+function costOf(message: AgentMessage): number {
+  const cost = message.usage?.cost?.total;
+  return typeof cost === "number" && Number.isFinite(cost) ? cost : 0;
 }
 
 function safely<T>(read: () => T, fallback: T): T {
@@ -228,14 +244,24 @@ export default function harilConsole(pi: ConsolePi): void {
 
   pi.on("thinking_level_select", () => redraw());
 
-  pi.on("message_end", () => {
+  // The cost follows every reply: at its end with the message that ended, and again at the end of each turn and
+  // run, once Pi has appended everything to the session.
+  function recountCost(ended?: AgentMessage): void {
     if (session === undefined) return;
     const current = session;
-    current.cost = safely(() => sessionCost(current.ctx.sessionManager.getEntries()), current.cost);
+    current.cost = safely(
+      () => sessionCost(current.ctx.sessionManager.getEntries(), ended),
+      current.cost,
+    );
     redraw();
-  });
+  }
+
+  pi.on("message_end", (event) => recountCost(event.message));
+
+  pi.on("turn_end", () => recountCost());
 
   pi.on("agent_end", () => {
+    recountCost();
     if (session === undefined || !cliAvailable()) return;
     void session.refresh();
   });
