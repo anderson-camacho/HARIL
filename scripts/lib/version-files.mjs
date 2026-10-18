@@ -2,8 +2,8 @@
 // scripts/bump-version.mjs and scripts/check-version.mjs (the user's permanent rule: every delivered change bumps the
 // version and adds its CHANGELOG entry, newest on top). Files keep their own line endings.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 const SEMVER = "(\\d+\\.\\d+\\.\\d+)";
 
@@ -70,11 +70,6 @@ export function readDocument(root, relative) {
   return { text: body.replace(/\r\n/g, "\n"), eol, bom };
 }
 
-export function writeDocument(root, relative, document) {
-  mkdirSync(dirname(join(root, relative)), { recursive: true });
-  writeFileSync(join(root, relative), serializeDocument(document), "utf8");
-}
-
 export function fileExists(root, relative) {
   return existsSync(join(root, relative));
 }
@@ -125,8 +120,7 @@ export function changelogVersions(text) {
   return [...text.matchAll(/^## (\S+)\s*$/gm)].map((match) => match[1]);
 }
 
-// A document as the text writeDocument would store, so a caller can write it elsewhere first (bump-version's temporary
-// files).
+// A document as the text to store: its line endings and BOM as read (bump-version writes it to a temporary file first).
 export function serializeDocument(document) {
   const body = document.eol === "\r\n" ? document.text.replace(/\n/g, "\r\n") : document.text;
   return document.bom + body;

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { main, nextVersion } from "../bump-version.mjs";
 import { PLACEHOLDER } from "../lib/version-files.mjs";
@@ -140,3 +140,76 @@ test("prints its usage and exits 2 without an argument or with a bad one", () =>
   assert.match(io.err.join("\n"), /usage: bump-version\.mjs <patch\|minor\|major\|x\.y\.z>/);
   assert.equal(main(["minor", "--date", "yesterday"], { root: ".", ...capture() }), 2);
 });
+
+test("a failure before the renames leaves every file untouched and no temporary file behind", () => {
+  const { root, cleanup } = sandbox();
+  try {
+    writeVersionTree(root, "0.10.0");
+    const paths = [
+      "package.json",
+      "apps/haril/package.json",
+      "apps/bootstrap/package.json",
+      "apps/shell/package.json",
+      "apps/haril/src/version.ts",
+      "README.md",
+      "versions/README.md",
+      "versions/v0/CHANGELOG.md",
+    ];
+    const before = Object.fromEntries(paths.map((path) => [path, readAt(root, path)]));
+    let writes = 0;
+    const io = capture();
+    const code = main(["minor"], {
+      root,
+      today: "2026-10-18",
+      ...io,
+      fs: {
+        writeTemp: (path, content) => {
+          writes += 1;
+          if (writes === 3) throw new Error("disk full (injected)");
+          writeFileSync(path, content, "utf8");
+        },
+      },
+    });
+    assert.equal(code, 1, io.text());
+    assert.match(io.err.join("\n"), /disk full \(injected\).*nothing changed/);
+    for (const path of paths) assert.equal(readAt(root, path), before[path], path);
+    const leftovers = listFiles(root).filter((path) => path.includes(".bump-"));
+    assert.deepEqual(leftovers, []);
+  } finally {
+    cleanup();
+  }
+});
+
+test("writes every file through a temporary file next to it, renamed at the end", () => {
+  const { root, cleanup } = sandbox();
+  try {
+    writeVersionTree(root, "0.10.0");
+    const renamed = [];
+    const io = capture();
+    const code = main(["patch"], {
+      root,
+      today: "2026-10-18",
+      ...io,
+      fs: {
+        rename: (from, to) => {
+          assert.ok(existsSync(from), from);
+          assert.equal(dirname(from), dirname(to));
+          renamed.push(to);
+          renameSync(from, to);
+        },
+      },
+    });
+    assert.equal(code, 0, io.text());
+    assert.equal(renamed.length, 8);
+    assert.equal(JSON.parse(readAt(root, "package.json")).version, "0.10.1");
+  } finally {
+    cleanup();
+  }
+});
+
+function listFiles(root, relative = "") {
+  return readdirSync(join(root, relative), { withFileTypes: true }).flatMap((entry) => {
+    const path = relative === "" ? entry.name : `${relative}/${entry.name}`;
+    return entry.isDirectory() ? listFiles(root, path) : [path];
+  });
+}

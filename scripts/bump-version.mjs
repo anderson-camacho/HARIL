@@ -5,8 +5,12 @@
 // version.ts and the README line "Versión actual"), inserts a dated entry at the top of versions/v<major>/CHANGELOG.md
 // with TODO(bump-version) markers for the author to fill, and updates "Estado actual" in versions/README.md. Line
 // endings are kept per file. No network, no git: check-version.mjs verifies the result.
+// Writes are all or nothing as far as the filesystem allows: every new content is computed first, written to a
+// temporary file next to its target, and only then are the temporary files renamed over their targets. A failure
+// before the renames removes the temporary files and leaves the tree untouched.
 
-import { dirname, resolve } from "node:path";
+import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   changelogPath,
@@ -17,11 +21,11 @@ import {
   readDocument,
   readVersionStrings,
   replaceVersionString,
+  serializeDocument,
   setVersionInVersionsReadme,
   VERSION_FILES,
   VERSIONS_README,
   versionInVersionsReadme,
-  writeDocument,
 } from "./lib/version-files.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -107,9 +111,51 @@ function parseArgs(argv) {
   return { kind, date };
 }
 
+const REAL_FS = {
+  writeTemp: (path, content) => writeFileSync(path, content, { encoding: "utf8", flag: "wx" }),
+  rename: (from, to) => renameSync(from, to),
+  remove: (path) => rmSync(path, { force: true }),
+};
+
+// Every [relative path, document] pair, through temporary files renamed at the end. Throws with the tree untouched when
+// a temporary file cannot be written.
+function writeAll(root, writes, fs) {
+  const staged = [];
+  try {
+    for (const [path, document] of writes) {
+      const target = join(root, path);
+      mkdirSync(dirname(target), { recursive: true });
+      const temp = `${target}.bump-${process.pid}.tmp`;
+      staged.push({ temp, target });
+      fs.writeTemp(temp, serializeDocument(document));
+    }
+  } catch (error) {
+    for (const { temp } of staged) fs.remove(temp);
+    throw error;
+  }
+  staged.forEach(({ temp, target }, index) => {
+    try {
+      fs.rename(temp, target);
+    } catch (error) {
+      const left = staged.slice(index).map((item) => item.temp);
+      const failure = new Error(
+        `renaming ${target} failed after ${index} of ${staged.length} files (${error.message}); the new contents wait in ${left.join(", ")}`,
+      );
+      failure.partial = true;
+      throw failure;
+    }
+  });
+}
+
 export function main(
   argv = [],
-  { root = REPO_ROOT, stdout = console.log, stderr = console.error, today = localToday() } = {},
+  {
+    root = REPO_ROOT,
+    stdout = console.log,
+    stderr = console.error,
+    today = localToday(),
+    fs = {},
+  } = {},
 ) {
   const args = parseArgs(argv);
   if (args === null) {
@@ -178,7 +224,12 @@ export function main(
     { ...versionsReadme, text: setVersionInVersionsReadme(versionsReadme.text, target) },
   ]);
   writes.push([logPath, log]);
-  for (const [path, document] of writes) writeDocument(root, path, document);
+  try {
+    writeAll(root, writes, { ...REAL_FS, ...fs });
+  } catch (error) {
+    stderr(`bump-version: ${error.message}${error.partial === true ? "" : "; nothing changed"}`);
+    return 1;
+  }
 
   stdout(`bump-version: ${current} -> ${target}`);
   for (const [path] of writes) stdout(`  updated ${path}`);
