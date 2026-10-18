@@ -11,6 +11,8 @@ export interface WorkflowTally {
   readonly failed: readonly string[];
   // Paused at a stop for the human (awaiting_human).
   readonly waiting: readonly string[];
+  // Stopped by the human (haril stop --now, haril workflow stop; 3.14): not a failure.
+  readonly stopped: readonly string[];
 }
 
 export function summarizeWorkflows(events: readonly RunEvent[]): WorkflowTally {
@@ -26,9 +28,10 @@ export function summarizeWorkflows(events: readonly RunEvent[]): WorkflowTally {
   return {
     turns,
     completed: inState("completed"),
-    // A workflow the human stops (phase F3) is not a failure, so "stopped" is left out.
+    // A workflow the human stops (3.14) is not a failure: it is counted apart.
     failed: inState("failed"),
     waiting: inState("awaiting_human"),
+    stopped: inState("stopped"),
   };
 }
 
@@ -39,8 +42,14 @@ export function workflowExitCode(tally: WorkflowTally): 0 | 1 {
 
 // The workflows part of the run's "done:" line, or "" when the run touched no workflow.
 export function workflowSummaryText(tally: WorkflowTally): string {
-  const touched = tally.turns + tally.completed.length + tally.failed.length + tally.waiting.length;
+  const touched =
+    tally.turns +
+    tally.completed.length +
+    tally.failed.length +
+    tally.waiting.length +
+    tally.stopped.length;
   if (touched === 0) return "";
   const waiting = tally.waiting.length === 0 ? "" : `, ${tally.waiting.length} waiting`;
-  return `; workflows: ${tally.turns} ${tally.turns === 1 ? "turn" : "turns"}, ${tally.completed.length} completed, ${tally.failed.length} failed${waiting}`;
+  const stopped = tally.stopped.length === 0 ? "" : `, ${tally.stopped.length} stopped`;
+  return `; workflows: ${tally.turns} ${tally.turns === 1 ? "turn" : "turns"}, ${tally.completed.length} completed, ${tally.failed.length} failed${waiting}${stopped}`;
 }

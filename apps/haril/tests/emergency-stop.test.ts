@@ -223,6 +223,10 @@ describe("haril stop --now with real agent processes", () => {
 
       expect(await runtime.done).toBe(0);
       expect(runtime.out.out.join("\n")).toContain("stopping now (emergency stop)");
+      // The run's last line counts what the stop ended: cancelled tasks and stopped workflows are not failures.
+      expect(runtime.out.out.join("\n")).toMatch(
+        /done: 0 completed, 0 failed, 0 blocked, 3 cancelled; workflows: 0 turns, 0 completed, 0 failed, 2 stopped/,
+      );
       for (const workflow of store.workflows.list()) {
         expect(workflow).toMatchObject({ state: "stopped", stopReason: "user_stop" });
         for (const task of store.workflows.tasks(workflow.workflowId))
