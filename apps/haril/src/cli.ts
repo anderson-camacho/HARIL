@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { StoreError } from "@haril/state-sqlite";
 import { approvals, approve, deny } from "./commands/approvals.js";
+import { config } from "./commands/config.js";
 import { consoleCommand } from "./commands/console.js";
 import { difficulty } from "./commands/difficulty.js";
 import { doctor } from "./commands/doctor.js";
@@ -58,7 +59,9 @@ const HELP_LINES = [
   "usage:",
   "  haril                            in a terminal, open the HARIL console (haril console); otherwise print this help",
   "  haril --version | version        print the CLI version",
-  "  haril doctor [--json] [--data-dir <path>]   check the runtime and the store",
+  "  haril doctor [--json] [--data-dir <path>]   check the runtime, the store, the providers and the delegation settings",
+  "  haril config get [<path>] [--json]   a setting or a group of haril.json (default: delegation) with its source",
+  "  haril config set <path> <value> | --reset [--json]   change one delegation setting (checked, other keys kept)",
   "  haril models [--json] [--provider <id>]   list the models of every provider as <provider>/<model> (haril.json)",
   "  haril quota [--json] [--provider <id>]   5-hour and weekly quota of each account (CLIProxyAPI management API,",
   "    key in CLIPROXYAPI_MANAGEMENT_KEY or delegation.quota.managementKeyEnv) and the model cooldowns; sin dato if unknown",
@@ -165,6 +168,8 @@ function dispatch(argv: readonly string[], io: CliIo, host: HostInfo): number | 
       return EXIT_OK;
     case "doctor":
       return doctor(rest, io, host);
+    case "config":
+      return config(rest, io, host);
     case "difficulty":
       return difficulty(rest, io, host);
     case "quota":

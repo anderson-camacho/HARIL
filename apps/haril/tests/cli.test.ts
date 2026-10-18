@@ -215,6 +215,8 @@ describe("doctor", async () => {
         status: "ok",
         entries: [expect.objectContaining({ id: "cliproxy", key: "set", status: "ok", models: 2 })],
       }),
+      // P10 (phase F7): no haril.json, so the delegation section is section 5's defaults.
+      delegation: expect.objectContaining({ status: "ok", source: "defaults" }),
       runtime: RUNTIME_MISSING,
     });
   });

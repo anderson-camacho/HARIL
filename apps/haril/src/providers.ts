@@ -146,6 +146,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// Every problem of a parsed haril.json, each with its JSON path, by the rules loadProviderConfig applies: what
+// `haril config set` checks before it writes.
+export function configDocumentErrors(value: unknown): string[] {
+  if (!isRecord(value)) return ["/: must be a JSON object"];
+  const own = ownKeyErrors(value);
+  if (own.length > 0 || !("providers" in value)) return own;
+  const checked = validateHarilConfig({ providers: value.providers });
+  return checked.ok ? [] : checked.errors;
+}
+
 // The rules the provider schema does not own: the top-level keys, the literal apiKey refusal and the ui object.
 function ownKeyErrors(value: Record<string, unknown>): string[] {
   const errors: string[] = [];

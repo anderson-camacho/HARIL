@@ -12,15 +12,27 @@ import { harilConfigPath, type ProviderEntry } from "./providers.js";
 // for the whole command, with each JSON path.
 
 export type DelegationLoad =
-  | { readonly ok: true; readonly path: string; readonly settings: DelegationSettings }
+  | {
+      readonly ok: true;
+      readonly path: string;
+      // "file" when haril.json holds the section, "defaults" otherwise.
+      readonly source: "file" | "defaults";
+      readonly settings: DelegationSettings;
+    }
   | { readonly ok: false; readonly path: string; readonly errors: string[] };
 
 export function loadDelegationSettings(host: HostInfo): DelegationLoad {
   const { path, explicit } = harilConfigPath(host);
+  const defaults: DelegationLoad = {
+    ok: true,
+    path,
+    source: "defaults",
+    settings: delegationSettingsOf(undefined),
+  };
   if (!existsSync(path)) {
     return explicit
       ? { ok: false, path, errors: ["the file named by HARIL_CONFIG does not exist"] }
-      : { ok: true, path, settings: delegationSettingsOf(undefined) };
+      : defaults;
   }
   let parsed: unknown;
   try {
@@ -32,11 +44,11 @@ export function loadDelegationSettings(host: HostInfo): DelegationLoad {
     return { ok: false, path, errors: ["/: must be a JSON object"] };
   }
   const section = (parsed as Record<string, unknown>).delegation;
-  if (section === undefined) return { ok: true, path, settings: delegationSettingsOf(undefined) };
+  if (section === undefined) return defaults;
   const errors = delegationSectionErrors(section);
   return errors.length > 0
     ? { ok: false, path, errors }
-    : { ok: true, path, settings: delegationSettingsOf(section) };
+    : { ok: true, path, source: "file", settings: delegationSettingsOf(section) };
 }
 
 // The provider the CLIProxyAPI management API stands behind, and the server's origin: the provider whose baseUrl has the

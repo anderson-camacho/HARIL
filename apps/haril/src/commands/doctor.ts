@@ -8,6 +8,7 @@ import {
   EXIT_WARN,
   type HostInfo,
 } from "../context.js";
+import { loadDelegationSettings } from "../delegation-config.js";
 import { storeAccess } from "../host.js";
 import {
   KEY_REJECTED,
@@ -21,7 +22,8 @@ import { VERSION } from "../version.js";
 import { dataDirFor } from "./common.js";
 
 // `haril doctor` (M1-D2): read-only. A 24.x below the supported range is a warning (the kept deviation, MC-D6); any
-// other version outside the range is an error, as the store gate refuses it (INV-19).
+// other version outside the range is an error, as the store gate refuses it (INV-19). The delegation section of
+// haril.json is checked by the same rules every reader applies (P10, phase F7): a problem is an error, with its path.
 
 const NODE_REQUIREMENT = "^24.21.0 || >=26.8.0";
 
@@ -101,9 +103,11 @@ export async function doctor(args: readonly string[], io: CliIo, host: HostInfo)
         ((entries) => Promise.all(entries.map((entry) => listProviderModels(entry, timeoutMs))))
       )(loaded.providers);
   const providers = providersStatus(loaded.ok, listings);
+  const delegation = loadDelegationSettings(host);
+  const delegationStatus: Status = delegation.ok ? "ok" : "error";
   // The runtime is reported but does not change the exit code: it is installed by the user, not by M1 flows.
   const runtime = (host.inspectRuntime ?? readRuntime)(runtimeRootFor(host), host.platform);
-  const overall = worst(node, storeStatus(store), providers);
+  const overall = worst(node, storeStatus(store), providers, delegationStatus);
   const configLine = loaded.ok
     ? `${loaded.source === "file" ? "file" : "defaults"}  ${loaded.path}`
     : `${loaded.path}`;
@@ -134,6 +138,9 @@ export async function doctor(args: readonly string[], io: CliIo, host: HostInfo)
             models: models.length,
           })),
         },
+        delegation: delegation.ok
+          ? { status: delegationStatus, source: delegation.source, path: delegation.path }
+          : { status: delegationStatus, path: delegation.path, errors: delegation.errors },
         runtime,
       }),
     );
@@ -154,6 +161,12 @@ export async function doctor(args: readonly string[], io: CliIo, host: HostInfo)
         `    ${listing.id}  ${providerRowStatus(listing)}  ${listing.url}  key ${listing.key}  ${listing.detail}`,
       );
     }
+    io.out(
+      delegation.ok
+        ? `  delegation  ok  ${delegation.source}  ${delegation.path}`
+        : `  delegation  error  ${delegation.path}`,
+    );
+    if (!delegation.ok) for (const error of delegation.errors) io.out(`    error     ${error}`);
     io.out(`  runtime   ${runtime.status}  ${runtime.root}`);
     io.out(`    detail    ${runtime.detail}`);
     if (runtime.node !== undefined)
