@@ -109,6 +109,11 @@ export interface PiAgentRuntimeOptions {
   // Linux (3.14): reads the spawned pid's boot ticks right after the spawn, recorded with its start time so a wall-clock
   // step never makes the live agent look like a reused pid. Absent or undefined elsewhere.
   readonly bootStartOf?: (pid: number) => BootStart | undefined;
+  // The host's verified tree kill (3.14): one snapshot of the processes, the root checked against its recorded start and
+  // each descendant against its parent's, every pid killed on its own, root first. "gone": the root no longer runs as
+  // recorded; "unreadable": the process table could not be read. Without it, or when it answers "unreadable", the OS's
+  // own tree kill (taskkill /T, or the POSIX process group) is the fallback.
+  readonly killTree?: (process: AgentProcess) => Promise<"killed" | "gone" | "unreadable">;
 }
 
 export interface PiDiagnostics {
@@ -950,10 +955,27 @@ class PiRun implements PiAgentHandle {
     }
   }
 
+  // Every kill of the run (the emergency stop, the watchdog's close, the end of the grace period, a failure) goes through
+  // the host's verified tree kill when it has one. taskkill /T walks the tree by parent pid alone, and Windows keeps a dead
+  // parent's pid in its children's ParentProcessId, so a stranger under a reused pid could be taken along; that path stays
+  // only as the fallback for a process table that cannot be read. The child's own handle is killed at the end either way:
+  // it names this process and no other.
   private killNow(): void {
     if (this.childClosed || this.child === undefined) return;
     this.killedByUs = true;
-    killProcessTree(this.child, this.osEnv);
+    const child = this.child;
+    const target = this.process;
+    const verified = this.options.killTree;
+    if (verified === undefined || target === undefined) {
+      killProcessTree(child, this.osEnv);
+      return;
+    }
+    const finish = (result: "killed" | "gone" | "unreadable"): void => {
+      if (this.childClosed) return;
+      if (result === "unreadable") killProcessTree(child, this.osEnv);
+      else child.kill("SIGKILL");
+    };
+    verified(target).then(finish, () => finish("unreadable"));
   }
 
   private fail(code: string, message: string): void {

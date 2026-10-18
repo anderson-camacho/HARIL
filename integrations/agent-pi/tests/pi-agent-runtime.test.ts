@@ -549,6 +549,47 @@ describe("createPiAgentRuntime lifecycle", () => {
     expect(await handle.settled).toEqual({ status: "aborted" });
   });
 
+  it("kills through the host's verified tree kill, never a tree walked by parent pid alone (3.14)", async () => {
+    const h = harness();
+    const asked: { pid: number; startedAt: number }[] = [];
+    const handle = await startHandle(
+      h.runtime("hang", {
+        timings: { graceMs: 30_000 },
+        killTree: async (target) => {
+          asked.push({ pid: target.pid, startedAt: target.startedAt });
+          process.kill(target.pid, "SIGKILL");
+          return "killed";
+        },
+      }),
+    );
+    await handle.prompt("go");
+    const pi = handle.process?.pid as number;
+    await handle.kill?.();
+    expect(await handle.settled).toEqual({ status: "aborted" });
+    expect(asked).toEqual([{ pid: pi, startedAt: handle.process?.startedAt as number }]);
+    expect(alive(pi)).toBe(false);
+  });
+
+  it("falls back to the OS's tree kill only when the host cannot read the process table (3.14)", async () => {
+    const h = harness();
+    const handle = await startHandle(
+      h.runtime("hang_with_tool", {
+        timings: { graceMs: 30_000 },
+        killTree: async () => "unreadable",
+      }),
+    );
+    await handle.prompt("go");
+    const pidFile = join(h.runsDir, "run-1", "fake-tool.pid");
+    await until(() => existsSync(pidFile), "the tool command started");
+    const tool = Number(readFileSync(pidFile, "utf8"));
+    strays.push(tool);
+    const pi = handle.process?.pid as number;
+    await handle.kill?.();
+    expect(await handle.settled).toEqual({ status: "aborted" });
+    expect(alive(pi)).toBe(false);
+    await until(() => !alive(tool), "the tool command killed with Pi", 3000);
+  });
+
   it("aborts cooperatively when Pi answers abort with agent_settled", async () => {
     const h = harness();
     const handle = await startHandle(h.runtime("hang_abortable"));

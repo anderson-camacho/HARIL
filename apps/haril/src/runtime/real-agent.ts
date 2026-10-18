@@ -30,6 +30,7 @@ import {
   resolveModelRef,
 } from "../providers.js";
 import { findPayloadFile, readRuntime, runtimeRootFor } from "../runtime.js";
+import { killTrees } from "./processes.js";
 
 // The real lane of `haril start` (M2-T6, M2-D1..D7): the analyst agent runs in Pi 1.2.0 on the isolated Node,
 // talks to the model only through one Broker, and holds one virtual key per run. This module is composition:
@@ -215,6 +216,12 @@ export function createRealAgents(options: RealAgentsOptions): RealAgents {
         virtualKey,
         onBridgeOperation: (event) => recordBridgeOperation(store, spec, event),
         bootStartOf: (pid) => processControl.bootStarts?.([pid])?.get(pid),
+        // Every kill of the run walks the verified tree (start times checked), never taskkill /T on its own.
+        killTree: async (target) => {
+          const result = await killTrees(processControl, [target]);
+          if (result === undefined) return "unreadable";
+          return result.roots.length > 0 ? "killed" : "gone";
+        },
         ...(options.proposePlan === undefined ? {} : { proposePlan: options.proposePlan }),
         ...(options.delegationTools === undefined
           ? {}

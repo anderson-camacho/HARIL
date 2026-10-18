@@ -100,6 +100,9 @@ type KillerSpawnFn = (command: string, args: readonly string[]) => ChildProcess;
 const defaultKillerSpawn: KillerSpawnFn = (command, args) =>
   spawn(command, [...args], { shell: false, windowsHide: true, stdio: "ignore" });
 
+// The fallback tree kill (3.14): the runtime kills through the host's verified tree kill (PiAgentRuntimeOptions.killTree),
+// and this runs only without one or when the host cannot read the process table. taskkill /T walks the tree by parent pid
+// alone, so a process whose dead parent's pid was reused could be taken along; the verified kill checks start times.
 // Windows: taskkill /T takes the whole tree by walking it from the child, so the child is killed only after taskkill
 // exits, or when taskkill cannot start. A child killed first leaves taskkill no tree to walk, and a process that a
 // shell under the child started has left the job object that would take it down with the child. POSIX: the child
