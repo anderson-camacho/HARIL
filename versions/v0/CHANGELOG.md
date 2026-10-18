@@ -4,6 +4,58 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.10.0
+
+- **Fecha:** 2026-10-18
+- **Estado:** **Modelo y nivel de razonamiento en la consola.** La barra y las cabeceras de la consola sobre Pi muestran siempre el modelo y su nivel; un clic los cambia, y para cada modelo de CLIProxyAPI Pi ofrece solo los niveles que ese modelo publica. El nivel llega al proveedor como `reasoning_effort`, comprobado con Pi 1.2.0 contra un servidor falso y contra el CLIProxyAPI local. Es la fase FM de la delegación (ADR-0021, decisiones P24 y P27, resultado S8).
+
+### Añadido
+
+- **Niveles de cada modelo (fase FM):**
+  - la consola lee la lista `GET <url>/models?client_version=0.99.0` de cada proveedor de HARIL y registra cada modelo en Pi con `reasoning` y `thinkingLevelMap`, que ofrece solo los niveles publicados, y con el contexto y la salida reales. Los niveles que comparten Pi y CLIProxyAPI (minimal, low, medium, high, xhigh y max) pasan tal cual; `none` es lo que envía `off` cuando el modelo lo publica (si no lo publica, `off` no se ofrece, porque no enviar nada deja al modelo en su nivel por defecto); `auto` no tiene nivel en Pi y no se ofrece;
+  - un modelo que esa lista no describe toma `reasoning` y `thinkingLevelMap` del catálogo de Pi por nombre normalizado (sin prefijo de proveedor o cuenta, aceptando `-preview`, `-latest` o una fecha), con los valores que CLIProxyAPI no conoce marcados como no admitidos. Sin ningún dato, el modelo sale «no reasoning» y solo ofrece `off`;
+  - si la lista falla (sin respuesta en 10 s, error HTTP, redirección o respuesta que no es JSON), la consola lo avisa y usa el catálogo de Pi, como antes.
+- **Siempre visible:** la barra muestra `modelo · nivel`, o `modelo · no reasoning` si el modelo no razona; las cabeceras ancha y compacta, y las áreas `AGENTS` y `EVERYWHERE`, también.
+- **Cambiarlo con clic o con teclado:**
+  - clic en el modelo de la barra: selector de los modelos con acceso (`getAvailable()`), primero el proveedor o la cuenta (`Gemini1` a `Gemini10`, en orden natural) y luego sus modelos con su contexto y sus niveles;
+  - clic en el nivel: solo los niveles de ese modelo, con el actual marcado, el que publica por defecto y el que guarda `/settings` de Pi;
+  - el control **Model and level** en `TOOLS` y **Choose reasoning level** en `/haril`;
+  - `/model`, `Ctrl+L`, `/thinking` y `Shift+Tab` de Pi siguen funcionando y ahora ofrecen los niveles reales.
+- **Recordarlo:** el nivel elegido se recuerda por modelo durante la sesión y vuelve al regresar a ese modelo; también los cambios hechos con `/thinking` y `Shift+Tab`. El reajuste que hace Pi al cambiar de modelo no se toma por una elección. El nivel por defecto que publica CLIProxyAPI se aplica solo si Pi no decide: sin nivel guardado para ese modelo y con un nivel por defecto global que el modelo no ofrece.
+- `pi-types.ts` declara `getAvailable`, `setThinkingLevel`, `ThinkingLevelMap`, el nivel por defecto y el nivel por modelo de los ajustes y el evento `thinking_level_select`, con las firmas de Pi 1.2.0.
+- **Pruebas:** 48 pruebas nuevas en `integrations/pi-console/tests/`: normalización de nombres, lectura de la lista (con `models` o `data`, `slug` o `id`, niveles como texto o como objeto, campos que faltan, respuestas que no son una lista), correspondencia de niveles, registro con `reasoning` y `thinkingLevelMap` contra un servidor falso en un puerto efímero (incluidos HTML, error 500, redirección, tiempo agotado y servidor caído), selectores con un Pi falso, la memoria por modelo, y la barra y las cabeceras.
+
+### Cambiado
+
+- **Choose Pi model** (en `AGENTS` y en `/haril`) lista solo los modelos con acceso, agrupados, en vez de todo el catálogo de Pi.
+- El catálogo de Pi se busca por nombre normalizado, no solo por id exacto; de ahí salen también, si el proveedor no las da, las entradas (texto o imagen), el contexto y la salida.
+- Para leer la lista, la extensión toma la clave de la misma variable de entorno que lee Pi, solo en memoria, y la envía a la misma URL a la que Pi la envía, sin seguir redirecciones. Nunca la escribe, la muestra ni la pone en argumentos.
+
+### Corregido
+
+- **No se podía cambiar el nivel de razonamiento en la consola.** Los modelos de CLIProxyAPI se registraban sin razonamiento porque su id no coincidía con el del catálogo de Pi (`gemini-3-flash` frente a `gemini-3-flash-preview`); Pi solo ofrecía `off` y `Shift+Tab` respondía que el modelo no admite razonamiento. La barra solo mostraba el nivel de un modelo que razona y las cabeceras nunca lo mostraban.
+- **Vista de orquestación (F5a, hallazgos del verificador):**
+  - una letra con `Ctrl`, `Alt` o `Super` en el protocolo de teclado de Kitty ya no hace la acción de la letra: `Ctrl+S` ya no abre la confirmación de la parada real. `Shift` más una letra sigue siendo la letra;
+  - en la vista en vivo, `↑` `↓` recorren la lista de la vista desde la que se abrió (el árbol para Quota y Log);
+  - la vista en vivo usa el rótulo común «DEMO · sample data, not real» y, en la demostración sin ningún agente en la vista, dice que no hay nada en vivo que mostrar;
+  - el README decía que un clic en la fila muestra u oculta el detalle; solo lo muestra, y `Enter` o `[Enter Detail]` lo alternan.
+
+### Desvíos y aplazamientos
+
+- **Recordar el nivel al reiniciar.** Pi 1.2.0 tiene un ajuste por modelo, `modelThinkingLevels`, que aplica al cambiar a ese modelo, pero solo lo escribe su `/settings`: la API de extensiones lee los ajustes y fija el nivel de la sesión, nada más. HARIL lo lee (lo marca en el selector), recuerda el nivel durante la sesión y remite a `/settings` › *Default thinking level per model* para conservarlo al reiniciar. No se creó un archivo de configuración propio.
+- **Sin tabla de familias editable** (la fuente «c» del diseño 7.10): queda fuera de FM.
+- **Aplazado a F7:** modelo y nivel por capa (`delegation.models.layers`), pasar `--thinking` a los agentes, que el catálogo de la pasarela en `integrations/gateway` (y `haril models`) lea esta lista, y los valores por defecto del contexto de los agentes.
+- **`auto` de CLIProxyAPI no se ofrece:** Pi no tiene un nivel que lo represente.
+- **Sin probar en una terminal real:** el clic en la barra y los selectores dentro de la interfaz de Pi solo se comprobaron con pruebas automáticas y con la sesión de Pi del SDK, que no dibuja la terminal.
+
+### Verificación
+
+- Local: `pnpm run check` 0; `pnpm test` con 1690 pruebas de Vitest (1 omitida, solo POSIX) y 89 de `node:test`; `npm run build` 0 y `haril --version` imprime `haril 0.10.0`.
+- Con Pi 1.2.0 real (su SDK), la extensión compilada, una CLI `haril` falsa y un servidor falso compatible con OpenAI, en un script fuera del repositorio porque Pi no es dependencia del repositorio: al arrancar, `Gemini1/gemini-3-flash` queda en `medium` (el nivel por defecto que publica) y Pi ofrece solo minimal, low, medium y high; `reasoning_effort` llega `high` y luego `low`; `Gemini1/claude-sonnet-4-6` ofrece solo `off` y no envía `reasoning_effort`; al volver a gemini-3-flash recupera `low`.
+- En vivo contra el CLIProxyAPI local (tres peticiones): por el mismo camino de Pi, `Gemini1/gemini-3-flash` con `low` y con `high` responde 200 y la petición lleva ese `reasoning_effort`; una petición directa con `high` y una pregunta corta responde 200 con `completion_tokens_details.reasoning_tokens` 393 de 396 tokens de salida.
+
+---
+
 ## 0.9.0
 
 - **Fecha:** 2026-10-18
