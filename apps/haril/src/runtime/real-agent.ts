@@ -6,6 +6,7 @@ import {
   type PiAgentHandle,
   type PiAgentRuntimeOptions,
 } from "@haril/agent-pi";
+import { compactAtFor, type DelegationLayer, type DelegationSettings } from "@haril/contracts";
 import type {
   AgentHandle,
   AgentOutcome,
@@ -22,6 +23,8 @@ import type { Broker, UpstreamFailure } from "@haril/gateway";
 import { createProcessControl } from "@haril/os";
 import { startHarilBroker } from "../broker.js";
 import type { HostInfo, RuntimeInspection } from "../context.js";
+import { loadDelegationSettings } from "../delegation-config.js";
+import { delegationSettingsOf } from "../delegation-section.js";
 import {
   bareModelOf,
   loadProviderConfig,
@@ -30,6 +33,7 @@ import {
   resolveModelRef,
 } from "../providers.js";
 import { findPayloadFile, readRuntime, runtimeRootFor } from "../runtime.js";
+import type { ModelFacts } from "./live-models.js";
 import { killTrees } from "./processes.js";
 import { outcomeWithProvider } from "./provider-failure.js";
 
@@ -82,6 +86,63 @@ export interface RealAgentsOptions {
   // calls land in the window the run loop opened for it whichever lane runs it. Without it, a real workflow turn's
   // delegation.call is unsupported and the turn cannot decide.
   readonly delegationTools?: DelegationToolHandler;
+  // The live catalog's facts of a model (phase F7): its real context window, max output and published levels. Without
+  // them, or for a model the catalog does not list, Pi gets the documented fallback limits (launch.ts).
+  readonly modelFacts?: (ref: string) => ModelFacts | undefined;
+}
+
+// What a Pi agent is launched with beyond its model (docs/modos-y-delegacion.md 3.12, 7.10 item 6; phase F7).
+export interface AgentLaunch {
+  readonly modelContextWindow?: number;
+  readonly modelMaxTokens?: number;
+  readonly compactAtTokens: number;
+  readonly thinkingLevel?: string;
+  readonly modelLevels?: readonly string[];
+}
+
+function wholePositive(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
+// The compaction threshold a workflow kept when it started (P11: haril workflow start snapshots delegation.context with
+// the limits), for one layer: its own, else the general one; undefined when the snapshot holds none.
+function snapshotCompactAt(limits: unknown, layer: DelegationLayer): number | undefined {
+  const context =
+    typeof limits === "object" && limits !== null
+      ? (limits as Record<string, unknown>).context
+      : undefined;
+  if (typeof context !== "object" || context === null) return undefined;
+  const { compactAtTokens, perLayer } = context as Record<string, unknown>;
+  const own =
+    typeof perLayer === "object" && perLayer !== null
+      ? wholePositive((perLayer as Record<string, unknown>)[layer])
+      : undefined;
+  return own ?? wholePositive(compactAtTokens);
+}
+
+// A run's launch: the catalog's window and output for its model (else the fallback), its layer's compaction threshold
+// (the workflow's snapshot, else haril.json's, else 300 000), and for a workflow turn its layer's level with the levels the
+// model publishes (unknown levels: none asked for). A task outside a workflow has no layer: the general threshold and no
+// level.
+export function agentLaunchOf(input: {
+  readonly settings: DelegationSettings;
+  readonly facts: ModelFacts | undefined;
+  readonly layer: DelegationLayer | undefined;
+  readonly workflowLimits: unknown;
+}): AgentLaunch {
+  const { settings, facts, layer } = input;
+  const compactAtTokens =
+    layer === undefined
+      ? settings.context.compactAtTokens
+      : (snapshotCompactAt(input.workflowLimits, layer) ?? compactAtFor(settings, layer));
+  const level = layer === undefined ? null : settings.models.layers[layer].level;
+  return {
+    ...(facts?.contextWindow == null ? {} : { modelContextWindow: facts.contextWindow }),
+    ...(facts?.maxTokens == null ? {} : { modelMaxTokens: facts.maxTokens }),
+    compactAtTokens,
+    ...(level === null ? {} : { thinkingLevel: level }),
+    ...(level === null || facts === undefined ? {} : { modelLevels: facts.levels }),
+  };
 }
 
 export function createRealAgents(options: RealAgentsOptions): RealAgents {
@@ -215,7 +276,20 @@ export function createRealAgents(options: RealAgentsOptions): RealAgents {
         ttlMs: spec.timeoutMs + KEY_GRACE_MS,
       });
 
+      const delegation = loadDelegationSettings(host);
+      const facts = options.modelFacts?.(resolved.ref);
+      const launch = agentLaunchOf({
+        settings: delegation.ok ? delegation.settings : delegationSettingsOf(undefined),
+        facts,
+        layer: spec.delegation?.role,
+        workflowLimits:
+          spec.delegation === undefined
+            ? undefined
+            : store.workflows.get(spec.delegation.workflowId)?.limits,
+      });
+
       const piOptions: PiAgentRuntimeOptions = {
+        ...launch,
         nodePath: ready.paths.nodePath,
         piCliPath: ready.paths.piCliPath,
         bridgePath: ready.paths.bridgePath,
@@ -242,7 +316,22 @@ export function createRealAgents(options: RealAgentsOptions): RealAgents {
         activeBroker.revokeRun(runSpec.runId);
         return started;
       }
-      recordEvent(store, runSpec, "run.started", { agentRuntime: "pi" });
+      // What the agent was launched with (3.12, 7.10): its model's window and output and where they came from, the
+      // compaction point of its layer and the level Pi runs at (null: the gateway's default level).
+      const launched = (started.value as Partial<PiAgentHandle>).diagnostics?.launch;
+      recordEvent(store, runSpec, "run.started", {
+        agentRuntime: "pi",
+        ...(launched === undefined
+          ? {}
+          : {
+              contextWindow: launched.contextWindow,
+              maxTokens: launched.maxTokens,
+              limitsSource: launch.modelContextWindow === undefined ? "fallback" : "catalog",
+              compactAtTokens: Math.min(launch.compactAtTokens, launched.contextWindow),
+              reserveTokens: launched.compactionReserveTokens,
+              thinkingLevel: launched.thinkingLevel,
+            }),
+      });
       return {
         ok: true,
         value: wrapHandle(started.value, runSpec, activeBroker, store, upstreamFailures),

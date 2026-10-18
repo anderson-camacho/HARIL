@@ -35,8 +35,19 @@ export interface LiveModelsDeps {
   ) => Promise<ProviderQuota[]>;
 }
 
+// What the live catalog says of one model (ADR-0021 S3, S8): its real context window and max output, and the reasoning
+// levels its gateway publishes. A Pi agent is launched with them (real-agent.ts).
+export interface ModelFacts {
+  readonly contextWindow: number | null;
+  readonly maxTokens: number | null;
+  readonly levels: readonly string[];
+}
+
 export interface LiveModels {
   readonly options: DelegationOptions;
+  // The catalog's facts of a model reference (<provider>/<model>), undefined while the catalog does not list it. A call
+  // also refreshes a catalog older than its time to live, in the background.
+  readonly factsOf: (ref: string) => ModelFacts | undefined;
   // Waits at most `ms` for the first catalog reading, so the first turns already see the catalog.
   ready(ms: number): Promise<void>;
   // Waits for the readings in flight.
@@ -170,6 +181,13 @@ export function createLiveModels(deps: LiveModelsDeps): LiveModels {
     options: {
       models,
       levelOf: (ref) => catalog?.value.find((entry) => entry.ref === ref)?.defaultLevel ?? null,
+    },
+    factsOf(ref) {
+      refreshCatalog(clock.now());
+      const entry = catalog?.value.find((item) => item.ref === ref);
+      return entry === undefined
+        ? undefined
+        : { contextWindow: entry.contextWindow, maxTokens: entry.maxTokens, levels: entry.levels };
     },
     async ready(ms) {
       refreshCatalog(clock.now());

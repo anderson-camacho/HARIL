@@ -18,6 +18,7 @@ export interface ProviderModel {
   readonly name: string;
   readonly input: readonly ("text" | "image")[];
   readonly reasoning: boolean;
+  readonly thinkingLevelMap?: Readonly<Record<string, string | null>>;
   readonly contextWindow: number;
   readonly maxTokens: number;
   readonly cost: {
@@ -64,6 +65,22 @@ const TOOLS_ENV = "HARIL_TOOLS";
 const VKEY_ENV = "HARIL_VKEY";
 const CONTEXT_ENV = "HARIL_MODEL_CONTEXT";
 const MAX_TOKENS_ENV = "HARIL_MODEL_MAX_TOKENS";
+const LEVELS_ENV = "HARIL_MODEL_LEVELS";
+const REASONING_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"];
+
+// The model's reasoning from the levels the gateway publishes (HARIL_MODEL_LEVELS, phase F7), which the runtime passes
+// only when the agent's layer asks for a level: each published level maps to itself and off to "none" when published,
+// so Pi keeps the --thinking level and sends it as reasoning_effort. Without a level Pi knows, the model does not reason.
+export function reasoningFromLevels(value: string | undefined): {
+  readonly reasoning: boolean;
+  readonly thinkingLevelMap?: Readonly<Record<string, string | null>>;
+} {
+  const published = new Set((value ?? "").split(",").filter((level) => level !== ""));
+  if (!REASONING_LEVELS.some((level) => published.has(level))) return { reasoning: false };
+  const map: Record<string, string | null> = { off: published.has("none") ? "none" : null };
+  for (const level of REASONING_LEVELS) map[level] = published.has(level) ? level : null;
+  return { reasoning: true, thinkingLevelMap: map };
+}
 const LF = "\n";
 // The planning tool of a plan task (LD-T4): registered only when the run announces it in HARIL_TOOLS.
 const PROPOSE_PLAN_TOOL = "haril_propose_plan";
@@ -114,7 +131,7 @@ export default async function harilBridge(pi: BridgePiApi): Promise<void> {
         id: model,
         name: model,
         input: ["text"],
-        reasoning: false,
+        ...reasoningFromLevels(process.env[LEVELS_ENV]),
         contextWindow: positiveIntegerEnv(process.env[CONTEXT_ENV], DEFAULT_CONTEXT_WINDOW),
         maxTokens: positiveIntegerEnv(process.env[MAX_TOKENS_ENV], DEFAULT_MAX_TOKENS),
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

@@ -98,6 +98,8 @@ async function serve(
     dataDir,
     proposePlan: planProposals.propose,
     delegationTools: delegationTools.call,
+    // Phase F7: each agent gets its model's real context window and output from the live catalog.
+    modelFacts: liveModels.factsOf,
   });
   // The control channel (LD-T2): the runtime opens it after taking the lease, so subscribed shells and nudging CLIs
   // reach this runtime only while it holds the lease.

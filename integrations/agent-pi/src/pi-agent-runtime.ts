@@ -8,7 +8,7 @@
 
 import type { ChildProcess } from "node:child_process";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
+import { createWriteStream, mkdirSync, type WriteStream, writeFileSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { join } from "node:path";
 import type {
@@ -30,11 +30,14 @@ import { JsonlReader } from "./jsonl.js";
 import {
   buildPiArgv,
   buildPiEnv,
+  compactionReserveTokens,
   DEFAULT_MODEL_CONTEXT_WINDOW,
   DEFAULT_MODEL_MAX_TOKENS,
   defaultSpawn,
   killProcessTree,
+  PI_THINKING_LEVELS,
   type SpawnFn,
+  thinkingLevelFor,
 } from "./launch.js";
 import { createPathGuard, type PathGuard } from "./path-guard.js";
 import { readGuardedFile } from "./read-guarded.js";
@@ -97,6 +100,14 @@ export interface PiAgentRuntimeOptions {
   // Limits the bridge registers for the model (HARIL_MODEL_CONTEXT, HARIL_MODEL_MAX_TOKENS). Positive integers.
   readonly modelContextWindow?: number;
   readonly modelMaxTokens?: number;
+  // The layer's reasoning level and the levels the gateway publishes for the model (phase F7). Pi runs at the level, or
+  // the nearest one the model publishes (--thinking), and the bridge registers the published levels so Pi sends it as
+  // reasoning_effort. Without published levels (unknown, or none) no level is asked for: the gateway's default applies.
+  readonly thinkingLevel?: string;
+  readonly modelLevels?: readonly string[];
+  // The layer's compaction threshold (3.12): Pi gets compaction.reserveTokens = max(16384, window - threshold) in the
+  // run's agent settings.json, so it compacts there. Absent: Pi's own reserve.
+  readonly compactAtTokens?: number;
   readonly spawn?: SpawnFn;
   readonly pathGuard?: PathGuard;
   readonly timings?: PiTimings;
@@ -116,9 +127,18 @@ export interface PiAgentRuntimeOptions {
   readonly killTree?: (process: AgentProcess) => Promise<"killed" | "gone" | "unreadable">;
 }
 
+interface PiLaunch {
+  readonly contextWindow: number;
+  readonly maxTokens: number;
+  readonly compactionReserveTokens: number | null;
+  readonly thinkingLevel: string | null;
+}
+
 export interface PiDiagnostics {
   readonly ignoredEvents: number;
   readonly warnings: readonly string[];
+  // What the run was launched with (phase F7): the runtime records it with the run.
+  readonly launch: PiLaunch;
 }
 
 export interface PiAgentHandle extends AgentHandle {
@@ -240,7 +260,34 @@ function validate(spec: AgentSpec, options: PiAgentRuntimeOptions): HarilError |
   if (options.modelMaxTokens !== undefined && !isPositiveInteger(options.modelMaxTokens)) {
     return invalid("modelMaxTokens must be a positive integer");
   }
+  if (options.thinkingLevel !== undefined && !PI_THINKING_LEVELS.includes(options.thinkingLevel)) {
+    return invalid(`thinkingLevel must be one of ${PI_THINKING_LEVELS.join(", ")}`);
+  }
+  if (options.modelLevels?.some((level) => !/^[a-z]+$/.test(level)) === true) {
+    return invalid("modelLevels must be lower-case level names");
+  }
+  if (options.compactAtTokens !== undefined && !isPositiveInteger(options.compactAtTokens)) {
+    return invalid("compactAtTokens must be a positive integer");
+  }
   return undefined;
+}
+
+// What a run is launched with: the model's limits (the catalog's, else the documented fallback), the compaction reserve
+// of its layer's threshold and the level Pi runs at, null when Pi's own reserve or the gateway's default level applies.
+function launchOf(options: PiAgentRuntimeOptions): PiLaunch {
+  const contextWindow = options.modelContextWindow ?? DEFAULT_MODEL_CONTEXT_WINDOW;
+  return {
+    contextWindow,
+    maxTokens: options.modelMaxTokens ?? DEFAULT_MODEL_MAX_TOKENS,
+    compactionReserveTokens:
+      options.compactAtTokens === undefined
+        ? null
+        : compactionReserveTokens(contextWindow, options.compactAtTokens),
+    thinkingLevel:
+      options.thinkingLevel === undefined || options.modelLevels === undefined
+        ? null
+        : (thinkingLevelFor(options.modelLevels, options.thinkingLevel) ?? null),
+  };
 }
 
 function isPositiveInteger(value: number): boolean {
@@ -327,6 +374,7 @@ class PiRun implements PiAgentHandle {
   >();
   private readonly warnings: string[] = [];
   private readonly osEnv: NodeJS.ProcessEnv = process.env;
+  private readonly launch: PiLaunch;
 
   private server: Server | undefined;
   private bridgeSocket: Socket | undefined;
@@ -368,6 +416,7 @@ class PiRun implements PiAgentHandle {
     this.graceMs = options.timings?.graceMs ?? DEFAULT_GRACE_MS;
     this.guard = options.pathGuard ?? createPathGuard(options.projectRoot);
     this.runDir = join(options.runsDir, spec.runId);
+    this.launch = launchOf(options);
     const suffix = randomBytes(8).toString("hex");
     this.pipeName =
       process.platform === "win32"
@@ -381,12 +430,25 @@ class PiRun implements PiAgentHandle {
   }
 
   get diagnostics(): PiDiagnostics {
-    return { ignoredEvents: this.ignoredEvents, warnings: [...this.warnings] };
+    return {
+      ignoredEvents: this.ignoredEvents,
+      warnings: [...this.warnings],
+      launch: this.launch,
+    };
   }
 
   async init(): Promise<void> {
     mkdirSync(join(this.runDir, "agent"), { recursive: true });
     mkdirSync(join(this.runDir, "pi"), { recursive: true });
+    // The layer's compaction point (3.12): Pi reads its agent directory's settings.json; only this key is set.
+    if (this.launch.compactionReserveTokens !== null) {
+      const settings = { compaction: { reserveTokens: this.launch.compactionReserveTokens } };
+      writeFileSync(
+        join(this.runDir, "agent", "settings.json"),
+        `${JSON.stringify(settings, null, 2)}\n`,
+        "utf8",
+      );
+    }
     this.stderrLog = createWriteStream(join(this.runDir, "pi", "stderr.log"), { flags: "a" });
     this.stderrLog.on("error", () => {});
 
@@ -409,8 +471,11 @@ class PiRun implements PiAgentHandle {
       tools: this.spec.allowedTools,
       brokerUrl: this.options.brokerUrl,
       model: this.options.model,
-      modelContextWindow: this.options.modelContextWindow ?? DEFAULT_MODEL_CONTEXT_WINDOW,
-      modelMaxTokens: this.options.modelMaxTokens ?? DEFAULT_MODEL_MAX_TOKENS,
+      modelContextWindow: this.launch.contextWindow,
+      modelMaxTokens: this.launch.maxTokens,
+      ...(this.launch.thinkingLevel === null || this.options.modelLevels === undefined
+        ? {}
+        : { modelLevels: this.options.modelLevels }),
       virtualKey: this.options.virtualKey,
       osEnv: this.osEnv,
     });
@@ -419,6 +484,7 @@ class PiRun implements PiAgentHandle {
       bridgePath: this.options.bridgePath,
       sessionDir: join(this.runDir, "pi"),
       model: this.options.model,
+      ...(this.launch.thinkingLevel === null ? {} : { thinking: this.launch.thinkingLevel }),
     });
     const child = this.spawnFn(this.options.nodePath, argv, {
       cwd: this.runDir,
