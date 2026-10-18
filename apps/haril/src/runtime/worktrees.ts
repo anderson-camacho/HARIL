@@ -290,9 +290,10 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
           .list({ workflowId, kind: "executor" })
           .find((item) => item.threadId === thread);
         if (record === undefined || record.headSha === null) continue;
+        // The predecessor's commit, not its branch: a merged step's branch may already be gone.
         const merged = await mergeBranch(
           path,
-          record.branch,
+          record.headSha,
           `haril: start ${label(view.label(task.threadId))} from ${label(view.label(thread))}`,
           git,
         );
@@ -338,6 +339,9 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
     const repo = repoOf(store, view);
     if (repo === undefined) throw new Error("the workflow's project is not registered");
     if (task.role === "executor") return ensureExecutor(store, epoch, view, task, repo);
+    const holdsLock =
+      task.role === "delegator" ||
+      (task.role === "auditor" && view.task(task.parentTaskId)?.role !== "executor");
     if (task.role === "auditor") {
       const subject = view.task(task.parentTaskId);
       if (subject?.role === "executor") {
@@ -358,7 +362,16 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
         };
       }
     }
-    return ensureIntegration(store, epoch, view, repo);
+    const integration = await ensureIntegration(store, epoch, view, repo);
+    if (holdsLock) {
+      // A turn that holds the integration lock starts clean: a merge a crashed runtime left half done is given up, and
+      // nothing uncommitted stays (every merge a delegator finished is a commit).
+      await withRepository(repo, async () => {
+        await runAbort(integration.root);
+        await discardChanges(integration.root, git);
+      });
+    }
+    return integration;
   };
 
   const commitExecutor = async (
@@ -496,7 +509,9 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
         // An executor's branch goes once merged; an unmerged one stays, as it may hold work. The integration branch
         // stays when it holds merges, for the user to review; an empty one goes.
         const keep =
-          record.kind === "executor" ? record.mergedAt === null : record.headSha !== null;
+          record.kind === "executor"
+            ? record.mergedAt === null && record.headSha !== null
+            : record.headSha !== null;
         if (!keep) await deleteBranch(repo, record.branch, git);
         return true;
       });
