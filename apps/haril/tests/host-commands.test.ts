@@ -40,7 +40,8 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  rmSync(dir, { recursive: true, force: true });
+  // A process a test left behind may hold the folder for a moment after its kill.
+  rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 });
 
 const parentEnv = (): NodeJS.ProcessEnv => ({
@@ -334,12 +335,20 @@ describe("runHostCommand", () => {
     expect(result).toMatchObject({ ok: true, exitCode: 0, timedOut: false });
     expect(Date.now() - started).toBeLessThan(15_000);
     const orphan = result.ok ? Number(/orphan (\d+)/.exec(result.stdout)?.[1]) : Number.NaN;
-    if (Number.isInteger(orphan)) {
+    expect(Number.isInteger(orphan)).toBe(true);
+    try {
+      process.kill(orphan, "SIGKILL");
+    } catch {
+      // Already gone.
+    }
+    // The orphan holds the test folder as its working directory until it is gone.
+    for (let check = 0; check < 50; check += 1) {
       try {
-        process.kill(orphan, "SIGKILL");
+        process.kill(orphan, 0);
       } catch {
-        // Already gone.
+        break;
       }
+      await new Promise((done) => setTimeout(done, 100));
     }
   });
 
