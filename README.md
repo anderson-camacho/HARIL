@@ -6,7 +6,7 @@ Una consola, múltiples inteligencias, un solo propósito.
 HARIL es una plataforma **local** de orquestación de agentes de IA, desarrollo de software y automatización, con un solo comando: `haril`.
 Un núcleo propio controla la ejecución; Pi, Engram, Herdr y los proveedores de modelos quedan detrás de puertos reemplazables.
 
-> **Estado real (2026-10-17): versión 0.7.0, demo en vivo de M4.** El MVP se cerró en 0.6.0: sus 15 criterios de aceptación se cumplen o tienen un desvío explícito y justificado (ver `versions/`). En 0.7.0, desde `haril` y en una sola ventana, se escribe un objetivo, se revisa y se aprueba el plan que propone el agente `planner` y se siguen sus tareas en vivo; está probado con un modelo real a través de CLIProxyAPI (ver [Demo en vivo](#demo-en-vivo)). La CI pública corre en Windows y Linux en cada PR, con la demo hermética incluida.
+> **Estado real (2026-10-17): versión 0.8.0, `haril` abre Pi.** El MVP se cerró en 0.6.0: sus 15 criterios de aceptación se cumplen o tienen un desvío explícito y justificado (ver `versions/`). En 0.7.0 se escribía un objetivo, se revisaba y aprobaba el plan que propone el agente `planner` y se seguían sus tareas en vivo; está probado con un modelo real a través de CLIProxyAPI (ver [Demo en vivo](#demo-en-vivo)). En 0.8.0, `haril` en una terminal abre Pi, el que instala HARIL, con una extensión de HARIL: todo Pi (`/login`, `/model`, el nivel de razonamiento), una barra amarilla y los comandos `/goal`, `/plans`, `/approve` y `/tasks` para pedir un plan, aprobarlo y seguir sus tareas (ver [Consola de HARIL sobre Pi](#m4-consola-de-haril-sobre-pi-haril)); la interfaz anterior sigue en `haril shell`. La consola de 0.8.0 todavía no se ha ejecutado en una terminal real. La CI pública corre en Windows y Linux en cada PR, con la demo hermética incluida.
 > **Carril real verificado (2026-10-16):** `npm run e2e:real` pasa en esta máquina con Pi 1.2.0 real y CLIProxyAPI (`cliproxy/gemini-3-flash`): una tarea `analyst` lee `README.md` con la herramienta del puente, responde el código pedido, HARIL lo verifica (`verified: true`) y el libro registra los tokens reales. Ollama no viene por defecto (demasiado pesado para el equipo de referencia). Bitácora: `odd/tasks/haril-phase4-real-lane.md`; matriz de criterios: `odd/tasks/haril-phase4-m3.md`.
 
 > **Nota sobre la documentación.** La documentación de diseño (`docs/`) se publicará al final del proyecto. Hasta entonces, los enlaces a `docs/` y a `odd/` de este README no están disponibles en el repositorio público.
@@ -116,7 +116,7 @@ El instalador ejecuta seis pasos. Si uno falla, se detiene y dice qué paso fall
 2. `corepack pnpm install --frozen-lockfile`. No ejecuta `corepack enable`.
 3. `corepack pnpm run build`.
 4. Instala el runtime de Pi: un Node fijado y Pi. Va antes que la CLI para que los lanzadores usen ese Node desde la primera instalación.
-5. Copia la CLI a `<raíz>\app\<versión>\` y crea los lanzadores en `<raíz>\bin\`.
+5. Copia la CLI y la extensión de la consola a `<raíz>\app\<versión>\` y crea los lanzadores en `<raíz>\bin\`.
 6. Ejecuta `doctor` con el lanzador instalado. Después muestra la ruta del lanzador, cómo añadir `bin` al PATH y los siguientes pasos.
 
 La raíz es `%LOCALAPPDATA%\HARIL` en Windows y `XDG_DATA_HOME/haril` en macOS y Linux (por defecto, `~/.local/share/haril`). `HARIL_RUNTIME_DIR` o `--root` la cambian.
@@ -197,9 +197,52 @@ HARIL lee sus proveedores de `HARIL_CONFIG` o, si no está definida, de `config\
 
 > **Aviso sobre gateways y términos de servicio.** `cliproxy` es solo un nombre y una URL local (`127.0.0.1:8317`): HARIL no incluye, instala ni configura ningún gateway, y no publica cuentas, plantillas OAuth ni configuración de terceros. Sirve cualquier endpoint compatible con OpenAI que declares en `haril.json`. Algunos gateways, como CLIProxyAPI, convierten suscripciones de consumo en una API; ese uso puede ir contra los términos de servicio del proveedor del modelo y acabar en la suspensión de la cuenta. Cada usuario es responsable de cumplir los términos de sus proveedores. HARIL no rota cuentas ni cambia solo a planes de pago.
 
+### M4: consola de HARIL sobre Pi (`haril`)
+
+`haril` sin subcomando en una terminal, o `haril console`, abre **Pi** en la carpeta actual con una extensión de HARIL, igual que Gentle Shell es Pi con su propia extensión. Pi es el que instala HARIL (Node 24.22.0 y Pi 1.2.0, en `runtime\` y `vendor\`) y corre como proceso externo, sin fork. Se conserva todo Pi: `/login` para conectar modelos, `/model` (también `Ctrl+L`), `/thinking` y `Shift+Tab` para el nivel de razonamiento, `/settings`, las sesiones y el resto de sus comandos. Fuera de una terminal (un script o una tubería), `haril` solo imprime la ayuda y sale con 2.
+
+```powershell
+cd D:\github\haril
+npm run build
+.\bin\haril.ps1
+```
+
+Con el instalador y `bin` en el PATH, basta `haril` en la carpeta de tu proyecto. `haril console --data-dir <ruta>` usa otra raíz de datos, como `HARIL_HOME`. Necesita una terminal real (sin ella sale con 2), el runtime de Pi instalado (`npm run runtime:install` o el instalador de un comando; sin él imprime una línea y sale con 2) y la extensión compilada (`npm run build`; sin ella lo dice y sale con 1). El código de salida es el de Pi.
+
+La extensión solo llama a la CLI `haril`, sin shell: el estado sigue en `haril.db` y lo escribe el runtime, como con cualquier otra interfaz. La barra amarilla es el pie de Pi y se actualiza al cambiar de modelo o de nivel; mientras hay un runtime en marcha o un plan por aprobar, se vuelve a leer cada 5 s:
+
+| Zona | Qué muestra |
+|---|---|
+| Izquierda | `◆ HARIL ◇ <proyecto o carpeta> ◇ <modelo> · <nivel>`. Sin proyecto registrado sale el nombre de la carpeta; el nivel solo con un modelo que razona |
+| Derecha | `ctx <medidor> <pct>% ◇ $<coste> ◇ <N pending> ◇ runtime <estado>`: contexto usado, coste de la sesión según Pi, planes por aprobar (solo si hay) y runtime (`running`, `starting`, `idle` o `unknown`). Si la terminal es estrecha, cede primero el coste, luego el runtime, los planes y, al final, el medidor |
+| Segunda línea | La carpeta, su rama de git y los estados que ponen otras extensiones de Pi |
+| Cabecera | Al abrir: `◆ HARIL <versión> · Many minds. One flow. · /haril for commands` |
+
+Los comandos de HARIL no chocan con ninguno de Pi y trabajan sobre el proyecto de la carpeta actual: el registrado cuya raíz es esa carpeta o su antecesora más cercana. Una respuesta de varias líneas se muestra sobre el editor hasta el siguiente mensaje; una de una línea, como aviso.
+
+| Comando | Acción |
+|---|---|
+| `/haril` | Lista los comandos de HARIL |
+| `/init [nombre]` | Registra la carpeta actual como proyecto (`haril project init --yes`) |
+| `/goal <texto>` | Pide un plan para el objetivo: encola una tarea de plan para `planner` con el modelo actual si lo sirve un proveedor de HARIL; si no, con `HARIL_DEFAULT_MODEL`; si no, con `fake:plan`, y lo avisa. El plan espera tu aprobación |
+| `/plans` | Los planes que esperan aprobación (`haril approvals`) |
+| `/plan <id>` | Un plan con cada tarea entera, para leerlo antes de aprobarlo (`haril approvals show`); sin id, el único pendiente |
+| `/approve [id]`, `/deny [id]` | Aprueba o rechaza el plan cuyo id empieza por `id`; sin id, el único pendiente. Con varios y sin id, pide el id |
+| `/tasks` | El estado del proyecto, su cola y el runtime (`haril status`) |
+| `/task <id>` | Una tarea con su resultado, error y tokens (`haril task show`) |
+| `/events` | Los últimos 20 eventos del proyecto |
+
+Después de `/goal` y de `/approve`, si ningún runtime está en marcha, la consola arranca `haril start --started-by shell` en segundo plano, como `haril shell`: sin ventana, con su salida en `logs\runtime-<fecha>.log` y saliendo solo tras 120 s sin trabajo. El avance se sigue con `/tasks`, `/task` y `/events`; la vista En vivo y los paneles son de `haril shell`.
+
+**Modelos.** Los proveedores de `haril.json` (por defecto `cliproxy`) aparecen en `/model` de Pi como `haril-<id>`, con los modelos que devuelve `haril models`. La clave no se escribe en ningún archivo ni pasa por la extensión ni por la línea de comandos: Pi lee por sí mismo la variable que nombra `keyEnv` (por ejemplo `HARIL_CLIPROXYAPI_KEY`). Un proveedor cuya variable no está definida, o que no responde, no se registra y la consola lo avisa al abrir. HARIL no sabe cuánto cobra un proveedor, así que el coste de la barra es cero con sus modelos. `/login` conecta los proveedores propios de Pi; los de `haril.json` usan su variable `keyEnv`.
+
+**Dónde vive la configuración de Pi.** En `agent\` dentro de la raíz del runtime (`%LOCALAPPDATA%\HARIL\agent` en Windows): sus ajustes, accesos y sesiones de HARIL no se mezclan con `~\.pi` ni con `~\.gentle-shell`, que HARIL nunca toca. Salvo que ya estén definidas, la consola arranca Pi con `PI_SKIP_VERSION_CHECK=1` y `PI_TELEMETRY=0`.
+
+`haril shell` sigue abriendo la interfaz anterior, descrita a continuación, ya sin la caja Taxis.
+
 ### M4: interfaz de terminal (`haril shell`)
 
-`haril shell` abre una interfaz interactiva sobre los datos de HARIL. En una terminal basta con escribir `haril`, sin subcomando: abre la misma interfaz. Fuera de una terminal (un script o una tubería), `haril` solo imprime la ayuda. Necesita una terminal real (Windows Terminal o PowerShell); sin ella `haril shell` sale con 2. La interfaz no escribe en la base: cada acción ejecuta un comando `haril` corto. No consulta la base en bucle: los datos se cargan al abrir, con `r`, después de cada acción y cuando el runtime en marcha avisa de un cambio.
+`haril shell` abre la interfaz de terminal propia de HARIL, la que abría `haril` hasta la 0.7.0; desde la 0.8.0, `haril` sin subcomando abre la [consola sobre Pi](#m4-consola-de-haril-sobre-pi-haril) y esta interfaz se abre con `haril shell`. Necesita una terminal real (Windows Terminal o PowerShell); sin ella `haril shell` sale con 2. La interfaz no escribe en la base: cada acción ejecuta un comando `haril` corto. No consulta la base en bucle: los datos se cargan al abrir, con `r`, después de cada acción y cuando el runtime en marcha avisa de un cambio.
 
 | Zona | Qué muestra |
 |---|---|
@@ -248,30 +291,30 @@ npm run build
 | `?` | Ayuda |
 | `q`, `Ctrl+C` | Salir (`Ctrl+C` también en modo entrada) |
 
-Flujo de demostración, entero desde `haril` en una sola ventana: escribes el objetivo y `Enter` pide un plan (o `g` en modo navegación) y la interfaz arranca el runtime; `/plans` lo muestra, `/approve` lo aprueba y `/deny` lo rechaza (o `p`, `y` y `n`), y En vivo sigue sus tareas hasta que terminan. No hace falta `haril start` en otra terminal. La guía paso a paso con un modelo real está en [Demo en vivo](#demo-en-vivo).
+Flujo de demostración, entero desde `haril shell` en una sola ventana: escribes el objetivo y `Enter` pide un plan (o `g` en modo navegación) y la interfaz arranca el runtime; `/plans` lo muestra, `/approve` lo aprueba y `/deny` lo rechaza (o `p`, `y` y `n`), y En vivo sigue sus tareas hasta que terminan. No hace falta `haril start` en otra terminal. La guía paso a paso con un modelo real está en [Demo en vivo](#demo-en-vivo).
 
 **Temas.** El predeterminado es `haril-crimson` (rojo sobre negro); vienen también `haril-blossom` (rosa sobre negro), `haril-dark` y `haril-light`. Para cambiarlo, `t` abre Temas: se elige con las flechas y `Enter` lo aplica al momento y lo guarda en `config\haril.json` como `ui.theme`, que se mantiene al reabrir. Los temas propios van en `config\themes\<nombre>.json` dentro de la raíz del runtime, con el formato JSON de temas de Pi; los colores `border`, `ok` y `danger` son opcionales (si faltan, se usan `muted`, `accent` y `warning`). Memoria, servicios y terminales todavía muestran «no disponible en esta versión».
 
 ### Demo en vivo
 
-La demo de 0.7.0: escribes un objetivo, el agente `planner` propone un plan con un modelo real, lo revisas entero, lo apruebas y sigues sus tareas en vivo hasta el resultado, todo en una ventana.
+La demo: escribes un objetivo, el agente `planner` propone un plan con un modelo real, lo revisas entero, lo apruebas y sigues sus tareas hasta el resultado, todo en una ventana. Desde 0.8.0 se hace en la consola sobre Pi; el mismo flujo en la interfaz anterior (`haril shell`) está descrito en su sección.
 
 **Requisitos**
 
 - CLIProxyAPI en marcha en `127.0.0.1:8317`, o cualquier endpoint compatible con OpenAI declarado en `haril.json` (lee antes el aviso de términos de servicio de la sección M3).
 - La CLI compilada (`npm run build`) y el runtime de Pi instalado (`npm run runtime:install`).
-- La clave de cliente en la variable de entorno de usuario `HARIL_CLIPROXYAPI_KEY`, creada desde «Editar las variables de entorno de tu cuenta» de Windows. Nunca en un archivo ni en una línea de comandos, donde quedaría en el historial: HARIL solo la lee del entorno.
+- La clave de cliente en la variable de entorno de usuario `HARIL_CLIPROXYAPI_KEY`, creada desde «Editar las variables de entorno de tu cuenta» de Windows. Nunca en un archivo ni en una línea de comandos, donde quedaría en el historial: HARIL y, en la consola, Pi solo la leen del entorno.
 - `HARIL_DEFAULT_MODEL=cliproxy/gemini-3-flash`, también como variable de usuario. Abre una terminal nueva para que las dos lleguen y comprueba con `haril models` que el modelo aparece.
-- Un proyecto registrado con algo que leer, por ejemplo una carpeta con un `README.md` (pasos 3 y 4 de [Cómo probarlo](#cómo-probarlo)).
+- Un proyecto registrado con algo que leer, por ejemplo una carpeta con un `README.md` (pasos 3 y 4 de [Cómo probarlo](#cómo-probarlo)); o `/init` dentro de la consola, que registra la carpeta donde la abres.
 
-**En la interfaz**
+**En la consola**
 
-1. Abre `haril` (desde el repositorio, `.\bin\haril.ps1`). Se abre en modo entrada, con la caja lista para escribir.
-2. Escribe el objetivo, por ejemplo `Escribe un CONTRIBUTING.md para este repositorio`, y pulsa `Enter`: se encola una tarea de plan para `planner` con el modelo por defecto y la interfaz arranca el runtime. Con varios proyectos, elige antes uno en Proyectos (`Esc`, `1`, `↓`, `Enter` e `i`).
-3. Cuando el planner termina, el plan aparece en Planes (`/plans`). `Enter` lo abre: lee cada tarea entera (objetivo, descripción, agente, archivos que lee y escribe, límites y comprobaciones) y el modelo con que correrá.
-4. Apruébalo con `/approve` (o `y` en modo navegación); `/deny` (o `n`) lo rechaza y no crea tareas.
-5. En vivo (`/live`) sigue cada tarea con su estado, agente, intento, tokens y la primera línea del resultado hasta que termina.
-6. Con la tarea seleccionada y la caja vacía, `Enter` abre su detalle con el resultado completo.
+1. Abre `haril` en la carpeta del proyecto (desde el repositorio, `.\bin\haril.ps1`). La barra amarilla muestra el proyecto y el modelo; si la carpeta no está registrada, muestra su nombre y `/init` la registra.
+2. Elige el modelo con `/model` (`Ctrl+L`): los de `haril.json` salen bajo el proveedor `haril-cliproxy`. `/goal` usa el modelo actual si es de HARIL y, si no, `HARIL_DEFAULT_MODEL`.
+3. Escribe el objetivo con `/goal`, por ejemplo `/goal Escribe un CONTRIBUTING.md para este repositorio`: se encola una tarea de plan para `planner` y, si no hay un runtime en marcha, la consola lo arranca.
+4. Cuando el planner termina, la barra marca `1 pending`. `/plans` lo lista y `/plan` (o `/plan <id>`) lo abre: lee cada tarea entera (objetivo, descripción, agente, archivos que lee y escribe, límites y comprobaciones) y el modelo con que correrá.
+5. Apruébalo con `/approve` (o `/deny`, que lo rechaza y no crea tareas). Con varios planes pendientes, `/approve <id>` y `/deny <id>`.
+6. `/tasks` muestra el estado de las tareas hasta que terminan; `/task <id>` abre una con su resultado completo, y `/events` el registro.
 
 **Con la CLI**, el mismo flujo:
 
@@ -290,7 +333,7 @@ La demo de 0.7.0: escribes un objetivo, el agente `planner` propone un plan con 
 - Una tarea recibe los resultados de las tareas de su `dependsOn`, así que el plan puede encadenar tareas (por ejemplo, un análisis y después un borrador hecho a partir de él). Cada tarea sigue haciendo un trabajo completo y devolviéndolo en su resultado, que es lo único que reciben las siguientes, y su aceptación comprueba su propio resultado.
 - A veces la primera propuesta omite la `description` de una tarea: el runtime la rechaza, el planner recibe el motivo y la corrige en el mismo run (`haril events` muestra el motivo).
 - Si el objetivo pide un archivo, nadie lo escribe en el disco: `analyst` solo lee, así que la última tarea devuelve el contenido completo como resultado y tú lo aplicas.
-- `task show` y En vivo muestran los tokens y los intentos (por ejemplo `attempts 1/3`). El coste no se registra (`n/a`). En el equipo de referencia, dos demos completas terminaron todas sus tareas al primer intento, en unos 22 s y con unos 15 800 tokens en total.
+- `/task` (`task show`) y la vista En vivo de `haril shell` muestran los tokens y los intentos (por ejemplo `attempts 1/3`). El coste de HARIL no se registra (`n/a`). En el equipo de referencia, con la interfaz de 0.7.0, dos demos completas terminaron todas sus tareas al primer intento, en unos 22 s y con unos 15 800 tokens en total.
 
 Para comprobar el flujo sin red ni tokens está `npm run e2e:demo` (ver la tabla «Calidad del repositorio» en [M2](#m2-agente-real-analyst-opt-in)), que también corre en la CI.
 
@@ -300,7 +343,7 @@ Fuente: `docs/PRODUCT_VISION.md` 1 y 4.
 
 | Es | No es |
 |---|---|
-| Un único punto de control: un Runtime bajo demanda por raíz de datos, propietario del estado; ningún agente lanza agentes | Un fork ni un reemplazo de Pi: lo ejecuta como proceso externo `--mode rpc`, con versión fijada |
+| Un único punto de control: un Runtime bajo demanda por raíz de datos, propietario del estado; ningún agente lanza agentes | Un fork ni un reemplazo de Pi: lo ejecuta como proceso externo, con versión fijada (`--mode rpc` para los agentes; interactivo, con una extensión de HARIL, en la consola) |
 | Gasto acotado por código: presupuesto de pago 0 por defecto, Broker local con corte a mitad de flujo | Una copia de Gentle Shell, Gentle AI o DC-Pi: son referencias de diseño |
 | Permisos reales: `PathGuard`, motor de políticas y aprobaciones atadas a hash, aplicados por el Runtime y no por un prompt | Un emulador de terminal: funciona en terminal estándar; Herdr es opcional |
 | Recuperación: el estado vive en `haril.db` con fencing; los procesos son desechables | Una base de memoria nueva: Engram es el proveedor principal |
@@ -416,7 +459,7 @@ Los dossiers de `docs/research/` se leen solo bajo demanda, cuando un documento 
 
 ## Versiones
 
-Versión actual: **0.7.0**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
+Versión actual: **0.8.0**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
 
 ## Licencia
 
@@ -442,8 +485,8 @@ Herramientas estudiadas en la Fase 0 (solo lectura), con la licencia que registr
 Cada referencia aporta una idea de diseño, nunca código. HARIL no está afiliado ni respaldado por ninguna de ellas.
 
 - **Gentle AI™** (Gentleman Programming). HARIL toma de su protocolo ODD (Organic Driven Development) la idea de un flujo de trabajo por fases. El bloque de metodología `odd` de HARIL es una obra derivada, redactada a partir de la versión 4.1.1 de ese protocolo, y lleva su atribución.
-- **Gentle Shell**. Su `LICENSE` (MIT) nombra a Mario Zechner; la titularidad real está pendiente de verificar. HARIL toma de esta referencia la maquetación de la TUI: paneles, rail de estado, cambios y tareas. Los temas de HARIL usan el formato JSON de Pi, no el de Gentle Shell.
-- **Pi** (Mario Zechner, earendil-works). HARIL ejecuta Pi como proceso externo en modo RPC, sin fork, y adopta su formato de temas JSON para la interfaz.
+- **Gentle Shell**. Su `LICENSE` (MIT) nombra a Mario Zechner; la titularidad real está pendiente de verificar. HARIL toma de esta referencia la maquetación de la TUI (paneles, rail de estado, cambios y tareas) y la idea de abrir Pi con una extensión propia. Los temas de HARIL usan el formato JSON de Pi, no el de Gentle Shell.
+- **Pi** (Mario Zechner, earendil-works). HARIL ejecuta Pi como proceso externo, sin fork (en modo RPC para los agentes y, en la consola, interactivo con una extensión de HARIL), y adopta su formato de temas JSON para la interfaz.
 - **Herdr**. HARIL toma la idea de agrupar terminales y sesiones de trabajo en paneles. La integración es opcional y se hará por su CLI en M4.
 - **Engram™**. HARIL toma la idea de una memoria persistente separada del estado transaccional. La integración está prevista para M4.
 - **DC-Pi**. HARIL toma tres ideas de diseño: el lease con latido y TTL, la limpieza de procesos abandonados y el registro de viajes. También la composición de agentes con bloques de datos validados. No toma su pool de cuentas de suscripción ni la lectura de credenciales.
