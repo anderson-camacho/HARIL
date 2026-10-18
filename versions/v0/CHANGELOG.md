@@ -4,6 +4,62 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.15.0
+
+- **Fecha:** 2026-10-18
+- **Estado:** **Parada de emergencia, barrido de procesos huérfanos y vigilante de 15 minutos.** `haril stop --now` para todos los agentes de todos los modos y no deja ningún proceso vivo: en una parada real con tres agentes de Pi en marcha, todos murieron 0,4 s después de la orden. `haril resume` saca al runtime del estado detenido, `haril workflow stop <id>` para un solo workflow, el arranque mata los procesos que dejó un runtime caído y un vigilante de código revisa cada 15 minutos cada agente vivo (fase F3 de la delegación, ADR-0021).
+
+### Añadido
+
+- **Parada de emergencia `haril stop --now`** (`--json` da el informe): encola `runtime.stop {mode: "now"}`. El almacén la aplica en una transacción: deja el runtime detenido (clave `runtime.halted` en `meta`), detiene cada workflow en marcha o en espera con motivo `user_stop`, cancela todos sus turnos sin terminar y las tareas sueltas en curso, y de cada run cancelado revoca las llaves virtuales y liquida las reservas abiertas a su cota superior. Las tareas sueltas que esperaban siguen esperando. El runtime mata entonces el árbol de procesos de cada intento sin el plazo de gracia, cierra los turnos cancelados (cada uno deja su fila de consumo `cancelled_user_stop`) y sale. La orden espera a que salga, comprueba por su cuenta que ningún proceso que registró un intento siga vivo y mata los que queden, solo si siguen siendo el proceso registrado. Sin runtime vivo, la parada queda en la cola y el siguiente runtime la aplica antes de reclamar nada. Repetirla no hace daño.
+- **Estado `halted` y `haril resume`:** mientras está detenido, el almacén no deja reclamar ninguna tarea y el runtime lo dice (`halted by an emergency stop`); `haril status` muestra `halted yes since ...` y `--json` trae `halted`. `haril resume` encola `runtime.resume`, que lo levanta; lo cancelado sigue cancelado y los workflows detenidos siguen detenidos.
+- **`haril workflow stop <id>`:** encola `workflow.stop`; el workflow queda `stopped` (`user_stop`), sus turnos se cancelan y solo mueren sus agentes; el runtime y los demás workflows siguen.
+- **Pid y hora de inicio de cada intento:** el adaptador de Pi informa el proceso que sirve el run (pid y la hora tomada justo después de crearlo) y el runtime los guarda en `runs.pid` y `runs.pid_started_at` (columnas que existen desde `0001`). `kill()` del adaptador mata el árbol al instante, sin pedir `abort` ni esperar los 5 s de gracia.
+- **Barrido de arranque:** antes de recuperar las tareas huérfanas, el runtime mata los procesos que registraron los runs abiertos de un runtime caído, solo si el pid sigue vivo y su hora de inicio, según el sistema, coincide con la registrada (±2 s); un pid reutilizado se deja en paz. Cada caso queda como evento `run.process_killed` o `run.process_kept`, y la salida dice `startup sweep: killed N agent processes`.
+- **Control de procesos sin dependencias** (`@haril/os`, puerto `ProcessControl`): la hora de inicio de varios pids en una sola llamada a `Get-Process` en Windows, `/proc` en Linux y `ps` en macOS, y la muerte de un árbol con `taskkill /F /T` en Windows o del grupo de procesos en POSIX. La regla de qué se puede matar es una función pura del Core (`planProcessKills`).
+- **Vigilante de 15 minutos en el runtime:** el delegador pregunta por sus ejecutores y auditores, el orquestador por sus delegadores y el workflow por su orquestador, con datos objetivos: tokens de las llamadas del run asentadas en la ventana, una llamada al modelo abierta y su última herramienta (`runs.activity`). Inactivo: se mata su proceso y cuenta como intento fallido (`watchdog.idle`, fila `closed_idle`), así que las reglas de reproceso deciden qué sigue. Activo: sigue y se revisa 15 minutos después (`tasks.next_check_at`, programado desde que se reclama y conservado tras un reinicio). Un turno que espera a sus hijos o capacidad sigue siempre. Residual: los turnos que deja un workflow terminado se cancelan en cada vuelta del bucle, y los de un hilo cuyo consumidor ya no tiene turnos vivos, en su revisión. Cada veredicto es un evento `watchdog.checked` o `watchdog.closed` cuyo texto empieza por el id del nodo, y la salida de `haril start` lo muestra (`watchdog: e1 active, continues: tool_call`).
+- **Comprobación real `npm run e2e:stop-real`** (`scripts/e2e-stop-real.mjs`): un workflow real de lectura en segundo plano con `cliproxy/gemini-3-flash`, `haril stop --now` mientras sus agentes trabajan y la prueba con los pids del almacén y con la lista de procesos del sistema de que no queda ninguno. Sale con `SKIP` sin el runtime o la clave y con `PARTIAL` si el gateway no responde.
+- La línea `done:` de `haril run` y `haril start` cuenta las tareas canceladas (`, N cancelled`) y los workflows detenidos (`, N stopped`), que no son fallos; `--json` los trae en `cancelled` y `workflows.stopped`.
+
+### Cambiado
+
+- Un workflow que falla por su tiempo máximo (`wall_time`) ya no deja sus intentos en curso hasta que terminen: son residuales y se matan y cancelan al instante. Es el respaldo de una espera de capacidad que nunca se libera.
+- `WorkflowSnapshot v1` muestra como texto de un evento la línea que trae (`text`), así que la vista del workflow lee los veredictos del vigilante por el id del nodo; los demás eventos siguen listando sus campos. El contrato no cambia.
+- `npm test` corre las pruebas de parada con procesos reales en un paso propio (`npm run test:stop`): solos, los agentes mueren unos 0,6 s después de la orden, pero con todos los demás archivos de prueba en paralelo la carga de CPU estira el `taskkill` del sistema más allá de los 2 s que mide la prueba.
+
+### Corregido
+
+- **Segunda señal:** el segundo Ctrl+C o SIGTERM ya no sale dejando a los agentes huérfanos: mata primero el árbol de procesos de cada intento en curso y sale con 130 cuando murieron (o tras 3 s); sin agentes en curso sale al instante, y una tercera señal también.
+
+### Valores provisionales
+
+Tomados de la propuesta de la especificación (sección 10.3) o decididos para esta fase:
+
+- P16: vigilante cada 15 minutos y una sola revisión sin progreso para cerrar; sin consultar a un modelo. La cadencia es una opción del runtime (`watchdog.intervalMs`); el ajuste por `haril.json` llega en F7.
+- P20: «Parar todo» sin ventana de confirmación; el atajo y el botón llegan con la consola (F4).
+- Los workflows detenidos quedan `stopped` con motivo `user_stop`, como dice la especificación (3.14.2); `halted` es el estado del runtime, no un estado nuevo de workflow, que exigiría un ADR y cambiaría `WorkflowSnapshot v1`.
+- `haril stop --now` sale del runtime tras la parada (sin la opción `--exit` de la sección 6) y `haril workflow stop` para siempre al instante (sin `--now`).
+- Hora de inicio con ±2 s de tolerancia frente a la que tomó el runtime al crear el proceso.
+- La orden espera hasta 5 s a que el runtime aplique la parada y salga antes de matar ella misma los procesos registrados.
+- Un intento de un workflow en espera del humano se juzga por su propio progreso; solo los turnos que esperan reciben el veredicto `waiting_human`.
+
+### Aplazado
+
+- F4: botón `■ PARAR TODO` y su atajo en la consola, y matar el árbol desde la consola si el runtime no responde.
+- F6: enfriamiento por cuota (`cooling_down`) y reintentos por 402 y 429.
+- F8: archivos modificados en el worktree como señal de progreso.
+- Un nieto cuyo padre (Pi) ya murió no se encuentra desde el pid registrado en el barrido de arranque: `taskkill /T` necesita la raíz viva. Los agentes de solo lectura no arrancan procesos propios.
+
+### Verificación
+
+- `corepack pnpm run check`: salida 0 (Biome, tipos, capas, pureza, knip, compatibilidad y `check-version`).
+- `corepack pnpm test`: salida 0; Vitest 2087 pasan y 1 omitida, las 3 pruebas de parada con procesos reales en su paso propio, `node:test` 122 de 122.
+- `npm run build`: salida 0; `haril --version` muestra 0.15.0.
+- `node scripts/e2e-stop-real.mjs` (una ejecución, `cliproxy/gemini-3-flash`): PASS. Tres agentes de Pi en marcha (un delegador y dos ejecutores); `haril stop --now` volvió en 890 ms y los tres procesos murieron 394 ms después de la orden; ninguno de los cinco pids que registraron los runs sigue vivo y ningún proceso del sistema nombra la carpeta temporal; el workflow quedó `stopped` (`user_stop`) con 7 turnos cancelados y 2 completados, el runtime detenido, sin reservas abiertas; la segunda parada no hizo nada y `usage verify` pasó.
+- Pruebas nuevas, con ROJO observado y después VERDE: la parada de emergencia, `workflow.stop`, `runtime.resume`, `tasks.cancel`, `runs.cancel` con `user_stop`, el registro de procesos y la actividad de un run en el almacén; la regla de qué proceso se puede matar; el pid y el `kill()` inmediato del adaptador de Pi; la parada con procesos reales (el Pi falso y su comando en un nieto: ninguno vivo en menos de 2 s, tareas canceladas, workflows detenidos, presupuesto liquidado, segunda parada inocua, `resume`), `workflow stop` de un solo workflow, la segunda señal que mata a los hijos antes de salir, el barrido de arranque tras una salida brusca con un pid reutilizado que no se mata, y el vigilante con tiempo virtual (cierre de lo inactivo, revisión a los 15 minutos de lo activo, esperas de capacidad que no se cierran, respaldo por tiempo máximo y residuales). Escritas junto al código, sin ROJO previo: el adaptador de `@haril/os` (con procesos reales), el interruptor de la segunda señal y una pasada del vigilante sobre el almacén.
+
+---
+
 ## 0.14.0
 
 - **Fecha:** 2026-10-18
