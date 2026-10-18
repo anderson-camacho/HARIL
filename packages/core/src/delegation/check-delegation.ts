@@ -13,7 +13,12 @@ import {
   mayUseTool,
 } from "./archetypes.js";
 import { type AutonomySettings, changeStops, checkpointChange } from "./checkpoints.js";
-import { chooseModel, type ModelRejection, type ModelSelectionContext } from "./choose-model.js";
+import {
+  chooseModel,
+  type ModelRejection,
+  type ModelSelectionContext,
+  modelPin,
+} from "./choose-model.js";
 import { surfacesMayOverlap } from "./globs.js";
 import type { DelegationLimits } from "./limits.js";
 
@@ -289,13 +294,14 @@ function graphIssuesOf(children: readonly ProposedChild[]): DelegationIssue[] {
   return issues;
 }
 
-// A child's proposed model, unless the user pinned the layer: then the pin wins and the proposal does not matter.
+// A child's proposed model, unless the user pinned the layer: then the pin wins and the proposal does not matter. A null,
+// empty or blank pin is no pin, the same rule chooseModel applies.
 function modelIssues(
   children: readonly ProposedChild[],
   archetype: DelegationArchetype,
   models: ModelSelectionContext,
 ): DelegationIssue[] {
-  if (models.pinned[archetype] !== undefined) return [];
+  if (modelPin(models.pinned[archetype]) !== null) return [];
   const issues: DelegationIssue[] = [];
   for (const item of children) {
     if (item.model === null) continue;

@@ -7,9 +7,12 @@ import type { DelegationArchetype } from "./archetypes.js";
 //      used exactly as given, never substituted; when its quota blocks it, the task waits or the workflow stops;
 //   2. the model the parent proposed, which the Core validates (rejected at proposal time, substituted at launch);
 //   3. the difficulty table.
-// Quota rule, per quota key (provider or account prefix, ADR-0021 P25), skipped when there is no data ("sin dato"):
-//   ok = used5h < switchAtPercent5h  and  usedWeekly < stopAtPercentWeekly
-//        and (not large or remaining5h > minRemainingPercentForLargeTask)
+// Quota rule, per quota key (provider or account prefix, ADR-0021 P25), skipped when there is no data ("sin dato"). The
+// boundaries follow the user's wording ("más del 80 %", "menos del 20 %"), not the strict formula of 3.11, so exactly
+// 80% used and exactly 20% left are still allowed:
+//   ok = used5h <= switchAtPercent5h  and  usedWeekly <= stopAtPercentWeekly
+//        and (not large or remaining5h >= minRemainingPercentForLargeTask)
+// A percentage that is not a number between 0 and 100 makes the whole sample unknown: the rule is skipped, never passed.
 // A task is large at difficulty "hard" or above, or with a budget of at least largeTaskTokens.
 
 export interface CatalogModel {
@@ -69,8 +72,8 @@ export interface ModelSelectionContext {
   readonly catalog: readonly CatalogModel[];
   // delegation.models.allow by archetype; an absent or empty list allows every catalog model.
   readonly allow: Partial<Readonly<Record<DelegationArchetype, readonly string[]>>>;
-  // Models the user pinned per layer (delegation.models).
-  readonly pinned: Partial<Readonly<Record<DelegationArchetype, string>>>;
+  // Models the user pinned per layer (delegation.models). null, empty or blank means the layer is not pinned.
+  readonly pinned: Partial<Readonly<Record<DelegationArchetype, string | null>>>;
   // Quota by quota key; an absent key means no data.
   readonly quota: Readonly<Record<string, QuotaSample>>;
   readonly table: DifficultyTable;
@@ -86,7 +89,7 @@ export interface ModelRequest {
   // "propose": checking a parent's proposal (an ineligible model is rejected so the parent corrects it).
   // "launch": starting the task (an ineligible proposal is replaced by the next eligible model).
   readonly phase: "propose" | "launch";
-  // The model the user specified for this task.
+  // The model the user specified for this task. Empty or blank counts as none.
   readonly explicit?: string | null;
   // The model the parent proposed.
   readonly proposed?: string | null;
@@ -180,30 +183,45 @@ export function isLargeTask(
   );
 }
 
+function validPercent(value: number | null): boolean {
+  return value === null || (Number.isFinite(value) && value >= 0 && value <= 100);
+}
+
+// A sample that reports, with every percentage it gives between 0 and 100. NaN, a negative or an above-100 value comes
+// from a broken reading: the sample is treated as unknown, never as ok.
+function usableSample(
+  sample: QuotaSample | undefined,
+): Extract<QuotaSample, { available: true }> | null {
+  if (sample === undefined || !sample.available) return null;
+  if (!validPercent(sample.window5hUsedPct) || !validPercent(sample.weeklyUsedPct)) return null;
+  return sample;
+}
+
 // The quota rule for one sample. Each window is checked only when it is reported; with neither, the rule is skipped.
 export function evaluateQuota(
   sample: QuotaSample | undefined,
   large: boolean,
   policy: QuotaPolicy,
 ): QuotaStatus {
-  if (sample === undefined || !sample.available) return { ok: true, data: "no_data" };
-  const { window5hUsedPct: used5h, weeklyUsedPct: usedWeekly } = sample;
+  const usable = usableSample(sample);
+  if (usable === null) return { ok: true, data: "no_data" };
+  const { window5hUsedPct: used5h, weeklyUsedPct: usedWeekly } = usable;
   if (used5h === null && usedWeekly === null) return { ok: true, data: "no_data" };
-  if (usedWeekly !== null && usedWeekly >= policy.stopAtPercentWeekly) {
-    return { ok: false, cause: "weekly", until: sample.weeklyResetsAt };
+  if (usedWeekly !== null && usedWeekly > policy.stopAtPercentWeekly) {
+    return { ok: false, cause: "weekly", until: usable.weeklyResetsAt };
   }
-  if (used5h !== null && used5h >= policy.switchAtPercent5h) {
-    return { ok: false, cause: "window_5h", until: sample.window5hResetsAt };
+  if (used5h !== null && used5h > policy.switchAtPercent5h) {
+    return { ok: false, cause: "window_5h", until: usable.window5hResetsAt };
   }
-  if (large && used5h !== null && 100 - used5h <= policy.minRemainingPercentForLargeTask) {
-    return { ok: false, cause: "large_task", until: sample.window5hResetsAt };
+  if (large && used5h !== null && 100 - used5h < policy.minRemainingPercentForLargeTask) {
+    return { ok: false, cause: "large_task", until: usable.window5hResetsAt };
   }
   return { ok: true, data: "ok" };
 }
 
 // P4 (until spike S2 said more): a provider served by several accounts counts as its worst account, per window.
 export function worstQuota(samples: readonly QuotaSample[]): QuotaSample {
-  const reporting = samples.filter((sample) => sample.available);
+  const reporting = samples.flatMap((sample) => usableSample(sample) ?? []);
   if (reporting.length === 0) return { available: false, reason: "no account reports quota" };
   const worst = (
     pick: (sample: (typeof reporting)[number]) => [number | null, number | null],
@@ -222,8 +240,9 @@ export function worstQuota(samples: readonly QuotaSample[]): QuotaSample {
 
 // Remaining share of the most used window, for the tie-break; -1 when unknown so an unknown quota ranks last.
 function remainingQuota(sample: QuotaSample | undefined): number {
-  if (sample === undefined || !sample.available) return -1;
-  const known = [sample.window5hUsedPct, sample.weeklyUsedPct].filter(
+  const usable = usableSample(sample);
+  if (usable === null) return -1;
+  const known = [usable.window5hUsedPct, usable.weeklyUsedPct].filter(
     (pct): pct is number => pct !== null,
   );
   return known.length === 0 ? -1 : 100 - Math.max(...known);
@@ -353,13 +372,18 @@ function chooseFromTable(
   };
 }
 
+// A model id the user gave, or null when it is absent, null, empty or blank: such a value never pins a model.
+export function modelPin(value: string | null | undefined): string | null {
+  return typeof value === "string" && value.trim() !== "" ? value : null;
+}
+
 export function chooseModel(request: ModelRequest, context: ModelSelectionContext): ModelChoice {
   const large = isLargeTask(request.difficulty, request.budgetTokens, context.largeTaskTokens);
   const avoid = request.avoid ?? null;
 
   // 1. A model the user specified: exactly that one, or a wait, never another model.
-  const explicit = request.explicit ?? null;
-  const pinned = explicit ?? context.pinned[request.archetype] ?? null;
+  const explicit = modelPin(request.explicit);
+  const pinned = explicit ?? modelPin(context.pinned[request.archetype]);
   if (pinned !== null) {
     const exclusion = usageExclusion(catalogEntry(pinned, context), large, context);
     if (exclusion !== null) return waitOrGiveUp(pinned, [exclusion], context);

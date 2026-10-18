@@ -353,6 +353,17 @@ describe("checkDelegation: each rule of 3.6", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("judges the parent's model when the layer pin is null, empty or blank: an unpinned layer", () => {
+    for (const pin of [null, "", "  "]) {
+      const result = checkDelegation(
+        proposal({ children: [child("a", { model: "ghost/g" })] }),
+        state({ models: { pinned: { delegator: pin } } }),
+        DEFAULT_DELEGATION_LIMITS,
+      );
+      expect(codes(result)).toEqual(["model_unavailable"]);
+    }
+  });
+
   it("checkpoint_removes_stop: the agent asked to remove a stop", () => {
     const result = checkDelegation(
       proposal({ checkpoints: ["at_end", { remove: "after_plan" }] }),

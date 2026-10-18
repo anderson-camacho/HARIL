@@ -89,6 +89,27 @@ describe("chooseModel: a model the user specified", () => {
     });
   });
 
+  it("treats an empty or blank model named for the task as absent, never as a pinned model", () => {
+    for (const blank of ["", "   "]) {
+      expect(chooseModel(request({ explicit: blank }), context())).toMatchObject({
+        kind: "use",
+        model: "mid/m",
+        source: "table",
+      });
+      expect(
+        chooseModel(request({ explicit: blank }), context({ pinned: { executor: "high/h" } })),
+      ).toMatchObject({ model: "high/h", source: "pinned", reason: "layer_pin" });
+    }
+  });
+
+  it("treats a null, empty or blank layer pin as unpinned", () => {
+    for (const pin of [null, "", " "]) {
+      expect(
+        chooseModel(request({ proposed: "cheap/a" }), context({ pinned: { executor: pin } })),
+      ).toMatchObject({ model: "cheap/a", source: "parent" });
+    }
+  });
+
   it("uses the layer's pinned model when the task names none, and the task's model over it", () => {
     const pinned = context({ pinned: { executor: "mid/m" } });
     expect(chooseModel(request({ proposed: "cheap/a" }), pinned)).toMatchObject({
@@ -196,7 +217,7 @@ describe("chooseModel: the parent's choice", () => {
     expect(
       chooseModel(
         request({ proposed: "mid/m", phase: "propose" }),
-        context({ quota: { mid: used(80) } }),
+        context({ quota: { mid: used(81) } }),
       ),
     ).toMatchObject({ kind: "reject", code: "quota_blocked", cause: "window_5h" });
     const catalog = [model("mid/m", { coolingUntil: NOW + 1 })];
@@ -277,19 +298,51 @@ describe("chooseModel: the difficulty table", () => {
     });
   });
 
-  it("switches away from a model at or over 80% of its 5-hour window, not below", () => {
-    expect(
-      chooseModel(request({ difficulty: "medium" }), context({ quota: { mid: used(79.9) } })),
-    ).toMatchObject({ model: "mid/m", quota: "ok" });
+  // The user's wording ("más del 80 %"): exactly 80% used still runs; only more than 80% switches.
+  it("switches away from a model over 80% of its 5-hour window, and keeps it at exactly 80%", () => {
     expect(
       chooseModel(request({ difficulty: "medium" }), context({ quota: { mid: used(80) } })),
+    ).toMatchObject({ model: "mid/m", quota: "ok" });
+    expect(
+      chooseModel(request({ difficulty: "medium" }), context({ quota: { mid: used(80.1) } })),
     ).toMatchObject({ model: "cheap/a" });
   });
 
-  it("stops using a model at or over 80% of its weekly limit", () => {
+  it("stops using a model over 80% of its weekly limit, and keeps it at exactly 80%", () => {
     expect(
       chooseModel(request({ difficulty: "medium" }), context({ quota: { mid: used(5, 81) } })),
     ).toMatchObject({ model: "cheap/a" });
+    expect(
+      chooseModel(request({ difficulty: "medium" }), context({ quota: { mid: used(5, 80) } })),
+    ).toMatchObject({ model: "mid/m", quota: "ok" });
+  });
+
+  it('sends a large task to a model with exactly 20% of its 5-hour window left ("menos del 20 %")', () => {
+    const policy = { ...DEFAULT_QUOTA_POLICY, switchAtPercent5h: 90 };
+    expect(
+      chooseModel(request({ difficulty: "hard" }), context({ policy, quota: { high: used(80) } })),
+    ).toMatchObject({ model: "high/h", quota: "ok" });
+    expect(
+      chooseModel(
+        request({ difficulty: "hard" }),
+        context({ policy, quota: { high: used(80.5) } }),
+      ),
+    ).toMatchObject({ model: "mid/m" });
+  });
+
+  it("treats a NaN, negative or above-100 percentage as no data: the rule is skipped, never passed as ok", () => {
+    for (const bad of [Number.NaN, -1, 100.5, Number.POSITIVE_INFINITY]) {
+      expect(
+        chooseModel(request({ difficulty: "medium" }), context({ quota: { mid: used(bad) } })),
+      ).toMatchObject({ model: "mid/m", quota: "no_data" });
+      expect(
+        chooseModel(request({ difficulty: "medium" }), context({ quota: { mid: used(5, bad) } })),
+      ).toMatchObject({ model: "mid/m", quota: "no_data" });
+      expect(evaluateQuota(used(bad, 95), false, DEFAULT_QUOTA_POLICY)).toEqual({
+        ok: true,
+        data: "no_data",
+      });
+    }
   });
 
   it("sends no large task to a model with 20% or less of its 5-hour window left", () => {
@@ -419,6 +472,11 @@ describe("worstQuota (P4: the worst account of the provider)", () => {
       weeklyUsedPct: 52,
       weeklyResetsAt: NOW + 72 * HOUR,
     });
+  });
+
+  it("leaves out an account whose percentages are not valid, as one that does not report", () => {
+    expect(worstQuota([used(38, 52), used(Number.NaN, 99)])).toEqual(used(38, 52));
+    expect(worstQuota([used(-5, 10)]).available).toBe(false);
   });
 
   it("is unavailable when no account reports", () => {
