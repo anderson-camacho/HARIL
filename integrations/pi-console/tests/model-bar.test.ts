@@ -49,7 +49,7 @@ describe("HARIL bar", () => {
     expect(stripAnsi(plain.lines[0] ?? "")).toContain("Gemini1/gemini-3-flash · no reasoning");
     const none = renderBarLayout(bar({ model: undefined, level: undefined }), 120, THEME);
     expect(stripAnsi(none.lines[0] ?? "")).toContain("no model");
-    expect(none.hits.map((hit) => hit.target)).toEqual(["mode", "model"]);
+    expect(none.hits.map((hit) => hit.target)).toEqual(["mode", "model", "stop"]);
   });
 
   it("keeps the hit-boxes inside a narrow bar", () => {
@@ -65,12 +65,26 @@ describe("HARIL bar", () => {
   });
 });
 
-describe("mode in the bar (F4)", () => {
-  it("shows the mode with a hit-box", () => {
+describe("mode and STOP ALL in the bar (F4)", () => {
+  it("shows the mode with a hit-box, and the button at the right end", () => {
     const layout = renderBarLayout(bar({ mode: "CONSULT" }), 140, THEME);
     const line = layout.lines[0] ?? "";
     const mode = layout.hits.find((hit) => hit.target === "mode");
+    const stop = layout.hits.find((hit) => hit.target === "stop");
     expect(hitText(line, mode ?? { start: 0, end: 0 })).toBe("MODE: CONSULT");
+    expect(hitText(line, stop ?? { start: 0, end: 0 })).toBe("■ STOP ALL");
+    expect(stop?.end).toBe(140);
+    expect(stripAnsi(line).endsWith("■ STOP ALL")).toBe(true);
+  });
+
+  it("never drops the button, however narrow the bar", () => {
+    for (const width of [12, 20, 30, 44, 60, 80]) {
+      const layout = renderBarLayout(bar({ mode: "DELEGATION" }), width, THEME);
+      const line = layout.lines[0] ?? "";
+      const stop = layout.hits.find((hit) => hit.target === "stop");
+      expect(hitText(line, stop ?? { start: 0, end: 0 }), String(width)).toBe("■ STOP ALL");
+      expect(textWidth(stripAnsi(line))).toBeLessThanOrEqual(width);
+    }
   });
 });
 

@@ -31,16 +31,7 @@ export interface FakePi {
   fire(event: string, payload: unknown, ctx: ConsoleContext): Promise<unknown[]>;
 }
 
-const PI_BUILTIN_TOOLS = [
-  "read",
-  "bash",
-  "powershell",
-  "edit",
-  "write",
-  "grep",
-  "find",
-  "ls",
-];
+const PI_BUILTIN_TOOLS = ["read", "bash", "powershell", "edit", "write", "grep", "find", "ls"];
 
 export function fakePi(options: { readonly extraTools?: readonly string[] } = {}): FakePi {
   const handlers = new Map<string, AnyHandler[]>();

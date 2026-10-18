@@ -152,7 +152,7 @@ describe("orchestration overlay", () => {
   it("outside demo, stop all closes it and hands the real stop to the console", async () => {
     const overlay = open(initialOrchestrationState());
     overlay.click((line) => line.indexOf("Stop all"));
-    await expect(overlay.result).resolves.toBe("stop-runtime");
+    await expect(overlay.result).resolves.toBe("emergency-stop");
   });
 
   it("in demo, stop all simulates inside the overlay and keeps it open", () => {

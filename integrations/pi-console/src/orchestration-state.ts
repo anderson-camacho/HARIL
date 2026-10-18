@@ -78,9 +78,9 @@ export type OrchestrationAction =
   | { readonly type: "reset"; readonly now: number }
   | { readonly type: "close" };
 
-// Effects only the console can carry out: closing the overlay, opening it, or the real runtime stop (which asks for
-// confirmation and must not run behind a full-screen overlay).
-export type OrchestrationEffect = "close" | "open-view" | "stop-runtime";
+// Effects only the console can carry out: closing the overlay, opening it, or the real emergency stop (■ STOP ALL,
+// haril stop --now; it runs once the full-screen overlay is gone, so its report is seen).
+export type OrchestrationEffect = "close" | "open-view" | "emergency-stop";
 
 export interface OrchestrationTransition {
   readonly state: OrchestrationState;
@@ -357,7 +357,7 @@ export function reduceOrchestration(
     case "simulate-watchdog":
       return done(simulateWatchdog(state));
     case "stop-all":
-      return state.demo ? done(simulateStop(state)) : done(state, "stop-runtime");
+      return state.demo ? done(simulateStop(state)) : done(state, "emergency-stop");
     case "reset":
       return done(
         state.demo

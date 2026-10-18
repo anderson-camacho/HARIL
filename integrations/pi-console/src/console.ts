@@ -4,7 +4,7 @@
 // CLI on the project of the folder Pi opened in. Self-contained: node:* imports and local types only, so it bundles
 // into one file next to the bridge.
 
-import { cliAvailable } from "./cli.js";
+import { cliAvailable, runHaril } from "./cli.js";
 import { type CommandHost, chooseMode, registerCommands } from "./commands.js";
 import {
   DASHBOARD_AREAS,
@@ -17,6 +17,7 @@ import {
 import { openDashboardActionMenu, runDashboardAction } from "./dashboard-actions.js";
 import type { DashboardAction } from "./dashboard-controls.js";
 import { type DashboardData, emptyDashboardData, loadDashboardData } from "./dashboard-data.js";
+import { stopAll } from "./emergency.js";
 import { installModes } from "./mode-controller.js";
 import { levelLabel } from "./model-levels.js";
 import { chooseLevel, chooseModel, createLevelMemory, type LevelMemory } from "./model-picker.js";
@@ -239,13 +240,38 @@ export default function harilConsole(pi: ConsolePi): void {
     };
   }
 
+  // ■ STOP ALL (3.14.6, P20): the bar button, Alt+X and the ORCHESTRATION "Stop all" outside demo. No confirmation:
+  // it aborts the chat turn, then runs haril stop --now and reports what the CLI says. A second press while one runs
+  // aborts the chat again and says the stop is under way.
+  let stopping = false;
+  async function runStopAll(ctx: ConsoleContext): Promise<void> {
+    if (stopping) {
+      safely(() => ctx.abort(), undefined);
+      if (ctx.hasUI) ctx.ui.notify("STOP ALL is already under way", "warning");
+      return;
+    }
+    stopping = true;
+    if (ctx.hasUI) ctx.ui.notify("STOP ALL: stopping every agent…", "warning");
+    try {
+      const outcome = await stopAll({
+        abort: () => ctx.abort(),
+        cliAvailable,
+        run: (args, options) => runHaril(args, { cwd: session?.cwd, timeoutMs: options.timeoutMs }),
+      });
+      if (ctx.hasUI) ctx.ui.notify(outcome.message, outcome.level);
+    } finally {
+      stopping = false;
+      if (session !== undefined && cliAvailable()) void session.refresh();
+    }
+  }
+
   // A click on the ORCHESTRATION summary: a row, a view or "Open full view" opens the overlay there; "Stop all"
-  // simulates in demo and otherwise runs the shared runtime stop, which asks for confirmation first.
+  // simulates in demo and otherwise is STOP ALL.
   function orchestrationPanelClick(current: Session, target: OrchestrationTarget): void {
     const transition = orchestrationClick(current.orchestration, target, Date.now(), "panel");
     current.orchestration = transition.state;
     if (transition.effect === "open-view") void current.openOrchestrationView(current.ctx);
-    else if (transition.effect === "stop-runtime") openDashboardAction(current, "stop-runtime");
+    else if (transition.effect === "emergency-stop") void runStopAll(current.ctx);
     else if (target.kind === "stop" && transition.state.status !== undefined)
       current.ctx.ui.notify(transition.state.status, "info");
     redraw();
@@ -344,9 +370,8 @@ export default function harilConsole(pi: ConsolePi): void {
             glyphs: orchestrationGlyphs(),
           });
           current.orchestration = { ...current.orchestration, screen: "workflow" };
-          // The real stop asks for confirmation, so it runs once the overlay is gone.
-          if (effect === "stop-runtime")
-            await runDashboardAction("stop-runtime", viewCtx, pi, current);
+          // STOP ALL runs once the overlay is gone, so its report is seen.
+          if (effect === "emergency-stop") await runStopAll(viewCtx);
         } finally {
           current.orchestrationOpen = false;
           redraw();
@@ -539,6 +564,7 @@ export default function harilConsole(pi: ConsolePi): void {
           if (barHit !== undefined) {
             if (barHit.target === "model") void chooseModel(current.ctx, pi);
             else if (barHit.target === "mode") void chooseMode(current, current.ctx);
+            else if (barHit.target === "stop") void runStopAll(current.ctx);
             else void chooseLevel(current.ctx, pi, current.levels);
             return { handled: true, render: true };
           }
@@ -715,7 +741,15 @@ export default function harilConsole(pi: ConsolePi): void {
     },
   });
 
-  // Alt+M is free in Pi 1.2.0's default keybindings (docs/keybindings.md), on Windows too.
+  // Alt+X and Alt+M are free in Pi 1.2.0's default keybindings (docs/keybindings.md), on Windows too.
+  pi.registerShortcut("alt+x", {
+    description:
+      "■ STOP ALL: abort the chat turn and stop every HARIL agent now (haril stop --now)",
+    handler: (ctx) => {
+      void runStopAll(ctx);
+    },
+  });
+
   pi.registerShortcut("alt+m", {
     description: "Cycle the HARIL console mode (ACTION, CONSULT, PLAN, DELEGATION)",
     handler: (ctx) => {

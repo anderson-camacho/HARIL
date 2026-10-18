@@ -102,7 +102,7 @@ describe("orchestration state: keyboard", () => {
     // Shift+S is the S key; a Caps Lock state bit alone does not block a letter.
     expect(nodeState(press(demoState(), "\u001b[115;2u"), "d1")).toBe("cancelled");
     expect(orchestrationKey(initialOrchestrationState(), "\u001b[115;65u", NOW).effect).toBe(
-      "stop-runtime",
+      "emergency-stop",
     );
   });
 
@@ -243,7 +243,7 @@ describe("orchestration state: demo actions", () => {
 
   it("outside demo, stop all asks the console to run the real stop", () => {
     const transition = orchestrationKey(initialOrchestrationState(), "s", NOW);
-    expect(transition.effect).toBe("stop-runtime");
+    expect(transition.effect).toBe("emergency-stop");
   });
 
   it("outside demo, the watchdog simulation and reset change nothing", () => {
@@ -314,6 +314,6 @@ describe("orchestration state: clicks", () => {
     expect(demo.effect).toBeUndefined();
     expect(nodeState(demo.state, "d1")).toBe("cancelled");
     const real = orchestrationClick(initialOrchestrationState(), { kind: "stop" }, NOW, "panel");
-    expect(real.effect).toBe("stop-runtime");
+    expect(real.effect).toBe("emergency-stop");
   });
 });

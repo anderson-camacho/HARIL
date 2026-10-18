@@ -28,8 +28,8 @@ export interface BarFacts {
 }
 
 // The parts of the bar a click acts on: the model opens the model selector, the level the level selector, the mode the
-// mode selector.
-type BarTarget = "model" | "level" | "mode";
+// mode selector, and the STOP ALL button the emergency stop.
+type BarTarget = "model" | "level" | "mode" | "stop";
 
 export interface BarLayout {
   readonly lines: string[];
@@ -51,6 +51,8 @@ interface Part {
 const MAIN: ThemeColor = "warning";
 const SEPARATOR: Part = { text: " ◇ ", tone: "dim" };
 const GAUGE_CELLS = 8;
+// The emergency button (3.14.6, P20): pinned at the right end of the bar in every mode, never dropped for room.
+const STOP_PART: Part = { text: "■ STOP ALL", tone: "error", bold: true, target: "stop" };
 // The right side gives way from its least needed part: the cost first, the context gauge last.
 const DROP_ORDER = ["cost", "runtime", "pending", "context"] as const;
 const OUTPUT_MAX_LINES = 30;
@@ -119,10 +121,10 @@ function rightParts(facts: BarFacts): Map<RightPart, Part[]> {
 
 const RIGHT_ORDER: readonly RightPart[] = ["context", "cost", "pending", "runtime"];
 
-// The columns of the parts a click acts on, in the parts as drawn.
-function hitsOf(parts: readonly Part[]): BarLayout["hits"][number][] {
+// The columns of the parts a click acts on, in the parts as drawn from column `from`.
+function hitsOf(parts: readonly Part[], from = 0): BarLayout["hits"][number][] {
   const hits: BarLayout["hits"][number][] = [];
-  let column = 0;
+  let column = from;
   for (const part of parts) {
     const size = textWidth(part.text);
     if (part.target !== undefined && size > 0)
@@ -148,6 +150,14 @@ function barLine(
   width: number,
   theme: ConsoleTheme,
 ): { line: string; hits: BarLayout["hits"][number][] } {
+  const stopWidth = textWidth(STOP_PART.text);
+  if (width <= stopWidth + 1) {
+    const fitted = fit([STOP_PART], width);
+    return { line: paint(fitted, theme), hits: hitsOf(fitted) };
+  }
+  // The button keeps its place at the right end, after one space; the rest of the bar fits in what is left.
+  const room = width - stopWidth - 1;
+  const stop = { line: ` ${paint([STOP_PART], theme)}`, hits: hitsOf([STOP_PART], room + 1) };
   const left = joined([
     [{ text: "◆ HARIL", tone: MAIN, bold: true }],
     [{ text: `MODE: ${plainText(facts.mode)}`, tone: MAIN, bold: true, target: "mode" }],
@@ -164,19 +174,25 @@ function barLine(
     );
   const leftWidth = widthOf(left);
   for (const name of DROP_ORDER) {
-    if (leftWidth + 2 + widthOf(shown()) <= width) break;
+    if (leftWidth + 2 + widthOf(shown()) <= room) break;
     right.delete(name);
   }
   const shownRight = shown();
   const rightWidth = widthOf(shownRight);
-  if (rightWidth === 0 || leftWidth + 2 + rightWidth > width) {
-    const fitted = fit(left, width);
-    return { line: paint(fitted, theme), hits: hitsOf(fitted) };
+  if (rightWidth === 0 || leftWidth + 2 + rightWidth > room) {
+    const fitted = fit(left, room);
+    return {
+      line: paint(fitted, theme) + " ".repeat(room - widthOf(fitted)) + stop.line,
+      hits: [...hitsOf(fitted), ...stop.hits],
+    };
   }
   return {
     line:
-      paint(left, theme) + " ".repeat(width - leftWidth - rightWidth) + paint(shownRight, theme),
-    hits: hitsOf(left),
+      paint(left, theme) +
+      " ".repeat(room - leftWidth - rightWidth) +
+      paint(shownRight, theme) +
+      stop.line,
+    hits: [...hitsOf(left), ...stop.hits],
   };
 }
 
@@ -201,8 +217,8 @@ function placeLine(facts: BarFacts, width: number, theme: ConsoleTheme): string 
 }
 
 // The two lines of the bar: HARIL, the mode, the place and `model · level` on the left, the session and the runtime on
-// the right; below, the folder, its git branch and the statuses other extensions set. The hit-boxes are the mode, the
-// model and the level on the first line.
+// the right, and the STOP ALL button at the right end; below, the folder, its git branch and the statuses other
+// extensions set. The hit-boxes are the mode, the model, the level and the button on the first line.
 export function renderBarLayout(facts: BarFacts, width: number, theme: ConsoleTheme): BarLayout {
   if (width <= 0) return { lines: [], hits: [] };
   const first = barLine(facts, width, theme);

@@ -21,8 +21,8 @@ export interface OrchestrationOverlayHost {
   readonly glyphs: OrchestrationGlyphs;
 }
 
-// Resolves when the view closes: undefined after Esc or Close, "stop-runtime" when the user asked for the real stop,
-// which the caller runs once the overlay is gone (it asks for confirmation).
+// Resolves when the view closes: undefined after Esc or Close, "emergency-stop" when the user asked for the real stop,
+// which the caller runs once the overlay is gone (■ STOP ALL, no confirmation), so its report is seen.
 export function openOrchestrationOverlay(
   ctx: ConsoleContext,
   host: OrchestrationOverlayHost,
@@ -33,7 +33,7 @@ export function openOrchestrationOverlay(
       let finished = false;
       const apply = (transition: OrchestrationTransition): void => {
         host.set(transition.state);
-        if (transition.effect === "close" || transition.effect === "stop-runtime") {
+        if (transition.effect === "close" || transition.effect === "emergency-stop") {
           if (finished) return;
           finished = true;
           done(transition.effect === "close" ? undefined : transition.effect);
