@@ -168,6 +168,8 @@ export function runDemoWorkflow(
   const rework = new Map<string, ReworkState>();
   const assignments = new Map<string, Assignment>();
   const reformulated = new Map<string, string[]>();
+  // Executor turns created by a relaunch (not by a reformulation).
+  const relaunched = new Set<string>();
   const reports = new Map<string, ReportInput>();
   const fired: Stop[] = [];
   const peaks = {
@@ -286,7 +288,6 @@ export function runDemoWorkflow(
     verdict: "approved" | "rejected" | null = null,
   ) => {
     const { task } = attempt;
-    const threadState = rework.get(task.threadId);
     store.usageLog.appendUsage({
       kind: "agent_run",
       orderId,
@@ -311,7 +312,8 @@ export function runDemoWorkflow(
       difficultyReason: task.difficultyReason,
       outcome,
       auditVerdict: verdict,
-      retries: task.role === "executor" ? (threadState?.retries ?? 0) : null,
+      // 1 for an executor attempt that is a relaunch after a rejection or an idle close, so a sum counts relaunches.
+      retries: task.role === "executor" ? (relaunched.has(task.taskId) ? 1 : 0) : null,
       simulated: true,
       idempotencyKey: `workflow-demo:${attempt.runId}`,
     });
@@ -652,8 +654,8 @@ export function runDemoWorkflow(
     const verdictNote =
       auditorTurn === undefined
         ? "The previous attempt was closed by the watchdog: it showed no progress."
-        : "The previous attempt was rejected by its auditor; its reasons follow as data.";
-    store.workflows.applyTurns(epoch, {
+        : "The previous attempt was rejected by its auditor; its verdict is in the workflow's audits.";
+    const made = store.workflows.applyTurns(epoch, {
       workflowId,
       turns: [
         {
@@ -674,6 +676,8 @@ export function runDemoWorkflow(
         { from: oldAuditor.taskId, to: "relaunch:audit" },
       ],
     });
+    const relaunchId = made.taskIds.relaunch;
+    if (relaunchId !== undefined) relaunched.add(relaunchId);
     event("audit.retry", executorTurn.taskId, {
       cause: auditorTurn === undefined ? "watchdog_idle" : "rejected",
       threadId: executorTurn.threadId,

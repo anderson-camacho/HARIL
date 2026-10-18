@@ -207,6 +207,14 @@ describe("haril workflow demo", () => {
     expect(await invoke(["usage", "log", "--data-dir", folder, "--kind", "order"])).toBe(0);
     expect(h.out).toHaveLength(1);
     expect(h.out[0]).toMatch(/order\.cli .* mode=delegacion/);
+    // Each relaunch counts once in the log: the executor rows add up to the demo's three retries.
+    expect(await invoke(["usage", "summary", "--by", "role", "--json", "--data-dir", folder])).toBe(
+      0,
+    );
+    const byRole = parseJson<{ rows: { key: string; retries: number; rejected: number }[] }>(
+      h.out,
+    ).rows;
+    expect(byRole.find((row) => row.key === "executor")).toMatchObject({ retries: 3, rejected: 3 });
     // A second run in the same folder adds a second workflow and keeps the chain whole.
     expect(await invoke(["workflow", "demo", "--data-dir", folder, "--seed", "2"])).toBe(0);
     expect(await invoke(["usage", "verify", "--data-dir", folder, "--json"])).toBe(0);
