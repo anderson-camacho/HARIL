@@ -246,8 +246,8 @@ Las vistas cargan JSON local de HARIL al abrirse o al refrescarse, no en cada re
 | Acción en la vista completa | Teclado | Clic |
 |---|---|---|
 | Cambiar de vista | `Tab`, `←` `→` | En el nombre de la vista |
-| Mover la selección | `↑` `↓` | En la fila |
-| Ver u ocultar el detalle | `Enter` | En la fila o `[Enter Detail]` |
+| Mover la selección y ver su detalle | `↑` `↓` | En la fila (selecciona y muestra el detalle) |
+| Ver u ocultar el detalle | `Enter` | `[Enter Detail]` |
 | Ver en vivo (en la demostración, una transcripción simulada) | `L` | `[L Live view]` |
 | Filtrar el registro (all, agent_run, chat) | `F` | En el filtro |
 | Demostración, simular el vigilante, reiniciar | `D`, `W`, `R` | Sus botones |

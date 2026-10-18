@@ -86,6 +86,26 @@ describe("orchestration state: keyboard", () => {
     expect(orchestrationKey(demoState(), KEY.kittyEscape, NOW).effect).toBe("close");
   });
 
+  it("ignores letter keys sent with Ctrl, Alt or Super in the Kitty protocol; Shift still counts", () => {
+    const ctrlS = "\u001b[115;5u";
+    const altD = "\u001b[100;3u";
+    const superR = "\u001b[114;9u";
+    const ctrlAltW = "\u001b[119;7u";
+    for (const data of [ctrlS, altD, superR, ctrlAltW]) {
+      const transition = orchestrationKey(demoState(), data, NOW);
+      expect(transition.handled).toBe(false);
+      expect(transition.effect).toBeUndefined();
+    }
+    // Ctrl+S never reaches the real stop outside demo, nor does the legacy Ctrl+S byte.
+    expect(orchestrationKey(initialOrchestrationState(), ctrlS, NOW).effect).toBeUndefined();
+    expect(orchestrationKey(initialOrchestrationState(), "\x13", NOW).handled).toBe(false);
+    // Shift+S is the S key; a Caps Lock state bit alone does not block a letter.
+    expect(nodeState(press(demoState(), "\u001b[115;2u"), "d1")).toBe("cancelled");
+    expect(orchestrationKey(initialOrchestrationState(), "\u001b[115;65u", NOW).effect).toBe(
+      "stop-runtime",
+    );
+  });
+
   it("Up and Down move the selection and stop at both ends", () => {
     const state = demoState();
     const order = nodesForView(state.snapshot, "tree").map((node) => node.id);
@@ -123,6 +143,26 @@ describe("orchestration state: keyboard", () => {
     const back = orchestrationKey(live, KEY.escape, NOW);
     expect(back.effect).toBeUndefined();
     expect(back.state.screen).toBe("workflow");
+  });
+
+  it("in the live view, Up and Down follow the list of the view it was opened from", () => {
+    const queue = press(demoState(), KEY.tab, KEY.tab);
+    const order = nodesForView(queue.snapshot, "queue").map((node) => node.id);
+    let live = press(queue, "l");
+    expect(live.screen).toBe("live");
+    const seen = [selectedNode(live)?.id];
+    for (let step = 0; step < order.length; step++) {
+      live = press(live, KEY.down);
+      seen.push(selectedNode(live)?.id);
+    }
+    expect(seen).toEqual([...order, order[order.length - 1]]);
+    expect(selectedNode(press(queue, "l", KEY.down, KEY.up))?.id).toBe(order[0]);
+    expect(selectedNode(press(queue, "l", KEY.up))?.id).toBe(order[0]);
+
+    // Quota lists no nodes: its live view follows the tree and leaves the quota cursor alone.
+    const quotaLive = press(demoState(), KEY.tab, KEY.tab, KEY.tab, "l", KEY.down);
+    expect(selectedNode(quotaLive)?.id).toBe("d1");
+    expect(quotaLive.quotaCursor).toBe(0);
   });
 
   it("L opens and closes the live view of the selected node", () => {

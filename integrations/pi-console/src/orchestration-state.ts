@@ -163,11 +163,16 @@ export function filteredUsage(
 // The node the detail and the live view show: the selected one if the current view lists it, else the view's first;
 // in Quota and Log (which list no nodes) the selected node stays the live view's target.
 export function selectedNode(state: OrchestrationState): WorkflowNode | undefined {
-  const snapshot = state.snapshot;
-  if (snapshot === undefined) return undefined;
-  const listed = nodesForView(snapshot, state.view);
-  const pool = listed.length > 0 || state.view === "queue" ? listed : treeOrder(snapshot.nodes);
+  const pool = nodePool(state);
   return pool.find((node) => node.id === state.selectedNodeId) ?? pool[0];
+}
+
+// The nodes the selection moves through: the current view's list, or the whole tree for the views that list none.
+function nodePool(state: OrchestrationState): WorkflowNode[] {
+  const snapshot = state.snapshot;
+  if (snapshot === undefined) return [];
+  const listed = nodesForView(snapshot, state.view);
+  return listed.length > 0 || state.view === "queue" ? listed : treeOrder(snapshot.nodes);
 }
 
 function clamp(value: number, low: number, high: number): number {
@@ -280,19 +285,18 @@ function simulateStop(state: OrchestrationState): OrchestrationState {
 }
 
 function move(state: OrchestrationState, delta: number): OrchestrationState {
-  if (state.view === "quota") {
+  const live = state.screen === "live";
+  if (!live && state.view === "quota") {
     const last = Math.max(0, (state.snapshot?.quota.length ?? 0) - 1);
     return { ...state, quotaCursor: clamp(state.quotaCursor + delta, 0, last) };
   }
-  if (state.view === "log") {
+  if (!live && state.view === "log") {
     const last = Math.max(0, filteredUsage(state.snapshot, state.logFilter).length - 1);
     return { ...state, logCursor: clamp(state.logCursor + delta, 0, last) };
   }
-  // The live view follows the whole tree; the lists follow their own view.
-  const list =
-    state.screen === "live"
-      ? treeOrder(state.snapshot?.nodes ?? [])
-      : nodesForView(state.snapshot, state.view);
+  // The live view moves through the same nodes it shows: the list of the view it was opened from (the whole tree
+  // for Quota and Log, which list none). The lists follow their own view.
+  const list = live ? nodePool(state) : nodesForView(state.snapshot, state.view);
   if (list.length === 0) return state;
   const current = list.findIndex((node) => node.id === selectedNode(state)?.id);
   const next = list[clamp((current < 0 ? 0 : current) + delta, 0, list.length - 1)];
@@ -370,6 +374,10 @@ export function reduceOrchestration(
 // arrows; release events never reach a component). Undefined for anything else.
 const ESC = "\u001b";
 const ARROWS: Readonly<Record<string, string>> = { A: "up", B: "down", C: "right", D: "left" };
+// Kitty CSI-u modifier bits (the field minus one): Shift 1; Alt 2, Ctrl 4, Super 8, Hyper 16 and Meta 32 make a
+// chord. Caps Lock (64) and Num Lock (128) are lock states, not chords.
+const SHIFT = 1;
+const CHORD_MODIFIERS = 2 | 4 | 8 | 16 | 32;
 
 function keyOf(data: string): string | undefined {
   if (data === ESC) return "escape";
@@ -383,10 +391,13 @@ function keyOf(data: string): string | undefined {
   const csiU = /^\[(\d+)(?::\d*)*(?:;(\d+)(?::\d+)?)?u$/.exec(body);
   if (csiU === null) return undefined;
   const code = Number(csiU[1]);
-  const shift = ((Number(csiU[2] ?? "1") - 1) & 1) === 1;
+  const modifiers = Number(csiU[2] ?? "1") - 1;
+  const shift = (modifiers & SHIFT) !== 0;
   if (code === 27) return "escape";
   if (code === 9) return shift ? "shift-tab" : "tab";
   if (code === 13 || code === 57414) return "enter";
+  // Ctrl+S, Alt+D and the like are other shortcuts, never the letter's action; Shift+S is still S.
+  if ((modifiers & CHORD_MODIFIERS) !== 0) return undefined;
   return code >= 32 && code < 127 ? String.fromCharCode(code).toLowerCase() : undefined;
 }
 

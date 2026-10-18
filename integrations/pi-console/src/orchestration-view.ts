@@ -48,6 +48,7 @@ export const DEMO_LABEL = "DEMO · sample data, not real";
 export const EMPTY_MESSAGE =
   "No workflows yet. Run /orchestration demo to see the view with sample data.";
 const LIVE_UNAVAILABLE = "The live view arrives with real workflows.";
+const LIVE_NOTHING_IN_DEMO = "Nothing live to show: this view lists no agent right now.";
 const LABEL_WIDTH = 11;
 
 const MODEL_SOURCE: Readonly<Record<WorkflowNode["modelSource"], string>> = {
@@ -783,12 +784,23 @@ export function renderLiveView(
   const back = button("[Esc Back]", { kind: "back" }, "cyan");
   const node = selectedNode(state);
   if (!state.demo || state.snapshot === undefined || node === undefined) {
-    canvas.push(compose([{ text: "LIVE VIEW", tone: "yellow" }], width));
+    // In demo the view may list no agent (a Queue emptied by Stop all): that is what it says, labeled DEMO.
+    canvas.push(
+      compose(
+        state.demo
+          ? spread(
+              [{ text: "LIVE VIEW", tone: "yellow" }],
+              [{ text: DEMO_LABEL, tone: "yellow", bg: "selected" }],
+              width,
+            )
+          : [{ text: "LIVE VIEW", tone: "yellow" }],
+        width,
+      ),
+    );
     canvas.push(compose([], width));
-    for (const text of [
-      LIVE_UNAVAILABLE,
-      "Each agent's text and tool calls will stream here while it works.",
-    ])
+    for (const text of state.demo
+      ? [LIVE_NOTHING_IN_DEMO]
+      : [LIVE_UNAVAILABLE, "Each agent's text and tool calls will stream here while it works."])
       for (const line of wrap(text, width)) canvas.push(compose([{ text: line }], width));
     canvas.push(compose([], width));
     canvas.push(compose([back], width));
@@ -800,7 +812,7 @@ export function renderLiveView(
     compose(
       spread(
         [{ text: `LIVE · ${node.label} ${node.id}`, tone: "yellow" }],
-        [{ text: "DEMO · sample transcript, not real", tone: "yellow", bg: "selected" }],
+        [{ text: DEMO_LABEL, tone: "yellow", bg: "selected" }],
         width,
       ),
       width,

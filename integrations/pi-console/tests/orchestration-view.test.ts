@@ -212,6 +212,17 @@ describe("orchestration full view", () => {
 });
 
 describe("orchestration panel summary", () => {
+  it("keeps the DEMO label visible at narrow widths, in the summary and the compact view", () => {
+    for (const width of [60, 40]) {
+      const summary = renderOrchestrationSummary(demoState(), width, 4, UNICODE_GLYPHS);
+      expectFits(summary, width);
+      expect(plain(summary).join("\n")).toContain("DEMO · sample data, not real");
+      const compact = renderOrchestrationView(demoState(), width, 24, UNICODE_GLYPHS);
+      expectFits(compact, width);
+      expect(plain(compact).join("\n")).toContain("DEMO · sample data, not real");
+    }
+  });
+
   it("fits the module width and the line budget it is given", () => {
     for (const width of [76, 136]) {
       for (const maxLines of [3, 4, 8]) {
@@ -263,7 +274,8 @@ describe("orchestration live view", () => {
       expectFits(block, width);
       expect(block.lines.length).toBeLessThanOrEqual(height);
       const text = plain(block).join("\n");
-      expect(text).toContain("DEMO");
+      expect(text).toContain("DEMO · sample data, not real");
+      expect(text).not.toContain("sample transcript");
       expect(text).toMatch(/Executor e1/);
       expect(text).toContain("fast-model");
       expect(text).toContain("medium");
@@ -281,6 +293,20 @@ describe("orchestration live view", () => {
     const block = renderLiveView(initialOrchestrationState(), 80, 24, UNICODE_GLYPHS);
     expectFits(block, 80);
     expect(plain(block).join("\n")).toContain("The live view arrives with real workflows.");
+  });
+
+  it("in demo with nothing live in the view says so, labeled DEMO", () => {
+    // After a demo Stop all the Queue lists no node, so the live view has no agent to show.
+    let state = reduceOrchestration(demoState(), { type: "stop-all" }).state;
+    state = reduceOrchestration(state, { type: "set-view", view: "queue" }).state;
+    state = reduceOrchestration(state, { type: "toggle-live" }).state;
+    const block = renderLiveView(state, 80, 24, UNICODE_GLYPHS);
+    expectFits(block, 80);
+    const text = plain(block).join("\n");
+    expect(text).toContain("DEMO · sample data, not real");
+    expect(text).toContain("Nothing live to show");
+    expect(text).not.toContain("arrives with real workflows");
+    expect(block.hits.some((hit) => hit.target.kind === "back")).toBe(true);
   });
 });
 
