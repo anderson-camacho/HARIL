@@ -337,17 +337,67 @@ describe("store.workflows.applyTurns (delegation.apply)", () => {
     const continuation = store.workflows
       .tasks(workflowId)
       .find((task) => task.taskId === top.taskIds.continuation);
+    // The dependents move from the delegator's first turn to its continuation, keeping their kind.
     expect(continuation?.dependsOn).toEqual([
-      { taskId: d1, kind: "settled" },
       { taskId: top.taskIds.d2, kind: "settled" },
       { taskId: result.taskIds.c1, kind: "settled" },
     ]);
     const d2 = store.workflows.tasks(workflowId).find((task) => task.taskId === top.taskIds.d2);
-    expect(d2?.dependsOn).toEqual([
-      { taskId: d1, kind: "completed" },
-      { taskId: result.taskIds.c1, kind: "completed" },
-    ]);
+    expect(d2?.dependsOn).toEqual([{ taskId: result.taskIds.c1, kind: "completed" }]);
     expect(store.workflows.get(workflowId)?.agentsCreated).toBe(7);
+  });
+
+  it("leaves the excepted dependents on the earlier turn, so a failed turn is not hidden from them", () => {
+    const { workflowId, rootTaskId } = start();
+    const top = delegateTwo(workflowId, rootTaskId);
+    const d1 = top.taskIds.d1 as string;
+    const made = store.workflows.applyTurns(epoch, {
+      workflowId,
+      turns: [
+        turn({ key: "e1", role: "executor", layer: 3, kind: "work", parentTaskId: d1 }),
+        turn({
+          key: "a1",
+          role: "auditor",
+          layer: 3,
+          kind: "verify",
+          parentTaskId: "e1",
+          localId: null,
+          dependsOn: [{ on: "e1", kind: "completed" }],
+        }),
+        turn({
+          key: "e2",
+          role: "executor",
+          layer: 3,
+          kind: "work",
+          parentTaskId: d1,
+          dependsOn: [{ on: "e1", kind: "completed" }],
+        }),
+      ],
+    });
+    const retry = store.workflows.applyTurns(epoch, {
+      workflowId,
+      turns: [
+        turn({
+          key: "e1-again",
+          threadId: made.threadIds.e1 as string,
+          role: "executor",
+          layer: 3,
+          kind: "work",
+          parentTaskId: d1,
+        }),
+      ],
+      inherit: [
+        { from: made.taskIds.e1 as string, to: "e1-again", except: [made.taskIds.a1 as string] },
+      ],
+    });
+    const byId = new Map(store.workflows.tasks(workflowId).map((task) => [task.taskId, task]));
+    expect(byId.get(made.taskIds.a1 as string)?.dependsOn).toEqual([
+      { taskId: made.taskIds.e1, kind: "completed" },
+    ]);
+    expect(byId.get(made.taskIds.e2 as string)?.dependsOn).toEqual([
+      { taskId: retry.taskIds["e1-again"], kind: "completed" },
+    ]);
+    expect(byId.get(retry.taskIds["e1-again"] as string)?.threadId).toBe(made.threadIds.e1);
   });
 
   it("merges the stops a proposal adds into the workflow's autonomy", () => {

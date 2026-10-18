@@ -474,13 +474,19 @@ export function createWorkflowsFacet(options: WorkflowsFacetOptions): {
         const addDependency = db.prepare(
           "INSERT OR IGNORE INTO task_dependencies (task_id, depends_on_task_id, kind) VALUES (?, ?, ?)",
         );
+        const dropDependency = db.prepare(
+          "DELETE FROM task_dependencies WHERE task_id = ? AND depends_on_task_id = ?",
+        );
+        // The dependency moves: a dependent of the earlier turn waits for the latest one instead, so a relaunched
+        // turn's failed predecessor does not block it. The excepted dependents (the earlier turn's own auditor) stay.
         for (const link of input.inherit ?? []) {
           const from = resolve(link.from, "inherit");
           const to = resolve(link.to, "inherit");
           const except = new Set((link.except ?? []).map((item) => resolve(item, "inherit")));
           for (const row of dependents.all(from) as Array<{ taskId: string; kind: string }>) {
-            if (row.taskId !== to && !except.has(row.taskId))
-              addDependency.run(row.taskId, to, row.kind);
+            if (row.taskId === to || except.has(row.taskId)) continue;
+            dropDependency.run(row.taskId, from);
+            addDependency.run(row.taskId, to, row.kind);
           }
         }
       } catch (error) {

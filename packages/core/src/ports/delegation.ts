@@ -140,7 +140,8 @@ export interface ApplyTurnsInput {
   readonly workflowId: string;
   readonly turns: readonly NewTurn[];
   // A thread's dependents wait for its latest turn: every pending task that depends on `from` (except the listed ones)
-  // also depends on `to`, with the same kind.
+  // depends on `to` instead, with the same kind. A relaunch thus keeps a dependent of a failed (closed) turn waiting
+  // instead of blocking it; the earlier turn's own auditor is excepted and settles with it.
   readonly inherit?: readonly {
     readonly from: string;
     readonly to: string;
