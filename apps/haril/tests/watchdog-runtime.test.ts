@@ -9,7 +9,7 @@ import {
   type DelegationLimits,
   type RunEvent,
 } from "@haril/core";
-import type { Clock, EventRecord, Store, WorkflowAutonomy } from "@haril/core/ports";
+import type { AgentRuntime, Clock, EventRecord, Store, WorkflowAutonomy } from "@haril/core/ports";
 import { FakeAgentRuntime } from "@haril/core/testing";
 import { openStore } from "@haril/state-sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -94,7 +94,11 @@ function startWorkflow(store: Store, goal: string, limits: Partial<DelegationLim
 }
 
 // idleExitMs 0 is haril run: it exits once nothing is claimable. A test whose turns only wait stays up like haril start.
-function run(store: Store, idleExitMs = 0) {
+function run(
+  store: Store,
+  idleExitMs = 0,
+  wrap: (agents: AgentRuntime) => AgentRuntime = (agents) => agents,
+) {
   const events: RunEvent[] = [];
   const tools = createDelegationTools({ store, clock, options: {} });
   const agents = new FakeAgentRuntime({
@@ -104,7 +108,7 @@ function run(store: Store, idleExitMs = 0) {
   });
   const done = runUntilIdle({
     store,
-    agentRuntime: agents,
+    agentRuntime: wrap(agents),
     clock,
     pid: process.pid,
     nodeVersion: process.version,
@@ -117,6 +121,33 @@ function run(store: Store, idleExitMs = 0) {
     watchdog: { intervalMs: WINDOW },
   });
   return { events, done };
+}
+
+// Agents whose process takes a while to die once killed, as a real Pi does while taskkill runs.
+function slowToDie(delayMs: number): (agents: AgentRuntime) => AgentRuntime {
+  return (agents) => ({
+    async start(spec) {
+      const started = await agents.start(spec);
+      if (!started.ok) return started;
+      const handle = started.value;
+      const later = async (): Promise<void> => {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        await handle.abort();
+      };
+      return {
+        ok: true,
+        value: {
+          runId: handle.runId,
+          hello: handle.hello,
+          settled: handle.settled,
+          prompt: (text) => handle.prompt(text),
+          abort: later,
+          kill: later,
+          dispose: () => handle.dispose(),
+        },
+      };
+    },
+  });
 }
 
 function workflowOf(store: Store) {
@@ -184,6 +215,25 @@ describe("the watchdog in the runtime", () => {
         action: "close",
       }),
     );
+  }, 30_000);
+
+  it("judges a closed attempt once: while its process dies, it is neither checked again nor closed twice", async () => {
+    const store = open();
+    startWorkflow(
+      store,
+      "Read the notes [fake:parts=1] [fake:steps=1] [fake:part-1/step-1=stall-once]",
+    );
+    const { done } = run(store, 0, slowToDie(300));
+    await until(() => runningExecutor(store) !== undefined, "the executor running");
+    const stalled = runningExecutor(store);
+    offset += WINDOW + 1000;
+
+    expect((await done).kind).toBe("idle");
+    expect(workflowOf(store).state).toBe("completed");
+    const verdicts = watchdogEvents(store).filter((event) => event.taskId === stalled?.taskId);
+    expect(verdicts.map((event) => [event.type, event.payload.verdict])).toEqual([
+      ["watchdog.closed", "idle"],
+    ]);
   }, 30_000);
 
   it("lets an attempt that shows progress continue, checks it again 15 minutes later and closes it then if it stopped", async () => {

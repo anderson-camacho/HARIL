@@ -353,8 +353,12 @@ async function serve(
     clock,
     policy,
     emit,
+    // An attempt that is ended or being ended (a stop, a residual cancel, an idle close whose process is still dying) is
+    // not judged again: it would earn a spurious verdict or a second close.
     attemptOf: (taskId) => {
-      const attempt = [...live.values()].find((item) => item.claimed.taskId === taskId);
+      const attempt = [...live.values()].find(
+        (item) => item.claimed.taskId === taskId && item.settled === null && item.endedBy === null,
+      );
       return attempt?.workflow === null || attempt === undefined
         ? undefined
         : { runId: attempt.runId, startedAt: attempt.workflow.startedAt };
