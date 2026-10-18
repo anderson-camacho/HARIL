@@ -1,0 +1,134 @@
+{
+  "schemaVersion": 1,
+  "demo": false,
+  "workflow": {
+    "id": "01M57GX3AEYW7PDEVQQZG5DNQ4",
+    "goal": "Summarize the notes [fake:parts=2] [fake:steps=1]",
+    "state": "awaiting_human",
+    "startedAt": 1792327716174,
+    "elapsedMs": 2867,
+    "autonomy": { "mode": "stops", "stops": ["after_plan"] },
+    "orchestratorModel": "fake/high-model"
+  },
+  "totals": {
+    "tokensUsed": 5160,
+    "tokensBudget": 20000000,
+    "agentsCreated": 4,
+    "agentsCap": 100,
+    "queued": 3,
+    "retries": 0,
+    "escalations": 0
+  },
+  "capacity": {
+    "executors": { "live": 0, "max": 5 },
+    "auditors": { "live": 0, "max": 5 },
+    "delegators": { "live": 0, "max": 5 }
+  },
+  "nodes": [
+    {
+      "id": "o1",
+      "parentId": null,
+      "threadId": "01M57GX3AEKA516W9XP64X2D6E",
+      "depth": 0,
+      "layer": 1,
+      "role": "orchestrator",
+      "label": "Orchestrator 1",
+      "goal": "Summarize the notes [fake:parts=2] [fake:steps=1]",
+      "state": "waiting",
+      "model": "fake/high-model",
+      "modelSource": "pinned",
+      "thinkingLevel": null,
+      "tokens": 5160,
+      "elapsedMs": 12,
+      "lastProgress": { "at": 1792327716198, "text": "delegated" },
+      "nextCheckAt": 1792328616209,
+      "context": null,
+      "quota": null,
+      "difficulty": null,
+      "files": { "write": [], "read": [] },
+      "memo": "Split the goal into 2 parts; read every report before asking for the final audit.",
+      "audit": null,
+      "waitingReason": "waits for its children",
+      "turn": { "index": 1, "of": 2 }
+    },
+    {
+      "id": "d1",
+      "parentId": "o1",
+      "threadId": "01M57GX3B7TXPRH4VHQMF3N5YD",
+      "depth": 1,
+      "layer": 2,
+      "role": "delegator",
+      "label": "Delegator 1",
+      "goal": "Summarize the notes [fake:parts=2] [fake:steps=1]: part 1 of 2",
+      "state": "queued",
+      "model": "fake/high-model",
+      "modelSource": "table",
+      "thinkingLevel": null,
+      "tokens": 0,
+      "elapsedMs": null,
+      "lastProgress": null,
+      "nextCheckAt": 1792328616209,
+      "context": null,
+      "quota": null,
+      "difficulty": { "estimated": "medium", "reason": "1 steps across a few files" },
+      "files": { "write": [], "read": [] },
+      "memo": null,
+      "audit": null,
+      "waitingReason": "waits until the workflow continues",
+      "turn": { "index": 1, "of": 1 }
+    },
+    {
+      "id": "d2",
+      "parentId": "o1",
+      "threadId": "01M57GX3B8FXGYEN9RF6QGQ3DM",
+      "depth": 1,
+      "layer": 2,
+      "role": "delegator",
+      "label": "Delegator 2",
+      "goal": "Summarize the notes [fake:parts=2] [fake:steps=1]: part 2 of 2",
+      "state": "queued",
+      "model": "fake/high-model",
+      "modelSource": "table",
+      "thinkingLevel": null,
+      "tokens": 0,
+      "elapsedMs": null,
+      "lastProgress": null,
+      "nextCheckAt": 1792328616209,
+      "context": null,
+      "quota": null,
+      "difficulty": { "estimated": "hard", "reason": "1 steps across a few files" },
+      "files": { "write": [], "read": [] },
+      "memo": null,
+      "audit": null,
+      "waitingReason": "waits until the workflow continues",
+      "turn": { "index": 1, "of": 1 }
+    }
+  ],
+  "quota": [],
+  "events": [
+    {
+      "at": 1792327716175,
+      "type": "workflow.created",
+      "text": "rootTaskId=01M57GX3AE3VEY09HEG9D57GY7 autonomy=stops stops=1 simulated=false"
+    },
+    {
+      "at": 1792327716201,
+      "type": "delegation.applied",
+      "text": "threadId=01M57GX3AEKA516W9XP64X2D6E tool=haril_delegate turns=3"
+    },
+    { "at": 1792327716203, "type": "workflow.awaiting_human", "text": "reason=after_plan" }
+  ],
+  "usage": [
+    {
+      "at": 1792327716202,
+      "kind": "agent_run",
+      "role": "orchestrator",
+      "model": "fake/high-model",
+      "tokensIn": 4054,
+      "tokensOut": 1106,
+      "durationMs": 12,
+      "difficulty": null,
+      "outcome": "delegated"
+    }
+  ]
+}

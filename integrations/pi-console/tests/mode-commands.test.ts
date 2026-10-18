@@ -38,6 +38,7 @@ function host(): CommandHost {
     openActions: async () => undefined,
     toggleOrchestrationDemo: () => false,
     openOrchestrationView: async () => undefined,
+    pickWorkflow: async () => false,
     mode: () => mode,
     switchMode(next) {
       switched.push(next);

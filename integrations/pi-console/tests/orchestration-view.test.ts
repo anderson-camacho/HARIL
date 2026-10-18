@@ -257,8 +257,7 @@ describe("orchestration panel summary", () => {
     const block = renderOrchestrationSummary(initialOrchestrationState(), 76, 8, UNICODE_GLYPHS);
     expectFits(block, 76);
     const text = plain(block).join("\n");
-    expect(text).toContain("No workflows yet.");
-    expect(text).toContain("/orchestration demo");
+    expect(text).toContain("No workflows yet. Use /delegate to start one.");
     expect(text).not.toMatch(/DEMO|wf_ab12|138k|11\/100|Executors/);
     expect(block.hits.some((hit) => hit.target.kind === "node")).toBe(false);
     expect(block.hits.some((hit) => hit.target.kind === "open")).toBe(true);
@@ -289,10 +288,10 @@ describe("orchestration live view", () => {
     }
   });
 
-  it("outside demo says the live view arrives with real workflows", () => {
+  it("without a workflow says there is none yet", () => {
     const block = renderLiveView(initialOrchestrationState(), 80, 24, UNICODE_GLYPHS);
     expectFits(block, 80);
-    expect(plain(block).join("\n")).toContain("The live view arrives with real workflows.");
+    expect(plain(block).join("\n")).toContain("No workflows yet. Use /delegate to start one.");
   });
 
   it("in demo with nothing live in the view says so, labeled DEMO", () => {
@@ -305,7 +304,7 @@ describe("orchestration live view", () => {
     const text = plain(block).join("\n");
     expect(text).toContain("DEMO · sample data, not real");
     expect(text).toContain("Nothing live to show");
-    expect(text).not.toContain("arrives with real workflows");
+    expect(text).not.toContain("No workflows yet");
     expect(block.hits.some((hit) => hit.target.kind === "back")).toBe(true);
   });
 });

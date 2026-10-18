@@ -31,14 +31,18 @@ import {
 } from "./models.js";
 import { modeLabel } from "./modes.js";
 import { ASCII_GLYPHS, orchestrationGlyphs } from "./orchestration-draw.js";
+import { createWorkflowFeed, type WorkflowFeed } from "./orchestration-feed.js";
 import { openOrchestrationOverlay } from "./orchestration-overlay.js";
 import {
   initialOrchestrationState,
+  type OrchestrationAction,
   type OrchestrationState,
   type OrchestrationTarget,
   orchestrationClick,
   reduceOrchestration,
+  selectedNode,
 } from "./orchestration-state.js";
+import { EMPTY_MESSAGE } from "./orchestration-view.js";
 import type {
   AgentMessage,
   ConsoleContext,
@@ -50,6 +54,7 @@ import type {
 } from "./pi-types.js";
 import { type BoundProject, findProject, folderName } from "./project.js";
 import { type PendingApproval, readStatus } from "./status.js";
+import { plainText } from "./text.js";
 import {
   type BarFacts,
   type BarLayout,
@@ -87,9 +92,11 @@ interface Session extends CommandHost {
   dashboardData: DashboardData;
   dashboardLoading: boolean;
   dashboardRefresh: Promise<void> | undefined;
-  // The ORCHESTRATION view's state, shared by the module panel and its full-view overlay.
+  // The ORCHESTRATION view's state, shared by the module panel and its full-view overlay, and its real data: the
+  // children haril workflow watch and tail (orchestration-feed.ts).
   orchestration: OrchestrationState;
   orchestrationOpen: boolean;
+  readonly feed: WorkflowFeed;
   orchestrationDemo(): boolean;
   runtime(): string;
   runtimeAvailable(): boolean;
@@ -277,6 +284,25 @@ export default function harilConsole(pi: ConsolePi): void {
     }
   }
 
+  function orchestrate(current: Session, action: OrchestrationAction): void {
+    current.orchestration = reduceOrchestration(current.orchestration, action).state;
+  }
+
+  // The live view's tail runs only while the full view shows a real agent live; anything else ends it.
+  function syncLive(current: Session): void {
+    const state = current.orchestration;
+    const snapshot = state.snapshot;
+    const node =
+      current.orchestrationOpen && state.screen === "live" && !state.demo && snapshot !== undefined
+        ? selectedNode(state)
+        : undefined;
+    current.feed.follow(
+      node === undefined || snapshot === undefined
+        ? undefined
+        : { workflowId: snapshot.workflow.id, nodeId: node.id },
+    );
+  }
+
   // A click on the ORCHESTRATION summary: a row, a view or "Open full view" opens the overlay there; "Stop all"
   // simulates in demo and otherwise is STOP ALL.
   function orchestrationPanelClick(current: Session, target: OrchestrationTarget): void {
@@ -356,6 +382,23 @@ export default function harilConsole(pi: ConsolePi): void {
       dashboardRefresh: undefined,
       orchestration: initialOrchestrationState(),
       orchestrationOpen: false,
+      feed: createWorkflowFeed({
+        cwd: () => current.cwd,
+        projectSlug: () => current.project?.slug,
+        onWorkflows: (rows) => {
+          orchestrate(current, { type: "workflows", rows });
+          redraw();
+        },
+        onSnapshot: (snapshot) => {
+          orchestrate(current, { type: "real-snapshot", snapshot, now: Date.now() });
+          syncLive(current);
+          redraw();
+        },
+        onTail: (nodeId, lines) => {
+          orchestrate(current, { type: "tail", nodeId, lines });
+          redraw();
+        },
+      }),
       orchestrationDemo: () => current.orchestration.demo,
       toggleOrchestrationDemo() {
         current.orchestration = reduceOrchestration(current.orchestration, {
@@ -373,21 +416,53 @@ export default function harilConsole(pi: ConsolePi): void {
         }
         if (current.orchestrationOpen) return;
         current.orchestrationOpen = true;
+        if (cliAvailable()) void current.feed.refresh();
+        let effect: Awaited<ReturnType<typeof openOrchestrationOverlay>>;
         try {
-          const effect = await openOrchestrationOverlay(viewCtx, {
+          effect = await openOrchestrationOverlay(viewCtx, {
             get: () => current.orchestration,
             set: (state) => {
               current.orchestration = state;
+              syncLive(current);
             },
             glyphs: orchestrationGlyphs(),
           });
           current.orchestration = { ...current.orchestration, screen: "workflow" };
-          // STOP ALL runs once the overlay is gone, so its report is seen.
-          if (effect === "emergency-stop") await runStopAll(viewCtx);
         } finally {
           current.orchestrationOpen = false;
+          syncLive(current);
           redraw();
         }
+        // STOP ALL runs once the overlay is gone, so its report is seen; the workflow choice too, then the view
+        // opens again on the chosen workflow.
+        if (effect === "emergency-stop") await runStopAll(viewCtx);
+        else if (effect === "pick-workflow" && (await current.pickWorkflow(viewCtx)))
+          await current.openOrchestrationView(viewCtx);
+      },
+      async pickWorkflow(pickCtx) {
+        if (!cliAvailable()) {
+          if (pickCtx.hasUI) pickCtx.ui.notify(NOT_LAUNCHED, "error");
+          return false;
+        }
+        await current.feed.refresh();
+        const rows = current.orchestration.workflows;
+        if (rows.length === 0) {
+          pickCtx.ui.notify(EMPTY_MESSAGE, "info");
+          return false;
+        }
+        const labels = rows.map(
+          (row) =>
+            `${row.id} · ${row.state}${row.stopReason === null ? "" : ` (${row.stopReason})`} · ${plainText(row.goal).slice(0, 60)}`,
+        );
+        const choice = await pickCtx.ui.select("Follow which workflow?", labels);
+        const row = rows[labels.indexOf(choice ?? "")];
+        if (row === undefined) return false;
+        // The real workflow is what the user asked for: the demo's sample data steps aside.
+        if (current.orchestration.demo)
+          orchestrate(current, { type: "toggle-demo", now: Date.now() });
+        await current.feed.pick(row.id);
+        redraw();
+        return true;
       },
       closed: false,
       mode: () => modes.mode(),
@@ -450,6 +525,8 @@ export default function harilConsole(pi: ConsolePi): void {
       },
       openArea(area) {
         current.area = area;
+        // ORCHESTRATION follows the project's real workflow (haril workflow list and watch).
+        if (area === "orchestration" && cliAvailable()) void current.feed.refresh();
         if (!ctx.hasUI || ctx.mode !== "tui") return;
         if (
           current.dashboardData.projectSlug !== current.project?.slug ||
@@ -526,6 +603,9 @@ export default function harilConsole(pi: ConsolePi): void {
             current.pendingAvailable = status.pending !== undefined;
             if (status.pending !== undefined) current.pending = status.pending;
           } while (current.refreshAgain);
+          // A workflow started elsewhere (another terminal) is found while ORCHESTRATION shows.
+          if (current.area === "orchestration" || current.orchestrationOpen)
+            void current.feed.refresh();
           followTimer(current);
           redraw();
         })().finally(() => {
@@ -680,16 +760,13 @@ export default function harilConsole(pi: ConsolePi): void {
         break;
       case "tools":
         lines.push(
+          "PI TOOLS",
           ...(facts.tools.length
             ? facts.tools.map(
                 (tool) =>
                   `${tool.active ? "ACTIVE" : "OFF"} · ${tool.name}${tool.description ? ` — ${tool.description}` : ""}`,
               )
             : ["Pi reports no configured tools."]),
-        );
-        break;
-      case "workflows":
-        lines.push(
           "GLOBAL HARIL METHODOLOGIES",
           ...(!data.methodologiesAvailable
             ? [
@@ -804,6 +881,8 @@ export default function harilConsole(pi: ConsolePi): void {
     if (session === undefined) return;
     session.closed = true;
     followTimer(session);
+    // The watch and tail children end with the session.
+    session.feed.close();
     session = undefined;
   });
 

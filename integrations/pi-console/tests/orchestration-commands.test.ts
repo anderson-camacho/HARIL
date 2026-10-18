@@ -16,6 +16,7 @@ let commands: Map<string, Registered>;
 let notes: [string, string | undefined][];
 let opened: DashboardArea[];
 let views: number;
+let picks: number;
 let demo: boolean;
 let ctx: ConsoleContext;
 
@@ -62,6 +63,10 @@ function fakeHost(): CommandHost {
     async openOrchestrationView() {
       views++;
     },
+    async pickWorkflow() {
+      picks++;
+      return true;
+    },
     mode: () => "action",
     switchMode: () => undefined,
     lastPlan: () => undefined,
@@ -80,6 +85,7 @@ beforeEach(() => {
   notes = [];
   opened = [];
   views = 0;
+  picks = 0;
   demo = false;
   ctx = {
     ui: {
@@ -111,6 +117,12 @@ describe("/orchestration", () => {
     expect(opened).toEqual(["orchestration"]);
   });
 
+  it("pick chooses the workflow to follow", async () => {
+    await command("orchestration").handler("pick", ctx);
+    expect(picks).toBe(1);
+    expect(opened).toEqual(["orchestration"]);
+  });
+
   it("without arguments keeps the area alias", async () => {
     await command("orchestration").handler("", ctx);
     expect(opened).toEqual(["orchestration"]);
@@ -122,12 +134,12 @@ describe("/orchestration", () => {
   it("an unknown argument opens the area and shows the usage", async () => {
     await command("orchestration").handler("bogus", ctx);
     expect(opened).toEqual(["orchestration"]);
-    expect(notes.at(-1)).toEqual(["usage: /orchestration [demo|view]", "warning"]);
+    expect(notes.at(-1)).toEqual(["usage: /orchestration [demo|view|pick]", "warning"]);
   });
 
-  it("completes its two subcommands", () => {
+  it("completes its three subcommands", () => {
     const complete = command("orchestration").getArgumentCompletions;
-    expect(complete?.("")?.map((item) => item.value)).toEqual(["demo", "view"]);
+    expect(complete?.("")?.map((item) => item.value)).toEqual(["demo", "view", "pick"]);
     expect(complete?.("v")?.map((item) => item.value)).toEqual(["view"]);
   });
 

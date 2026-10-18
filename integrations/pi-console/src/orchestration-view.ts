@@ -38,17 +38,19 @@ import {
 import type { QuotaRow, UsageRow, WorkflowNode, WorkflowSnapshot } from "./orchestration-types.js";
 import { plainText, textWidth, truncate, wrap } from "./text.js";
 
-// The ORCHESTRATION view drawn as terminal lines (spec 7.6 and 7.8): the module panel summary, the full view (wide
-// from 120x40, compact below) and the live view of one agent. Pure: a state, a size and a glyph set in, lines and
+// The ORCHESTRATION view drawn as terminal lines (spec 7.6, 7.8 and 7.9): the module panel summary, the full view
+// (wide from 120x40, compact below) and the live view of one agent. Pure: a state, a size and a glyph set in, lines and
 // hit-boxes out. Every line is cut to the width, every state is a glyph and a text (never a color alone), and a value
-// the snapshot does not have is drawn as "n/a". The primitives (glyphs, composition, values) are in
+// the snapshot does not have is drawn as "n/a". The live view of a real agent shows what haril workflow tail read from
+// its Pi session; only the demo shows the demo's transcript. The primitives (glyphs, composition, values) are in
 // orchestration-draw.ts.
 
 export const DEMO_LABEL = "DEMO · sample data, not real";
-export const EMPTY_MESSAGE =
-  "No workflows yet. Run /orchestration demo to see the view with sample data.";
-const LIVE_UNAVAILABLE = "The live view arrives with real workflows.";
-const LIVE_NOTHING_IN_DEMO = "Nothing live to show: this view lists no agent right now.";
+export const EMPTY_MESSAGE = "No workflows yet. Use /delegate to start one.";
+const EMPTY_DEMO_HINT = "Press D (or click Demo) to see the view with sample data.";
+const LIVE_NOTHING = "Nothing live to show: this view lists no agent right now.";
+export const LIVE_NO_CONTENT =
+  "Content not available: no Pi session has been read for this agent yet (a simulated agent keeps none).";
 const LABEL_WIDTH = 11;
 
 const MODEL_SOURCE: Readonly<Record<WorkflowNode["modelSource"], string>> = {
@@ -145,6 +147,9 @@ function actionCandidates(state: OrchestrationState, g: OrchestrationGlyphs): Se
         kind: "filter",
         filter: next,
       }),
+      ...(!state.demo && state.workflows.length > 0
+        ? [button(long ? "[P Pick workflow]" : "[P Workflow]", { kind: "pick" })]
+        : []),
       button(long ? `[D Demo: ${state.demo ? "on" : "off"}]` : "[D Demo]", { kind: "demo" }),
       ...(state.demo
         ? [
@@ -714,11 +719,7 @@ function emptyView(
     ),
   );
   canvas.push(compose([], width));
-  const message = [
-    EMPTY_MESSAGE,
-    "Press D (or click Demo) to load the sample workflow here.",
-    LIVE_UNAVAILABLE,
-  ];
+  const message = [EMPTY_MESSAGE, EMPTY_DEMO_HINT];
   for (const text of message)
     for (const line of wrap(text, width))
       canvas.push(compose([{ text: line, tone: "text" }], width));
@@ -783,8 +784,8 @@ export function renderLiveView(
   const canvas = new Canvas();
   const back = button("[Esc Back]", { kind: "back" }, "cyan");
   const node = selectedNode(state);
-  if (!state.demo || state.snapshot === undefined || node === undefined) {
-    // In demo the view may list no agent (a Queue emptied by Stop all): that is what it says, labeled DEMO.
+  if (state.snapshot === undefined || node === undefined) {
+    // The view may list no agent (a Queue emptied by Stop all, no workflow yet): that is what it says.
     canvas.push(
       compose(
         state.demo
@@ -798,14 +799,13 @@ export function renderLiveView(
       ),
     );
     canvas.push(compose([], width));
-    for (const text of state.demo
-      ? [LIVE_NOTHING_IN_DEMO]
-      : [LIVE_UNAVAILABLE, "Each agent's text and tool calls will stream here while it works."])
+    for (const text of state.snapshot === undefined ? [EMPTY_MESSAGE] : [LIVE_NOTHING])
       for (const line of wrap(text, width)) canvas.push(compose([{ text: line }], width));
     canvas.push(compose([], width));
     canvas.push(compose([back], width));
     return fitHeight(canvas.block(), width, height);
   }
+  if (!state.demo) return realLiveView(state, state.snapshot, node, width, height, g);
   const status = nodeStatus(node, state.clock, g);
   const transcript = demoTranscript(node, state.clock);
   canvas.push(
@@ -858,6 +858,144 @@ export function renderLiveView(
   ];
   const rows = Math.max(0, height - canvas.lines.length - 1);
   for (const line of body.slice(0, rows)) canvas.push(compose(line, width));
+  while (canvas.lines.length < height - 1) canvas.push(compose([], width));
+  canvas.push(
+    compose(
+      [
+        { text: `${g.upDown} other agent · `, tone: "dim" },
+        button("[L Back]", { kind: "back" }),
+        { text: " " },
+        back,
+      ],
+      width,
+    ),
+  );
+  return fitHeight(canvas.block(), width, height);
+}
+
+// The tones of the live view's lines, by the kind haril workflow tail gave them.
+const TAIL_TONES: Readonly<Record<string, DashboardTone>> = {
+  run: "yellow",
+  note: "yellow",
+  tool: "cyan",
+  result: "teal",
+  tokens: "muted",
+  error: "error",
+  user: "muted",
+  system: "dim",
+  session: "dim",
+  model: "dim",
+  thinking: "dim",
+};
+
+function timeOfDay(at: number | null): string {
+  if (at === null) return "        ";
+  const date = new Date(at);
+  return [date.getHours(), date.getMinutes(), date.getSeconds()]
+    .map((value) => String(value).padStart(2, "0"))
+    .join(":");
+}
+
+// The timeline of a real node: its last progress, then every verdict of the watchdog on it (the events whose text
+// starts with its id, as the watchdog writes them), oldest first.
+function realTimeline(
+  snapshot: WorkflowSnapshot,
+  node: WorkflowNode,
+): { at: number; text: string }[] {
+  const items: { at: number; text: string }[] = [];
+  for (const event of snapshot.events) {
+    if (event.text.startsWith(`${node.id} `))
+      items.push({ at: event.at, text: `${event.type}: ${event.text.slice(node.id.length + 1)}` });
+  }
+  if (node.lastProgress !== null)
+    items.push({ at: node.lastProgress.at, text: `progress: ${node.lastProgress.text}` });
+  return items.sort((a, b) => a.at - b.at);
+}
+
+// The live view of a real agent (7.9): its header, its timeline from the snapshot, and what haril workflow tail read
+// from its Pi session (the newest lines, scrolled to the end). Without a session: "content not available".
+function realLiveView(
+  state: OrchestrationState,
+  snapshot: WorkflowSnapshot,
+  node: WorkflowNode,
+  width: number,
+  height: number,
+  g: OrchestrationGlyphs,
+): RenderedBlock {
+  const canvas = new Canvas();
+  const back = button("[Esc Back]", { kind: "back" }, "cyan");
+  const status = nodeStatus(node, state.clock, g);
+  canvas.push(
+    compose(
+      spread(
+        [{ text: `LIVE · ${node.label} ${node.id}`, tone: "yellow" }],
+        [{ text: snapshot.workflow.id, tone: "cyan" }],
+        width,
+      ),
+      width,
+    ),
+  );
+  canvas.push(
+    compose(
+      [
+        {
+          text: `${node.label} ${node.id} · layer ${node.layer} · ${node.role} · ${node.model} · ${node.thinkingLevel ?? "level n/a"}`,
+          tone: "cyan",
+        },
+      ],
+      width,
+    ),
+  );
+  canvas.push(
+    compose(
+      [
+        { text: `${status.glyph} ${status.text}`, tone: status.tone },
+        {
+          text: ` · ${tokens(node.tokens)} tokens · context ${node.context === null ? "n/a" : `${tokens(node.context.used)} of ${tokens(node.context.threshold)}`}`,
+          tone: "text",
+        },
+      ],
+      width,
+    ),
+  );
+  const timeline = realTimeline(snapshot, node).slice(-4);
+  const head: Seg[][] = [
+    [{ text: "Timeline", tone: "teal" }],
+    ...(timeline.length === 0
+      ? [[{ text: "  none yet", tone: "muted" as const }]]
+      : timeline.map((entry): Seg[] => [
+          { text: `  ${ago(entry.at, state.clock).padEnd(11)} `, tone: "muted" },
+          { text: entry.text },
+        ])),
+    [{ text: "Activity (Pi session)", tone: "teal" }],
+  ];
+  const lines = state.live.nodeId === node.id ? state.live.lines : [];
+  const indent = 20;
+  const activity: Seg[][] =
+    lines.length === 0
+      ? wrap(LIVE_NO_CONTENT, Math.max(1, width - 2)).map((part): Seg[] => [
+          { text: `  ${part}`, tone: "muted" },
+        ])
+      : lines.flatMap((line): Seg[][] => {
+          const parts = wrap(plainText(line.text), Math.max(1, width - indent)).slice(0, 3);
+          return parts.map((part, index): Seg[] => [
+            {
+              text:
+                index === 0
+                  ? `  ${timeOfDay(line.at)} ${line.kind.padEnd(9)}`
+                  : " ".repeat(indent - 1),
+              tone: TAIL_TONES[line.kind] ?? "muted",
+            },
+            { text: ` ${part}`, tone: line.kind === "error" ? "error" : "text" },
+          ]);
+        });
+  const room = Math.max(0, height - canvas.lines.length - 1);
+  const headShown = head.slice(0, room);
+  for (const line of headShown) canvas.push(compose(line, width));
+  // The newest activity: what does not fit scrolls off the top.
+  const activityRoom = Math.max(0, room - headShown.length);
+  for (const line of activityRoom === 0 ? [] : activity.slice(-activityRoom))
+    canvas.push(compose(line, width));
   while (canvas.lines.length < height - 1) canvas.push(compose([], width));
   canvas.push(
     compose(

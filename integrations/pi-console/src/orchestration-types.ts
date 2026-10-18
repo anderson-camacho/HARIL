@@ -1,7 +1,7 @@
-// WorkflowSnapshot v1 (docs/ADR-0021): the data the ORCHESTRATION view draws. `haril workflow show <id> --json`
-// will return it (a later phase); today only the demo data (orchestration-demo.ts) produces it. This is a local copy
-// because the console imports nothing from other workspaces (check-layers R6). `null` always means "not available":
-// the view says so and never invents a value.
+// WorkflowSnapshot v1 (docs/ADR-0021): the data the ORCHESTRATION view draws. `haril workflow show <id> --json` and
+// each line of `haril workflow watch <id>` print it (orchestration-feed.ts reads them), and the demo data
+// (orchestration-demo.ts) produces it too. This is a local copy because the console imports nothing from other
+// workspaces (check-layers R6). `null` always means "not available": the view says so and never invents a value.
 
 export type WorkflowState = "running" | "awaiting_human" | "completed" | "failed" | "stopped";
 

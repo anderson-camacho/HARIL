@@ -8,12 +8,13 @@ import { renderOrchestrationSummary } from "./orchestration-view.js";
 import type { ConsoleTheme, ThemeColor } from "./pi-types.js";
 import { plainText, textWidth, truncate, wrap } from "./text.js";
 
+// The five modules (spec 7.8): WORKFLOWS retired, its methodologies are in TOOLS (P19) and a workflow is seen in
+// ORCHESTRATION.
 export const DASHBOARD_AREAS = [
   "agents",
   "orchestration",
   "automation",
   "tools",
-  "workflows",
   "everywhere",
 ] as const;
 export type DashboardArea = (typeof DASHBOARD_AREAS)[number];
@@ -84,7 +85,6 @@ const LABELS: Readonly<Record<DashboardArea, string>> = {
   orchestration: "ORCHESTRATION",
   automation: "AUTOMATION",
   tools: "TOOLS",
-  workflows: "WORKFLOWS",
   everywhere: "EVERYWHERE",
 };
 const YELLOW: ThemeColor = "warning";
@@ -334,11 +334,7 @@ function linesFor(area: DashboardArea, facts: DashboardFacts): string[] {
         facts.tools.length
           ? `${facts.activeTools.length}/${facts.tools.length} configured Pi tools active`
           : "Pi reports no configured tools in this session.",
-      ];
-    case "workflows":
-      return [
-        "Select a methodology to inspect its complete bundled definition; project registration can bind one.",
-        `${data.methodologies.length} HARIL methodologies · ${facts.commands.length} Pi commands reported`,
+        `Methodologies: ${data.methodologies.length} HARIL methodologies · ${facts.commands.length} Pi commands reported`,
         ...(!data.methodologiesAvailable
           ? ["The global methodology registry could not be read; use Refresh to retry."]
           : data.methodologies.length === 0
@@ -346,8 +342,7 @@ function linesFor(area: DashboardArea, facts: DashboardFacts): string[] {
                 "The local registry successfully returned no methodologies; the CLI has no import command.",
               ]
             : []),
-        "HARIL task add has no methodology selector; browsing a definition does not execute it.",
-        "Pi's native slash commands remain available separately.",
+        "Browse a methodology to read its complete bundled definition; browsing does not execute it.",
       ];
     case "everywhere":
       return [
@@ -472,7 +467,7 @@ export function renderDashboardLayout(
   }
   lines.push(
     boxRow(
-      "Click a control · /haril for keyboard menu · Ctrl+Shift+1..6 for areas",
+      `Click a control · /haril for keyboard menu · Ctrl+Shift+1..${DASHBOARD_AREAS.length} for areas`,
       width,
       theme,
       "dim",

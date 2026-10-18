@@ -1,4 +1,4 @@
-import { execFile, spawn } from "node:child_process";
+import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync } from "node:fs";
 import { join, relative } from "node:path";
 
@@ -89,6 +89,74 @@ export async function runHarilJson(
   } catch {
     return undefined;
   }
+}
+
+// A `haril` command whose output is read line by line while it runs (haril workflow watch and tail).
+export interface HarilStream {
+  // False once the child exited (or could not start).
+  readonly running: boolean;
+  // Ends the child, through its own handle (the console spawned it); safe to call more than once.
+  close(): void;
+}
+
+// Longest line kept: a line that never ends is dropped, not grown without bound.
+const MAX_LINE_CHARS = 4 * 1024 * 1024;
+
+// Runs `haril <args>` and calls onLine with each line of its stdout as it arrives (stderr is ignored), and onExit once
+// when it ends. Same launcher as runHaril: execFile's pair, no shell, the inherited environment. Undefined when this
+// Pi was not opened by haril.
+export function streamHaril(
+  args: readonly string[],
+  options: {
+    readonly cwd?: string;
+    readonly onLine: (line: string) => void;
+    readonly onExit?: (code: number | null) => void;
+  },
+): HarilStream | undefined {
+  const found = launcher();
+  if (found === undefined) return undefined;
+  let running = true;
+  let exited = false;
+  const exit = (code: number | null): void => {
+    running = false;
+    if (exited) return;
+    exited = true;
+    options.onExit?.(code);
+  };
+  let child: ChildProcess;
+  try {
+    child = spawn(found.node, [found.cli, ...args], {
+      cwd: options.cwd,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    exit(null);
+    return { running: false, close: () => undefined };
+  }
+  let partial = "";
+  child.stdout?.setEncoding("utf8");
+  child.stdout?.on("data", (chunk: string) => {
+    partial += chunk;
+    const lines = partial.split(/\r?\n/);
+    partial = lines.pop() ?? "";
+    if (partial.length > MAX_LINE_CHARS) partial = "";
+    for (const line of lines) if (line.trim() !== "") options.onLine(line);
+  });
+  child.once("error", () => exit(null));
+  child.once("close", (code) => {
+    if (partial.trim() !== "") options.onLine(partial);
+    partial = "";
+    exit(typeof code === "number" ? code : null);
+  });
+  return {
+    get running() {
+      return running;
+    },
+    close() {
+      if (running && child.exitCode === null && child.signalCode === null) child.kill();
+    },
+  };
 }
 
 // The runtime the console started. `running` turns false when the child exits.

@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { runHaril } from "./cli.js";
-import type { DashboardArea } from "./dashboard.js";
+import { DASHBOARD_AREAS, type DashboardArea } from "./dashboard.js";
 import type { DashboardAction } from "./dashboard-controls.js";
 import {
   type DashboardEvent,
@@ -69,6 +69,7 @@ export interface DashboardActionHost {
   readonly openArea: (area: DashboardArea) => void;
   // The ORCHESTRATION view: its full-view overlay and its demo mode (sample data, never HARIL state).
   readonly openOrchestrationView: (ctx: ConsoleContext) => Promise<void>;
+  readonly pickWorkflow: (ctx: ConsoleContext) => Promise<boolean>;
   readonly toggleOrchestrationDemo: () => boolean;
   readonly orchestrationDemo: () => boolean;
   // The console mode: CONSULT refuses the actions that change state (modes.ts). Absent means ACTION.
@@ -709,6 +710,9 @@ export async function runDashboardAction(
     case "orchestration-view":
       await host.openOrchestrationView(ctx);
       return;
+    case "orchestration-pick":
+      await host.pickWorkflow(ctx);
+      return;
     case "orchestration-demo":
       ctx.ui.notify(demoNotice(host.toggleOrchestrationDemo()), "info");
       return;
@@ -724,6 +728,7 @@ export async function openDashboardActionMenu(
     "Open an area",
     ...(host.project === undefined ? ["Register this folder"] : []),
     "Open orchestration view",
+    "Pick orchestration workflow",
     host.orchestrationDemo() ? "Orchestration demo off" : "Orchestration demo on",
     "Choose Pi model",
     "Choose reasoning level",
@@ -753,7 +758,7 @@ export async function openDashboardActionMenu(
   const choice = await ctx.ui.select("HARIL console controls", shown);
   if (choice === undefined || choice === "Cancel") return;
   if (choice === "Open an area") {
-    const labels = ["AGENTS", "ORCHESTRATION", "AUTOMATION", "TOOLS", "WORKFLOWS", "EVERYWHERE"];
+    const labels = DASHBOARD_AREAS.map((item) => item.toUpperCase());
     const area = await ctx.ui.select("Dashboard area", labels);
     if (area !== undefined) host.openArea(area.toLowerCase() as DashboardArea);
     return;
@@ -766,6 +771,7 @@ export async function openDashboardActionMenu(
 const MENU_ACTIONS: Readonly<Record<string, DashboardAction>> = {
   "Register this folder": "register-project",
   "Open orchestration view": "orchestration-view",
+  "Pick orchestration workflow": "orchestration-pick",
   "Orchestration demo on": "orchestration-demo",
   "Orchestration demo off": "orchestration-demo",
   "Choose Pi model": "model",

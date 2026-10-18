@@ -11,7 +11,7 @@ import { renderOrchestrationScreen } from "./orchestration-view.js";
 import type { ConsoleContext, ConsoleMouseEvent } from "./pi-types.js";
 
 // The full ORCHESTRATION view as a Pi overlay over the whole terminal (ctx.ui.custom, like the details pager). Inside
-// it the overlay owns the keyboard, so plain keys work (Tab, arrows, Enter, L, F, D, W, R, S, Esc); in fullscreen
+// it the overlay owns the keyboard, so plain keys work (Tab, arrows, Enter, L, F, P, D, W, R, S, Esc); in fullscreen
 // mode clicks on its hit-boxes do the same. The state lives in the console session, so the module panel shows the
 // same selection and demo data after it closes.
 
@@ -22,7 +22,8 @@ export interface OrchestrationOverlayHost {
 }
 
 // Resolves when the view closes: undefined after Esc or Close, "emergency-stop" when the user asked for the real stop,
-// which the caller runs once the overlay is gone (■ STOP ALL, no confirmation), so its report is seen.
+// which the caller runs once the overlay is gone (■ STOP ALL, no confirmation), so its report is seen, and
+// "pick-workflow" when the user asked to choose the workflow to follow (a dialog the caller shows, then reopens this).
 export function openOrchestrationOverlay(
   ctx: ConsoleContext,
   host: OrchestrationOverlayHost,
@@ -33,7 +34,11 @@ export function openOrchestrationOverlay(
       let finished = false;
       const apply = (transition: OrchestrationTransition): void => {
         host.set(transition.state);
-        if (transition.effect === "close" || transition.effect === "emergency-stop") {
+        if (
+          transition.effect === "close" ||
+          transition.effect === "emergency-stop" ||
+          transition.effect === "pick-workflow"
+        ) {
           if (finished) return;
           finished = true;
           done(transition.effect === "close" ? undefined : transition.effect);

@@ -105,13 +105,14 @@ describe("ORCHESTRATION module panel", () => {
       "register-project",
       "details",
       "orchestration-view",
+      "orchestration-pick",
       "orchestration-demo",
       "refresh",
     ]);
   });
 
   it("other modules draw no orchestration summary", () => {
-    for (const area of ["agents", "automation", "tools", "workflows", "everywhere"] as const) {
+    for (const area of ["agents", "automation", "tools", "everywhere"] as const) {
       const layout = renderDashboardLayout(area, facts(true), 80, THEME, 40);
       expect(layout.orchestrationHits).toHaveLength(0);
       expect(layout.lines.map(stripAnsi).join("\n")).not.toContain(DEMO_LABEL);

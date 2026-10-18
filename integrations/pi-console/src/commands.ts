@@ -58,6 +58,8 @@ export interface CommandHost {
   toggleOrchestrationDemo(): boolean;
   // Opens the ORCHESTRATION full view over the terminal.
   openOrchestrationView(ctx: ConsoleContext): Promise<void>;
+  // Lets the user choose the workflow ORCHESTRATION follows; resolves whether one was chosen.
+  pickWorkflow(ctx: ConsoleContext): Promise<boolean>;
   // The console mode (modes.ts) and the switch to another one.
   mode(): ConsoleMode;
   switchMode(mode: ConsoleMode, ctx: ConsoleContext): void;
@@ -501,10 +503,11 @@ export function registerCommands(pi: ConsolePi, host: () => CommandHost | undefi
 const ORCHESTRATION_SUBCOMMANDS: readonly AutocompleteItem[] = [
   { value: "demo", label: "demo", description: "Turn the sample workflow on or off" },
   { value: "view", label: "view", description: "Open the full orchestration view" },
+  { value: "pick", label: "pick", description: "Choose the workflow to follow" },
 ];
 
-// /orchestration demo toggles the sample workflow; /orchestration view opens the full view. Both open the area, so
-// the module panel shows the result.
+// /orchestration demo toggles the sample workflow; /orchestration view opens the full view; /orchestration pick
+// chooses the workflow to follow. Each opens the area, so the module panel shows the result.
 async function orchestrationCommand(
   args: string,
   current: CommandHost,
@@ -515,7 +518,8 @@ async function orchestrationCommand(
   current.openArea("orchestration");
   if (sub === "demo") ctx.ui.notify(demoNotice(current.toggleOrchestrationDemo()), "info");
   else if (sub === "view") await current.openOrchestrationView(ctx);
-  else ctx.ui.notify("usage: /orchestration [demo|view]", "warning");
+  else if (sub === "pick") await current.pickWorkflow(ctx);
+  else ctx.ui.notify("usage: /orchestration [demo|view|pick]", "warning");
   return true;
 }
 
@@ -528,7 +532,7 @@ function registerDashboardCommands(pi: ConsolePi, host: () => CommandHost | unde
     const orchestration = area === "orchestration";
     pi.registerCommand(area, {
       description: orchestration
-        ? "HARIL: open the ORCHESTRATION dashboard (demo: sample workflow, view: full view)"
+        ? "HARIL: open the ORCHESTRATION dashboard (view: full view, pick: workflow to follow, demo: sample workflow)"
         : `HARIL: open the ${area.toUpperCase()} dashboard`,
       ...(orchestration
         ? {
@@ -543,7 +547,10 @@ function registerDashboardCommands(pi: ConsolePi, host: () => CommandHost | unde
         if (current === undefined) return;
         if (orchestration && (await orchestrationCommand(args, current, ctx))) return;
         current.openArea(area);
-        ctx.ui.notify(`${area.toUpperCase()} dashboard · Ctrl+Shift+1..6 or /${area}`, "info");
+        ctx.ui.notify(
+          `${area.toUpperCase()} dashboard · Ctrl+Shift+1..${DASHBOARD_AREAS.length} or /${area}`,
+          "info",
+        );
       },
     });
   }

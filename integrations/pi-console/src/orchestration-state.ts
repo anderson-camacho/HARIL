@@ -1,4 +1,5 @@
 import { demoSnapshot } from "./orchestration-demo.js";
+import type { TailLine, WorkflowChoice } from "./orchestration-feed.js";
 import type {
   NodeState,
   UsageRow,
@@ -7,9 +8,11 @@ import type {
   WorkflowSnapshot,
 } from "./orchestration-types.js";
 
-// The ORCHESTRATION view's state and controller, pure: a key, a click or a demo action in, a new state (and at most
-// one effect for the console to run) out. The console keeps one state per session, shared by the module panel and
-// the full-view overlay. Without a workflow and without demo there is no snapshot, and the view says so.
+// The ORCHESTRATION view's state and controller, pure: a key, a click, a demo action or real data in, a new state (and
+// at most one effect for the console to run) out. The console keeps one state per session, shared by the module panel
+// and the full-view overlay. Real data arrives from haril workflow watch (a snapshot) and tail (the live view's lines);
+// the demo's sample data never mixes with it: while the demo shows, the newest real snapshot waits in "real" and comes
+// back when the demo is turned off. Without a workflow and without demo there is no snapshot, and the view says so.
 
 export const ORCHESTRATION_VIEWS = ["tree", "layers", "queue", "quota", "log"] as const;
 export type OrchestrationView = (typeof ORCHESTRATION_VIEWS)[number];
@@ -25,9 +28,27 @@ export const VIEW_LABELS: Readonly<Record<OrchestrationView, string>> = {
 export const LOG_FILTERS = ["all", "agent_run", "chat"] as const;
 export type LogFilter = (typeof LOG_FILTERS)[number];
 
+// Lines the live view keeps for one node: the newest ones.
+const LIVE_LINES = 500;
+
+export interface LiveLines {
+  readonly nodeId: string | undefined;
+  readonly lines: readonly TailLine[];
+}
+
+const NO_LIVE_LINES: LiveLines = { nodeId: undefined, lines: [] };
+
 export interface OrchestrationState {
+  // What the view draws: the demo's sample data while the demo is on, else the real snapshot (or none).
   readonly snapshot: WorkflowSnapshot | undefined;
   readonly demo: boolean;
+  // The newest real snapshot (haril workflow watch) and when it arrived, kept while the demo shows.
+  readonly real: WorkflowSnapshot | undefined;
+  readonly realClock: number;
+  // The project's workflows (haril workflow list), newest first, for the choice of the one to follow.
+  readonly workflows: readonly WorkflowChoice[];
+  // The live view's lines (haril workflow tail) and the node they belong to.
+  readonly live: LiveLines;
   // "Now" for every relative time the view draws ("9 s ago", "in 12 min"): the moment the snapshot was taken.
   readonly clock: number;
   readonly view: OrchestrationView;
@@ -57,6 +78,7 @@ export type OrchestrationTarget =
         | "demo"
         | "watchdog"
         | "reset"
+        | "pick"
         | "close";
     };
 
@@ -76,11 +98,16 @@ export type OrchestrationAction =
   | { readonly type: "simulate-watchdog" }
   | { readonly type: "stop-all" }
   | { readonly type: "reset"; readonly now: number }
+  | { readonly type: "pick-workflow" }
+  | { readonly type: "real-snapshot"; readonly snapshot: WorkflowSnapshot; readonly now: number }
+  | { readonly type: "workflows"; readonly rows: readonly WorkflowChoice[] }
+  | { readonly type: "tail"; readonly nodeId: string; readonly lines: readonly TailLine[] }
   | { readonly type: "close" };
 
-// Effects only the console can carry out: closing the overlay, opening it, or the real emergency stop (■ STOP ALL,
-// haril stop --now; it runs once the full-screen overlay is gone, so its report is seen).
-export type OrchestrationEffect = "close" | "open-view" | "emergency-stop";
+// Effects only the console can carry out: closing the overlay, opening it, the real emergency stop (■ STOP ALL,
+// haril stop --now; it runs once the full-screen overlay is gone, so its report is seen), or the choice of the workflow
+// to follow (a selection dialog, shown once the overlay is gone).
+export type OrchestrationEffect = "close" | "open-view" | "emergency-stop" | "pick-workflow";
 
 export interface OrchestrationTransition {
   readonly state: OrchestrationState;
@@ -104,6 +131,10 @@ export function initialOrchestrationState(): OrchestrationState {
   return {
     snapshot: undefined,
     demo: false,
+    real: undefined,
+    realClock: 0,
+    workflows: [],
+    live: NO_LIVE_LINES,
     clock: 0,
     view: "tree",
     selectedNodeId: undefined,
@@ -284,6 +315,55 @@ function simulateStop(state: OrchestrationState): OrchestrationState {
   };
 }
 
+// A real snapshot arrived: it is drawn at once unless the demo shows, and the selection stays on its node while the
+// node is there.
+function takeReal(
+  state: OrchestrationState,
+  snapshot: WorkflowSnapshot,
+  now: number,
+): OrchestrationState {
+  const next = { ...state, real: snapshot, realClock: now };
+  if (state.demo) return next;
+  const sameWorkflow = state.snapshot?.workflow.id === snapshot.workflow.id;
+  const kept =
+    state.selectedNodeId !== undefined &&
+    snapshot.nodes.some((node) => node.id === state.selectedNodeId);
+  return {
+    ...next,
+    snapshot,
+    clock: now,
+    selectedNodeId: kept ? state.selectedNodeId : treeOrder(snapshot.nodes)[0]?.id,
+    ...(sameWorkflow ? {} : { quotaCursor: 0, logCursor: 0, live: NO_LIVE_LINES }),
+  };
+}
+
+// Lines of the live view's node: appended, the oldest dropped past LIVE_LINES; another node starts over.
+function takeTail(
+  state: OrchestrationState,
+  nodeId: string,
+  lines: readonly TailLine[],
+): OrchestrationState {
+  const previous = state.live.nodeId === nodeId ? state.live.lines : [];
+  return { ...state, live: { nodeId, lines: [...previous, ...lines].slice(-LIVE_LINES) } };
+}
+
+// Turning the demo off brings back the real snapshot that waited, if any.
+function leaveDemo(state: OrchestrationState): OrchestrationState {
+  const real = state.real;
+  return {
+    ...state,
+    snapshot: real,
+    demo: false,
+    clock: state.realClock,
+    selectedNodeId: real === undefined ? undefined : treeOrder(real.nodes)[0]?.id,
+    quotaCursor: 0,
+    logCursor: 0,
+    screen: "workflow",
+    live: NO_LIVE_LINES,
+    status: undefined,
+  };
+}
+
 function move(state: OrchestrationState, delta: number): OrchestrationState {
   const live = state.screen === "live";
   if (!live && state.view === "quota") {
@@ -335,7 +415,12 @@ export function reduceOrchestration(
     case "toggle-detail":
       return done({ ...state, detail: !state.detail });
     case "toggle-live":
-      return done({ ...state, screen: state.screen === "live" ? "workflow" : "live" });
+      // Entering the live view starts its lines over: the console starts the node's tail again.
+      return done(
+        state.screen === "live"
+          ? { ...state, screen: "workflow" }
+          : { ...state, screen: "live", live: NO_LIVE_LINES },
+      );
     case "back":
       return done({ ...state, screen: "workflow" });
     case "cycle-filter":
@@ -349,11 +434,7 @@ export function reduceOrchestration(
       return done({ ...state, view: "log", logFilter: action.filter, logCursor: 0 });
     case "toggle-demo":
       // The DEMO label (or the empty state) already says what changed: no status line.
-      return done(
-        state.demo
-          ? { ...state, snapshot: undefined, demo: false, screen: "workflow", status: undefined }
-          : loadDemo(state, action.now, undefined),
-      );
+      return done(state.demo ? leaveDemo(state) : loadDemo(state, action.now, undefined));
     case "simulate-watchdog":
       return done(simulateWatchdog(state));
     case "stop-all":
@@ -364,6 +445,19 @@ export function reduceOrchestration(
           ? loadDemo(state, action.now, "Demo data reset.")
           : { ...state, status: DEMO_ONLY },
       );
+    case "pick-workflow":
+      return done(state, "pick-workflow");
+    case "real-snapshot":
+      return done(takeReal(state, action.snapshot, action.now));
+    case "workflows":
+      // No workflow left to follow: the real view empties (the demo, if on, stays as it is).
+      return done(
+        action.rows.length > 0 || state.demo
+          ? { ...state, workflows: action.rows }
+          : { ...state, workflows: action.rows, real: undefined, snapshot: undefined },
+      );
+    case "tail":
+      return done(takeTail(state, action.nodeId, action.lines));
     case "close":
       return done(state, "close");
   }
@@ -433,6 +527,8 @@ function actionForKey(
       return { type: "reset", now };
     case "s":
       return { type: "stop-all" };
+    case "p":
+      return { type: "pick-workflow" };
     case "escape":
     case "q":
       return state.screen === "live" ? { type: "back" } : { type: "close" };
@@ -475,6 +571,8 @@ function actionForTarget(target: OrchestrationTarget, now: number): Orchestratio
       return { type: "reset", now };
     case "stop":
       return { type: "stop-all" };
+    case "pick":
+      return { type: "pick-workflow" };
     case "open":
     case "close":
       return { type: "close" };
