@@ -702,11 +702,35 @@ export async function runDashboardAction(
       await host.reload();
       return;
     case "commands": {
-      const choice = await ctx.ui.select(
-        "HARIL slash commands · select to prefill the editor",
-        HARIL_COMMANDS,
-      );
-      if (choice !== undefined) ctx.ui.setEditorText(`${choice} `);
+      const category = await ctx.ui.select("HARIL command reference", [
+        "HARIL CLI (PowerShell / terminal)",
+        "Pi slash commands (chat editor)",
+      ]);
+      if (category === "HARIL CLI (PowerShell / terminal)") {
+        await showInlineDetails(ctx, "HARIL CLI · PowerShell", [
+          "Install version 0.21.1 or later to use the update command.",
+          "Update from GitHub main (development channel, NOT an official release):",
+          "  haril update --main --check       Check without installing",
+          "  haril update --main               Ask for confirmation",
+          "  haril update --main --yes         Install without prompting",
+          "Update from a reviewed local checkout:",
+          "  haril update --check --from D:\\github\\HARIL",
+          "  haril update --yes --from D:\\github\\HARIL",
+          "Other useful CLI commands:",
+          "  haril --version",
+          "  haril doctor",
+          "  haril workflow list",
+          "  haril status",
+          "  haril help",
+          "Run these in PowerShell, not in the Pi chat editor.",
+        ]);
+      } else if (category === "Pi slash commands (chat editor)") {
+        const choice = await ctx.ui.select(
+          "HARIL slash commands · select to prefill the editor",
+          HARIL_COMMANDS,
+        );
+        if (choice !== undefined) ctx.ui.setEditorText(`${choice} `);
+      }
       return;
     }
     case "memory":
