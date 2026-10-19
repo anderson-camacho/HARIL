@@ -47,7 +47,7 @@ export function workflowIntake(root: string): WorkflowIntake {
 }
 
 // Keep intake outside a git project so fixture creation cannot change its base SHA.
-export function workflowIntakeFile(sandbox: Sandbox, root: string): string {
+function workflowIntakeFile(sandbox: Sandbox, root: string): string {
   const path = join(sandbox.root, "workflow-intake.json");
   writeFileSync(path, JSON.stringify(workflowIntake(root)));
   return path;

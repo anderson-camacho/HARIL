@@ -31,7 +31,7 @@ export function projectTestCommand(
 type EvidenceStore = { readonly events: Pick<Store["events"], "list"> };
 type Turn = Pick<WorkflowTaskRecord, "taskId" | "attempt" | "auditedTaskId" | "role">;
 
-export interface ExecutorEvidence {
+interface ExecutorEvidence {
   readonly ok: true;
   readonly executorTaskId: string;
   readonly executorRunId: string;
