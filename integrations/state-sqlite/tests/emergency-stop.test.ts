@@ -7,6 +7,7 @@ import {
   sequentialIds,
   testRules,
   workflowIntake,
+  TEST_PROJECT_ROOT,
 } from "./support.js";
 
 // The emergency stop at the store (docs/modos-y-delegacion.md 3.14): runtime.stop {mode: "now"} halts the runtime,
@@ -27,7 +28,7 @@ beforeEach(() => {
   projectId = store.projects.register({
     slug: "demo",
     name: "Demo",
-    rootPath: "D:/demo",
+    rootPath: TEST_PROJECT_ROOT,
   }).projectId;
   epoch = acquire();
 });
@@ -72,7 +73,7 @@ function command(type: string, args: Record<string, unknown>, project: string | 
 function startWorkflow(goal: string): { workflowId: string; rootTaskId: string } {
   const applied = command("workflow.start", {
     goal,
-    intake: workflowIntake("D:/demo"),
+    intake: workflowIntake(TEST_PROJECT_ROOT),
     model: "fake/high-model",
     agent: "fake:orchestrate",
     autonomy: { mode: "autonomous", stops: [] },
