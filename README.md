@@ -241,11 +241,15 @@ El vigilante es código, no un modelo, y no gasta tokens: cada 15 minutos el del
 
 ### Actualizar HARIL desde un repositorio local (0.21.1)
 
-HARIL incorpora `haril update`. Por ahora la actualización es **local y explícita**:
-no existe una release oficial verificable de HARIL para descargar automáticamente, por
-lo que el comando **no descarga ni ejecuta scripts de GitHub**. La fuente debe ser una
-copia local del repositorio que hayas revisado y actualizado (por ejemplo, con
-`git pull --ff-only` desde su carpeta). No se considera `main` una release.
+HARIL incorpora `haril update`. Por defecto opera sobre una copia local del
+repositorio, que puedes actualizar con `git pull --ff-only`. También puedes
+seleccionar explícitamente **`--main`**, el canal de desarrollo de
+`anderson-camacho/HARIL` en GitHub. Esta opción realiza un clon superficial
+de `main` en una carpeta temporal, registra el SHA exacto, no cambia tu rama
+actual ni tu carpeta de trabajo, y borra el clon al terminar. **No es una
+release oficial firmada:** actualizar desde `main` ejecuta su código de
+instalación, por lo que solo debe hacerse cuando confíes en el contenido de
+esa rama. Todavía no se publica un canal de releases verificadas.
 
 Desde PowerShell, con HARIL instalado y los agentes detenidos:
 
@@ -257,6 +261,20 @@ haril --version
 haril doctor
 ```
 
+Para consultar e instalar directamente la versión de `main`, desde cualquier
+carpeta (requiere Git y conexión a GitHub):
+
+```powershell
+haril update --main --check
+haril update --main
+# O sin confirmación interactiva:
+haril update --main --yes
+```
+
+Estos comandos instalan la versión declarada en el último commit obtenido de
+`main` **solo si es mayor que la instalada**. No cambian tu rama
+`codex/release-0.9.0` ni realizan pull sobre tu repositorio local.
+
 Si ejecutas el comando desde la raíz del repositorio, `--from` es opcional.
 `HARIL_SOURCE_DIR` también puede indicar la copia local. Sin `--yes`, se pide
 confirmación en una terminal interactiva; fuera de una terminal se rechaza. El
@@ -266,7 +284,7 @@ inspeccionarse también bloquea la actualización. El instalador existente compi
 instala en una carpeta de versión y ejecuta `doctor`. La configuración, los
 proyectos y los datos se conservan.
 
-**Limitación:** `haril update` todavía no instala releases remotas ni dispone de
+**Limitación:** `haril update --main` utiliza código de desarrollo, no releases verificadas. Tampoco dispone de
 `--rollback` integrado. Si el instalador falla, revisa sus mensajes antes de
 usar la nueva versión. No actualices cuando HARIL esté ejecutando workflows.
 
