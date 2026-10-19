@@ -7,6 +7,7 @@ import {
   sequentialIds,
   testRules,
   workflowIntake,
+  TEST_PROJECT_ROOT,
 } from "./support.js";
 
 // Quota and cooldowns in the store (docs/modos-y-delegacion.md 3.11, 4.2; phase F6): each sampling of a provider is one
@@ -26,7 +27,7 @@ beforeEach(() => {
   projectId = store.projects.register({
     slug: "demo",
     name: "Demo",
-    rootPath: "D:/demo",
+    rootPath: TEST_PROJECT_ROOT,
   }).projectId;
   const grant = store.runtime.acquire({
     pid: 1,
@@ -165,7 +166,7 @@ describe("a workflow turn's provider retry", () => {
       type: "workflow.start",
       projectId,
       args: {
-        intake: workflowIntake("D:/demo"),
+        intake: workflowIntake(TEST_PROJECT_ROOT),
         goal: "Answer from the notes",
         model: "cliproxy/Gemini1/m",
         agent: "fake:orchestrate",
