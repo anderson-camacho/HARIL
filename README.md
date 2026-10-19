@@ -250,9 +250,9 @@ copia local del repositorio que hayas revisado y actualizado (por ejemplo, con
 Desde PowerShell, con HARIL instalado y los agentes detenidos:
 
 ```powershell
-git -C "D:\\github\\HARIL" pull --ff-only
-haril update --check --from "D:\\github\\HARIL"
-haril update --from "D:\\github\\HARIL" --yes
+git -C "D:\github\HARIL" pull --ff-only
+haril update --check --from "D:\github\HARIL"
+haril update --from "D:\github\HARIL" --yes
 haril --version
 haril doctor
 ```
