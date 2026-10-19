@@ -113,13 +113,15 @@ function turnFakes(role: "executor" | "auditor" | "delegator" = "executor") {
       // is tied to that attempt; keep this minimal fake faithful to that contract.
       list: ({ taskId }: { taskId?: string } = {}) =>
         taskId === "t1"
-          ? [{
-              type: "task.claimed",
-              actorKind: "system",
-              taskId: "t1",
-              runId: "run-1",
-              payload: { attempt: 1 },
-            }]
+          ? [
+                {
+                  type: "task.claimed",
+                  actorKind: "system",
+                  taskId: "t1",
+                  runId: "run-1",
+                  payload: { attempt: 1 },
+                },
+              ]
           : [],
     },
     worktrees: {
