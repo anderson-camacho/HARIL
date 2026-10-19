@@ -1,12 +1,12 @@
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
+import { DatabaseSync } from "node:sqlite";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
-import { dataDirFor } from "./common.js";
 import { defaultPidAlive } from "../host.js";
 import { runtimeRootFor } from "../runtime.js";
+import { dataDirFor } from "./common.js";
 
 // Local-source updater. No unverified GitHub archive, branch or arbitrary remote script is
 // executed: the caller explicitly selects a checked-out HARIL source repository. The
