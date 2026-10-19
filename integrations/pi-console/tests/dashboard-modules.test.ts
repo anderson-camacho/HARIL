@@ -195,7 +195,9 @@ describe("the console's modules", () => {
     expect(text).toContain("Activity log: 2 failed record(s)");
     expect(text).toContain("Pi console active");
     expect(layout.tabHits.map((hit) => hit.area)).toEqual(DASHBOARD_AREAS);
-    expect(layout.tabHits.every((hit) => hit.end <= 150 && hit.row < layout.lines.length)).toBe(true);
+    expect(layout.tabHits.every((hit) => hit.end <= 150 && hit.row < layout.lines.length)).toBe(
+      true,
+    );
   });
 
   it("does not mistake missing Pi extension status reports for zero loaded extensions", () => {
