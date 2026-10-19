@@ -293,15 +293,18 @@ describe("the console's modules", () => {
   });
 
   it.each(["\u001b", "\u001b[27u", "\u001b[27;1u"])(
-    "closes inline area details on Escape input %s",
+    "closes full-screen area details on Escape input %s",
     async (input) => {
       const ctx = fakeContext();
       (ctx.ui as { select: unknown }).select = async () => "View area details";
       let handleInput: ((data: string) => void) | undefined;
+      let overlayOptions: unknown;
       (ctx.ui as { custom: unknown }).custom = (
         factory: (...args: unknown[]) => { handleInput(data: string): void },
+        options: unknown,
       ) =>
         new Promise<void>((resolve) => {
+          overlayOptions = options;
           const component = factory({ requestRender: () => undefined }, THEME, undefined, () =>
             resolve(),
           );
@@ -318,6 +321,10 @@ describe("the console's modules", () => {
 
       const opening = openDashboardActionMenu(ctx, fakePi().pi, host);
       await vi.waitFor(() => expect(handleInput).toBeDefined());
+      expect(overlayOptions).toEqual({
+        overlay: true,
+        overlayOptions: { width: "100%", maxHeight: "100%" },
+      });
       handleInput?.(input);
       await opening;
     },
