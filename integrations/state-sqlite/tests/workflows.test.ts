@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { NewTurn, Store } from "@haril/core/ports";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -23,8 +24,9 @@ let keySeq = 0;
 const sha256 = (text: string): string => createHash("sha256").update(text).digest("hex");
 const planText = "1. Change the primary button color.\n2. Test it.\n";
 const methodText = "Follow the selected tasks and report observed tests.";
+const projectRoot = resolve("demo");
 const intake = {
-  projectRoot: "D:/demo",
+  projectRoot,
   plan: { sourceId: "file:plan.md", revision: "v1", text: planText, sha256: sha256(planText) },
   methodology: { id: "custom", instructions: methodText, sha256: sha256(methodText) },
 };
@@ -35,7 +37,7 @@ beforeEach(() => {
   projectId = store.projects.register({
     slug: "demo",
     name: "Demo",
-    rootPath: "D:/demo",
+    rootPath: projectRoot,
   }).projectId;
   const grant = store.runtime.acquire({
     pid: 1,
