@@ -246,7 +246,9 @@ describe("haril start with an analyst task (M2-T6)", () => {
 
       const result = await startRuntime(host);
 
-      expect(result.code).toBe(0);
+      // All attempted workspace reads are refused: the run must fail closed while
+      // still recording each denial without storing the sensitive path or content.
+      expect(result.code).toBe(1);
       const taskId = taskIdOf("Read outside the project");
       const db = ledgerDb();
       const denied = db
