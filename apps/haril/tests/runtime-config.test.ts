@@ -78,7 +78,7 @@ describe("haril workflow start with haril.json's delegation section", () => {
       autonomy: { defaultStops: ["at_end"] },
       models: { layers: { orchestrator: { model: "fake/configured-model", level: "high" } } },
     });
-    expect(await invoke(["workflow", "start", "Ship it [fake:parts=2]"])).toBe(0);
+    expect(await invoke(["workflow", "start", "Ship it [fake:parts=2]", "--read-only"])).toBe(0);
     const workflow = await onlyWorkflow();
     expect(workflow.orchestratorModel).toBe("fake/configured-model");
     expect(workflow.autonomy).toEqual({ mode: "stops", stops: ["at_end"] });
@@ -109,6 +109,7 @@ describe("haril workflow start with haril.json's delegation section", () => {
         "workflow",
         "start",
         "Job",
+        "--read-only",
         "--model",
         "fake/given",
         "--stop-at",
@@ -122,13 +123,13 @@ describe("haril workflow start with haril.json's delegation section", () => {
 
   it("starts autonomous when the configured default stops are empty", async () => {
     writeDelegation({ autonomy: { defaultStops: [] } });
-    expect(await invoke(["workflow", "start", "Job", "--model", "fake/m"])).toBe(0);
+    expect(await invoke(["workflow", "start", "Job", "--model", "fake/m", "--read-only"])).toBe(0);
     expect((await onlyWorkflow()).autonomy).toEqual({ mode: "autonomous", stops: [] });
   });
 
   it("refuses to start with a haril.json the section rules refuse", async () => {
     writeDelegation({ limits: { maxEscalationsPerTask: 2 } });
-    expect(await invoke(["workflow", "start", "Job", "--model", "fake/m"])).toBe(2);
+    expect(await invoke(["workflow", "start", "Job", "--model", "fake/m", "--read-only"])).toBe(2);
     expect(h.err.join("\n")).toContain("/delegation/limits/maxEscalationsPerTask");
   });
 });

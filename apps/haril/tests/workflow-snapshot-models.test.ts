@@ -209,6 +209,7 @@ describe("the snapshot's models and quota", () => {
           "workflow",
           "start",
           "Plain",
+          "--read-only",
           "--model",
           PINNED,
           "--agent",

@@ -58,6 +58,7 @@ async function runningWorkflow(store: Store): Promise<string> {
         "workflow",
         "start",
         "Watch me",
+        "--read-only",
         "--model",
         "fake/high-model",
         "--autonomous",

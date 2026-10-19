@@ -61,6 +61,7 @@ async function claimedOrchestrator(store: Store): Promise<{ workflowId: string; 
         "workflow",
         "start",
         "Tail me",
+        "--read-only",
         "--model",
         "cliproxy/model-x",
         "--agent",
