@@ -14,7 +14,7 @@ import {
 import { openDelegationSettings } from "./delegation-panel.js";
 import { chooseLevel, chooseModel, type LevelMemory, openModelAndLevel } from "./model-picker.js";
 import { actionRefusal, type ConsoleMode } from "./modes.js";
-import { demoNotice } from "./orchestration-state.js";
+import { demoNotice, keyOf } from "./orchestration-state.js";
 import type { ConsoleContext, ConsolePi } from "./pi-types.js";
 import { type BoundProject, folderName } from "./project.js";
 import type { PendingApproval } from "./status.js";
@@ -140,7 +140,7 @@ async function showInlineDetails(
           ];
         },
         handleInput(input) {
-          if (input === "\u001b" || input === "q") done(undefined);
+          if (keyOf(input) === "escape" || input === "q") done(undefined);
           else if (input === "\u001b[A" || input === "k") offset = Math.max(0, offset - 1);
           else if (input === "\u001b[B" || input === "j") offset += 1;
           else if (input === "\u001b[5~") offset = Math.max(0, offset - 14);

@@ -18,6 +18,7 @@ import {
 } from "./delegation-settings.js";
 import { supportedLevels, tokenCount } from "./model-levels.js";
 import { groupModels } from "./model-picker.js";
+import { keyOf } from "./orchestration-state.js";
 import type { ConsoleContext, ConsoleMouseEvent, PiModel } from "./pi-types.js";
 import { textWidth, truncate } from "./text.js";
 
@@ -239,7 +240,7 @@ export function openDelegationPanel(
           return screen.lines;
         },
         handleInput(data) {
-          if (data === "\u001b" || data === "q") return finish(undefined);
+          if (keyOf(data) === "escape" || data === "q") return finish(undefined);
           if (data === "\r" || data === "\n" || data === "e") return act({ kind: "edit" });
           if (data === "r" || data === "R") return act({ kind: "reset" });
           if (data === "\u001b[A" || data === "k") move(state, -1);

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import harilConsole from "../src/console.js";
 import { DASHBOARD_AREAS, type DashboardFacts, renderDashboardLayout } from "../src/dashboard.js";
 import { type DashboardActionHost, openDashboardActionMenu } from "../src/dashboard-actions.js";
@@ -149,4 +149,34 @@ describe("the console's modules", () => {
     );
     expect(offered[1]).toEqual(["AGENTS", "ORCHESTRATION", "AUTOMATION", "TOOLS", "EVERYWHERE"]);
   });
+
+  it.each(["\u001b", "\u001b[27u", "\u001b[27;1u"])(
+    "closes inline area details on Escape input %s",
+    async (input) => {
+      const ctx = fakeContext();
+      (ctx.ui as { select: unknown }).select = async () => "View area details";
+      let handleInput: ((data: string) => void) | undefined;
+      (ctx.ui as { custom: unknown }).custom = (
+        factory: (...args: unknown[]) => { handleInput(data: string): void },
+      ) =>
+        new Promise<void>((resolve) => {
+          const component = factory({ requestRender: () => undefined }, THEME, undefined, () =>
+            resolve(),
+          );
+          handleInput = component.handleInput;
+        });
+      const host = {
+        details: () => ({ title: "TOOLS details", lines: ["Deterministic detail"] }),
+        mode: () => "action",
+        orchestrationDemo: () => false,
+        runtimeAvailable: () => false,
+        runtime: () => "idle",
+      } as unknown as DashboardActionHost;
+
+      const opening = openDashboardActionMenu(ctx, fakePi().pi, host);
+      await vi.waitFor(() => expect(handleInput).toBeDefined());
+      handleInput?.(input);
+      await opening;
+    },
+  );
 });

@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type DashboardFacts, renderDashboardLayout } from "../src/dashboard.js";
 import { controlsFor } from "../src/dashboard-controls.js";
 import { emptyDashboardData } from "../src/dashboard-data.js";
@@ -277,6 +277,15 @@ describe("the Delegation overlay", () => {
     close.click("[Esc Close]");
     await expect(close.result).resolves.toBeUndefined();
   });
+
+  it.each(["\u001b", "\u001b[27u", "\u001b[27;1u"])(
+    "closes the delegation overlay on Escape input %s without an effect",
+    async (input) => {
+      const overlay = open({ view: view(), selected: 0, offset: 0 });
+      overlay.view().handleInput?.(input);
+      await expect(overlay.result).resolves.toBeUndefined();
+    },
+  );
 });
 
 describe("editing a delegation setting", () => {
@@ -404,6 +413,70 @@ describe("editing a delegation setting", () => {
     expect(sets().map((call) => call.args)).toEqual([
       ["config", "set", "delegation.limits.maxActiveChildren.orchestrator", "--reset", "--json"],
     ]);
+  });
+
+  it.each(["\u001b", "\u001b[27u", "\u001b[27;1u"])(
+    "cancels the active delegation overlay on Escape input %s without saving",
+    async (input) => {
+      const { ctx } = scripted([], {});
+      const ui = ctx.ui as unknown as Record<string, unknown>;
+      let handleInput: ((data: string) => void) | undefined;
+      ui.custom = (factory: (...args: unknown[]) => { handleInput(data: string): void }) =>
+        new Promise((resolve) => {
+          handleInput = factory(
+            { terminal: { columns: 100, rows: 30 }, requestRender: () => undefined },
+            THEME,
+            undefined,
+            resolve,
+          ).handleInput;
+        });
+
+      const opening = openDelegationSettings(ctx, {});
+      await vi.waitFor(() => expect(handleInput).toBeDefined());
+      handleInput?.(input);
+      await opening;
+      expect(sets()).toEqual([]);
+    },
+  );
+
+  it("returns focus to the settings overlay on the edited row after its dialog is canceled", async () => {
+    const { ctx } = scripted([], {});
+    const ui = ctx.ui as unknown as Record<string, unknown>;
+    const panels: {
+      handleInput(data: string): void;
+      render(width: number): string[];
+      overlay: boolean;
+    }[] = [];
+    ui.custom = (
+      factory: (...args: unknown[]) => {
+        handleInput(data: string): void;
+        render(width: number): string[];
+      },
+      options: { overlay?: boolean },
+    ) =>
+      new Promise((resolve) => {
+        const component = factory(
+          { terminal: { columns: 100, rows: 30 }, requestRender: () => undefined },
+          THEME,
+          undefined,
+          resolve,
+        );
+        panels.push({ ...component, overlay: options.overlay ?? false });
+      });
+    ui.input = async () => undefined;
+
+    const opening = openDelegationSettings(ctx, {});
+    await vi.waitFor(() => expect(panels).toHaveLength(1));
+    panels[0]?.handleInput("\r");
+    await vi.waitFor(() => expect(panels).toHaveLength(2));
+    const returned = panels[1];
+    expect(returned?.overlay).toBe(true);
+    expect(returned?.render(100).map(stripAnsi).join("\n")).toMatch(
+      /▶ Compact at, every layer\s+300,000 tokens/,
+    );
+    returned?.handleInput("\u001b");
+    await opening;
+    expect(sets()).toEqual([]);
   });
 
   it("shows but changes nothing in CONSULT mode", async () => {
