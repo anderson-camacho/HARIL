@@ -160,7 +160,7 @@ async function showInlineDetails(
         invalidate() {},
       };
     },
-    { overlay: false },
+    { overlay: true, overlayOptions: { width: "100%", maxHeight: "100%" } },
   );
 }
 
