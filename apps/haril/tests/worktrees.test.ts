@@ -487,7 +487,7 @@ describe.skipIf(!HAS_GIT)("a base branch that moved during a turn", () => {
     expect(gitIn(repo, "show", "haril/wf/step/s1:src/button.ts")).toBe(
       "export const color = 'blue';",
     );
-    expect(fakes.events.map((event) => event.type)).toEqual(["base.moved"]);
+    expect(fakes.events.map((event) => event.type)).toEqual(["base.moved", "worktree.committed"]);
     expect(fakes.events[0]?.payload).toMatchObject({
       fromSha: before,
       toSha: after,
