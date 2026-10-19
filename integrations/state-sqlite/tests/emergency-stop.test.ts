@@ -5,9 +5,9 @@ import {
   type ManualClock,
   manualClock,
   sequentialIds,
+  TEST_PROJECT_ROOT,
   testRules,
   workflowIntake,
-  TEST_PROJECT_ROOT,
 } from "./support.js";
 
 // The emergency stop at the store (docs/modos-y-delegacion.md 3.14): runtime.stop {mode: "now"} halts the runtime,
