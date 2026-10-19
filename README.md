@@ -239,6 +239,37 @@ El vigilante es código, no un modelo, y no gasta tokens: cada 15 minutos el del
 .\bin\haril.ps1 workflow stop <id>
 ```
 
+### Actualizar HARIL desde un repositorio local (0.21.1)
+
+HARIL incorpora `haril update`. Por ahora la actualización es **local y explícita**:
+no existe una release oficial verificable de HARIL para descargar automáticamente, por
+lo que el comando **no descarga ni ejecuta scripts de GitHub**. La fuente debe ser una
+copia local del repositorio que hayas revisado y actualizado (por ejemplo, con
+`git pull --ff-only` desde su carpeta). No se considera `main` una release.
+
+Desde PowerShell, con HARIL instalado y los agentes detenidos:
+
+```powershell
+git -C "D:\\github\\HARIL" pull --ff-only
+haril update --check --from "D:\\github\\HARIL"
+haril update --from "D:\\github\\HARIL" --yes
+haril --version
+haril doctor
+```
+
+Si ejecutas el comando desde la raíz del repositorio, `--from` es opcional.
+`HARIL_SOURCE_DIR` también puede indicar la copia local. Sin `--yes`, se pide
+confirmación en una terminal interactiva; fuera de una terminal se rechaza. El
+comando compara `app/current.json` con la versión declarada por la fuente y
+rechaza versiones anteriores o un runtime activo; una base SQLite que no pueda
+inspeccionarse también bloquea la actualización. El instalador existente compila,
+instala en una carpeta de versión y ejecuta `doctor`. La configuración, los
+proyectos y los datos se conservan.
+
+**Limitación:** `haril update` todavía no instala releases remotas ni dispone de
+`--rollback` integrado. Si el instalador falla, revisa sus mensajes antes de
+usar la nueva versión. No actualices cuando HARIL esté ejecutando workflows.
+
 ### Instalar HARIL en tu usuario
 
 Un solo comando desde la raíz del repositorio:
@@ -664,7 +695,7 @@ Los dossiers de `docs/research/` se leen solo bajo demanda, cuando un documento 
 
 ## Versiones
 
-Versión actual: **0.21.0**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
+Versión actual: **0.21.1**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
 
 ## Licencia
 
