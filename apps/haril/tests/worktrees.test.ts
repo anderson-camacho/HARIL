@@ -107,7 +107,21 @@ function turnFakes(role: "executor" | "auditor" | "delegator" = "executor") {
   const heads: string[] = [];
   const verified: string[] = [];
   const store = {
-    events: { append: (event: { type: string; payload: unknown }) => events.push(event) },
+    events: {
+      append: (event: { type: string; payload: unknown }) => events.push(event),
+      // The real store records a host claim before each executor turn. Commit evidence
+      // is tied to that attempt; keep this minimal fake faithful to that contract.
+      list: ({ taskId }: { taskId?: string } = {}) =>
+        taskId === "t1"
+          ? [{
+              type: "task.claimed",
+              actorKind: "system",
+              taskId: "t1",
+              runId: "run-1",
+              payload: { attempt: 1 },
+            }]
+          : [],
+    },
     worktrees: {
       setHead: (_epoch: number, _id: string, sha: string) => heads.push(sha),
       setVerified: (_epoch: number, _id: string, sha: string) => verified.push(sha),
