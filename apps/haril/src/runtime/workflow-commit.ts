@@ -24,6 +24,7 @@ import type {
   Store,
 } from "@haril/core/ports";
 import { delegationState, reassignmentProblem, type TurnAction } from "./delegation-tools.js";
+import { evidenceStatus, executorEvidence, workflowEvidence } from "./workflow-evidence.js";
 import {
   firedStops,
   type Task,
@@ -228,6 +229,7 @@ function turnLike(task: Task): Omit<NewTurn, "key" | "dependsOn"> {
     layer: task.layer,
     kind: task.kind,
     parentTaskId: task.parentTaskId,
+    auditedTaskId: task.auditedTaskId,
     localId: task.localId,
     goal: task.goal,
     description: task.description,
@@ -414,7 +416,8 @@ function assignTurns(
       role: "auditor",
       layer: 3,
       kind: "verify",
-      parentTaskId: assignment.localId,
+      parentTaskId: firstTurn?.parentTaskId ?? task.taskId,
+      auditedTaskId: assignment.localId,
       localId: null,
       goal: `Audit ${assignment.localId} against its acceptance criteria`,
       description: "Judge the step's result against each of its acceptance criteria.",
@@ -453,7 +456,8 @@ function relaunch(context: TurnContext, executor: Task, auditor: Task): () => vo
         {
           ...turnLike(auditor),
           key: "relaunch:audit",
-          parentTaskId: "relaunch",
+          parentTaskId: executor.parentTaskId,
+          auditedTaskId: "relaunch",
           dependsOn: [{ on: "relaunch", kind: "completed" }],
         },
       ],
@@ -762,19 +766,37 @@ function taskAuditPlan(
   const { store, epoch, view, task } = context;
   const verdict =
     outcome.status === "succeeded" && action?.tool === "haril_verdict" ? action.input : null;
+  const observed =
+    verdict?.approved && view.workflow.baseBranch !== null
+      ? executorEvidence(store, executor, task)
+      : null;
+  const accepted: VerdictInput | null =
+    verdict === null
+      ? null
+      : observed?.ok === false
+        ? {
+            approved: false,
+            reasons: [
+              ...verdict.reasons,
+              { criterion: "host implementation evidence", ok: false, evidence: observed.reason },
+            ],
+          }
+        : verdict;
   const event: ReworkEvent =
-    verdict === null ? { type: "attempt_failed" } : { type: "verdict", approved: verdict.approved };
+    accepted === null
+      ? { type: "attempt_failed" }
+      : { type: "verdict", approved: accepted.approved };
   const step = reworkEvent(context, executor, event);
   const before: (() => void)[] = [];
-  if (verdict !== null) {
+  if (accepted !== null) {
     before.push(() => {
       store.workflows.recordAudit(epoch, {
         workflowId: view.workflow.workflowId,
         subjectTaskId: executor.taskId,
         auditorTaskId: task.taskId,
         scope: "task",
-        verdict: verdict.approved ? "approved" : "rejected",
-        reasons: verdict.reasons,
+        verdict: accepted.approved ? "approved" : "rejected",
+        reasons: accepted.reasons,
         reworkAction: step.action === "rerun" ? "ignore" : step.action,
       });
     });
@@ -784,7 +806,7 @@ function taskAuditPlan(
     if (verdict === null) before.push(retryEvent(context, executor, "auditor_failed"));
   }
   const after = step.action === "fail" ? [stopAt(context, { type: "audit_exhausted" })] : [];
-  if (verdict === null) {
+  if (accepted === null) {
     const completion =
       outcome.status === "succeeded"
         ? noAction(context, "haril_verdict", refusals)
@@ -793,12 +815,27 @@ function taskAuditPlan(
   }
   return {
     before,
-    completion: verdict.approved
-      ? { runId: context.runId, outcome: "succeeded", result: verdictOutput(verdict) }
-      : failure(context, "audit.rejected", unmetText(verdict), verdictOutput(verdict)),
-    outcome: verdict.approved ? "approved" : "rejected",
-    verdict: verdict.approved ? "approved" : "rejected",
-    after,
+    completion: accepted.approved
+      ? {
+          runId: context.runId,
+          outcome: "succeeded",
+          result: {
+            ...verdictOutput(accepted),
+            ...(observed?.ok ? { evidence: observed as unknown as JsonObject } : {}),
+          },
+        }
+      : failure(
+          context,
+          observed?.ok === false ? "audit.evidence_missing" : "audit.rejected",
+          observed?.ok === false ? observed.reason : unmetText(accepted),
+          verdictOutput(accepted),
+        ),
+    outcome: accepted.approved ? "approved" : "rejected",
+    verdict: accepted.approved ? "approved" : "rejected",
+    after:
+      step.action === "fail" && observed?.ok === false
+        ? [setWorkflowFailed(context, `host_evidence_missing: ${observed.reason}`)]
+        : after,
   };
 }
 
@@ -826,6 +863,21 @@ function finalAuditPlan(
   }
   const workflowId = view.workflow.workflowId;
   if (verdict.approved) {
+    const evidence = workflowEvidence(store, view.workflow, view.tasks, view.audits);
+    if (!evidence.ok) {
+      return {
+        before: [],
+        completion: failure(
+          context,
+          "audit.evidence_missing",
+          evidence.reason,
+          verdictOutput(verdict),
+        ),
+        outcome: "evidence_missing",
+        verdict: "rejected",
+        after: [setWorkflowFailed(context, `host_evidence_missing: ${evidence.reason}`)],
+      };
+    }
     return {
       before: [
         () => {
@@ -840,14 +892,22 @@ function finalAuditPlan(
           });
         },
       ],
-      completion: { runId: context.runId, outcome: "succeeded", result: verdictOutput(verdict) },
+      completion: {
+        runId: context.runId,
+        outcome: "succeeded",
+        result: { ...verdictOutput(verdict), evidence: evidence as unknown as JsonObject },
+      },
       outcome: "approved",
       verdict: "approved",
       after: [
         () => {
           if (reachStop(store, epoch, workflowId, { type: "workflow_completing" })) return;
           if (store.workflows.get(workflowId)?.state === "running") {
-            store.workflows.setState(epoch, { workflowId, state: "completed" });
+            store.workflows.setState(epoch, {
+              workflowId,
+              state: "completed",
+              reason: short(evidenceStatus(evidence)),
+            });
           }
         },
       ],
@@ -929,7 +989,7 @@ export function commitPlanOf(
     case "executor":
       return executorPlan(context, outcome);
     case "auditor": {
-      const subject = view.task(task.parentTaskId);
+      const subject = view.task(task.auditedTaskId);
       return subject?.role === "executor"
         ? taskAuditPlan(context, outcome, action, refusals, subject)
         : finalAuditPlan(context, outcome, action, refusals);

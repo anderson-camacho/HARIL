@@ -16,7 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDelegationTools } from "../src/runtime/delegation-tools.js";
 import { runUntilIdle } from "../src/runtime/run-loop.js";
 import { createShutdown } from "../src/runtime/shutdown.js";
-import { makeSandbox, type Sandbox } from "./helpers.js";
+import { makeSandbox, type Sandbox, workflowIntake } from "./helpers.js";
 import { until } from "./process-helpers.js";
 
 // The 15-minute watchdog in the runtime (docs/modos-y-delegacion.md 3.16, reading L2), on virtual time: the clock the
@@ -79,6 +79,7 @@ function startWorkflow(store: Store, goal: string, limits: Partial<DelegationLim
     type: "workflow.start",
     projectId,
     args: {
+      intake: workflowIntake(store.projects.list()[0]?.rootPath as string),
       goal,
       model: "fake/high-model",
       agent: "fake:orchestrate",

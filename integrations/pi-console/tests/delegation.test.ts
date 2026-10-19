@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type CommandHost, registerCommands } from "../src/commands.js";
@@ -22,6 +23,9 @@ let shown: string[];
 let opened: string[];
 let selects: { title: string; options: string[] }[];
 let pick: (options: string[]) => string | undefined;
+let currentPlan: string | undefined;
+let pending: CommandHost["pending"];
+let switched: string[];
 
 // Each ctx.ui.custom call draws the card once and then feeds it the next batch of keys.
 function scriptOverlay(): void {
@@ -49,15 +53,23 @@ function scriptOverlay(): void {
     });
   ui.select = async (title: string, options: string[]) => {
     selects.push({ title, options });
-    return pick(options);
+    return (
+      pick(options) ??
+      (title.includes("exact plan source")
+        ? options[2]
+        : title.includes("methodology")
+          ? options[3]
+          : undefined)
+    );
   };
+  ui.input = async () => "Use the supplied methodology instructions exactly.";
 }
 
 function host(): CommandHost {
   return {
     cwd: tmpdir(),
     project: { slug: "fake-proj", name: "Fake", rootPath: tmpdir() },
-    pending: [],
+    pending,
     area: undefined,
     started: undefined,
     harilModelRef: () => "fake-gw/fake-model",
@@ -74,22 +86,45 @@ function host(): CommandHost {
     toggleOrchestrationDemo: () => false,
     openOrchestrationView: async () => undefined,
     mode: () => "delegation",
-    switchMode: () => undefined,
-    lastPlan: () => undefined,
+    switchMode: (mode: string) => {
+      switched.push(mode);
+    },
+    lastPlan: () => currentPlan,
   } as unknown as CommandHost;
 }
 
 function startCalls(): string[][] {
   return cli
     .calls()
-    .filter((call) => call.args[0] === "workflow" && call.args[1] === "start")
+    .filter(
+      (call) =>
+        call.args[0] === "workflow" &&
+        call.args[1] === "start" &&
+        !call.args.includes("--preflight"),
+    )
     .map((call) => call.args);
 }
 
 beforeEach(() => {
   cli = installFakeCli();
+  cli.answer("workflow start --preflight", {
+    stdout: JSON.stringify({
+      mode: "implementation",
+      status: "ready",
+      capabilities: {
+        writing: true,
+        worktreeList: true,
+        worktreeCreated: false,
+        testCommand: "npm test",
+        testsRun: false,
+        baseBranch: "main",
+        baseSha: "abc123",
+      },
+    }),
+  });
   cli.answer("workflow start", {
-    stdout: '{"commandId":"cmd-7","type":"workflow.start","status":"queued"}',
+    stdout:
+      '{"commandId":"cmd-7","type":"workflow.start","status":"queued","mode":"implementation","capabilities":{"writing":true,"worktreeList":true,"worktreeCreated":false,"testCommand":"npm test","testsRun":false,"baseBranch":"main","baseSha":"abc123"}}',
   });
   cli.answer("status", { stdout: "{}" });
   cli.answer("workflow list", { stdout: "[]" });
@@ -100,6 +135,9 @@ beforeEach(() => {
   opened = [];
   selects = [];
   pick = () => undefined;
+  currentPlan = "1. Change the requested behavior.\n2. Verify it with tests.";
+  pending = [];
+  switched = [];
   scriptOverlay();
 });
 
@@ -116,6 +154,9 @@ describe("/delegate", () => {
     keys = [["\r"]];
     await fake.commands.get("delegate")?.handler("Change the button color; stop at the end", ctx);
     expect(shown[0]).toContain("DELEGATE");
+    expect(shown[0]).toContain("Implementation");
+    expect(shown[0]).toContain("npm test");
+    expect(cli.calls().some((call) => call.args.includes("--preflight"))).toBe(true);
     expect(shown[0]).toContain("fake-gw/fake-model");
     expect(shown[0]).toMatch(/\[x\] at_end/);
     expect(startCalls()).toEqual([
@@ -132,6 +173,7 @@ describe("/delegate", () => {
         "at_end",
         "--project",
         "fake-proj",
+        "--intake-stdin",
         "--json",
       ],
     ]);
@@ -150,11 +192,84 @@ describe("/delegate", () => {
     expect(ctx.notes.at(-1)).toEqual(["Delegation cancelled: no workflow was started", "info"]);
   });
 
+  it("offers plan creation instead of starting a workflow for a vague goal", async () => {
+    pick = (options) => options.find((option) => option.startsWith("Create a plan"));
+    await fake.commands.get("delegate")?.handler("Improve it", ctx);
+    expect(startCalls()).toEqual([]);
+    expect(switched).toEqual(["plan"]);
+    expect(ctx.notes.some(([message]) => message.includes("Write an explicit plan"))).toBe(true);
+  });
+
+  it("preserves explicit read-only consultation without queueing", async () => {
+    pick = (options) => options.find((option) => option.startsWith("Continue read-only"));
+    await fake.commands.get("delegate")?.handler("Investigate", ctx);
+    expect(switched).toEqual(["consult"]);
+    expect(startCalls()).toEqual([]);
+  });
+
+  it("selects an exact prior workflow plan rather than using the goal as a plan", async () => {
+    const text = "1. Inspect the parser.\n2. Add regression tests.\n";
+    const sha256 = createHash("sha256").update(text).digest("hex");
+    cli.answer("workflow list", {
+      stdout: JSON.stringify([
+        {
+          workflowId: "wf-old",
+          projectId: "project-1",
+          state: "completed",
+          stopReason: null,
+          goal: "Old goal",
+          intake: { plan: { sourceId: "file:original", revision: "v3", sha256 } },
+        },
+      ]),
+    });
+    cli.answer("workflow show", {
+      stdout: JSON.stringify({
+        workflowId: "wf-old",
+        projectId: "project-1",
+        intake: {
+          plan: { sourceId: "file:original", revision: "v3", sha256, text },
+        },
+      }),
+    });
+    pick = (options) =>
+      options.find(
+        (option) => option.startsWith("Select an existing") || option === "Workflow wf-old",
+      );
+    keys = [["\r"]];
+    await fake.commands.get("delegate")?.handler("Improve it", ctx);
+    expect(startCalls()).toHaveLength(1);
+    expect(startCalls()[0]).not.toContain(text);
+    expect(cli.calls().some((call) => call.args.includes("--intake-json"))).toBe(true);
+  });
+
+  it("selects a stored approval plan with tasks", async () => {
+    cli.answer("approvals --all", {
+      stdout: JSON.stringify([
+        { approvalId: "approval-1", projectSlug: "fake-proj", tasks: 2, status: "granted" },
+      ]),
+    });
+    cli.answer("approvals show", {
+      stdout: JSON.stringify({
+        approvalId: "approval-1",
+        projectSlug: "fake-proj",
+        plan: { tasks: [{ goal: "Write tests" }] },
+      }),
+    });
+    pick = (options) =>
+      options.find(
+        (option) => option.startsWith("Select an existing") || option === "Approval approval-1",
+      );
+    keys = [["\r"]];
+    await fake.commands.get("delegate")?.handler("Improve it", ctx);
+    expect(startCalls()).toHaveLength(1);
+    expect(cli.calls().some((call) => call.args.includes("approval-1"))).toBe(true);
+  });
+
   it("picks another model with M and comes back to the card", async () => {
     keys = [["m"], ["\u001b[B", " ", "\r"]];
     pick = (options) => options.find((option) => option === "fake-gw/fake-high-model");
     await fake.commands.get("delegate")?.handler("Write the tests, don't stop", ctx);
-    expect(selects[0]?.title).toMatch(/high model/);
+    expect(selects.some((entry) => /high model/.test(entry.title))).toBe(true);
     const [args] = startCalls();
     expect(args?.[args.indexOf("--model") + 1]).toBe("fake-gw/fake-high-model");
     expect(args?.[args.indexOf("--stop-at") + 1]).toBe("at_end");
@@ -178,6 +293,27 @@ describe("/delegate", () => {
     keys = [["\r"]];
     await fake.commands.get("delegate")?.handler("Goal", ctx);
     expect(ctx.notes.at(-1)).toEqual(['haril: no project with slug "fake-proj"', "error"]);
+    expect(opened).toEqual([]);
+  });
+
+  it("does not show confirmation or queue when implementation preflight fails", async () => {
+    cli.answer("workflow start --preflight", {
+      stderr: "haril: implementation requires Git worktrees\n",
+      code: 2,
+    });
+    keys = [["\r"]];
+    await fake.commands.get("delegate")?.handler("Goal", ctx);
+    expect(startCalls()).toEqual([]);
+    expect(shown).toEqual([]);
+    expect(ctx.notes.at(-1)).toEqual(["haril: implementation requires Git worktrees", "error"]);
+  });
+
+  it("does not announce implementation when the queued response lacks its mode", async () => {
+    cli.answer("workflow start", { stdout: '{"commandId":"cmd-7","status":"queued"}' });
+    keys = [["\r"]];
+    await fake.commands.get("delegate")?.handler("Goal", ctx);
+    expect(startCalls()).toHaveLength(1);
+    expect(ctx.notes.at(-1)?.[0]).toMatch(/response.*verified/i);
     expect(opened).toEqual([]);
   });
 });
@@ -246,16 +382,17 @@ describe("typing in DELEGATION mode", () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
   }
 
-  it("opens the card instead of sending the text to the model", async () => {
-    keys = [["\u001b"]];
+  it("asks for an exact plan instead of starting on a vague message", async () => {
     const [result] = await fake.fire(
       "input",
       { text: "Translate the README", source: "interactive" },
       ctx,
     );
     expect(result).toEqual({ action: "handled" });
-    await settle(() => shown.length > 0);
-    expect(shown[0]).toContain("Translate the README");
+    await settle(() => ctx.notes.some(([message]) => message.includes("registered project")));
+    expect(shown).toEqual([]);
+    expect(startCalls()).toEqual([]);
+    expect(ctx.notes.some(([message]) => message.includes("registered project"))).toBe(true);
   });
 
   it("refuses the text with a hint while a workflow runs or waits (P5)", async () => {

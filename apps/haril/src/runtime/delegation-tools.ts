@@ -24,14 +24,16 @@ import {
   proposalFromDelegate,
 } from "@haril/core";
 import type { Clock, DelegationToolHandler, DelegationToolResult, Store } from "@haril/core/ports";
+import { changedPaths, headCommit } from "@haril/git";
 import { createIntegration, type Integration, unmergedSteps } from "./integration.js";
+import { projectTestCommand } from "./workflow-evidence.js";
 import {
   type DelegationOptions,
   type WorkflowSettings,
   WorkflowView,
   workflowSettings,
 } from "./workflow-view.js";
-import type { TurnWorkspace, Workspaces, WriteScope } from "./worktrees.js";
+import { type TurnWorkspace, type Workspaces, type WriteScope, worktreeGit } from "./worktrees.js";
 
 // The host side of the delegation tools (docs/modos-y-delegacion.md 3.4, 3.5, 3.6): one handler serves every agent
 // runtime, the FakeAgentRuntime option now and Pi's bridge tools in phase F2b, as plan-proposals.ts does for
@@ -358,6 +360,14 @@ export function createDelegationTools(deps: DelegationToolsDeps): DelegationTool
       const input = valid.input;
       const args = input.args ?? [];
       const runId = window.attempt.runId;
+      const testCommand = projectTestCommand(workspace.root, input.command, args);
+      const git = worktreeGit(workspaces.settings.git ?? {}, workspace);
+      const cleanAuditedCommit =
+        testCommand !== null &&
+        task.role === "auditor" &&
+        task.auditedTaskId !== null &&
+        (await headCommit(workspace.root, git)) === workspace.startHead &&
+        (await changedPaths(workspace.root, git))?.length === 0;
       // The command's process is recorded with the run, so a stop and the sweeps find it; it ends with the turn.
       const result = await workspaces.run(workspace, input.command, args, {
         ...(window.ended === undefined ? {} : { signal: window.ended }),
@@ -380,6 +390,8 @@ export function createDelegationTools(deps: DelegationToolsDeps): DelegationTool
         },
       });
       if (!result.ok) return refuse(window, result.reason);
+      const projectTest =
+        cleanAuditedCommit && (await headCommit(workspace.root, git)) === workspace.startHead;
       store.events.append({
         aggregateType: "task",
         aggregateId: task.taskId,
@@ -390,6 +402,8 @@ export function createDelegationTools(deps: DelegationToolsDeps): DelegationTool
           workflowId: view.workflow.workflowId,
           command: input.command,
           argsSha256: sha256(JSON.stringify(args)),
+          projectTest,
+          testCommand: projectTest ? testCommand : null,
           exitCode: result.exitCode,
           timedOut: result.timedOut,
           durationMs: result.durationMs,

@@ -23,6 +23,7 @@ import {
   parseJson,
   projectRoot,
   type Sandbox,
+  withWorkflowIntake,
 } from "./helpers.js";
 import { alive, killNoted, sleep, toolProcesses, until } from "./process-helpers.js";
 
@@ -131,9 +132,14 @@ async function agentsInFlight(store: Store, count: number): Promise<Agent[]> {
 
 async function queue(host: HostInfo, argv: readonly string[]): Promise<void> {
   const h = harness();
-  const code = await run(argv, h.io, host);
+  // These process-stop scenarios need explicit intake but never write project files.
+  const command =
+    argv[0] === "workflow" && argv[1] === "start"
+      ? withWorkflowIntake(sb, projectRoot(sb, "demo"), [...argv, "--read-only"])
+      : [...argv];
+  const code = await run(command, h.io, host);
   if (code !== 0)
-    throw new Error(`haril ${argv.join(" ")} exited ${String(code)}: ${h.err.join(" ")}`);
+    throw new Error(`haril ${command.join(" ")} exited ${String(code)}: ${h.err.join(" ")}`);
 }
 
 function startRuntime(host: HostInfo): { out: Harness; done: Promise<number> } {

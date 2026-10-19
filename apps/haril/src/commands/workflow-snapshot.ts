@@ -20,6 +20,7 @@ export interface ThreadView {
   readonly role: WorkflowTaskRecord["role"];
   readonly layer: 1 | 2 | 3;
   readonly parentThreadId: string | null;
+  readonly auditedThreadId: string | null;
   // In creation order.
   readonly turns: readonly WorkflowTaskRecord[];
 }
@@ -49,13 +50,15 @@ export function threadsOf(tasks: readonly WorkflowTaskRecord[]): ThreadView[] {
     const first = turns[0] as WorkflowTaskRecord;
     const parent = first.parentTaskId === null ? undefined : byTask.get(first.parentTaskId);
     const parentThreadId = parent?.threadId ?? null;
+    const subject = first.auditedTaskId === null ? undefined : byTask.get(first.auditedTaskId);
+    const auditedThreadId = subject?.threadId ?? null;
     let code: string;
     let label: string;
     if (first.role === "auditor") {
-      const parentCode = parentThreadId === null ? undefined : codeOf.get(parentThreadId);
-      if (parent?.role === "executor" && parentCode !== undefined) {
-        code = `a${parentCode.slice(1)}`;
-        label = `Auditor of ${parentCode}`;
+      const subjectCode = auditedThreadId === null ? undefined : codeOf.get(auditedThreadId);
+      if (subject?.role === "executor" && subjectCode !== undefined) {
+        code = `a${subjectCode.slice(1)}`;
+        label = `Auditor of ${subjectCode}`;
       } else {
         counters.final += 1;
         code = counters.final === 1 ? "fa" : `fa${counters.final}`;
@@ -74,6 +77,7 @@ export function threadsOf(tasks: readonly WorkflowTaskRecord[]): ThreadView[] {
       role: first.role,
       layer: first.layer,
       parentThreadId,
+      auditedThreadId,
       turns,
     });
   }
@@ -313,6 +317,10 @@ function nodeOf(thread: ThreadView, context: NodeContext): WorkflowNode {
       thread.parentThreadId === null
         ? null
         : (context.threads.get(thread.parentThreadId)?.code ?? null),
+    auditedId:
+      thread.auditedThreadId === null
+        ? null
+        : (context.threads.get(thread.auditedThreadId)?.code ?? null),
     threadId: thread.threadId,
     depth: 0,
     layer: thread.layer,

@@ -350,6 +350,11 @@ function jobLines(input: DelegationTurnInput): string[] {
 
 function roleInstructions(input: DelegationTurnInput): string[] {
   const lines = [
+    ...(input.intake === undefined || input.intake === null
+      ? []
+      : [
+          "The selected plan and methodology above are authoritative. Decompose and execute their actual tasks; do not substitute a generic plan, infer missing tasks, or claim an unavailable framework implementation.",
+        ]),
     ...jobLines(input),
     toolsLine(input.role, input.workspace ?? null),
     ...workspaceLines(input),
@@ -370,10 +375,20 @@ export interface DelegationPromptTask {
 
 export function delegationPrompt(task: DelegationPromptTask, input: DelegationTurnInput): string {
   const reads = input.files.read;
+  const intake = input.intake;
   return [
     task.goal,
     task.description,
     visibleText(`Workflow goal: ${input.workflowGoal}`),
+    ...(intake === undefined || intake === null
+      ? []
+      : [
+          `Project root: ${intake.projectRoot}`,
+          `Selected plan source: ${intake.plan.sourceId}; revision: ${intake.plan.revision ?? "none"}; SHA-256: ${intake.plan.sha256}`,
+          `Selected plan (exact text, do not replace with a generic plan):\n${intake.plan.text}`,
+          `Methodology: ${intake.methodology.id}; SHA-256: ${intake.methodology.sha256}`,
+          `Methodology instructions (exact snapshot):\n${intake.methodology.instructions}`,
+        ]),
     visibleText(
       `You are ${input.label}, the ${input.role} of this workflow (layer ${input.layer}); this is turn ${input.turn} of your thread (${input.turnKind}).`,
     ),

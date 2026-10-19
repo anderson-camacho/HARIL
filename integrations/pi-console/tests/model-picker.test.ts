@@ -6,6 +6,7 @@ import {
   chooseLevel,
   chooseModel,
   createLevelMemory,
+  delegationModelCatalog,
   groupModels,
   type LevelMemory,
   openModelAndLevel,
@@ -118,6 +119,33 @@ describe("groupModels", () => {
       "Gemini1/claude-sonnet-4-6",
       "Gemini1/gemini-3-flash",
     ]);
+  });
+});
+
+describe("delegationModelCatalog", () => {
+  it("deduplicates registry entries and separates executable HARIL references from unavailable Pi models", () => {
+    const unauthenticated: PiModel = { provider: "haril-gw", id: "Gemini2/private" };
+    const openAi: PiModel = { provider: "openai-api", id: "gpt-native" };
+    const claudeBridge: PiModel = { provider: "claude-bridge", id: "claude-native" };
+    const catalog = delegationModelCatalog(
+      [FLASH, FLASH, unauthenticated, openAi, claudeBridge],
+      [FLASH, openAi],
+    );
+
+    expect(catalog.compatible.flatMap((group) => group.models)).toEqual([FLASH]);
+    expect(catalog.unavailable.map((group) => group.label)).toEqual([
+      "claude-bridge",
+      "haril-gw · Gemini2",
+      "openai-api",
+    ]);
+    expect(
+      catalog.unavailable.find((group) => group.label === "haril-gw · Gemini2")?.reason,
+    ).toContain("no working credentials");
+    for (const provider of ["openai-api", "claude-bridge"]) {
+      expect(catalog.unavailable.find((group) => group.label === provider)?.reason).toContain(
+        "configure a HARIL provider in haril.json",
+      );
+    }
   });
 });
 
@@ -266,9 +294,23 @@ describe("level memory", () => {
 
 describe("dashboard model controls", () => {
   it("TOOLS offers Model and level; AGENTS keeps Choose Pi model", () => {
-    const tools = controlsFor("tools", emptyDashboardData("fake-project"), "idle");
+    const tools = controlsFor(
+      "tools",
+      emptyDashboardData("fake-project"),
+      "idle",
+      true,
+      false,
+      "en",
+    );
     expect(tools.map((control) => control.label)).toContain("Model and level");
-    const agents = controlsFor("agents", emptyDashboardData("fake-project"), "idle");
+    const agents = controlsFor(
+      "agents",
+      emptyDashboardData("fake-project"),
+      "idle",
+      true,
+      false,
+      "en",
+    );
     expect(agents.find((control) => control.action === "model")?.label).toBe("Choose Pi model");
   });
 

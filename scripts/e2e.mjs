@@ -445,15 +445,13 @@ const steps = [
           ["task", "add", "Read outside the project", "--agent", "analyst", "--project", "demo"],
           [0],
         );
-        return expectCode(["run", "--project", "demo"], [0]).out;
+        return expectCode(["run", "--project", "demo"], [1]).out;
       });
-      expect(
-        /^completed \S+ Read outside the project$/m.test(output),
-        "the task with denied reads did not complete",
-      );
-      const taskId = statusReport().taskList.find(
+      const deniedTask = statusReport().taskList.find(
         (task) => task.goal === "Read outside the project",
-      )?.taskId;
+      );
+      expect(deniedTask?.state === "failed", "all denied reads must fail closed");
+      const taskId = deniedTask?.taskId;
       expect(taskId !== undefined, "no read-outside task in status");
       const shown = expectCode(["task", "show", taskId], [0]).out;
       expect(/^permission denials: 3$/m.test(shown), "task show does not count 3 denials");
@@ -482,15 +480,13 @@ const steps = [
           ["task", "add", "Read through a link", "--agent", "analyst", "--project", "demo"],
           [0],
         );
-        return expectCode(["run", "--project", "demo"], [0]).out;
+        return expectCode(["run", "--project", "demo"], [1]).out;
       });
-      expect(
-        /^completed \S+ Read through a link$/m.test(output),
-        "the task that read through a link did not complete",
-      );
-      const taskId = statusReport().taskList.find(
+      const deniedTask = statusReport().taskList.find(
         (task) => task.goal === "Read through a link",
-      )?.taskId;
+      );
+      expect(deniedTask?.state === "failed", "a denied link read must fail closed");
+      const taskId = deniedTask?.taskId;
       expect(taskId !== undefined, "no read-through-link task in status");
       const shown = expectCode(["task", "show", taskId], [0]).out;
       expect(/^permission denials: 1$/m.test(shown), "task show does not count 1 denial");

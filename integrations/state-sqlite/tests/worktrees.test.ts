@@ -1,7 +1,14 @@
+import { resolve } from "node:path";
 import type { Store } from "@haril/core/ports";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openMemoryStore, type StoreError } from "../src/index.js";
-import { type ManualClock, manualClock, sequentialIds, testRules } from "./support.js";
+import {
+  type ManualClock,
+  manualClock,
+  sequentialIds,
+  testRules,
+  workflowIntake,
+} from "./support.js";
 
 // The worktrees of workflows that write (docs/modos-y-delegacion.md 3.10, phase F8; migration 0014): one per executor
 // thread and one integration worktree per workflow, recorded so a restart reuses them, the snapshot names their
@@ -11,6 +18,7 @@ let clock: ManualClock;
 let store: Store;
 let epoch: number;
 let workflowId: string;
+const projectRoot = resolve("demo");
 
 beforeEach(() => {
   clock = manualClock();
@@ -18,7 +26,7 @@ beforeEach(() => {
   const projectId = store.projects.register({
     slug: "demo",
     name: "Demo",
-    rootPath: "D:/demo",
+    rootPath: projectRoot,
   }).projectId;
   const grant = store.runtime.acquire({
     pid: 1,
@@ -32,6 +40,7 @@ beforeEach(() => {
     type: "workflow.start",
     projectId,
     args: {
+      intake: workflowIntake(projectRoot),
       goal: "Change the button",
       model: "fake/high-model",
       agent: "fake:orchestrate",

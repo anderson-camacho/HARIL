@@ -28,7 +28,7 @@ import { runUntilIdle } from "../src/runtime/run-loop.js";
 import { createShutdown, type Shutdown } from "../src/runtime/shutdown.js";
 import { createWorkspaces, integrationBranchOf } from "../src/runtime/worktrees.js";
 import { COMMIT_MAIN_SCRIPT, SNEAK_SCRIPT } from "./command-scripts.js";
-import { makeSandbox, type Sandbox } from "./helpers.js";
+import { makeSandbox, type Sandbox, workflowIntake } from "./helpers.js";
 
 // Real git and real processes: under the load of the full suite one test can take several seconds, so this file gives
 // its tests and hooks a minute instead of the suite's 15 s (a hang still fails it).
@@ -81,6 +81,14 @@ beforeEach(() => {
   git("init", "--quiet", "--initial-branch=main");
   writeFileSync(join(repo, "README.md"), "# demo\n");
   writeFileSync(join(repo, "src", "index.ts"), "export const ready = true;\n");
+  writeFileSync(
+    join(repo, "package.json"),
+    JSON.stringify({ scripts: { test: "node --test src/test.mjs" } }),
+  );
+  writeFileSync(
+    join(repo, "src", "test.mjs"),
+    "import { test } from 'node:test';\nimport { readFileSync } from 'node:fs';\ntest('project fixture', () => { if (!readFileSync('src/index.ts', 'utf8').includes('ready = true')) throw new Error('project is not ready'); });\n",
+  );
   git("add", ".");
   git("commit", "--quiet", "-m", "first");
 });
@@ -120,6 +128,7 @@ function startWorkflow(store: Store, goal: string): void {
     type: "workflow.start",
     projectId,
     args: {
+      intake: workflowIntake(store.projects.list()[0]?.rootPath as string),
       goal,
       model: "fake/high-model",
       agent: "fake:orchestrate",
@@ -184,7 +193,7 @@ async function run(
   const workspaces = createWorkspaces({
     root: join(sb.root, "wt"),
     commands: {
-      allow: setup.allow ?? ["node --version"],
+      allow: setup.allow ?? ["npm test"],
       timeoutMs: 60_000,
       outputMaxBytes: 4_096,
     },
@@ -249,12 +258,35 @@ async function runCommand(
 
 // Each scenario runs a whole workflow with real git: several seconds, more under the load of the full suite.
 describe.skipIf(!HAS_GIT)("a workflow that writes in parallel", () => {
+  it("fails closed when the approved writing workflow has no host-observed project test", async () => {
+    const store = open();
+    startWorkflow(store, "Write the part [fake:parts=1] [fake:steps=1] [fake:own-files]");
+    await run(store);
+    expect(onlyWorkflow(store).state).toBe("failed");
+    expect(onlyWorkflow(store).stopReason).toContain("test");
+  }, 120_000);
+
+  it("fails closed when writes are only claimed in text despite a successful host project test", async () => {
+    const store = open();
+    startWorkflow(store, "Write the part [fake:parts=1] [fake:steps=1] [fake:run=npm test]");
+    const wrap =
+      (call: DelegationToolHandler): DelegationToolHandler =>
+      (context, tool, input) =>
+        tool === "write" && roleOf(store, context.taskId) === "executor"
+          ? { ok: true, path: (input as { path: string }).path, bytes: 0, created: true }
+          : call(context, tool, input);
+    await run(store, { wrap });
+    expect(onlyWorkflow(store).state).toBe("failed");
+    expect(onlyWorkflow(store).stopReason).toContain("changed files");
+    expect(store.events.list().filter((event) => event.type === "worktree.committed")).toEqual([]);
+  }, 120_000);
+
   it("writes disjoint files at once, overlapping ones in sequence, and leaves an integration branch", async () => {
     const store = open();
     const mainBefore = git("rev-parse", "main");
     startWorkflow(
       store,
-      "Write the part [fake:parts=1] [fake:steps=3] [fake:own-files] [fake:run=node --version]",
+      "Write the part [fake:parts=1] [fake:steps=3] [fake:own-files] [fake:run=npm test]",
     );
     const log = await run(store);
     const workflow = onlyWorkflow(store);
@@ -332,7 +364,7 @@ describe.skipIf(!HAS_GIT)("a workflow that writes in parallel", () => {
 
   it("refuses a delegator's report of done while one of its approved steps is not merged", async () => {
     const store = open();
-    startWorkflow(store, "Write the part [fake:parts=1] [fake:steps=1]");
+    startWorkflow(store, "Write the part [fake:parts=1] [fake:steps=1] [fake:run=npm test]");
     const reports: DelegationToolResult[] = [];
     // The delegator's merges never reach the host: its approved step stays out of the integration branch. Every other
     // call goes through as it came (a planning turn's calls answer at once).
@@ -359,7 +391,7 @@ describe.skipIf(!HAS_GIT)("a workflow that writes in parallel", () => {
     const store = open();
     startWorkflow(
       store,
-      "Write a common file [fake:parts=2] [fake:steps=1] [fake:common=src/common.ts] [fake:run=node --version]",
+      "Write a common file [fake:parts=2] [fake:steps=1] [fake:common=src/common.ts] [fake:run=npm test]",
     );
     const replies: { when: string; reply: DelegationToolResult }[] = [];
     let probedIdle = false;
@@ -395,7 +427,7 @@ describe.skipIf(!HAS_GIT)("a workflow that writes in parallel", () => {
       }
       return await call(context, tool, input);
     };
-    await run(store, { allow: ["node --version"], wrap });
+    await run(store, { allow: ["npm test"], wrap });
     expect(replies.find((item) => item.when === "idle")?.reply).toMatchObject({
       ok: false,
       reason: expect.stringContaining("no merge waits for its conflicts"),
@@ -412,7 +444,7 @@ describe.skipIf(!HAS_GIT)("a workflow that writes in parallel", () => {
     const store = open();
     startWorkflow(
       store,
-      "Write a common file [fake:parts=2] [fake:steps=1] [fake:common=src/common.ts] [fake:run=node --version]",
+      "Write a common file [fake:parts=2] [fake:steps=1] [fake:common=src/common.ts] [fake:run=npm test]",
     );
     const log = await run(store);
     const workflow = onlyWorkflow(store);
@@ -437,7 +469,7 @@ describe.skipIf(!HAS_GIT)("a workflow that writes in parallel", () => {
     async (how, args) => {
       commitScripts();
       const store = open();
-      startWorkflow(store, "Write the part [fake:parts=1] [fake:steps=1]");
+      startWorkflow(store, "Write the part [fake:parts=1] [fake:steps=1] [fake:run=npm test]");
       let sneaked = false;
       // The executor's first attempt runs a command that commits outside its surface; then that attempt fails, or its
       // command also rewrote the .git file. The retry writes as usual.
@@ -455,7 +487,7 @@ describe.skipIf(!HAS_GIT)("a workflow that writes in parallel", () => {
             return reply;
           })();
         };
-      await run(store, { allow: ["node sneak.mjs", "node sneak.mjs tamper"], wrap });
+      await run(store, { allow: ["node sneak.mjs", "node sneak.mjs tamper", "npm test"], wrap });
       const workflow = onlyWorkflow(store);
       expect(sneaked).toBe(true);
       expect(workflow.state).toBe("completed");
@@ -472,12 +504,19 @@ describe.skipIf(!HAS_GIT)("a workflow that writes in parallel", () => {
     commitScripts();
     const store = open();
     // The auditor runs the command in the step's worktree; the delegator runs it before its merge and before its report.
-    startWorkflow(store, "Write the part [fake:parts=1] [fake:steps=1] [fake:run=node sneak.mjs]");
+    startWorkflow(store, "Write the part [fake:parts=1] [fake:steps=1] [fake:run=npm test]");
     const sneakedBy: string[] = [];
     const wrap =
       (call: DelegationToolHandler): DelegationToolHandler =>
       (context, tool, input) => {
         const delegator = roleOf(store, context.taskId) === "delegator";
+        if (roleOf(store, context.taskId) === "auditor" && tool === "haril_run") {
+          return (async () => {
+            const tested = await call(context, tool, input);
+            await runCommand(call, context, ["sneak.mjs"]);
+            return tested;
+          })();
+        }
         if (!delegator || (tool !== "haril_merge" && tool !== "haril_report")) {
           return call(context, tool, input);
         }
@@ -487,7 +526,7 @@ describe.skipIf(!HAS_GIT)("a workflow that writes in parallel", () => {
           return await call(context, tool, input);
         })();
       };
-    await run(store, { allow: ["node sneak.mjs"], wrap });
+    await run(store, { allow: ["node sneak.mjs", "npm test"], wrap });
     const workflow = onlyWorkflow(store);
     expect(sneakedBy).toEqual(["haril_merge", "haril_report"]);
     expect(workflow.state).toBe("completed");

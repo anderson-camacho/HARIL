@@ -1,17 +1,24 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import harilConsole from "../src/console.js";
-import { DASHBOARD_AREAS, type DashboardFacts, renderDashboardLayout } from "../src/dashboard.js";
+import {
+  DASHBOARD_AREAS,
+  type DashboardFacts,
+  renderDashboardLayout,
+  renderHeaderLayout,
+} from "../src/dashboard.js";
 import { type DashboardActionHost, openDashboardActionMenu } from "../src/dashboard-actions.js";
 import { controlsFor } from "../src/dashboard-controls.js";
 import { emptyDashboardData } from "../src/dashboard-data.js";
+import { readConsoleLocale } from "../src/locale.js";
 import { initialOrchestrationState } from "../src/orchestration-state.js";
 import type { ConsoleTheme } from "../src/pi-types.js";
+import { createTabPicker, initialTabPickerIndex } from "../src/tab-picker.js";
 import { stripAnsi } from "../src/text.js";
 import { fakeContext, fakePi } from "./fake-pi.js";
 
 // The console's modules after F5b (spec 7.8, P19): WORKFLOWS is retired, a workflow is seen in ORCHESTRATION, and the
-// methodologies (with the HARIL command list) are browsed from TOOLS, as they were from WORKFLOWS. Five modules, five
-// shortcuts.
+// methodologies (with the HARIL command list) are browsed from TOOLS, as they were from WORKFLOWS. Alt+H opens the
+// focused area picker; arrows wrap across its five areas.
 
 const NOW = 1_800_000_000_000;
 const THEME: ConsoleTheme = { fg: (_color, text) => text, bold: (text) => text };
@@ -84,30 +91,112 @@ describe("the console's modules", () => {
     expect(actions).toEqual(
       expect.arrayContaining(["toggle-tools", "model-level", "methodologies", "commands"]),
     );
-    const text = renderDashboardLayout("tools", facts(), 100, THEME, 40)
+    const text = renderDashboardLayout("tools", { ...facts(), locale: "en" }, 100, THEME, 40)
       .lines.map(stripAnsi)
       .join("\n");
     expect(text).toContain("Methodologies: 1 HARIL methodologies");
     expect(text).toContain("[B] Browse HARIL methodologies");
     expect(text).toContain("[C] Browse HARIL commands");
-    expect(text).toContain("Ctrl+Shift+1..5");
+    expect(text).toContain("Alt+H to choose area");
   });
 
-  it("have one shortcut each, Ctrl+Shift+1..5, and a /command each but /workflows", async () => {
+  it("defaults direct control and dashboard callers to Spanish without changing mouse action IDs", () => {
+    const directFacts = facts();
+    const layout = renderDashboardLayout("tools", directFacts, 100, THEME, 40);
+    const text = layout.lines.map(stripAnsi).join("\n");
+    expect(text).toContain("[S] Ajustes de delegación");
+    expect(text).toContain("[B] Explorar metodologías de HARIL");
+    expect(text).toContain("[C] Explorar comandos de HARIL");
+    expect(controlsFor("tools", directFacts.data, "idle").map((item) => item.label)).toContain(
+      "Ajustes de delegación",
+    );
+    expect(layout.controlHits.map((hit) => hit.action)).toEqual(
+      controlsFor("tools", directFacts.data, "idle", true, false, "en").map(
+        (control) => control.action,
+      ),
+    );
+    const detailsHit = layout.controlHits.find((hit) => hit.action === "details");
+    expect(detailsHit).toBeDefined();
+    expect(stripAnsi(layout.lines[detailsHit?.row ?? -1] ?? "")).toContain(
+      "[D] Ver detalles completos",
+    );
+  });
+
+  it("renders English controls only when explicitly configured", () => {
+    const englishFacts = { ...facts(), locale: "en" as const };
+    const layout = renderDashboardLayout("tools", englishFacts, 100, THEME, 40);
+    expect(layout.lines.map(stripAnsi).join("\n")).toContain("[S] Delegation settings");
+    expect(
+      controlsFor("tools", englishFacts.data, "idle", true, false, "en").map((item) => item.label),
+    ).toContain("Delegation settings");
+    expect(layout.controlHits.map((hit) => hit.action)).toEqual(
+      controlsFor("tools", englishFacts.data, "idle").map((item) => item.action),
+    );
+  });
+
+  it("decodes only valid persisted console locales", () => {
+    expect(readConsoleLocale({ path: "ui.locale", value: "en" })).toBe("en");
+    expect(readConsoleLocale({ path: "ui.locale", value: "es" })).toBe("es");
+    expect(readConsoleLocale({ path: "other", value: "en" })).toBe("es");
+    expect(readConsoleLocale({ path: "ui.locale", value: "fr" })).toBe("es");
+    expect(readConsoleLocale(undefined)).toBe("es");
+  });
+
+  it("uses a compact HARIL mark without decorative ASCII in narrow and wide headers", () => {
+    const narrow = renderHeaderLayout("1.2.3", 60, facts(), "tools", THEME, 24);
+    const wide = renderHeaderLayout("1.2.3", 140, facts(), "tools", THEME, 45);
+
+    const narrowText = narrow.lines.map(stripAnsi).join("\n");
+    const wideText = wide.lines.map(stripAnsi).join("\n");
+    for (const text of [narrowText, wideText]) {
+      expect(text).toContain("HARIL ◉");
+      expect(text).not.toContain("NEURAL LINK");
+      expect(text).not.toContain("MANY MINDS. ONE FLOW.");
+      expect(text).toContain("fake-project");
+      expect(text).toContain("fake-model · no reasoning");
+    }
+    expect(wideText).toContain("fake-cwd");
+    expect(wideText).toContain("Pi console active");
+    expect(wideText).not.toContain(".-~~~~~~~~~~-.");
+    for (const [layout, width] of [
+      [narrow, 60],
+      [wide, 140],
+    ] as const) {
+      expect(layout.tabHits.map((hit) => hit.area)).toEqual(DASHBOARD_AREAS);
+      expect(layout.tabHits.every((hit) => hit.row >= 0 && hit.end <= width)).toBe(true);
+    }
+  });
+
+  it("registers one area-picker shortcut and a /command each but /workflows", async () => {
     const fake = fakePi();
     harilConsole(fake.pi);
     const ctx = fakeContext();
     await fake.fire("session_start", { reason: "startup" }, ctx);
-    const areaShortcuts = [...fake.shortcuts.keys()].filter((key) => key.startsWith("ctrl+shift+"));
-    expect(areaShortcuts).toEqual([
-      "ctrl+shift+1",
-      "ctrl+shift+2",
-      "ctrl+shift+3",
-      "ctrl+shift+4",
-      "ctrl+shift+5",
-    ]);
+    expect([...fake.shortcuts.keys()].filter((key) => key.startsWith("ctrl+shift+"))).toEqual([]);
+    expect(fake.shortcuts.has("alt+h")).toBe(true);
     expect(fake.commands.has("workflows")).toBe(false);
     for (const area of DASHBOARD_AREAS) expect(fake.commands.has(area)).toBe(true);
+  });
+
+  it("starts on the current area, wraps left and right, confirms with Enter, and cancels with Esc", () => {
+    expect(initialTabPickerIndex("tools")).toBe(3);
+    const results: unknown[] = [];
+    const picker = createTabPicker("tools", (result) => results.push(result));
+    expect(picker.render(80).join("\n")).toContain("TOOLS");
+    picker.handleInput("\u001b[C");
+    expect(picker.render(80).join("\n")).toContain("EVERYWHERE");
+    picker.handleInput("\u001b[C");
+    expect(picker.render(80).join("\n")).toContain("AGENTS");
+    picker.handleInput("\u001b[D");
+    expect(picker.render(80).join("\n")).toContain("EVERYWHERE");
+    picker.handleInput("\r");
+    picker.handleInput("\u001b[C");
+    expect(results).toEqual([{ type: "open", area: "everywhere" }]);
+
+    const cancelled: unknown[] = [];
+    const cancelPicker = createTabPicker("tools", (result) => cancelled.push(result));
+    cancelPicker.handleInput("\u001b");
+    expect(cancelled).toEqual([{ type: "cancel" }]);
   });
 
   it("are the areas the /haril menu offers", async () => {
@@ -120,6 +209,7 @@ describe("the console's modules", () => {
       return step === 1 ? "Open an area" : undefined;
     };
     const host = {
+      locale: "en",
       project: undefined,
       orchestrationDemo: () => false,
       runtimeAvailable: () => false,
@@ -133,4 +223,103 @@ describe("the console's modules", () => {
     );
     expect(offered[1]).toEqual(["AGENTS", "ORCHESTRATION", "AUTOMATION", "TOOLS", "EVERYWHERE"]);
   });
+
+  it("dispatches translated menu choices through stable action and area IDs", async () => {
+    const ctx = fakeContext();
+    const selections: { title: string; options: string[] }[] = [];
+    let nextChoice = "Actualizar datos";
+    (ctx.ui as { select: unknown }).select = async (title: string, options: string[]) => {
+      selections.push({ title, options });
+      return nextChoice;
+    };
+    const reload = vi.fn(async () => undefined);
+    const refreshStatus = vi.fn(async () => undefined);
+    const openArea = vi.fn();
+    const host = {
+      project: undefined,
+      orchestrationDemo: () => false,
+      runtimeAvailable: () => false,
+      runtime: () => "idle",
+      mode: () => "action",
+      reload,
+      refreshStatus,
+      openArea,
+    } as unknown as DashboardActionHost;
+
+    await openDashboardActionMenu(ctx, fakePi().pi, host);
+    expect(selections[0]?.title).toBe("Controles de la consola HARIL");
+    expect(selections[0]?.options).toContain("Actualizar datos");
+    expect(selections[0]?.options).toContain("Abrir un área");
+    expect(reload).toHaveBeenCalledOnce();
+    expect(refreshStatus).toHaveBeenCalledOnce();
+
+    nextChoice = "Abrir un área";
+    (ctx.ui as { select: unknown }).select = async (title: string, options: string[]) => {
+      selections.push({ title, options });
+      return title === "Área del panel" ? "HERRAMIENTAS" : nextChoice;
+    };
+    await openDashboardActionMenu(ctx, fakePi().pi, host);
+    expect(openArea).toHaveBeenCalledWith("tools");
+    expect(selections.at(-1)?.options).toContain("HERRAMIENTAS");
+
+    const englishHost = { ...host, locale: "en" } as DashboardActionHost;
+    nextChoice = "Refresh data";
+    await openDashboardActionMenu(ctx, fakePi().pi, englishHost);
+    expect(selections.at(-1)?.options).toContain("Refresh data");
+    expect(reload).toHaveBeenCalledTimes(2);
+  });
+
+  it("filters state-changing menu actions by ID in both locales", async () => {
+    for (const locale of ["es", "en"] as const) {
+      const ctx = fakeContext();
+      let options: string[] = [];
+      (ctx.ui as { select: unknown }).select = async (_title: string, offered: string[]) => {
+        options = offered;
+        return undefined;
+      };
+      const host = {
+        locale,
+        project: { slug: "fake-project" },
+        orchestrationDemo: () => false,
+        runtimeAvailable: () => true,
+        runtime: () => "idle",
+        mode: () => "consult",
+      } as unknown as DashboardActionHost;
+      await openDashboardActionMenu(ctx, fakePi().pi, host);
+      expect(options).toContain(locale === "es" ? "Inspeccionar tareas" : "Inspect tasks");
+      expect(options).not.toContain(locale === "es" ? "Encolar un objetivo" : "Queue a goal");
+      expect(options).not.toContain(locale === "es" ? "Iniciar runtime" : "Start runtime");
+    }
+  });
+
+  it.each(["\u001b", "\u001b[27u", "\u001b[27;1u"])(
+    "closes inline area details on Escape input %s",
+    async (input) => {
+      const ctx = fakeContext();
+      (ctx.ui as { select: unknown }).select = async () => "View area details";
+      let handleInput: ((data: string) => void) | undefined;
+      (ctx.ui as { custom: unknown }).custom = (
+        factory: (...args: unknown[]) => { handleInput(data: string): void },
+      ) =>
+        new Promise<void>((resolve) => {
+          const component = factory({ requestRender: () => undefined }, THEME, undefined, () =>
+            resolve(),
+          );
+          handleInput = component.handleInput;
+        });
+      const host = {
+        locale: "en",
+        details: () => ({ title: "TOOLS details", lines: ["Deterministic detail"] }),
+        mode: () => "action",
+        orchestrationDemo: () => false,
+        runtimeAvailable: () => false,
+        runtime: () => "idle",
+      } as unknown as DashboardActionHost;
+
+      const opening = openDashboardActionMenu(ctx, fakePi().pi, host);
+      await vi.waitFor(() => expect(handleInput).toBeDefined());
+      handleInput?.(input);
+      await opening;
+    },
+  );
 });

@@ -3,7 +3,15 @@ import type { NewTurn, Store } from "@haril/core/ports";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { run } from "../src/cli.js";
 import { storeAccess } from "../src/host.js";
-import { harness, makeSandbox, parseJson, projectRoot, type Sandbox } from "./helpers.js";
+import {
+  harness,
+  makeSandbox,
+  parseJson,
+  projectRoot,
+  type Sandbox,
+  withWorkflowIntake,
+  workflowIntake,
+} from "./helpers.js";
 
 // The models and the quota in WorkflowSnapshot v1 (ADR-0021; phase F6): where each node's model came from (pinned by the
 // user, proposed by its parent, or chosen by the difficulty table), the reasoning level its attempt ran at when known,
@@ -71,6 +79,7 @@ function seed(): string {
     type: "workflow.start",
     projectId: store.projects.list()[0]?.projectId,
     args: {
+      intake: workflowIntake(store.projects.list()[0]?.rootPath as string),
       goal: "Answer from the notes",
       model: PINNED,
       agent: "orchestrator",
@@ -196,16 +205,17 @@ describe("the snapshot's models and quota", () => {
     stores.push(store);
     expect(
       await run(
-        [
+        withWorkflowIntake(sb, projectRoot(sb, "demo"), [
           "workflow",
           "start",
           "Plain",
+          "--read-only",
           "--model",
           PINNED,
           "--agent",
           "orchestrator",
           "--autonomous",
-        ],
+        ]),
         harness().io,
         sb.host,
       ),

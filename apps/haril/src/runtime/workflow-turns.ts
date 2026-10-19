@@ -148,6 +148,7 @@ export function buildTurnInput(
   const base = {
     workflowId: view.workflow.workflowId,
     workflowGoal: view.workflow.goal,
+    intake: view.workflow.intake,
     role: task.role,
     layer: task.layer,
     threadId: task.threadId,
@@ -206,7 +207,7 @@ export function buildTurnInput(
       };
     }
     case "auditor": {
-      const subject = view.task(task.parentTaskId);
+      const subject = view.task(task.auditedTaskId);
       if (subject?.role === "executor") {
         const assignment = view.assignmentOf(subject.threadId);
         return {

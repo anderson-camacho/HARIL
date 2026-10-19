@@ -1,5 +1,6 @@
 import type { DashboardArea } from "./dashboard.js";
 import type { DashboardData } from "./dashboard-data.js";
+import { DEFAULT_UI_LOCALE, localized, type UiLocale } from "./locale.js";
 
 export type DashboardAction =
   | "refresh"
@@ -36,88 +37,147 @@ export function controlsFor(
   runtime: string,
   runtimeAvailable = true,
   orchestrationDemo = false,
+  locale: UiLocale = DEFAULT_UI_LOCALE,
 ): DashboardControl[] {
-  const refresh: DashboardControl = { action: "refresh", label: "Refresh data", hint: "R" };
+  const control = (
+    action: DashboardAction,
+    hint: string,
+    english: string,
+    spanish: string,
+  ): DashboardControl => ({ action, hint, label: localized(locale, english, spanish) });
+  const refresh = control("refresh", "R", "Refresh data", "Actualizar datos");
   switch (area) {
     case "agents":
       return [
         ...(data.projectSlug === undefined
-          ? [{ action: "register-project" as const, label: "Register this folder", hint: "I" }]
+          ? [control("register-project", "I", "Register this folder", "Registrar esta carpeta")]
           : []),
-        { action: "details", label: "View complete details", hint: "D" },
-        { action: "model", label: "Choose Pi model", hint: "M" },
+        control("details", "D", "View complete details", "Ver detalles completos"),
+        control("model", "M", "Choose Pi model", "Elegir modelo de Pi"),
         ...(data.projectSlug === undefined
           ? []
-          : [{ action: "tasks" as const, label: "Tasks by observed agent", hint: "T" }]),
+          : [control("tasks", "T", "Tasks by observed agent", "Tareas por agente observado")]),
         refresh,
       ];
     case "orchestration":
       return [
         ...(data.projectSlug === undefined
-          ? [{ action: "register-project" as const, label: "Register this folder", hint: "I" }]
+          ? [control("register-project", "I", "Register this folder", "Registrar esta carpeta")]
           : []),
-        { action: "details", label: "View complete details", hint: "D" },
-        { action: "orchestration-view", label: "Open orchestration view", hint: "V" },
-        { action: "orchestration-pick", label: "Pick the workflow to follow", hint: "P" },
-        {
-          action: "orchestration-demo",
-          label: orchestrationDemo ? "Demo off (sample data)" : "Demo on (sample data)",
-          hint: "M",
-        },
+        control("details", "D", "View complete details", "Ver detalles completos"),
+        control(
+          "orchestration-view",
+          "V",
+          "Open orchestration view",
+          "Abrir vista de orquestación",
+        ),
+        control(
+          "orchestration-pick",
+          "P",
+          "Pick the workflow to follow",
+          "Elegir el flujo de trabajo a seguir",
+        ),
+        control(
+          "orchestration-demo",
+          "M",
+          orchestrationDemo ? "Demo off (sample data)" : "Demo on (sample data)",
+          orchestrationDemo
+            ? "Desactivar demostración (datos de ejemplo)"
+            : "Activar demostración (datos de ejemplo)",
+        ),
         ...(data.projectSlug === undefined
           ? []
           : [
-              {
-                action: "approvals" as const,
-                label: `Review approvals (${data.approvals.length})`,
-                hint: "A",
-              },
-              { action: "tasks" as const, label: "Inspect project tasks", hint: "T" },
-              { action: "goal" as const, label: "Queue a goal for planning", hint: "G" },
-              { action: "events" as const, label: "Project event history", hint: "E" },
+              control(
+                "approvals",
+                "A",
+                `Review approvals (${data.approvals.length})`,
+                `Revisar aprobaciones (${data.approvals.length})`,
+              ),
+              control("tasks", "T", "Inspect project tasks", "Inspeccionar tareas del proyecto"),
+              control(
+                "goal",
+                "G",
+                "Queue a goal for planning",
+                "Encolar un objetivo para planificación",
+              ),
+              control("events", "E", "Project event history", "Historial de eventos del proyecto"),
             ]),
         refresh,
       ];
     case "automation":
       return [
         ...(data.projectSlug === undefined
-          ? [{ action: "register-project" as const, label: "Register this folder", hint: "I" }]
+          ? [control("register-project", "I", "Register this folder", "Registrar esta carpeta")]
           : []),
-        { action: "details", label: "View complete details", hint: "D" },
+        control("details", "D", "View complete details", "Ver detalles completos"),
         ...(data.projectSlug === undefined
           ? []
           : [
               ...(runtimeAvailable && runtime === "idle"
                 ? [
-                    {
-                      action: "run-queue" as const,
-                      label: "Run this project's queued work",
-                      hint: "Q",
-                    },
-                    { action: "start-runtime" as const, label: "Start shared runtime", hint: "S" },
+                    control(
+                      "run-queue",
+                      "Q",
+                      "Run this project's queued work",
+                      "Ejecutar trabajo encolado del proyecto",
+                    ),
+                    control(
+                      "start-runtime",
+                      "S",
+                      "Start shared runtime",
+                      "Iniciar runtime compartido",
+                    ),
                   ]
                 : []),
               ...(runtimeAvailable && runtime === "running"
-                ? [{ action: "stop-runtime" as const, label: "Stop shared runtime", hint: "S" }]
+                ? [
+                    control(
+                      "stop-runtime",
+                      "S",
+                      "Stop shared runtime",
+                      "Detener runtime compartido",
+                    ),
+                  ]
                 : []),
-              { action: "tasks" as const, label: "Inspect queue and task states", hint: "T" },
+              control(
+                "tasks",
+                "T",
+                "Inspect queue and task states",
+                "Inspeccionar cola y estados de tareas",
+              ),
             ]),
         refresh,
       ];
     case "tools":
       return [
-        { action: "details", label: "View complete details", hint: "D" },
-        { action: "model-level", label: "Model and level", hint: "M" },
-        { action: "delegation", label: "Delegation settings", hint: "S" },
-        { action: "toggle-tools", label: "Enable or disable Pi tools", hint: "T" },
-        { action: "methodologies", label: "Browse HARIL methodologies", hint: "B" },
-        { action: "commands", label: "Browse HARIL commands", hint: "C" },
+        control("details", "D", "View complete details", "Ver detalles completos"),
+        control("model-level", "M", "Model and level", "Modelo y nivel"),
+        control("delegation", "S", "Delegation settings", "Ajustes de delegación"),
+        control(
+          "toggle-tools",
+          "T",
+          "Enable or disable Pi tools",
+          "Activar o desactivar herramientas de Pi",
+        ),
+        control(
+          "methodologies",
+          "B",
+          "Browse HARIL methodologies",
+          "Explorar metodologías de HARIL",
+        ),
+        control("commands", "C", "Browse HARIL commands", "Explorar comandos de HARIL"),
         refresh,
       ];
     case "everywhere":
       return [
-        { action: "details", label: "View complete details", hint: "D" },
-        { action: "memory", label: "Show recorded memory health", hint: "M" },
+        control("details", "D", "View complete details", "Ver detalles completos"),
+        control(
+          "memory",
+          "M",
+          "Show recorded memory health",
+          "Mostrar estado de la memoria registrada",
+        ),
         refresh,
       ];
   }

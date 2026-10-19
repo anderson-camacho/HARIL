@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { validateWorkflowSnapshot, type WorkflowSnapshot } from "@haril/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { run } from "../src/cli.js";
@@ -16,6 +19,8 @@ import {
 
 let sb: Sandbox;
 let h: Harness;
+let intakeFile: string;
+const EXACT_PLAN = "1. Change the button.\n2. Test the behavior.\n";
 
 beforeEach(async () => {
   sb = makeSandbox();
@@ -29,6 +34,22 @@ beforeEach(async () => {
     "demo",
     "--yes",
   ]);
+  intakeFile = join(sb.root, "workflow-intake.json");
+  writeFileSync(
+    intakeFile,
+    JSON.stringify({
+      projectRoot: projectRoot(sb, "demo"),
+      plan: {
+        sourceId: "file:fixture-plan",
+        revision: "v1",
+        text: EXACT_PLAN,
+      },
+      methodology: {
+        id: "custom",
+        instructions: "Implement the selected tasks and report observed tests.",
+      },
+    }),
+  );
 });
 
 afterEach(() => {
@@ -37,7 +58,9 @@ afterEach(() => {
 
 async function invoke(args: string[]): Promise<number> {
   h = harness();
-  return await run(args, h.io, sb.host);
+  // These intake/lifecycle fixtures use a plain directory and intentionally exercise consultation.
+  const command = args[0] === "workflow" && args[1] === "start" ? [...args, "--read-only"] : args;
+  return await run(command, h.io, sb.host);
 }
 
 async function workflowId(): Promise<string> {
@@ -48,6 +71,135 @@ async function workflowId(): Promise<string> {
 }
 
 describe("haril workflow start, list, show and continue", () => {
+  it("refuses a vague goal without an explicit project root, plan, and methodology", async () => {
+    expect(await invoke(["workflow", "start", "Improve it", "--model", "fake/m"])).toBe(2);
+    expect(h.err.join(" ")).toMatch(/intake|plan|project/i);
+    expect(await invoke(["workflow", "list", "--json"])).toBe(0);
+    expect(parseJson<unknown[]>(h.out)).toEqual([]);
+  });
+
+  it("snapshots exact intake but omits sensitive plan text from workflow listings", async () => {
+    expect(
+      await invoke([
+        "workflow",
+        "start",
+        "Ship",
+        "--model",
+        "fake/m",
+        "--project",
+        "demo",
+        "--intake-file",
+        intakeFile,
+        "--json",
+      ]),
+    ).toBe(0);
+    expect(await invoke(["run"])).toBe(0);
+    expect(await invoke(["workflow", "list", "--json"])).toBe(0);
+    const [workflow] = parseJson<
+      Array<{
+        workflowId: string;
+        intake: { plan: { sourceId: string; sha256: string; text?: string } };
+      }>
+    >(h.out);
+    expect(workflow?.intake.plan).toMatchObject({
+      sourceId: "file:fixture-plan",
+      sha256: createHash("sha256").update(EXACT_PLAN).digest("hex"),
+    });
+    expect(workflow?.intake.plan.text).toBeUndefined();
+    expect(h.out.join(" ")).not.toContain(EXACT_PLAN);
+    expect(await invoke(["workflow", "show", workflow?.workflowId ?? "", "--intake-json"])).toBe(0);
+    const selected = parseJson<{
+      intake: { plan: { text: string; revision: string }; methodology: { instructions: string } };
+    }>(h.out);
+    expect(selected.intake.plan).toMatchObject({ text: EXACT_PLAN, revision: "v1" });
+    expect(selected.intake.methodology.instructions).toBe(
+      "Implement the selected tasks and report observed tests.",
+    );
+  });
+
+  it("rejects a plan from a different root before queueing", async () => {
+    writeFileSync(
+      intakeFile,
+      JSON.stringify({
+        projectRoot: sb.root,
+        plan: { sourceId: "file:wrong-root", revision: null, text: EXACT_PLAN },
+        methodology: { id: "custom", instructions: "Use this procedure." },
+      }),
+    );
+    expect(
+      await invoke([
+        "workflow",
+        "start",
+        "Ship",
+        "--model",
+        "fake/m",
+        "--project",
+        "demo",
+        "--intake-file",
+        intakeFile,
+      ]),
+    ).toBe(2);
+    expect(h.err.join(" ")).toMatch(/project root/);
+    expect(await invoke(["workflow", "list", "--json"])).toBe(0);
+    expect(parseJson<unknown[]>(h.out)).toEqual([]);
+  });
+
+  it("rejects a methodology label without usable instructions", async () => {
+    writeFileSync(
+      intakeFile,
+      JSON.stringify({
+        projectRoot: projectRoot(sb, "demo"),
+        plan: { sourceId: "file:plan", revision: null, text: EXACT_PLAN },
+        methodology: { id: "ODD", instructions: "Use ODD" },
+      }),
+    );
+    expect(
+      await invoke([
+        "workflow",
+        "start",
+        "Ship",
+        "--model",
+        "fake/m",
+        "--project",
+        "demo",
+        "--intake-file",
+        intakeFile,
+      ]),
+    ).toBe(2);
+    expect(h.err.join(" ")).toMatch(/framework label/);
+  });
+
+  it("accepts an exact intake over stdin without putting plan text in CLI arguments", async () => {
+    const intake = {
+      projectRoot: projectRoot(sb, "demo"),
+      plan: { sourceId: "console:session-1", revision: null, text: EXACT_PLAN },
+      methodology: { id: "custom", instructions: "Follow the selected tasks and report checks." },
+    };
+    h = harness();
+    expect(
+      await run(
+        [
+          "workflow",
+          "start",
+          "Ship",
+          "--model",
+          "fake/m",
+          "--project",
+          "demo",
+          "--intake-stdin",
+          "--read-only",
+          "--json",
+        ],
+        h.io,
+        { ...sb.host, readStdin: () => JSON.stringify(intake) },
+      ),
+    ).toBe(0);
+    expect(await invoke(["run"])).toBe(0);
+    expect(await invoke(["workflow", "list", "--json"])).toBe(0);
+    expect(
+      parseJson<Array<{ intake: { plan: { sourceId: string } } }>>(h.out)[0]?.intake.plan.sourceId,
+    ).toBe("console:session-1");
+  });
   it("queues a workflow that stops after its first plan, and runs it to the end once continued", async () => {
     expect(
       await invoke([
@@ -59,6 +211,10 @@ describe("haril workflow start, list, show and continue", () => {
         "[fake:parts=2]",
         "--model",
         "fake/high-model",
+        "--project",
+        "demo",
+        "--intake-file",
+        intakeFile,
         "--json",
       ]),
     ).toBe(0);
@@ -137,13 +293,17 @@ describe("haril workflow start, list, show and continue", () => {
         "--model",
         "fake/m",
         "--autonomous",
+        "--project",
+        "demo",
+        "--intake-file",
+        intakeFile,
       ]),
     ).toBe(0);
     expect(h.out[0]).toMatch(/^command \S+: queued/);
     expect(await invoke(["run"])).toBe(0);
     expect(await invoke(["workflow", "list"])).toBe(0);
     expect(h.out).toHaveLength(1);
-    expect(h.out[0]).toMatch(/ {2}completed {2}.* {2}Quick job$/);
+    expect(h.out[0]).toMatch(/ {2}completed(?: \([^)]*\))? {2}.* {2}Quick job$/);
     // A node that ended has no next watchdog check: the view must not promise one.
     expect(await invoke(["workflow", "show", await workflowId(), "--json"])).toBe(0);
     const snapshot = parseJson<WorkflowSnapshot>(h.out);
@@ -171,7 +331,20 @@ describe("haril workflow start, list, show and continue", () => {
   it("says so when a workflow does not exist or does not wait for the human", async () => {
     expect(await invoke(["workflow", "show", "no-such-workflow"])).toBe(2);
     expect(h.err.join("\n")).toMatch(/no workflow with id "no-such-workflow"/);
-    expect(await invoke(["workflow", "start", "Job", "--model", "fake/m", "--autonomous"])).toBe(0);
+    expect(
+      await invoke([
+        "workflow",
+        "start",
+        "Job",
+        "--model",
+        "fake/m",
+        "--autonomous",
+        "--project",
+        "demo",
+        "--intake-file",
+        intakeFile,
+      ]),
+    ).toBe(0);
     expect(await invoke(["run"])).toBe(0);
     expect(await invoke(["workflow", "continue", await workflowId()])).toBe(2);
     expect(h.err.join("\n")).toMatch(/is completed, not waiting for you/);

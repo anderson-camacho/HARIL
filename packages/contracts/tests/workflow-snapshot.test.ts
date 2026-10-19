@@ -92,6 +92,15 @@ describe("validateWorkflowSnapshot", () => {
     expect(validateWorkflowSnapshot(snapshot)).toEqual({ ok: true, snapshot });
   });
 
+  it("carries an auditor target independently from its structural parent", () => {
+    const auditor = { ...node, id: "a1", parentId: "d1", auditedId: "e1", role: "auditor" };
+    const result = validateWorkflowSnapshot({ ...snapshot, nodes: [auditor] });
+    expect(result).toMatchObject({
+      ok: true,
+      snapshot: { nodes: [{ parentId: "d1", auditedId: "e1" }] },
+    });
+  });
+
   it("rejects a node role or state outside the closed vocabulary", () => {
     for (const change of [
       { role: "boss" },

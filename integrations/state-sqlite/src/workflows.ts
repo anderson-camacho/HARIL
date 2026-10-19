@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { isAbsolute, resolve } from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { isStop, type Stop, type TaskState } from "@haril/contracts";
 import type {
@@ -18,6 +20,7 @@ import type {
   SetWorkflowStateInput,
   StrandedTurn,
   WorkflowAutonomy,
+  WorkflowIntake,
   WorkflowRecord,
   WorkflowsPort,
   WorkflowTaskRecord,
@@ -81,10 +84,10 @@ const TERMINAL = new Set(["completed", "failed", "stopped"]);
 const TERMINAL_TASK = new Set(["completed", "failed", "cancelled"]);
 
 const WORKFLOW_COLUMNS =
-  "workflow_id AS workflowId, project_id AS projectId, root_task_id AS rootTaskId, goal, state, autonomy, limits, orchestrator_model AS orchestratorModel, agents_created AS agentsCreated, stop_reason AS stopReason, base_branch AS baseBranch, base_sha AS baseSha, simulated, order_id AS orderId, created_at AS createdAt, ended_at AS endedAt";
+  "workflow_id AS workflowId, project_id AS projectId, root_task_id AS rootTaskId, goal, intake, state, autonomy, limits, orchestrator_model AS orchestratorModel, agents_created AS agentsCreated, stop_reason AS stopReason, base_branch AS baseBranch, base_sha AS baseSha, simulated, order_id AS orderId, created_at AS createdAt, ended_at AS endedAt";
 
 const TASK_COLUMNS =
-  "task_id AS taskId, workflow_id AS workflowId, thread_id AS threadId, parent_task_id AS parentTaskId, role, layer, kind, local_id AS localId, delegation_id AS delegationId, goal, description, state, block_reason AS blockReason, cooldown_until AS cooldownUntil, agent_ref AS agentRef, model, model_pinned AS modelPinned, difficulty, difficulty_reason AS difficultyReason, priority, created_seq AS createdSeq, attempt, budget_max_tokens AS budgetTokens, timeout_ms AS timeoutMs, surface_write AS surfaceWrite, surface_read AS surfaceRead, result, next_check_at AS nextCheckAt, created_at AS createdAt, completed_at AS completedAt";
+  "task_id AS taskId, workflow_id AS workflowId, thread_id AS threadId, parent_task_id AS parentTaskId, audited_task_id AS auditedTaskId, role, layer, kind, local_id AS localId, delegation_id AS delegationId, goal, description, state, block_reason AS blockReason, cooldown_until AS cooldownUntil, agent_ref AS agentRef, model, model_pinned AS modelPinned, difficulty, difficulty_reason AS difficultyReason, priority, created_seq AS createdSeq, attempt, budget_max_tokens AS budgetTokens, timeout_ms AS timeoutMs, surface_write AS surfaceWrite, surface_read AS surfaceRead, result, next_check_at AS nextCheckAt, created_at AS createdAt, completed_at AS completedAt";
 
 const DELEGATION_COLUMNS =
   "delegation_id AS delegationId, workflow_id AS workflowId, thread_id AS threadId, parent_task_id AS parentTaskId, proposed_by_run_id AS proposedByRunId, tool, payload_hash AS payloadHash, memo, payload, created_at AS createdAt";
@@ -101,6 +104,7 @@ function conflict(message: string, details: Record<string, unknown> = {}): Store
 function toWorkflow(row: Row): WorkflowRecord {
   return {
     ...(row as unknown as WorkflowRecord),
+    intake: row.intake === null ? null : (JSON.parse(String(row.intake)) as WorkflowIntake),
     autonomy: JSON.parse(String(row.autonomy)) as WorkflowAutonomy,
     limits: JSON.parse(String(row.limits)) as JsonObject,
     simulated: row.simulated === 1,
@@ -110,6 +114,84 @@ function toWorkflow(row: Row): WorkflowRecord {
 
 function nonBlank(value: unknown): value is string {
   return typeof value === "string" && value.trim() !== "";
+}
+
+function digest(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+function labelOnly(id: string, instructions: string): boolean {
+  const normalized = instructions
+    .trim()
+    .toLowerCase()
+    .replace(/[.\s]+$/g, "");
+  const label = id.trim().toLowerCase();
+  return (
+    normalized === label ||
+    ["use", "follow", "apply"].some((verb) => normalized === `${verb} ${label}`)
+  );
+}
+
+function sameRoot(selected: string, registered: string): boolean {
+  if (!isAbsolute(selected)) return false;
+  const left = resolve(selected);
+  const right = resolve(registered);
+  return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
+}
+
+function intakeOf(value: unknown, projectRoot: string): WorkflowIntake | string {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return "intake must include the explicit project root, selected plan, and methodology";
+  }
+  const candidate = value as Record<string, unknown>;
+  if (!nonBlank(candidate.projectRoot) || !sameRoot(candidate.projectRoot, projectRoot)) {
+    return "intake.projectRoot must match the selected project's registered root";
+  }
+  const plan = candidate.plan;
+  if (typeof plan !== "object" || plan === null || Array.isArray(plan)) {
+    return "intake.plan must name an exact selected plan";
+  }
+  const selected = plan as Record<string, unknown>;
+  if (!nonBlank(selected.sourceId) || !nonBlank(selected.text)) {
+    return "intake.plan requires a source identifier and non-empty exact text";
+  }
+  if (selected.revision !== null && !nonBlank(selected.revision)) {
+    return "intake.plan.revision must be non-empty or null";
+  }
+  if (selected.sha256 !== digest(selected.text)) {
+    return "intake.plan.sha256 does not match the selected text";
+  }
+  const methodology = candidate.methodology;
+  if (typeof methodology !== "object" || methodology === null || Array.isArray(methodology)) {
+    return "intake.methodology must include exact instructions, not just a label";
+  }
+  const selectedMethod = methodology as Record<string, unknown>;
+  if (!nonBlank(selectedMethod.id) || !nonBlank(selectedMethod.instructions)) {
+    return "intake.methodology requires an identifier and non-empty exact instructions";
+  }
+  if (labelOnly(selectedMethod.id, selectedMethod.instructions)) {
+    return "intake.methodology needs exact instructions, not just a framework label";
+  }
+  if (selectedMethod.sha256 !== digest(selectedMethod.instructions)) {
+    return "intake.methodology.sha256 does not match the instructions";
+  }
+  if (selected.text.length > 1_048_576 || selectedMethod.instructions.length > 1_048_576) {
+    return "intake plan or methodology exceeds the 1 MiB limit";
+  }
+  return {
+    projectRoot: candidate.projectRoot,
+    plan: {
+      sourceId: selected.sourceId,
+      revision: selected.revision,
+      sha256: selected.sha256,
+      text: selected.text,
+    },
+    methodology: {
+      id: selectedMethod.id,
+      instructions: selectedMethod.instructions,
+      sha256: selectedMethod.sha256,
+    },
+  } as WorkflowIntake;
 }
 
 // The autonomy of a workflow.start, or a reason it is refused. The mode follows the stops (no stop is autonomous),
@@ -209,6 +291,15 @@ export function createWorkflowsFacet(options: WorkflowsFacetOptions): {
     const args = command.args;
     const projectId = command.projectId ?? "";
     if (!nonBlank(args.goal)) return { ok: false, reason: "goal must be a non-empty text" };
+    const project = db
+      .prepare("SELECT root_path AS rootPath FROM projects WHERE project_id = ?")
+      .get(projectId) as { rootPath: string } | undefined;
+    if (project === undefined) return { ok: false, reason: "workflow project is unavailable" };
+    // The offline demo is a scripted simulation, not an implementation workflow. It has no selected plan.
+    const demo =
+      args.simulated === true && args.agent === "fake:orchestrate" && args.intake === undefined;
+    const intake = demo ? null : intakeOf(args.intake, project.rootPath);
+    if (typeof intake === "string") return { ok: false, reason: intake };
     if (!nonBlank(args.model)) {
       return { ok: false, reason: "model (the orchestrator's model) must be a non-empty model id" };
     }
@@ -243,11 +334,12 @@ export function createWorkflowsFacet(options: WorkflowsFacetOptions): {
     const taskId = ids.next();
     const threadId = ids.next();
     db.prepare(
-      "INSERT INTO workflows (workflow_id, project_id, root_task_id, goal, state, autonomy, limits, orchestrator_model, agents_created, base_branch, base_sha, simulated, order_id, created_at) VALUES (?, ?, NULL, ?, 'running', ?, ?, ?, 0, ?, ?, ?, ?, ?)",
+      "INSERT INTO workflows (workflow_id, project_id, root_task_id, goal, intake, state, autonomy, limits, orchestrator_model, agents_created, base_branch, base_sha, simulated, order_id, created_at) VALUES (?, ?, NULL, ?, ?, 'running', ?, ?, ?, 0, ?, ?, ?, ?, ?)",
     ).run(
       workflowId,
       projectId,
       args.goal as string,
+      intake === null ? null : JSON.stringify(intake),
       JSON.stringify(autonomy),
       JSON.stringify(limits),
       args.model as string,
@@ -394,9 +486,14 @@ export function createWorkflowsFacet(options: WorkflowsFacetOptions): {
         (
           db
             .prepare(
-              "SELECT task_id AS taskId, thread_id AS threadId, role FROM tasks WHERE workflow_id = ?",
+              "SELECT task_id AS taskId, thread_id AS threadId, parent_task_id AS parentTaskId, role FROM tasks WHERE workflow_id = ?",
             )
-            .all(workflow.workflowId) as Array<{ taskId: string; threadId: string; role: string }>
+            .all(workflow.workflowId) as Array<{
+            taskId: string;
+            threadId: string;
+            parentTaskId: string | null;
+            role: string;
+          }>
         ).map((row) => [row.taskId, row]),
       );
       const byKey = new Map<string, string>();
@@ -433,6 +530,21 @@ export function createWorkflowsFacet(options: WorkflowsFacetOptions): {
           }
           const parentTaskId =
             turn.parentTaskId === null ? null : resolve(turn.parentTaskId, where);
+          const auditedTaskId =
+            turn.auditedTaskId == null ? null : resolve(turn.auditedTaskId, where);
+          const auditedTask = auditedTaskId === null ? undefined : known.get(auditedTaskId);
+          if (auditedTaskId !== null) {
+            if (turn.role !== "auditor" || auditedTask?.role !== "executor") {
+              throw conflict(
+                `${where}: auditedTaskId must reference an executor turn from an auditor`,
+              );
+            }
+            if (auditedTask.parentTaskId !== parentTaskId) {
+              throw conflict(
+                `${where}: an auditor and its executor must have the same structural parent`,
+              );
+            }
+          }
           let threadId = turn.threadId;
           if (threadId === null) {
             threadId = ids.next();
@@ -447,6 +559,9 @@ export function createWorkflowsFacet(options: WorkflowsFacetOptions): {
           const dependencies = new Map<string, DependencyKind>();
           for (const dependency of turn.dependsOn) {
             dependencies.set(resolve(dependency.on, where), dependency.kind);
+          }
+          if (auditedTaskId !== null && dependencies.get(auditedTaskId) !== "completed") {
+            throw conflict(`${where}: an auditor must wait for its audited executor to complete`);
           }
           const taskId = ids.next();
           const state = dependencies.size === 0 ? "ready" : "pending";
@@ -476,6 +591,7 @@ export function createWorkflowsFacet(options: WorkflowsFacetOptions): {
                 role: turn.role,
                 threadId,
                 parentTaskId,
+                auditedTaskId,
                 difficulty: turn.difficulty,
                 difficultyReason: turn.difficultyReason,
                 modelPinned: turn.modelPinned,
@@ -493,7 +609,7 @@ export function createWorkflowsFacet(options: WorkflowsFacetOptions): {
             layer: turn.layer,
           });
           byKey.set(turn.key, taskId);
-          known.set(taskId, { taskId, threadId, role: turn.role });
+          known.set(taskId, { taskId, threadId, parentTaskId, role: turn.role });
           taskIds[turn.key] = taskId;
           threadIds[turn.key] = threadId;
         }

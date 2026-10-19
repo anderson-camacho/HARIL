@@ -1,8 +1,9 @@
-import { renderNeuralProfile, renderWordmark } from "./dashboard-art.js";
+import { renderBrandMark } from "./dashboard-art.js";
 import { controlsFor, type DashboardAction } from "./dashboard-controls.js";
 import type { DashboardData } from "./dashboard-data.js";
 import { frameGlyph, paddedCell, visualText } from "./dashboard-theme.js";
 import { delegationSummary } from "./delegation-settings.js";
+import { DEFAULT_UI_LOCALE, type UiLocale } from "./locale.js";
 import { ASCII_GLYPHS, UNICODE_GLYPHS } from "./orchestration-draw.js";
 import type { OrchestrationState, OrchestrationTarget } from "./orchestration-state.js";
 import { renderOrchestrationSummary } from "./orchestration-view.js";
@@ -21,6 +22,7 @@ export const DASHBOARD_AREAS = [
 export type DashboardArea = (typeof DASHBOARD_AREAS)[number];
 
 export interface DashboardFacts {
+  readonly locale?: UiLocale;
   readonly project: string;
   readonly cwd: string;
   readonly branch: string | null | undefined;
@@ -194,17 +196,9 @@ function wideHeader(
   const leftWidth = Math.floor((inside - 1) * 0.68);
   const rightWidth = inside - leftWidth - 1;
   const tabLayout = tabs(width, selected);
-  const title = ` HARIL NEURAL INTERFACE :: SESSION INIT  ·  ${version ?? "HARIL"} `;
+  const title = ` ${renderBrandMark()} :: SESSION INIT  ·  ${version ?? "HARIL"} `;
   const rows = [border(width, "┌", "─", "┐"), frameRow(title, width, "yellow")];
-  const left: string[] = [
-    ...renderWordmark(false).map((line, index) =>
-      paddedCell(line, leftWidth, index === 2 ? "yellow" : "cyan", "base"),
-    ),
-    paddedCell("MANY MINDS. ONE FLOW.", leftWidth, "teal", "base"),
-    ...renderNeuralProfile(leftWidth, false)
-      .slice(0, 6)
-      .map((line, index) => paddedCell(line, leftWidth, index === 3 ? "yellow" : "teal", "base")),
-  ];
+  const left: string[] = [paddedCell(renderBrandMark(), leftWidth, "yellow", "base")];
   const right = [
     statusRow("SESSION", "Pi console active", rightWidth),
     statusRow("PROJECT", facts.project, rightWidth),
@@ -264,12 +258,12 @@ export function renderHeaderLayout(
   _theme: ConsoleTheme,
   height = 24,
 ): HeaderLayout {
-  if (width < 10) return { lines: [fit("HARIL", width)], tabHits: [] };
+  if (width < 10) return { lines: [fit(renderBrandMark(), width)], tabHits: [] };
   if (width >= 120 && height >= 40) return wideHeader(width, version, facts, selected);
   const tabLayout = tabs(width, selected);
   const rows = [
     border(width, "┌", "─", "┐"),
-    `${frameGlyph("│")}${paddedCell(` ◆ HARIL ${version ?? ""} · MANY MINDS. ONE FLOW.`, width - 2, "yellow")}${frameGlyph("│")}`,
+    `${frameGlyph("│")}${paddedCell(` ${renderBrandMark()} ${version ?? ""}`, width - 2, "yellow")}${frameGlyph("│")}`,
     `${frameGlyph("│")}${paddedCell(` ${facts.project} · ${facts.modelLevel} · ${facts.runtime} · TOOLS ${facts.activeTools.length}/${facts.tools.length} · MCP ${facts.mcpServers.length}`, width - 2, "teal")}${frameGlyph("│")}`,
     ...tabLayout.lines.map(
       (line) =>
@@ -461,6 +455,7 @@ export function renderDashboardLayout(
     facts.runtime,
     facts.runtimeAvailable,
     facts.orchestration.demo,
+    facts.locale ?? DEFAULT_UI_LOCALE,
   );
   const controlHits: DashboardLayout["controlHits"][number][] = [];
   const rowIndex = lines.length;
@@ -473,7 +468,7 @@ export function renderDashboardLayout(
   }
   lines.push(
     boxRow(
-      `Click a control · /haril for keyboard menu · Ctrl+Shift+1..${DASHBOARD_AREAS.length} for areas`,
+      `Click a control · /haril for keyboard menu · Alt+H to choose area`,
       width,
       theme,
       "dim",

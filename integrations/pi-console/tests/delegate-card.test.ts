@@ -96,16 +96,17 @@ describe("the card", () => {
       "after_plan",
       "--project",
       "fake-proj",
+      "--intake-stdin",
       "--json",
     ]);
   });
 
   it("passes --autonomous when no stop is checked", () => {
     const card = createCard("Refactor, don't stop", MODEL);
-    const args = workflowStartArgs(card, undefined);
+    const args = workflowStartArgs(card, "fake-proj");
     expect(args).toContain("--autonomous");
     expect(args).not.toContain("--stop-at");
-    expect(args).not.toContain("--project");
+    expect(args).toContain("--project");
   });
 
   it("toggles stops with the keyboard and starts on Enter", () => {
@@ -151,6 +152,19 @@ describe("the card", () => {
     expect(
       renderCard(createCard("Go, don't stop", MODEL), 100, THEME).lines.map(stripAnsi).join("\n"),
     ).toMatch(/autonomous/);
+  });
+
+  it("shows implementation preflight as policy evidence rather than completed execution", () => {
+    const card = createCard("Implement the plan", MODEL, {
+      baseBranch: "main",
+      testCommand: "npm test",
+    });
+    const text = renderCard(card, 100, THEME).lines.map(stripAnsi).join("\n");
+    expect(text).toContain("Implementation");
+    expect(text).toContain("main");
+    expect(text).toContain("npm test");
+    expect(text).toMatch(/not run|pending/i);
+    expect(text).not.toContain("read-only for now");
   });
 
   it("acts on clicks: a stop row toggles it, the buttons start, cancel or choose the model", () => {

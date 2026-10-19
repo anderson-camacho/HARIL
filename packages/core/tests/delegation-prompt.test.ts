@@ -85,6 +85,29 @@ function turn(delegation: DelegationTurnInput, kind: "plan" | "work" | "verify" 
 }
 
 describe("buildAgentSpec for a workflow turn", () => {
+  it("passes the exact selected plan and methodology to the runtime prompt", () => {
+    const plan = "1. Keep these exact steps.\n2. Do not replace them.\n";
+    const method = "Use the user's explicit procedure.\n";
+    const spec = turn(
+      input({
+        intake: {
+          projectRoot: "D:/selected-project",
+          plan: {
+            sourceId: "console:session-1",
+            revision: "r2",
+            sha256: "a".repeat(64),
+            text: plan,
+          },
+          methodology: { id: "custom", sha256: "b".repeat(64), instructions: method },
+        },
+      }),
+    );
+    expect(spec.prompt).toContain(
+      `Selected plan (exact text, do not replace with a generic plan):\n${plan}`,
+    );
+    expect(spec.prompt).toContain(`Methodology instructions (exact snapshot):\n${method}`);
+    expect(spec.prompt).toContain("Project root: D:/selected-project");
+  });
   it("gives the role's archetype tools and carries the turn input for a fake agent", () => {
     const spec = turn(input());
     expect(spec.allowedTools).toEqual(["read", "haril_assign", "haril_report"]);

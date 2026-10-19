@@ -17,7 +17,8 @@ import {
   valueText,
 } from "./delegation-settings.js";
 import { supportedLevels, tokenCount } from "./model-levels.js";
-import { groupModels } from "./model-picker.js";
+import { delegationModelCatalog } from "./model-picker.js";
+import { keyOf } from "./orchestration-state.js";
 import type { ConsoleContext, ConsoleMouseEvent, PiModel } from "./pi-types.js";
 import { textWidth, truncate } from "./text.js";
 
@@ -239,11 +240,12 @@ export function openDelegationPanel(
           return screen.lines;
         },
         handleInput(data) {
-          if (data === "\u001b" || data === "q") return finish(undefined);
-          if (data === "\r" || data === "\n" || data === "e") return act({ kind: "edit" });
-          if (data === "r" || data === "R") return act({ kind: "reset" });
-          if (data === "\u001b[A" || data === "k") move(state, -1);
-          else if (data === "\u001b[B" || data === "j") move(state, 1);
+          const key = keyOf(data);
+          if (key === "escape" || key === "q") return finish(undefined);
+          if (key === "enter" || key === "e") return act({ kind: "edit" });
+          if (key === "r") return act({ kind: "reset" });
+          if (key === "up" || key === "k") move(state, -1);
+          else if (key === "down" || key === "j") move(state, 1);
           else if (data === "\u001b[5~") move(state, -10);
           else if (data === "\u001b[6~") move(state, 10);
           else if (data === "\u001b[H" || data === "g") move(state, -state.view.fields.length);
@@ -296,34 +298,60 @@ async function loadDelegationView(
   }
 }
 
-function available(ctx: ConsoleContext): PiModel[] {
+function modelCatalog(ctx: ConsoleContext) {
   try {
-    return ctx.modelRegistry.getAvailable().filter((model) => harilRefOf(model) !== undefined);
+    const all = ctx.modelRegistry.getAll();
+    const available = ctx.modelRegistry.getAvailable();
+    return delegationModelCatalog(all, available);
   } catch {
-    return [];
+    return delegationModelCatalog([], []);
   }
 }
 
 function piModelOf(ctx: ConsoleContext, ref: string | null): PiModel | undefined {
   if (ref === null) return undefined;
-  return available(ctx).find((model) => harilRefOf(model) === ref);
+  return modelCatalog(ctx)
+    .compatible.flatMap((group) => group.models)
+    .find((model) => harilRefOf(model) === ref);
 }
 
 const NOT_PINNED = "Not pinned: the parent or the difficulty table chooses";
 
-// A layer's model: HARIL's models that have credentials, by provider and account, each with its context and levels.
+// A layer's model: selectable HARIL models, with an informational-only catalog for models Pi cannot delegate.
 async function pickModel(
   ctx: ConsoleContext,
   field: SettingField,
 ): Promise<{ readonly arg: string; readonly value: SettingValue } | undefined> {
-  const models = available(ctx);
+  const catalog = modelCatalog(ctx);
+  const models = catalog.compatible.flatMap((group) => group.models);
+  const unavailableChoice = `View unavailable models (${catalog.unavailable.reduce((count, group) => count + group.models.length, 0)})`;
   const first = await ctx.ui.select(`${field.label} · ${rangeText(field)}`, [
     ...(models.length === 0 ? [] : ["Choose a model"]),
+    ...(catalog.unavailable.length === 0 ? [] : [unavailableChoice]),
     NOT_PINNED,
   ]);
   if (first === undefined) return undefined;
   if (first === NOT_PINNED) return { arg: "null", value: null };
-  const groups = groupModels(models);
+  if (first === unavailableChoice) {
+    const groups = catalog.unavailable;
+    let group = groups[0];
+    if (groups.length > 1) {
+      const groupLabels = groups.map(
+        (item) => `${item.label} · ${item.models.length} models · unavailable`,
+      );
+      const selected = await ctx.ui.select(
+        `${field.label} · unavailable provider or account`,
+        groupLabels,
+      );
+      group = selected === undefined ? undefined : groups[groupLabels.indexOf(selected)];
+    }
+    if (group !== undefined) {
+      const labels = group.models.map((model) => `[NOT SELECTABLE] ${model.id} · ${group.reason}`);
+      await ctx.ui.select(`${field.label} · ${group.label} · informational only`, labels);
+    }
+    return undefined;
+  }
+  const groups = catalog.compatible;
   let group = groups[0];
   if (groups.length > 1) {
     const labels = groups.map((item) => `${item.label} · ${item.models.length} models`);
@@ -415,7 +443,8 @@ async function addEntry(
   list: readonly string[],
 ): Promise<string | undefined> {
   if (field.kind.type === "model-list") {
-    const refs = available(ctx)
+    const refs = modelCatalog(ctx)
+      .compatible.flatMap((group) => group.models)
       .map((model) => harilRefOf(model) as string)
       .filter((ref) => !list.includes(ref));
     if (refs.length === 0) {

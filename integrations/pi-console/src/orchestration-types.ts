@@ -26,6 +26,7 @@ type UsageKind = "chat" | "agent_run";
 export interface WorkflowNode {
   readonly id: string;
   readonly parentId: string | null;
+  readonly auditedId?: string | null;
   readonly threadId: string;
   readonly depth: number;
   readonly layer: 1 | 2 | 3;

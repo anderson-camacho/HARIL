@@ -150,6 +150,10 @@ function sha256(value: unknown): string {
   return createHash("sha256").update(canonicalJson(value), "utf8").digest("hex");
 }
 
+function textHash(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
 function settled(task: WorkflowTaskRecord): boolean {
   return (
     TERMINAL_TASK.has(task.state) || (task.state === "blocked" && task.blockReason === "dep_failed")
@@ -196,6 +200,13 @@ export function runDemoWorkflow(
   let tokensSinceSweep = 0;
 
   // --- start: the workflow.start command, as `haril workflow start` will queue it, and the order behind it -------
+  const projectRoot = store.projects
+    .list()
+    .find((project) => project.projectId === projectId)?.rootPath;
+  if (projectRoot === undefined) throw new Error(`project ${projectId} vanished`);
+  const planText = `1. Complete the demo goal: ${settings.goal}\n2. Verify the result.\n`;
+  const instructions =
+    "Run the simulated delegation steps and report their observed audit results.";
   store.commands.enqueue({
     type: "workflow.start",
     projectId,
@@ -208,6 +219,16 @@ export function runDemoWorkflow(
       budgetTokens: 200_000,
       timeoutMs: limits.attemptTimeoutMs,
       simulated: true,
+      intake: {
+        projectRoot,
+        plan: {
+          sourceId: "demo:scenario",
+          revision: `seed:${settings.seed}`,
+          text: planText,
+          sha256: textHash(planText),
+        },
+        methodology: { id: "demo", instructions, sha256: textHash(instructions) },
+      },
     },
     idempotencyKey: `workflow-demo:${settings.runKey}`,
     requestHash: sha256(settings),
@@ -492,7 +513,11 @@ export function runDemoWorkflow(
         existing === undefined
           ? undefined
           : all.find(
-              (thread) => thread.role === "auditor" && thread.parentThreadId === existing.threadId,
+              (thread) =>
+                thread.role === "auditor" &&
+                thread.turns.some((turn) =>
+                  existing.turns.some((executor) => executor.taskId === turn.auditedTaskId),
+                ),
             );
       if (existing !== undefined)
         reuse.set(assignment.localId, { executor: existing, auditor: auditorThread });
@@ -547,7 +572,8 @@ export function runDemoWorkflow(
         role: "auditor",
         layer: 3,
         kind: "verify",
-        parentTaskId: executorKey,
+        parentTaskId: existing?.turns[0]?.parentTaskId ?? attempt.task.taskId,
+        auditedTaskId: executorKey,
         localId: null,
         goal: `Audit ${assignment.localId} against its criteria`,
         description: `Judge the result against: ${assignment.acceptanceCriteria.join("; ")}`,
@@ -667,7 +693,8 @@ export function runDemoWorkflow(
         {
           ...turnLike(oldAuditor),
           key: "relaunch:audit",
-          parentTaskId: "relaunch",
+          parentTaskId: executorTurn.parentTaskId,
+          auditedTaskId: "relaunch",
           dependsOn: [{ on: "relaunch", kind: "completed" }],
         },
       ],
@@ -690,6 +717,7 @@ export function runDemoWorkflow(
     layer: task.layer,
     kind: task.kind,
     parentTaskId: task.parentTaskId,
+    auditedTaskId: task.auditedTaskId,
     localId: task.localId,
     goal: task.goal,
     description: task.description,
@@ -800,8 +828,8 @@ export function runDemoWorkflow(
         }),
       };
     }
-    // An auditor: of an executor turn (its dependency), or of the whole workflow.
-    const subject = task.dependsOn[0]?.taskId ?? null;
+    // The audit target is independent of the auditor's structural parent and scheduling dependency.
+    const subject = task.auditedTaskId;
     const subjectTask =
       subject === null ? undefined : tasks().find((other) => other.taskId === subject);
     const executorThread = subjectTask === undefined ? undefined : threadOf(subjectTask.taskId);

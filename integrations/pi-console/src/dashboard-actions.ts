@@ -12,9 +12,10 @@ import {
   summarizeApproval,
 } from "./dashboard-data.js";
 import { openDelegationSettings } from "./delegation-panel.js";
+import { DEFAULT_UI_LOCALE, localized, type UiLocale } from "./locale.js";
 import { chooseLevel, chooseModel, type LevelMemory, openModelAndLevel } from "./model-picker.js";
 import { actionRefusal, type ConsoleMode } from "./modes.js";
-import { demoNotice } from "./orchestration-state.js";
+import { demoNotice, keyOf } from "./orchestration-state.js";
 import type { ConsoleContext, ConsolePi } from "./pi-types.js";
 import { type BoundProject, folderName } from "./project.js";
 import type { PendingApproval } from "./status.js";
@@ -38,6 +39,7 @@ const HARIL_COMMANDS = [
 ];
 
 export interface DashboardActionHost {
+  readonly locale?: UiLocale;
   readonly cwd: string;
   readonly project: BoundProject | undefined;
   readonly pending: readonly PendingApproval[];
@@ -140,7 +142,7 @@ async function showInlineDetails(
           ];
         },
         handleInput(input) {
-          if (input === "\u001b" || input === "q") done(undefined);
+          if (keyOf(input) === "escape" || input === "q") done(undefined);
           else if (input === "\u001b[A" || input === "k") offset = Math.max(0, offset - 1);
           else if (input === "\u001b[B" || input === "j") offset += 1;
           else if (input === "\u001b[5~") offset = Math.max(0, offset - 14);
@@ -730,71 +732,97 @@ export async function openDashboardActionMenu(
   pi: ConsolePi,
   host: DashboardActionHost,
 ): Promise<void> {
+  const locale = host.locale ?? DEFAULT_UI_LOCALE;
+  const option = (
+    id: DashboardAction | "open-area" | "cancel",
+    english: string,
+    spanish: string,
+  ) => ({
+    id,
+    label: localized(locale, english, spanish),
+  });
   const options = [
-    "Open an area",
-    ...(host.project === undefined ? ["Register this folder"] : []),
-    "Open orchestration view",
-    "Pick orchestration workflow",
-    host.orchestrationDemo() ? "Orchestration demo off" : "Orchestration demo on",
-    "Choose Pi model",
-    "Choose reasoning level",
+    option("open-area", "Open an area", "Abrir un área"),
+    ...(host.project === undefined
+      ? [option("register-project", "Register this folder", "Registrar esta carpeta")]
+      : []),
+    option("orchestration-view", "Open orchestration view", "Abrir vista de orquestación"),
+    option(
+      "orchestration-pick",
+      "Pick orchestration workflow",
+      "Elegir flujo de trabajo de orquestación",
+    ),
+    host.orchestrationDemo()
+      ? option(
+          "orchestration-demo",
+          "Orchestration demo off",
+          "Desactivar demostración de orquestación",
+        )
+      : option(
+          "orchestration-demo",
+          "Orchestration demo on",
+          "Activar demostración de orquestación",
+        ),
+    option("model", "Choose Pi model", "Elegir modelo de Pi"),
+    option("level", "Choose reasoning level", "Elegir nivel de razonamiento"),
     ...(host.project === undefined
       ? []
-      : ["Review approvals", "Inspect tasks", "Queue a goal", "Project events"]),
+      : [
+          option("approvals", "Review approvals", "Revisar aprobaciones"),
+          option("tasks", "Inspect tasks", "Inspeccionar tareas"),
+          option("goal", "Queue a goal", "Encolar un objetivo"),
+          option("events", "Project events", "Eventos del proyecto"),
+        ]),
     ...(host.project !== undefined && host.runtimeAvailable() && host.runtime() === "idle"
-      ? ["Run project queue", "Start runtime"]
+      ? [
+          option("run-queue", "Run project queue", "Ejecutar cola del proyecto"),
+          option("start-runtime", "Start runtime", "Iniciar runtime"),
+        ]
       : []),
     ...(host.project !== undefined && host.runtimeAvailable() && host.runtime() === "running"
-      ? ["Stop shared runtime"]
+      ? [option("stop-runtime", "Stop shared runtime", "Detener runtime compartido")]
       : []),
-    "Toggle Pi tools",
-    "Delegation settings",
-    "Browse methodologies",
-    "Browse HARIL commands",
-    "Memory status",
-    "View area details",
-    "Refresh data",
-    "Cancel",
+    option("toggle-tools", "Toggle Pi tools", "Alternar herramientas de Pi"),
+    option("delegation", "Delegation settings", "Ajustes de delegación"),
+    option("methodologies", "Browse methodologies", "Explorar metodologías"),
+    option("commands", "Browse HARIL commands", "Explorar comandos de HARIL"),
+    option("memory", "Memory status", "Estado de la memoria"),
+    option("details", "View area details", "Ver detalles del área"),
+    option("refresh", "Refresh data", "Actualizar datos"),
+    option("cancel", "Cancel", "Cancelar"),
   ];
   // CONSULT hides the actions it would refuse.
   const mode = host.mode?.() ?? "action";
-  const shown = options.filter((option) => {
-    const action = MENU_ACTIONS[option];
-    return action === undefined || actionRefusal(mode, action) === undefined;
+  const shown = options.filter((item) => {
+    return (
+      item.id === "open-area" || item.id === "cancel" || actionRefusal(mode, item.id) === undefined
+    );
   });
-  const choice = await ctx.ui.select("HARIL console controls", shown);
-  if (choice === undefined || choice === "Cancel") return;
-  if (choice === "Open an area") {
-    const labels = DASHBOARD_AREAS.map((item) => item.toUpperCase());
-    const area = await ctx.ui.select("Dashboard area", labels);
-    if (area !== undefined) host.openArea(area.toLowerCase() as DashboardArea);
+  const choice = await ctx.ui.select(
+    localized(locale, "HARIL console controls", "Controles de la consola HARIL"),
+    shown.map((item) => item.label),
+  );
+  const selected = shown.find((item) => item.label === choice);
+  if (selected === undefined || selected.id === "cancel") return;
+  if (selected.id === "open-area") {
+    const spanishAreas: Readonly<Record<DashboardArea, string>> = {
+      agents: "AGENTES",
+      orchestration: "ORQUESTACIÓN",
+      automation: "AUTOMATIZACIÓN",
+      tools: "HERRAMIENTAS",
+      everywhere: "GENERAL",
+    };
+    const areas = DASHBOARD_AREAS.map((id) => ({
+      id,
+      label: localized(locale, id.toUpperCase(), spanishAreas[id]),
+    }));
+    const area = await ctx.ui.select(
+      localized(locale, "Dashboard area", "Área del panel"),
+      areas.map((item) => item.label),
+    );
+    const selectedArea = areas.find((item) => item.label === area);
+    if (selectedArea !== undefined) host.openArea(selectedArea.id);
     return;
   }
-  const action = MENU_ACTIONS[choice];
-  if (action !== undefined) await runDashboardAction(action, ctx, pi, host);
+  await runDashboardAction(selected.id, ctx, pi, host);
 }
-
-// The /haril menu's options and the actions they run.
-const MENU_ACTIONS: Readonly<Record<string, DashboardAction>> = {
-  "Register this folder": "register-project",
-  "Open orchestration view": "orchestration-view",
-  "Pick orchestration workflow": "orchestration-pick",
-  "Orchestration demo on": "orchestration-demo",
-  "Orchestration demo off": "orchestration-demo",
-  "Choose Pi model": "model",
-  "Choose reasoning level": "level",
-  "Review approvals": "approvals",
-  "Inspect tasks": "tasks",
-  "Queue a goal": "goal",
-  "Run project queue": "run-queue",
-  "Project events": "events",
-  "Start runtime": "start-runtime",
-  "Stop shared runtime": "stop-runtime",
-  "Toggle Pi tools": "toggle-tools",
-  "Delegation settings": "delegation",
-  "Browse methodologies": "methodologies",
-  "Browse HARIL commands": "commands",
-  "Memory status": "memory",
-  "View area details": "details",
-  "Refresh data": "refresh",
-};

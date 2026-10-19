@@ -13,11 +13,12 @@ import type { AgentRuntime, AgentSpec, Clock, Store, WorkflowAutonomy } from "@h
 import { FakeAgentRuntime } from "@haril/core/testing";
 import { openStore } from "@haril/state-sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { buildWorkflowSnapshot } from "../src/commands/workflow-snapshot.js";
 import { createDelegationTools } from "../src/runtime/delegation-tools.js";
 import { runUntilIdle } from "../src/runtime/run-loop.js";
 import { createShutdown } from "../src/runtime/shutdown.js";
 import { WorkflowView } from "../src/runtime/workflow-view.js";
-import { makeSandbox, type Sandbox } from "./helpers.js";
+import { makeSandbox, type Sandbox, workflowIntake } from "./helpers.js";
 
 // The runtime that runs three-layer workflows (docs/modos-y-delegacion.md 3.3 to 3.9, phase F2), hermetic: the fake
 // workflow agents inside FakeAgentRuntime, the real SQLite store in a sandbox, the real concurrent loop. Each scenario is
@@ -79,6 +80,7 @@ function startWorkflow(
     type: "workflow.start",
     projectId,
     args: {
+      intake: workflowIntake(store.projects.list()[0]?.rootPath as string),
       goal,
       model: "fake/high-model",
       agent: "fake:orchestrate",
@@ -223,6 +225,21 @@ describe("a three-layer workflow through the runtime", () => {
         expect(threads.get(`audit of ${part}/step-${step}`)).toHaveLength(1);
       }
     }
+    for (const executor of view.tasks.filter((task) => task.role === "executor")) {
+      const auditor = view.auditorOf(executor.taskId);
+      expect(auditor).toBeDefined();
+      expect(auditor?.parentTaskId).toBe(executor.parentTaskId);
+      expect(auditor?.auditedTaskId).toBe(executor.taskId);
+      expect(auditor?.dependsOn).toContainEqual({ taskId: executor.taskId, kind: "completed" });
+      const snapshot = buildWorkflowSnapshot(store, workflow.workflowId, { now: Date.now() });
+      const executorNode = snapshot.nodes.find((node) => node.threadId === executor.threadId);
+      const auditorNode = snapshot.nodes.find((node) => node.threadId === auditor?.threadId);
+      expect(auditorNode).toMatchObject({
+        parentId: executorNode?.parentId,
+        auditedId: executorNode?.id,
+        label: `Auditor of ${executorNode?.id}`,
+      });
+    }
     expect(threads.get("final audit")).toHaveLength(1);
     expect(view.tasks.every((task) => task.state === "completed")).toBe(true);
     expect(view.audits.filter((audit) => audit.scope === "task")).toHaveLength(6);
@@ -244,7 +261,12 @@ describe("a three-layer workflow through the runtime", () => {
     );
     expect(store.usageLog.verify().ok).toBe(true);
     expect(events.filter((event) => event.type === "workflow.state")).toEqual([
-      { type: "workflow.state", workflowId: workflow.workflowId, state: "completed", reason: null },
+      {
+        type: "workflow.state",
+        workflowId: workflow.workflowId,
+        state: "completed",
+        reason: "read-only consultation; no implementation or tests claimed",
+      },
     ]);
     // The continuations received their children's outcomes and the memo; the prompt carried them as data.
     expect(view.delegations.map((row) => row.tool).sort()).toEqual([
@@ -316,6 +338,13 @@ describe("a three-layer workflow through the runtime", () => {
     expect(workflow.state).toBe("completed");
     const step1 = threads.get("part-1/step-1") ?? [];
     expect(step1).toHaveLength(2);
+    for (const executorId of step1) {
+      const executor = view.task(executorId);
+      const auditor = view.auditorOf(executorId);
+      expect(auditor?.parentTaskId).toBe(executor?.parentTaskId);
+      expect(auditor?.auditedTaskId).toBe(executorId);
+      expect(auditor?.dependsOn).toContainEqual({ taskId: executorId, kind: "completed" });
+    }
     expect(view.audits.filter((audit) => step1.includes(audit.subjectTaskId ?? ""))).toEqual([
       expect.objectContaining({ verdict: "rejected", reworkAction: "retry" }),
       expect.objectContaining({ verdict: "approved", reworkAction: "accept" }),

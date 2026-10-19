@@ -54,6 +54,38 @@ async function cli(args: string[], configPath: string) {
 }
 
 describe("haril config get", () => {
+  it("shows the effective Spanish default and explicit locales with their sources", async () => {
+    const path = writeConfig("{}");
+    const fallback = await cli(["config", "get", "ui.locale", "--json"], path);
+    expect(parseJson(fallback.out)).toMatchObject({
+      path: "ui.locale",
+      value: "es",
+      default: "es",
+      source: "default",
+      configPath: path,
+    });
+    for (const locale of ["en", "es"]) {
+      writeFileSync(path, JSON.stringify({ ui: { locale } }));
+      const got = await cli(["config", "get", "ui.locale"], path);
+      expect(got.out).toEqual([`ui.locale = "${locale}"  (haril.json)`]);
+    }
+  });
+
+  it("rejects an invalid locale without requiring an unrelated delegation section to be valid", async () => {
+    const path = writeConfig(JSON.stringify({ ui: { locale: "fr" } }));
+    const invalid = await cli(["config", "get", "ui.locale"], path);
+    expect(invalid.code).toBe(2);
+    expect(invalid.err.join("\n")).toContain("/ui/locale");
+
+    writeFileSync(
+      path,
+      JSON.stringify({ ui: { locale: "en" }, delegation: { limits: { maxAuditRetries: 5 } } }),
+    );
+    const valid = await cli(["config", "get", "ui.locale"], path);
+    expect(valid.code).toBe(0);
+    expect(valid.out).toEqual(['ui.locale = "en"  (haril.json)']);
+  });
+
   it("shows one value and its source, the default when the file does not set it", async () => {
     const path = writeConfig(JSON.stringify({ ui: { theme: "haril-dark" } }));
     const text = await cli(["config", "get", "delegation.context.compactAtTokens"], path);
@@ -123,6 +155,52 @@ describe("haril config set", () => {
     "}",
     "",
   ].join("\r\n");
+
+  it("persists either locale through the atomic writer and preserves unrelated keys", async () => {
+    const path = writeConfig(original);
+    for (const locale of ["en", "es"]) {
+      const set = await cli(["config", "set", "ui.locale", locale, "--json"], path);
+      expect(set.code).toBe(0);
+      expect(parseJson(set.out)).toMatchObject({
+        path: "ui.locale",
+        value: locale,
+        source: "file",
+        written: true,
+      });
+      const written = readFileSync(path, "utf8");
+      const document = JSON.parse(written) as Record<string, unknown>;
+      expect(document).toMatchObject({
+        providers: [{ id: "cliproxy" }],
+        ui: { theme: "haril-dark", locale },
+        delegation: { quota: { managementKeyEnv: "TEST_MGMT_KEY" } },
+      });
+      expect(written.replace(/\r\n/g, "")).not.toContain("\n");
+      expect(readdirSync(root).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    }
+    const reset = await cli(["config", "set", "ui.locale", "--reset"], path);
+    expect(reset.code).toBe(0);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(JSON.parse(original));
+    expect((await cli(["config", "get", "ui.locale"], path)).out).toEqual([
+      'ui.locale = "es"  (default)',
+    ]);
+  });
+
+  it("refuses invalid locales and still rejects a malformed delegation section", async () => {
+    const path = writeConfig(original);
+    for (const locale of ["fr", "EN", "", "null"]) {
+      const refused = await cli(["config", "set", "ui.locale", locale], path);
+      expect(refused.code).toBe(2);
+      expect(refused.err.join("\n")).toContain("/ui/locale");
+      expect(readFileSync(path, "utf8")).toBe(original);
+    }
+    writeFileSync(path, JSON.stringify({ delegation: { limits: { maxAuditRetries: 5 } } }));
+    const refused = await cli(["config", "set", "ui.locale", "en"], path);
+    expect(refused.code).toBe(2);
+    expect(refused.err.join("\n")).toContain("/delegation/limits/maxAuditRetries");
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
+      delegation: { limits: { maxAuditRetries: 5 } },
+    });
+  });
 
   it("keeps every other key, the indentation and the line endings, and leaves no temporary file", async () => {
     const path = writeConfig(original);

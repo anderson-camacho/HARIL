@@ -107,7 +107,23 @@ function turnFakes(role: "executor" | "auditor" | "delegator" = "executor") {
   const heads: string[] = [];
   const verified: string[] = [];
   const store = {
-    events: { append: (event: { type: string; payload: unknown }) => events.push(event) },
+    events: {
+      append: (event: { type: string; payload: unknown }) => events.push(event),
+      // The real store records a host claim before each executor turn. Commit evidence
+      // is tied to that attempt; keep this minimal fake faithful to that contract.
+      list: ({ taskId }: { taskId?: string } = {}) =>
+        taskId === "t1"
+          ? [
+              {
+                type: "task.claimed",
+                actorKind: "system",
+                taskId: "t1",
+                runId: "run-1",
+                payload: { attempt: 1 },
+              },
+            ]
+          : [],
+    },
     worktrees: {
       setHead: (_epoch: number, _id: string, sha: string) => heads.push(sha),
       setVerified: (_epoch: number, _id: string, sha: string) => verified.push(sha),
@@ -471,7 +487,7 @@ describe.skipIf(!HAS_GIT)("a base branch that moved during a turn", () => {
     expect(gitIn(repo, "show", "haril/wf/step/s1:src/button.ts")).toBe(
       "export const color = 'blue';",
     );
-    expect(fakes.events.map((event) => event.type)).toEqual(["base.moved"]);
+    expect(fakes.events.map((event) => event.type)).toEqual(["base.moved", "worktree.committed"]);
     expect(fakes.events[0]?.payload).toMatchObject({
       fromSha: before,
       toSha: after,
@@ -527,7 +543,8 @@ describe.skipIf(!HAS_GIT)("a step's next turn after a crash", () => {
       role: "auditor",
       taskId: "t-a",
       threadId: "th-a",
-      parentTaskId: "t-e",
+      parentTaskId: "t-d",
+      auditedTaskId: "t-e",
     } as unknown as Task;
     const view = {
       workflow: { workflowId: "wf3", projectId: "p1", baseBranch: "main", baseSha: base },

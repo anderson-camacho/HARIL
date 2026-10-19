@@ -3,6 +3,7 @@ import { posix, win32 } from "node:path";
 import {
   envSecretRef,
   HARIL_CONFIG_TOP_LEVEL_KEYS,
+  isUiLocale,
   isValidModelDescriptor,
   type ModelDescriptor,
   type SecretMaterial,
@@ -140,7 +141,7 @@ export function loadProviderConfig(
 // F7; delegation-section.ts). Anything else is refused. haril shell reads the same list from @haril/contracts.
 const TOP_LEVEL_KEYS: ReadonlySet<string> = new Set(HARIL_CONFIG_TOP_LEVEL_KEYS);
 const THEME_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-const UI_KEYS: ReadonlySet<string> = new Set(["theme"]);
+const UI_KEYS: ReadonlySet<string> = new Set(["theme", "locale"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -180,6 +181,9 @@ function uiErrors(ui: unknown): string[] {
     errors.push(
       "/ui/theme: must be a theme name (letters, digits, '.', '_' or '-', starting with a letter or digit)",
     );
+  }
+  if ("locale" in ui && !isUiLocale(ui.locale)) {
+    errors.push('/ui/locale: must be "es" or "en"');
   }
   return errors;
 }

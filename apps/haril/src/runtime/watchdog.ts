@@ -213,14 +213,13 @@ function continueText(thread: ThreadView, state: string, decision: LivenessDecis
 }
 
 // The thread that consumes this thread's result has no live turn left (3.16 residual): the parent thread for an executor
-// or a delegator, the delegator of the executor for that executor's auditor. The orchestrator and the final auditor
+// or delegator. A task auditor shares its executor's structural delegator parent; the orchestrator and final auditor
 // answer to the workflow itself, which cancelStrandedTurns covers.
 function consumerGone(thread: ThreadView, byId: ReadonlyMap<string, ThreadView>): boolean {
   if (thread.role === "orchestrator") return false;
-  let consumer = thread.parentThreadId === null ? undefined : byId.get(thread.parentThreadId);
+  const consumer = thread.parentThreadId === null ? undefined : byId.get(thread.parentThreadId);
   if (thread.role === "auditor") {
-    if (consumer?.role !== "executor") return false;
-    consumer = consumer.parentThreadId === null ? undefined : byId.get(consumer.parentThreadId);
+    if (consumer?.role !== "delegator") return false;
   }
   if (consumer === undefined) return false;
   return !consumer.turns.some((turn) => LIVE.has(turn.state) || turn.state === "blocked");

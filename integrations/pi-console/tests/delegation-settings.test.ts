@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type DashboardFacts, renderDashboardLayout } from "../src/dashboard.js";
 import { controlsFor } from "../src/dashboard-controls.js";
 import { emptyDashboardData } from "../src/dashboard-data.js";
@@ -141,10 +141,13 @@ describe("the delegation settings as the console shows them", () => {
     expect(delegationSummary(view())[0]).toBe(
       "Delegation: compact at 300k (orchestrator 400k) · watchdog 15 min · models set for executor",
     );
-    expect(controlsFor("tools", emptyDashboardData(), "idle").map((item) => item.label)).toContain(
-      "Delegation settings",
-    );
+    expect(
+      controlsFor("tools", emptyDashboardData(), "idle", true, false, "en").map(
+        (item) => item.label,
+      ),
+    ).toContain("Delegation settings");
     const facts = {
+      locale: "en",
       project: "fake-project",
       cwd: "fake-cwd",
       branch: "main",
@@ -205,7 +208,7 @@ describe("the Delegation overlay", () => {
     expect(state.offset).toBeGreaterThan(0);
   });
 
-  function open(state: PanelState) {
+  function open(state: PanelState, rows = 30) {
     let component:
       | {
           render(width: number): string[];
@@ -218,7 +221,7 @@ describe("the Delegation overlay", () => {
         custom(factory: (...args: unknown[]) => typeof component) {
           return new Promise((resolve) => {
             component = factory(
-              { terminal: { columns: 100, rows: 30 }, requestRender: () => undefined },
+              { terminal: { columns: 100, rows }, requestRender: () => undefined },
               THEME,
               undefined,
               resolve,
@@ -277,6 +280,73 @@ describe("the Delegation overlay", () => {
     close.click("[Esc Close]");
     await expect(close.result).resolves.toBeUndefined();
   });
+
+  it.each([
+    ["legacy arrows", "\u001b[A", "\u001b[B"],
+    ["Pi SS3 arrows", "\u001bOA", "\u001bOB"],
+    ["Kitty arrows", "\u001b[1;1A", "\u001b[1;1B"],
+  ])("navigates settings with %s", async (_name, up, down) => {
+    const overlay = open({ view: view(), selected: 1, offset: 0 });
+    overlay.view().handleInput?.(up);
+    overlay.view().handleInput?.(down);
+    overlay.view().handleInput?.(down);
+    overlay.view().handleInput?.("\u001b[13u");
+    await expect(overlay.result).resolves.toEqual({
+      kind: "edit",
+      path: "delegation.context.perLayer.delegator",
+    });
+  });
+
+  it("keeps selection visible while moving and clamps the preserved offset", () => {
+    const state: PanelState = { view: view(), selected: 0, offset: 0 };
+    const overlay = open(state, 12);
+    const last = state.view.fields.length - 1;
+    for (let i = 0; i < last; i++) overlay.view().handleInput?.("\u001b[1;1B");
+    const bottom = overlay.view().render(100).map(stripAnsi).join("\n");
+    expect(bottom).toContain(`▶ ${state.view.fields[last]?.label}`);
+    expect(state.offset).toBeGreaterThan(0);
+    const bottomOffset = state.offset;
+
+    overlay.view().handleInput?.("\u001b[A");
+    const up = overlay.view().render(100).map(stripAnsi).join("\n");
+    expect(up).toContain(`▶ ${state.view.fields[last - 1]?.label}`);
+    expect(state.offset).toBeLessThanOrEqual(bottomOffset);
+
+    state.selected = 0;
+    state.offset = Number.MAX_SAFE_INTEGER;
+    overlay.view().render(100);
+    expect(state.offset).toBe(0);
+  });
+
+  it("preserves mouse wheel navigation and click editing", async () => {
+    const overlay = open({ view: view(), selected: 0, offset: 0 });
+    overlay.view().handleMouse?.({
+      type: "wheel",
+      button: "none",
+      wheelDelta: 1,
+      x: 0,
+      y: 0,
+      width: 100,
+      height: 30,
+      shift: false,
+      alt: false,
+      ctrl: false,
+    });
+    overlay.view().handleInput?.("\u001b[13u");
+    await expect(overlay.result).resolves.toEqual({
+      kind: "edit",
+      path: "delegation.context.perLayer.orchestrator",
+    });
+  });
+
+  it.each(["\u001b", "\u001b[27u", "\u001b[27;1u"])(
+    "closes the delegation overlay on Escape input %s without an effect",
+    async (input) => {
+      const overlay = open({ view: view(), selected: 0, offset: 0 });
+      overlay.view().handleInput?.(input);
+      await expect(overlay.result).resolves.toBeUndefined();
+    },
+  );
 });
 
 describe("editing a delegation setting", () => {
@@ -300,6 +370,7 @@ describe("editing a delegation setting", () => {
       readonly select?: ((title: string, options: string[]) => string | undefined)[];
       readonly confirm?: boolean;
       readonly models?: PiModel[];
+      readonly availableModels?: PiModel[];
     },
   ) {
     const ctx = fakeContext("fake-cwd");
@@ -318,7 +389,7 @@ describe("editing a delegation setting", () => {
     };
     (ctx as unknown as { modelRegistry: unknown }).modelRegistry = {
       getAll: () => answers.models ?? [],
-      getAvailable: () => answers.models ?? [],
+      getAvailable: () => answers.availableModels ?? answers.models ?? [],
       find: () => undefined,
     };
     return { ctx, selects, confirms };
@@ -379,7 +450,7 @@ describe("editing a delegation setting", () => {
       },
     );
     await openDelegationSettings(ctx, {});
-    // HARIL's providers and accounts only: a Pi provider of its own (anthropic here) serves no agent.
+    // Compatible HARIL models stay grouped by provider and account; Pi-native providers are informational only.
     expect(selects[1]?.options).toEqual([
       "haril-cliproxy · 1 models",
       "haril-cliproxy · Gemini1 · 1 models",
@@ -394,6 +465,33 @@ describe("editing a delegation setting", () => {
     ]);
   });
 
+  it("explains unavailable Pi-native and unauthenticated models without saving either", async () => {
+    const unauthenticated = { ...GEMINI, id: "Gemini2/private-model" };
+    const native = { ...NOT_HARIL, provider: "openai-api", id: "gpt-native" };
+    const { ctx, selects } = scripted(
+      [{ kind: "edit", path: "delegation.models.layers.auditor.model" }],
+      {
+        models: [GEMINI, unauthenticated, native],
+        availableModels: [GEMINI, native],
+        select: [
+          () => "View unavailable models (2)",
+          (_title, options) => options.find((option) => option.startsWith("openai-api")),
+          (_title, options) => options[0],
+        ],
+      },
+    );
+    await openDelegationSettings(ctx, {});
+    expect(selects[0]?.options).toContain("View unavailable models (2)");
+    expect(selects[1]?.options).toEqual([
+      "haril-cliproxy · Gemini2 · 1 models · unavailable",
+      "openai-api · 1 models · unavailable",
+    ]);
+    expect(selects[2]?.title).toContain("informational only");
+    expect(selects[2]?.options[0]).toContain("[NOT SELECTABLE]");
+    expect(selects[2]?.options[0]).toContain("configure a HARIL provider in haril.json");
+    expect(sets()).toEqual([]);
+  });
+
   it("resets a value to its default after confirming it", async () => {
     const { ctx, confirms } = scripted(
       [{ kind: "reset", path: "delegation.limits.maxActiveChildren.orchestrator" }],
@@ -404,6 +502,71 @@ describe("editing a delegation setting", () => {
     expect(sets().map((call) => call.args)).toEqual([
       ["config", "set", "delegation.limits.maxActiveChildren.orchestrator", "--reset", "--json"],
     ]);
+  });
+
+  it.each(["\u001b", "\u001b[27u", "\u001b[27;1u"])(
+    "cancels the active delegation overlay on Escape input %s without saving",
+    async (input) => {
+      const { ctx } = scripted([], {});
+      const ui = ctx.ui as unknown as Record<string, unknown>;
+      let handleInput: ((data: string) => void) | undefined;
+      ui.custom = (factory: (...args: unknown[]) => { handleInput(data: string): void }) =>
+        new Promise((resolve) => {
+          handleInput = factory(
+            { terminal: { columns: 100, rows: 30 }, requestRender: () => undefined },
+            THEME,
+            undefined,
+            resolve,
+          ).handleInput;
+        });
+
+      const opening = openDelegationSettings(ctx, {});
+      await vi.waitFor(() => expect(handleInput).toBeDefined());
+      handleInput?.(input);
+      await opening;
+      expect(sets()).toEqual([]);
+    },
+  );
+
+  it("returns focus to the settings overlay on the edited row after its dialog is canceled", async () => {
+    const { ctx } = scripted([], {});
+    const ui = ctx.ui as unknown as Record<string, unknown>;
+    const panels: {
+      handleInput(data: string): void;
+      render(width: number): string[];
+      overlay: boolean;
+    }[] = [];
+    ui.custom = (
+      factory: (...args: unknown[]) => {
+        handleInput(data: string): void;
+        render(width: number): string[];
+      },
+      options: { overlay?: boolean },
+    ) =>
+      new Promise((resolve) => {
+        const component = factory(
+          { terminal: { columns: 100, rows: 30 }, requestRender: () => undefined },
+          THEME,
+          undefined,
+          resolve,
+        );
+        panels.push({ ...component, overlay: options.overlay ?? false });
+      });
+    ui.input = async () => undefined;
+
+    const opening = openDelegationSettings(ctx, {});
+    await vi.waitFor(() => expect(panels).toHaveLength(1));
+    panels[0]?.handleInput("\u001b[B");
+    panels[0]?.handleInput("\r");
+    await vi.waitFor(() => expect(panels).toHaveLength(2));
+    const returned = panels[1];
+    expect(returned?.overlay).toBe(true);
+    expect(returned?.render(100).map(stripAnsi).join("\n")).toMatch(
+      /▶ Compact at, orchestrator\s+400,000 tokens/,
+    );
+    returned?.handleInput("\u001b");
+    await opening;
+    expect(sets()).toEqual([]);
   });
 
   it("shows but changes nothing in CONSULT mode", async () => {

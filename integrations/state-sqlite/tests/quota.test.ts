@@ -1,7 +1,14 @@
 import type { QuotaSnapshot, Store } from "@haril/core/ports";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openMemoryStore, type StoreError } from "../src/index.js";
-import { type ManualClock, manualClock, sequentialIds, testRules } from "./support.js";
+import {
+  type ManualClock,
+  manualClock,
+  sequentialIds,
+  TEST_PROJECT_ROOT,
+  testRules,
+  workflowIntake,
+} from "./support.js";
 
 // Quota and cooldowns in the store (docs/modos-y-delegacion.md 3.11, 4.2; phase F6): each sampling of a provider is one
 // batch of quota_samples rows, the newest batch of each provider is the evidence while it is fresh, a 402 or 429 starts
@@ -20,7 +27,7 @@ beforeEach(() => {
   projectId = store.projects.register({
     slug: "demo",
     name: "Demo",
-    rootPath: "D:/demo",
+    rootPath: TEST_PROJECT_ROOT,
   }).projectId;
   const grant = store.runtime.acquire({
     pid: 1,
@@ -159,6 +166,7 @@ describe("a workflow turn's provider retry", () => {
       type: "workflow.start",
       projectId,
       args: {
+        intake: workflowIntake(TEST_PROJECT_ROOT),
         goal: "Answer from the notes",
         model: "cliproxy/Gemini1/m",
         agent: "fake:orchestrate",

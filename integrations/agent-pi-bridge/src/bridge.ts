@@ -179,7 +179,13 @@ function readTool(channel: Channel, nextId: () => string): BridgeToolDefinition 
       if (reply.ok === true && typeof reply.content === "string") {
         return { content: [{ type: "text", text: reply.content }], details: {} };
       }
-      const error = typeof reply.error === "string" ? reply.error : "denied";
+      const error =
+        typeof reply.error === "string" &&
+        ["missing", "not_a_file", "unreadable", "path_denied", "too_large", "read_failed"].includes(
+          reply.error,
+        )
+          ? reply.error
+          : "denied";
       return {
         content: [{ type: "text", text: `denied: ${error}` }],
         details: {},

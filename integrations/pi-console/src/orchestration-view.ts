@@ -449,6 +449,7 @@ function nodeDetail(
         : [{ text: ` · turn ${node.turn.index} of ${node.turn.of}`, tone: "muted" as const }]),
     ],
     ...wrappedField("Goal", node.goal, width, 2),
+    ...(node.role === "auditor" ? [field("Audits", node.auditedId ?? "n/a")] : []),
     field(
       "Model",
       `${node.model} · ${node.thinkingLevel ?? "level n/a"} (${MODEL_SOURCE[node.modelSource]})`,

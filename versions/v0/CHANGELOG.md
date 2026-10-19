@@ -4,6 +4,36 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.21.0
+
+- **Fecha:** 2026-10-19
+- **Estado:** Cambios de consola y barreras de delegación incluidos en esta versión en preparación. La verificación integral y la prueba manual en Windows siguen pendientes; el idioma español configurable todavía no está implementado.
+
+### Añadido
+
+- Selector de áreas de la consola con `Alt+H`: las flechas eligen, Enter abre y Esc cancela, sin sustituir la navegación por ratón.
+- Entrada explícita de proyecto, fuente y revisión del plan, y metodología con instrucciones completas; el workflow conserva una instantánea y las huellas de ese contenido.
+- Comprobación previa de implementación que informa si el proyecto y las capacidades permiten continuar, sin iniciar el workflow ni ejecutar pruebas durante esa comprobación.
+
+### Cambiado
+
+- Cabecera de la consola compacta con la marca `HARIL ◉`, conservando la información operativa.
+- Selector de modelos de la delegación: muestra los proveedores y modelos conectados compatibles e indica de forma segura por qué una opción no está disponible; las opciones incompatibles con el runtime no se guardan.
+
+### Corregido
+
+- Cierre y cancelación con Esc en ajustes y menús, con restauración del foco; Delegation Settings acepta flechas, desplazamiento y Enter para editar, incluidos eventos de teclado Kitty.
+- El auditor queda como hijo del delegador y hermano del ejecutor evaluado; la tarea auditada se registra por separado del parentesco estructural.
+- La implementación falla de forma cerrada si falta la comprobación previa; la aprobación y el cierre exigen evidencia del host de un commit del intento y una prueba ejecutada con éxito, no solo una afirmación del agente.
+
+### Verificación
+
+- Para este incremento: 33 pruebas de los scripts de versión y la prueba de versión de HARIL pasaron; `pnpm run check:version`, Biome de los cinco archivos de versión y `git diff --check` terminaron con código 0. El Node local es 24.19.0, por debajo del mínimo declarado de 24.21.0.
+- Pasaron las pruebas focalizadas de la consola, la entrada de planes, la jerarquía de auditoría y las barreras de evidencia, junto con las comprobaciones de Biome y tipos registradas para esas unidades de trabajo.
+- La última suite completa, en `6c8a930`, terminó con 2.608 pruebas aprobadas y 3 fallidas. La suite completa aún no se ha repetido sobre `c595af3`; la prueba manual de Windows sigue pendiente. No se declara verificación integral en verde.
+
+---
+
 ## 0.20.2
 
 - **Fecha:** 2026-10-18

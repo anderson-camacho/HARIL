@@ -11,7 +11,10 @@ const CONTEXT_THRESHOLD = 300_000;
 const ORCHESTRATOR_THRESHOLD = 400_000;
 const NO_QUOTA_DATA = { window5hPct: null, weeklyPct: null } as const;
 
-type NodeFields = Pick<WorkflowNode, "id" | "parentId" | "role" | "label" | "goal" | "state">;
+type NodeFields = Pick<
+  WorkflowNode,
+  "id" | "parentId" | "auditedId" | "role" | "label" | "goal" | "state"
+>;
 
 function node(fields: NodeFields, rest: Partial<WorkflowNode>): WorkflowNode {
   const layer = fields.role === "orchestrator" ? 1 : fields.role === "delegator" ? 2 : 3;
@@ -32,6 +35,7 @@ function node(fields: NodeFields, rest: Partial<WorkflowNode>): WorkflowNode {
     files: { write: [], read: [] },
     memo: null,
     audit: null,
+    auditedId: null,
     waitingReason: null,
     turn: null,
     ...fields,
@@ -120,9 +124,10 @@ function demoNodes(now: number): WorkflowNode[] {
     node(
       {
         id: "a1",
-        parentId: "e1",
+        parentId: "d1",
+        auditedId: "e1",
         role: "auditor",
-        label: "Auditor",
+        label: "Auditor of e1",
         goal: "Review e1 against its criteria",
         state: "queued",
       },
@@ -179,9 +184,10 @@ function demoNodes(now: number): WorkflowNode[] {
     node(
       {
         id: "a3",
-        parentId: "e3",
+        parentId: "d1",
+        auditedId: "e3",
         role: "auditor",
-        label: "Auditor",
+        label: "Auditor of e3",
         goal: "Review e3",
         state: "done",
       },
@@ -250,9 +256,10 @@ function demoNodes(now: number): WorkflowNode[] {
     node(
       {
         id: "a4",
-        parentId: "e4",
+        parentId: "d2",
+        auditedId: "e4",
         role: "auditor",
-        label: "Auditor",
+        label: "Auditor of e4",
         goal: "Review e4",
         state: "queued",
       },

@@ -10,7 +10,14 @@ import {
   tableFor,
 } from "../src/difficulty.js";
 import { storeAccess } from "../src/host.js";
-import { harness, makeSandbox, parseJson, projectRoot, type Sandbox } from "./helpers.js";
+import {
+  harness,
+  makeSandbox,
+  parseJson,
+  projectRoot,
+  type Sandbox,
+  workflowIntake,
+} from "./helpers.js";
 
 // The difficulty table (docs/modos-y-delegacion.md 3.11; phase F6): built-in provisional defaults, a config file that
 // overrides them value by value, patterns that follow a model across account prefixes, `haril difficulty show` with the
@@ -243,6 +250,7 @@ function seedRuns(host: typeof sb.host): void {
     type: "workflow.start",
     projectId: store.projects.list()[0]?.projectId,
     args: {
+      intake: workflowIntake(store.projects.list()[0]?.rootPath as string),
       goal: "Seed model stats",
       model: "cliproxy/high",
       agent: "orchestrator",

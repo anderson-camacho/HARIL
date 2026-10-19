@@ -10,7 +10,7 @@ import type { Clock, Store } from "@haril/core/ports";
 import { openStore } from "@haril/state-sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDelegationTools, type DelegationTools } from "../src/runtime/delegation-tools.js";
-import { makeSandbox, type Sandbox } from "./helpers.js";
+import { makeSandbox, type Sandbox, workflowIntake } from "./helpers.js";
 
 // The host side of the delegation tools (docs/modos-y-delegacion.md 3.4 to 3.6): only an open workflow turn may call,
 // for itself; the tool must be its archetype's, the input must pass the contract and a proposal must pass
@@ -58,7 +58,12 @@ function openOrchestratorTurn() {
   store.commands.enqueue({
     type: "workflow.start",
     projectId,
-    args: { goal: "Ship it", model: "fake/high-model", agent: "fake:orchestrate" },
+    args: {
+      intake: workflowIntake(store.projects.list()[0]?.rootPath as string),
+      goal: "Ship it",
+      model: "fake/high-model",
+      agent: "fake:orchestrate",
+    },
     idempotencyKey: "start",
     requestHash: "start",
   });

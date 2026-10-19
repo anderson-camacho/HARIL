@@ -10,7 +10,7 @@
 //     turn that writes in a git worktree (write, edit, haril_run, haril_merge, haril_merge_continue, haril_merge_abort):
 //     the host does them inside the worktree and answers once they are done.
 import type { DelegationToolReply, Difficulty } from "@haril/contracts";
-import type { DelegationRole } from "./delegation.js";
+import type { DelegationRole, WorkflowIntake } from "./delegation.js";
 
 export interface DelegationVerdictView {
   readonly verdict: "approved" | "rejected";
@@ -121,6 +121,7 @@ export interface DelegationWorkspaceView {
 export interface DelegationTurnInput {
   readonly workflowId: string;
   readonly workflowGoal: string;
+  readonly intake?: WorkflowIntake | null;
   readonly role: DelegationRole;
   readonly layer: 1 | 2 | 3;
   readonly threadId: string;

@@ -244,6 +244,10 @@ export function delegationHost(host: CommandHost): DelegationHost {
   return {
     cwd: host.cwd,
     project: host.project,
+    pending: host.pending,
+    currentPlan: () => host.lastPlan(),
+    createPlan: (ctx) => host.switchMode("plan", ctx),
+    consult: (ctx) => host.switchMode("consult", ctx),
     harilModelRef: () => host.harilModelRef(),
     harilModels: () => host.harilModels(),
     ensureRuntime: () => ensureRuntime(host),
@@ -597,7 +601,7 @@ function registerDashboardCommands(pi: ConsolePi, host: () => CommandHost | unde
         if (orchestration && (await orchestrationCommand(args, current, ctx))) return;
         current.openArea(area);
         ctx.ui.notify(
-          `${area.toUpperCase()} dashboard · Ctrl+Shift+1..${DASHBOARD_AREAS.length} or /${area}`,
+          `${area.toUpperCase()} dashboard · Alt+H to choose another area or /${area}`,
           "info",
         );
       },

@@ -21,12 +21,29 @@ export interface WorkflowAutonomy {
   readonly stops: readonly Stop[];
 }
 
+// Immutable, user-selected intake. Legacy workflows migrated from pre-0018 have no intake.
+export interface WorkflowIntake {
+  readonly projectRoot: string;
+  readonly plan: {
+    readonly sourceId: string;
+    readonly revision: string | null;
+    readonly sha256: string;
+    readonly text: string;
+  };
+  readonly methodology: {
+    readonly id: string;
+    readonly instructions: string;
+    readonly sha256: string;
+  };
+}
+
 export interface WorkflowRecord {
   readonly workflowId: string;
   readonly projectId: string;
   // The orchestrator's first turn.
   readonly rootTaskId: string | null;
   readonly goal: string;
+  readonly intake: WorkflowIntake | null;
   readonly state: WorkflowState;
   readonly autonomy: WorkflowAutonomy;
   // The limits snapshot taken when the workflow started (P11).
@@ -50,6 +67,8 @@ export interface WorkflowTaskRecord {
   readonly threadId: string;
   // A task of the parent thread (null for the orchestrator).
   readonly parentTaskId: string | null;
+  // The executor turn an auditor evaluates; null for final workflow auditors. Independent of structural parentage.
+  readonly auditedTaskId: string | null;
   readonly role: DelegationRole;
   readonly layer: 1 | 2 | 3;
   readonly kind: TaskKind;
@@ -127,6 +146,8 @@ export interface NewTurn {
   readonly layer: 1 | 2 | 3;
   readonly kind: TaskKind;
   readonly parentTaskId: string | null;
+  // The executor turn an auditor evaluates; null for final workflow auditors.
+  readonly auditedTaskId?: string | null;
   readonly localId: string | null;
   readonly goal: string;
   readonly description: string;
