@@ -240,11 +240,12 @@ export function openDelegationPanel(
           return screen.lines;
         },
         handleInput(data) {
-          if (keyOf(data) === "escape" || data === "q") return finish(undefined);
-          if (data === "\r" || data === "\n" || data === "e") return act({ kind: "edit" });
-          if (data === "r" || data === "R") return act({ kind: "reset" });
-          if (data === "\u001b[A" || data === "k") move(state, -1);
-          else if (data === "\u001b[B" || data === "j") move(state, 1);
+          const key = keyOf(data);
+          if (key === "escape" || key === "q") return finish(undefined);
+          if (key === "enter" || key === "e") return act({ kind: "edit" });
+          if (key === "r") return act({ kind: "reset" });
+          if (key === "up" || key === "k") move(state, -1);
+          else if (key === "down" || key === "j") move(state, 1);
           else if (data === "\u001b[5~") move(state, -10);
           else if (data === "\u001b[6~") move(state, 10);
           else if (data === "\u001b[H" || data === "g") move(state, -state.view.fields.length);

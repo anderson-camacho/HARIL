@@ -205,7 +205,7 @@ describe("the Delegation overlay", () => {
     expect(state.offset).toBeGreaterThan(0);
   });
 
-  function open(state: PanelState) {
+  function open(state: PanelState, rows = 30) {
     let component:
       | {
           render(width: number): string[];
@@ -218,7 +218,7 @@ describe("the Delegation overlay", () => {
         custom(factory: (...args: unknown[]) => typeof component) {
           return new Promise((resolve) => {
             component = factory(
-              { terminal: { columns: 100, rows: 30 }, requestRender: () => undefined },
+              { terminal: { columns: 100, rows }, requestRender: () => undefined },
               THEME,
               undefined,
               resolve,
@@ -276,6 +276,64 @@ describe("the Delegation overlay", () => {
     const close = open({ view: view(), selected: 0, offset: 0 });
     close.click("[Esc Close]");
     await expect(close.result).resolves.toBeUndefined();
+  });
+
+  it.each([
+    ["legacy arrows", "\u001b[A", "\u001b[B"],
+    ["Pi SS3 arrows", "\u001bOA", "\u001bOB"],
+    ["Kitty arrows", "\u001b[1;1A", "\u001b[1;1B"],
+  ])("navigates settings with %s", async (_name, up, down) => {
+    const overlay = open({ view: view(), selected: 1, offset: 0 });
+    overlay.view().handleInput?.(up);
+    overlay.view().handleInput?.(down);
+    overlay.view().handleInput?.(down);
+    overlay.view().handleInput?.("\u001b[13u");
+    await expect(overlay.result).resolves.toEqual({
+      kind: "edit",
+      path: "delegation.context.perLayer.delegator",
+    });
+  });
+
+  it("keeps selection visible while moving and clamps the preserved offset", () => {
+    const state: PanelState = { view: view(), selected: 0, offset: 0 };
+    const overlay = open(state, 12);
+    const last = state.view.fields.length - 1;
+    for (let i = 0; i < last; i++) overlay.view().handleInput?.("\u001b[1;1B");
+    const bottom = overlay.view().render(100).map(stripAnsi).join("\n");
+    expect(bottom).toContain(`▶ ${state.view.fields[last]?.label}`);
+    expect(state.offset).toBeGreaterThan(0);
+    const bottomOffset = state.offset;
+
+    overlay.view().handleInput?.("\u001b[A");
+    const up = overlay.view().render(100).map(stripAnsi).join("\n");
+    expect(up).toContain(`▶ ${state.view.fields[last - 1]?.label}`);
+    expect(state.offset).toBeLessThanOrEqual(bottomOffset);
+
+    state.selected = 0;
+    state.offset = Number.MAX_SAFE_INTEGER;
+    overlay.view().render(100);
+    expect(state.offset).toBe(0);
+  });
+
+  it("preserves mouse wheel navigation and click editing", async () => {
+    const overlay = open({ view: view(), selected: 0, offset: 0 });
+    overlay.view().handleMouse?.({
+      type: "wheel",
+      button: "none",
+      wheelDelta: 1,
+      x: 0,
+      y: 0,
+      width: 100,
+      height: 30,
+      shift: false,
+      alt: false,
+      ctrl: false,
+    });
+    overlay.view().handleInput?.("\u001b[13u");
+    await expect(overlay.result).resolves.toEqual({
+      kind: "edit",
+      path: "delegation.context.perLayer.orchestrator",
+    });
   });
 
   it.each(["\u001b", "\u001b[27u", "\u001b[27;1u"])(
@@ -467,12 +525,13 @@ describe("editing a delegation setting", () => {
 
     const opening = openDelegationSettings(ctx, {});
     await vi.waitFor(() => expect(panels).toHaveLength(1));
+    panels[0]?.handleInput("\u001b[B");
     panels[0]?.handleInput("\r");
     await vi.waitFor(() => expect(panels).toHaveLength(2));
     const returned = panels[1];
     expect(returned?.overlay).toBe(true);
     expect(returned?.render(100).map(stripAnsi).join("\n")).toMatch(
-      /▶ Compact at, every layer\s+300,000 tokens/,
+      /▶ Compact at, orchestrator\s+400,000 tokens/,
     );
     returned?.handleInput("\u001b");
     await opening;
