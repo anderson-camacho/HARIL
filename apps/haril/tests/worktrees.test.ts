@@ -121,7 +121,7 @@ function turnFakes(role: "executor" | "auditor" | "delegator" = "executor") {
                 runId: "run-1",
                 payload: { attempt: 1 },
               },
-              ]
+            ]
           : [],
     },
     worktrees: {
