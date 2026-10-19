@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   canonicalJson,
   canTransition,
@@ -10,6 +10,9 @@ import {
   checkTaskKind,
 } from "@haril/core";
 import type { Clock, Ids, StoreRules, WorkflowIntake } from "@haril/core/ports";
+
+// Test fixtures must use an absolute path that is native to the current OS.
+export const TEST_PROJECT_ROOT = resolve("D:/demo");
 
 export function workflowIntake(root: string): WorkflowIntake {
   const text = "1. Complete the selected task.\n2. Verify the result.\n";
