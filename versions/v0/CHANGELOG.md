@@ -4,6 +4,16 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.21.2
+
+- **Fecha:** 2026-10-19
+- **Estado:** mejoras visuales y de navegación de la consola HARIL.
+- El selector `Alt+H` utiliza flechas **↑/↓** acordes con la lista vertical; conserva **←/→**, `Enter` y `Esc`.
+- La cabecera muestra un logotipo tipográfico estático sin parpadeos en terminales con espacio suficiente; pantallas pequeñas conservan la marca compacta.
+- En **TOOLS** y **EVERYWHERE** aparece **Registro de actividad reciente** (`L`), que consulta los últimos 40 registros de 24 horas mediante `haril usage log` y los muestra en un visor de pantalla completa. También se encuentra en el menú `/haril`.
+
+---
+
 ## 0.21.1
 
 - **Fecha:** 2026-10-19
