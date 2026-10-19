@@ -2,7 +2,8 @@
 
 ## Estado actual
 
-- **Versión actual:** 0.21.2.
+- **Versión actual:** 0.21.3.
+- **Estado (0.21.3):** cabecera con columna izquierda persistente para modo de la sesión, estados de extensiones reportados por Pi y advertencias de HARIL; diseño adaptable sin invadir el editor ni ocultar el historial de Pi. Pi no expone una lista completa de extensiones cargadas por esta API.
 - **Estado (0.21.2):** selector vertical accesible con ↑/↓ (compatibilidad ←/→), logotipo de terminal estático adaptable y acceso de solo lectura al registro de actividad reciente desde TOOLS y EVERYWHERE.
 - **Estado (0.21.1):** operación nativa `haril update` para comprobar e instalar una versión mayor desde una copia local explícitamente seleccionada, con confirmación y rechazo ante runtimes activos; el canal `--main` realiza una descarga aislada de la rama de desarrollo; aún no existen releases oficiales verificadas ni rollback automatizado.
 - **Estado (0.21.0):** selector de áreas y teclado, catálogo de modelos compatibles, cabecera compacta, auditor como hermano del ejecutor, entrada explícita de proyecto/plan/metodología, comprobación previa y aprobación/cierre basados en evidencia del host. Las pruebas focalizadas pasaron; la suite completa en `6c8a930` tuvo 3 fallos y no se ha repetido en `c595af3`. Siguen pendientes la prueba manual de Windows y el idioma español configurable.
