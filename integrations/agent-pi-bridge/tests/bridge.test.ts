@@ -292,6 +292,28 @@ describe("agent-pi-bridge extension", () => {
     expect(result.details).toEqual({});
   });
 
+  it.each(["missing", "not_a_file", "unreadable", "path_denied", "too_large"])(
+    "shows the safe %s read denial category to the agent",
+    async (reason) => {
+      const { pi, fake } = await loadWithPipe();
+      fake.respond(() => ({ ok: false, error: reason }));
+      const result = await readTool(pi).execute("call-denied", { path: "candidate.txt" });
+      expect(result).toEqual({
+        content: [{ type: "text", text: `denied: ${reason}` }],
+        details: {},
+        isError: true,
+      });
+    },
+  );
+
+  it("does not expose an unexpected read error from the runtime", async () => {
+    const { pi, fake } = await loadWithPipe();
+    fake.respond(() => ({ ok: false, error: "secret internal path" }));
+    const result = await readTool(pi).execute("call-denied", { path: "candidate.txt" });
+    expect(result.content).toEqual([{ type: "text", text: "denied: denied" }]);
+    expect(result.isError).toBe(true);
+  });
+
   it("registers haril_propose_plan next to read when HARIL_TOOLS announces it, and the hello lists both", async () => {
     const { pi, fake } = await loadWithPipe(PLAN_TOOLS);
     expect(pi.tools.map((tool) => tool.name)).toEqual(["read", "haril_propose_plan"]);

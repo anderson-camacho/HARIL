@@ -57,6 +57,9 @@ export type BridgeOperationOutcome =
   | "ok"
   | "path_denied"
   | "too_large"
+  | "missing"
+  | "not_a_file"
+  | "unreadable"
   | "read_failed"
   | "plan_refused"
   | "delegation_refused"
@@ -441,6 +444,8 @@ class PiRun implements PiAgentHandle {
   private helloDone = false;
   private promptStarted = false;
   private settledSeen = false;
+  private readAttempts = 0;
+  private successfulReads = 0;
   private finalText: string | undefined;
   // The last assistant message_end before agent_settled decides the run; an earlier one may be a retried error.
   private lastAssistant:
@@ -791,6 +796,7 @@ class PiRun implements PiAgentHandle {
       this.replyBridge(id, { ok: false, error: "unsupported" });
       return;
     }
+    this.readAttempts++;
     const requested = typeof message.path === "string" ? message.path : "";
     const pathSha256 = sha256(requested);
     const check = this.guard(requested);
@@ -801,6 +807,7 @@ class PiRun implements PiAgentHandle {
     }
     const read = await readGuardedFile(check.absolutePath, { maxBytes: MAX_READ_BYTES });
     if (read.ok) {
+      this.successfulReads++;
       this.recordOperation("read", pathSha256, "ok");
       this.replyBridge(id, { ok: true, content: read.content.toString("utf8") });
       return;
@@ -816,8 +823,8 @@ class PiRun implements PiAgentHandle {
       this.replyBridge(id, { ok: false, error: "too_large" });
       return;
     }
-    this.recordOperation("read", pathSha256, "read_failed");
-    this.replyBridge(id, { ok: false, error: "read_failed" });
+    this.recordOperation("read", pathSha256, read.reason);
+    this.replyBridge(id, { ok: false, error: read.reason });
   }
 
   // haril_propose_plan (LD-T4): the plan goes to the host's proposer untouched, with the run's own context; the host
@@ -1057,6 +1064,13 @@ class PiRun implements PiAgentHandle {
         status: "failed",
         code: message.includes("insufficient_quota") ? "insufficient_quota" : "provider_error",
         message,
+      };
+    }
+    if (this.readAttempts > 0 && this.successfulReads === 0) {
+      return {
+        status: "failed",
+        code: "agent.read_unavailable",
+        message: "No attempted workspace file read succeeded; workspace contents remain unverified",
       };
     }
     return { status: "succeeded", summary: this.finalText ?? this.streamedText };

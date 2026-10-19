@@ -275,6 +275,7 @@ describe("createPiAgentRuntime lifecycle", () => {
     expect((await handle.hello).tools).toEqual(TOOLS);
     expect(await handle.prompt("go")).toEqual({ ok: true, value: undefined });
     expect(await handle.settled).toEqual({ status: "succeeded", summary: "fake reply" });
+    expect(h.events).toEqual([]);
     const diagnostics = handle.diagnostics;
     expect(diagnostics.ignoredEvents).toBeGreaterThanOrEqual(1);
     expect(diagnostics.warnings).toEqual([]);
@@ -296,6 +297,23 @@ describe("createPiAgentRuntime lifecycle", () => {
     expect(serialized).not.toContain("notes.txt");
   });
 
+  it.each([
+    ["missing", "missing.txt", "missing"],
+    ["not_a_file", "folder", "not_a_file"],
+  ])("reports a %s read denial without claiming workspace success", async (_, readPath, reason) => {
+    const h = harness();
+    mkdirSync(join(h.root, "folder"));
+    const handle = await startHandle(h.runtime("ok_with_read", { readPath }));
+    await handle.prompt("go");
+    expect(await handle.settled).toEqual({
+      status: "failed",
+      code: "agent.read_unavailable",
+      message: "No attempted workspace file read succeeded; workspace contents remain unverified",
+    });
+    expect(h.events).toEqual([expect.objectContaining({ op: "read", outcome: reason })]);
+    expect(JSON.stringify(h.events)).not.toContain(readPath);
+  });
+
   it("records each denial with its guard reason and never the path or the content (ESC-05)", async () => {
     const h = harness();
     const handle = await startHandle(
@@ -303,8 +321,9 @@ describe("createPiAgentRuntime lifecycle", () => {
     );
     await handle.prompt("go");
     expect(await handle.settled).toEqual({
-      status: "succeeded",
-      summary: "read denials 3: path_denied, path_denied, path_denied",
+      status: "failed",
+      code: "agent.read_unavailable",
+      message: "No attempted workspace file read succeeded; workspace contents remain unverified",
     });
     expect(h.events).toEqual([
       expect.objectContaining({ op: "read", outcome: "path_denied", reason: "outside_root" }),
@@ -321,8 +340,9 @@ describe("createPiAgentRuntime lifecycle", () => {
     const handle = await startHandle(h.runtime("ok_with_read", { readPath: "../outside.txt" }));
     await handle.prompt("go");
     expect(await handle.settled).toEqual({
-      status: "succeeded",
-      summary: "read denied: path_denied",
+      status: "failed",
+      code: "agent.read_unavailable",
+      message: "No attempted workspace file read succeeded; workspace contents remain unverified",
     });
     expect(h.events).toEqual([expect.objectContaining({ op: "read", outcome: "path_denied" })]);
     expect(JSON.stringify(h.events)).not.toContain("secret outside");
@@ -337,13 +357,31 @@ describe("createPiAgentRuntime lifecycle", () => {
     const handle = await startHandle(h.runtime("ok_with_read", { readPath: "jout/secret.txt" }));
     await handle.prompt("go");
     expect(await handle.settled).toEqual({
-      status: "succeeded",
-      summary: "read denied: path_denied",
+      status: "failed",
+      code: "agent.read_unavailable",
+      message: "No attempted workspace file read succeeded; workspace contents remain unverified",
     });
     expect(h.events).toEqual([
       expect.objectContaining({ op: "read", outcome: "path_denied", reason: "link" }),
     ]);
     expect(JSON.stringify(h.events)).not.toContain("secret outside");
+  });
+
+  it("keeps a turn successful when at least one attempted workspace read succeeds", async () => {
+    const h = harness();
+    const handle = await startHandle(
+      h.runtime("read_outside", { outsidePath: join(h.root, "notes.txt") }),
+    );
+    await handle.prompt("go");
+    expect(await handle.settled).toEqual({
+      status: "succeeded",
+      summary: "read denials 3: path_denied, allowed, path_denied",
+    });
+    expect(h.events).toEqual([
+      expect.objectContaining({ op: "read", outcome: "path_denied" }),
+      expect.objectContaining({ op: "read", outcome: "ok" }),
+      expect.objectContaining({ op: "read", outcome: "path_denied" }),
+    ]);
   });
 
   it("answers extension_ui_request with a cancellation", async () => {
