@@ -21,6 +21,7 @@ import { states } from "./commands/states.js";
 import { status } from "./commands/status.js";
 import { stop } from "./commands/stop.js";
 import { task } from "./commands/task.js";
+import { update } from "./commands/update.js";
 import { usage } from "./commands/usage.js";
 import { workflow } from "./commands/workflow.js";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "./context.js";
@@ -69,6 +70,7 @@ const HELP_LINES = [
   "    source of each value (config/difficulty.json or the provisional defaults)",
   "  haril difficulty calibrate [--yes] [--json]   recompute the success rates from real runs (model_stats), show the",
   "    change and write config/difficulty.json only with --yes; nothing else updates the table",
+  "  haril update [--check] [--from <repo>] [--yes]   check and install a newer local checkout safely",
   "  haril states                     print the task states and legal transitions",
   "  haril plan validate <file> [--json]   validate a plan file",
   "  haril plan import <file> [--project <slug>] [--json]   queue a plan (applied by start)",
@@ -168,6 +170,8 @@ function dispatch(argv: readonly string[], io: CliIo, host: HostInfo): number | 
       return EXIT_OK;
     case "doctor":
       return doctor(rest, io, host);
+    case "update":
+      return update(rest, io, host);
     case "config":
       return config(rest, io, host);
     case "difficulty":
