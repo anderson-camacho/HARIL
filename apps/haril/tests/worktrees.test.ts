@@ -114,13 +114,13 @@ function turnFakes(role: "executor" | "auditor" | "delegator" = "executor") {
       list: ({ taskId }: { taskId?: string } = {}) =>
         taskId === "t1"
           ? [
-                {
-                  type: "task.claimed",
-                  actorKind: "system",
-                  taskId: "t1",
-                  runId: "run-1",
-                  payload: { attempt: 1 },
-                },
+              {
+                type: "task.claimed",
+                actorKind: "system",
+                taskId: "t1",
+                runId: "run-1",
+                payload: { attempt: 1 },
+              },
               ]
           : [],
     },
