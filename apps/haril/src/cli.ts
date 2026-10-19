@@ -70,7 +70,7 @@ const HELP_LINES = [
   "    source of each value (config/difficulty.json or the provisional defaults)",
   "  haril difficulty calibrate [--yes] [--json]   recompute the success rates from real runs (model_stats), show the",
   "    change and write config/difficulty.json only with --yes; nothing else updates the table",
-  "  haril update [--check] [--from <repo>] [--yes]   check and install a newer local checkout safely",
+  "  haril update [--check] [--from <repo> | --main] [--yes]   update locally or from pinned GitHub main",
   "  haril states                     print the task states and legal transitions",
   "  haril plan validate <file> [--json]   validate a plan file",
   "  haril plan import <file> [--project <slug>] [--json]   queue a plan (applied by start)",
