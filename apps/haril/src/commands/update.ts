@@ -216,9 +216,7 @@ export async function update(
       io.out("Checking GitHub main (development channel; not a signed release)...");
       checkout = await services.checkoutMain();
     } catch (error) {
-      io.err(
-        `haril: cannot fetch main: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      io.err(`haril: cannot fetch main: ${error instanceof Error ? error.message : String(error)}`);
       return 1;
     }
   }
