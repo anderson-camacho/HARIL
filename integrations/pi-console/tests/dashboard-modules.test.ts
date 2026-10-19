@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import harilConsole from "../src/console.js";
-import { DASHBOARD_AREAS, type DashboardFacts, renderDashboardLayout } from "../src/dashboard.js";
+import {
+  DASHBOARD_AREAS,
+  type DashboardFacts,
+  renderDashboardLayout,
+  renderHeaderLayout,
+} from "../src/dashboard.js";
 import { type DashboardActionHost, openDashboardActionMenu } from "../src/dashboard-actions.js";
 import { controlsFor } from "../src/dashboard-controls.js";
 import { emptyDashboardData } from "../src/dashboard-data.js";
@@ -92,6 +97,31 @@ describe("the console's modules", () => {
     expect(text).toContain("[B] Browse HARIL methodologies");
     expect(text).toContain("[C] Browse HARIL commands");
     expect(text).toContain("Alt+H to choose area");
+  });
+
+  it("uses a compact HARIL mark without decorative ASCII in narrow and wide headers", () => {
+    const narrow = renderHeaderLayout("1.2.3", 60, facts(), "tools", THEME, 24);
+    const wide = renderHeaderLayout("1.2.3", 140, facts(), "tools", THEME, 45);
+
+    const narrowText = narrow.lines.map(stripAnsi).join("\n");
+    const wideText = wide.lines.map(stripAnsi).join("\n");
+    for (const text of [narrowText, wideText]) {
+      expect(text).toContain("HARIL ◉");
+      expect(text).not.toContain("NEURAL LINK");
+      expect(text).not.toContain("MANY MINDS. ONE FLOW.");
+      expect(text).toContain("fake-project");
+      expect(text).toContain("fake-model · no reasoning");
+    }
+    expect(wideText).toContain("fake-cwd");
+    expect(wideText).toContain("Pi console active");
+    expect(wideText).not.toContain(".-~~~~~~~~~~-.");
+    for (const [layout, width] of [
+      [narrow, 60],
+      [wide, 140],
+    ] as const) {
+      expect(layout.tabHits.map((hit) => hit.area)).toEqual(DASHBOARD_AREAS);
+      expect(layout.tabHits.every((hit) => hit.row >= 0 && hit.end <= width)).toBe(true);
+    }
   });
 
   it("registers one area-picker shortcut and a /command each but /workflows", async () => {

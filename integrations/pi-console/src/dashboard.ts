@@ -1,4 +1,4 @@
-import { renderNeuralProfile, renderWordmark } from "./dashboard-art.js";
+import { renderBrandMark } from "./dashboard-art.js";
 import { controlsFor, type DashboardAction } from "./dashboard-controls.js";
 import type { DashboardData } from "./dashboard-data.js";
 import { frameGlyph, paddedCell, visualText } from "./dashboard-theme.js";
@@ -194,17 +194,9 @@ function wideHeader(
   const leftWidth = Math.floor((inside - 1) * 0.68);
   const rightWidth = inside - leftWidth - 1;
   const tabLayout = tabs(width, selected);
-  const title = ` HARIL NEURAL INTERFACE :: SESSION INIT  ·  ${version ?? "HARIL"} `;
+  const title = ` ${renderBrandMark()} :: SESSION INIT  ·  ${version ?? "HARIL"} `;
   const rows = [border(width, "┌", "─", "┐"), frameRow(title, width, "yellow")];
-  const left: string[] = [
-    ...renderWordmark(false).map((line, index) =>
-      paddedCell(line, leftWidth, index === 2 ? "yellow" : "cyan", "base"),
-    ),
-    paddedCell("MANY MINDS. ONE FLOW.", leftWidth, "teal", "base"),
-    ...renderNeuralProfile(leftWidth, false)
-      .slice(0, 6)
-      .map((line, index) => paddedCell(line, leftWidth, index === 3 ? "yellow" : "teal", "base")),
-  ];
+  const left: string[] = [paddedCell(renderBrandMark(), leftWidth, "yellow", "base")];
   const right = [
     statusRow("SESSION", "Pi console active", rightWidth),
     statusRow("PROJECT", facts.project, rightWidth),
@@ -264,12 +256,12 @@ export function renderHeaderLayout(
   _theme: ConsoleTheme,
   height = 24,
 ): HeaderLayout {
-  if (width < 10) return { lines: [fit("HARIL", width)], tabHits: [] };
+  if (width < 10) return { lines: [fit(renderBrandMark(), width)], tabHits: [] };
   if (width >= 120 && height >= 40) return wideHeader(width, version, facts, selected);
   const tabLayout = tabs(width, selected);
   const rows = [
     border(width, "┌", "─", "┐"),
-    `${frameGlyph("│")}${paddedCell(` ◆ HARIL ${version ?? ""} · MANY MINDS. ONE FLOW.`, width - 2, "yellow")}${frameGlyph("│")}`,
+    `${frameGlyph("│")}${paddedCell(` ${renderBrandMark()} ${version ?? ""}`, width - 2, "yellow")}${frameGlyph("│")}`,
     `${frameGlyph("│")}${paddedCell(` ${facts.project} · ${facts.modelLevel} · ${facts.runtime} · TOOLS ${facts.activeTools.length}/${facts.tools.length} · MCP ${facts.mcpServers.length}`, width - 2, "teal")}${frameGlyph("│")}`,
     ...tabLayout.lines.map(
       (line) =>
