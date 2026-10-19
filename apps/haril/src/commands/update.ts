@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { DatabaseSync } from "node:sqlite";
@@ -8,11 +9,16 @@ import { defaultPidAlive } from "../host.js";
 import { runtimeRootFor } from "../runtime.js";
 import { dataDirFor } from "./common.js";
 
-// Local-source updater. No unverified GitHub archive, branch or arbitrary remote script is
-// executed: the caller explicitly selects a checked-out HARIL source repository. The
-// existing installer performs dependency resolution, build, versioned installation and doctor.
-// Remote updates can be enabled later when signed/pinned release artifacts are published.
-const USAGE = "usage: haril update [--check] [--from <repository>] [--yes]";
+// Local updates by default, with explicit --main opt-in to the fixed development branch.
+// This source is NOT an official verified release artifact.
+const MAIN_REPOSITORY = "https://github.com/anderson-camacho/HARIL.git";
+const USAGE = "usage: haril update [--check] [--from <repository> | --main] [--yes]";
+
+export interface MainCheckout {
+  readonly source: string;
+  readonly revision: string;
+  cleanup(): void;
+}
 
 export interface UpdateServices {
   readonly readText: (path: string) => string;
@@ -23,6 +29,7 @@ export interface UpdateServices {
   };
   readonly install: (script: string, root: string, source: string) => Promise<number>;
   readonly confirm: () => Promise<boolean>;
+  readonly checkoutMain: () => Promise<MainCheckout>;
 }
 
 function versionParts(input: unknown): number[] | null {
@@ -95,6 +102,63 @@ function installFrom(script: string, root: string, source: string): Promise<numb
   });
 }
 
+
+function git(args: readonly string[], cwd?: string): Promise<string> {
+  return new Promise((resolveOutput, reject) => {
+    const child = spawn("git", [...args], {
+      ...(cwd === undefined ? {} : { cwd }),
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    });
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => child.kill(), 60_000);
+    child.stdout.on("data", (bytes: Buffer) => {
+      stdout = (stdout + bytes.toString("utf8")).slice(-4096);
+    });
+    child.stderr.on("data", (bytes: Buffer) => {
+      stderr = (stderr + bytes.toString("utf8")).slice(-4096);
+    });
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once("close", (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolveOutput(stdout);
+      else reject(new Error("git failed (exit " + String(code) + "): " + stderr.trim()));
+    });
+  });
+}
+
+// Clone main into an isolated temporary directory: never switch or pull the user's worktree.
+async function checkoutMain(): Promise<MainCheckout> {
+  const temp = mkdtempSync(join(tmpdir(), "haril-main-"));
+  const source = join(temp, "checkout");
+  const cleanup = () => rmSync(temp, { recursive: true, force: true });
+  try {
+    await git([
+      "clone",
+      "--quiet",
+      "--depth",
+      "1",
+      "--no-tags",
+      "--single-branch",
+      "--branch",
+      "main",
+      MAIN_REPOSITORY,
+      source,
+    ]);
+    const revision = (await git(["rev-parse", "--verify", "HEAD"], source)).trim();
+    if (!/^[0-9a-f]{40}$/.test(revision)) throw new Error("Git returned an invalid commit SHA");
+    return { source, revision, cleanup };
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
+}
+
 async function askConfirm(): Promise<boolean> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
@@ -111,6 +175,7 @@ const DEFAULT_SERVICES: UpdateServices = {
   activeRuntime: runtimeState,
   install: installFrom,
   confirm: askConfirm,
+  checkoutMain,
 };
 
 export async function update(
@@ -120,12 +185,14 @@ export async function update(
   services: UpdateServices = DEFAULT_SERVICES,
 ): Promise<number> {
   let sourceArg: string | undefined;
+  let main = false;
   let check = false;
   let yes = false;
   for (let index = 0; index < args.length; index++) {
     const token = args[index];
     if (token === "--check") check = true;
     else if (token === "--yes") yes = true;
+    else if (token === "--main") main = true;
     else if (token === "--from") {
       const value = args[index + 1];
       if (value === undefined || value.startsWith("--") || value === "") {
@@ -140,69 +207,87 @@ export async function update(
     }
   }
 
-  const source = resolve(host.cwd ?? process.cwd(), sourceArg ?? host.env?.HARIL_SOURCE_DIR ?? ".");
-  const script = join(source, "scripts", "install.mjs");
-  const manifest = join(source, "apps", "haril", "package.json");
-  const root = runtimeRootFor(host);
-  let current: string;
-  let available: string;
+  if (main && sourceArg !== undefined) {
+    io.err("haril: choose either --main or --from");
+    return EXIT_USAGE;
+  }
+  let checkout: MainCheckout | undefined;
+  if (main) {
+    try {
+      io.out("Checking GitHub main (development channel; not a signed release)...");
+      checkout = await services.checkoutMain();
+    } catch (error) {
+      io.err("haril: cannot fetch main: " + (error instanceof Error ? error.message : String(error)));
+      return 1;
+    }
+  }
   try {
-    current = installedVersion(root, services);
-    if (!services.exists(script) || !services.exists(manifest)) {
+    const source = checkout?.source ?? resolve(host.cwd ?? process.cwd(), sourceArg ?? host.env?.HARIL_SOURCE_DIR ?? ".");
+    const script = join(source, "scripts", "install.mjs");
+    const manifest = join(source, "apps", "haril", "package.json");
+    const root = runtimeRootFor(host);
+    let current: string;
+    let available: string;
+    try {
+      current = installedVersion(root, services);
+      if (!services.exists(script) || !services.exists(manifest)) {
+        io.err(
+          `haril: no local HARIL checkout at ${source}; use --from <repository>. No official release auto-updater is configured.`,
+        );
+        return EXIT_USAGE;
+      }
+      available = readVersion(manifest, services);
+    } catch (error) {
+      io.err(`haril: ${error instanceof Error ? error.message : String(error)}`);
+      return EXIT_USAGE;
+    }
+
+    io.out(`HARIL installed: ${current}; ${main ? "GitHub main" : "local source"}: ${available} (${checkout?.revision ?? source})`);
+    const comparison = compareVersions(available, current);
+    if (comparison < 0) {
+      io.err("haril: the selected source is older; downgrades are not automatic");
+      return EXIT_USAGE;
+    }
+    if (comparison === 0) {
+      io.out("HARIL is already at the selected source version.");
+      return EXIT_OK;
+    }
+    if (check) {
+      io.out("An update is available; the installed files were not changed.");
+      return EXIT_OK;
+    }
+
+    const runtime = services.activeRuntime(dataDirFor(host, undefined));
+    if (runtime.state !== "none") {
       io.err(
-        `haril: no local HARIL checkout at ${source}; use --from <repository>. No official release auto-updater is configured.`,
+        runtime.state === "active"
+          ? `haril: a runtime is active (${runtime.detail ?? "unknown PID"}); stop it before updating`
+          : `haril: runtime state could not be checked (${runtime.detail ?? "unknown"}); update refused`,
       );
       return EXIT_USAGE;
     }
-    available = readVersion(manifest, services);
-  } catch (error) {
-    io.err(`haril: ${error instanceof Error ? error.message : String(error)}`);
-    return EXIT_USAGE;
-  }
-
-  io.out(`HARIL installed: ${current}; local source: ${available} (${source})`);
-  const comparison = compareVersions(available, current);
-  if (comparison < 0) {
-    io.err("haril: the selected source is older; downgrades are not automatic");
-    return EXIT_USAGE;
-  }
-  if (comparison === 0) {
-    io.out("HARIL is already at the selected source version.");
-    return EXIT_OK;
-  }
-  if (check) {
-    io.out("An update is available from this local checkout; no files were changed.");
-    return EXIT_OK;
-  }
-
-  const runtime = services.activeRuntime(dataDirFor(host, undefined));
-  if (runtime.state !== "none") {
-    io.err(
-      runtime.state === "active"
-        ? `haril: a runtime is active (${runtime.detail ?? "unknown PID"}); stop it before updating`
-        : `haril: runtime state could not be checked (${runtime.detail ?? "unknown"}); update refused`,
-    );
-    return EXIT_USAGE;
-  }
-  if (!yes) {
-    if (host.interactive !== true) {
-      io.err("haril: confirmation required; inspect with --check, then use --yes");
-      return EXIT_USAGE;
+    if (!yes) {
+      if (host.interactive !== true) {
+        io.err("haril: confirmation required; inspect with --check, then use --yes");
+        return EXIT_USAGE;
+      }
+      if (!(await services.confirm())) {
+        io.out("Update cancelled; no files were changed.");
+        return EXIT_OK;
+      }
     }
-    if (!(await services.confirm())) {
-      io.out("Update cancelled; no files were changed.");
-      return EXIT_OK;
-    }
-  }
 
-  io.out(`Updating HARIL to ${available} through the repository installer...`);
-  const result = await services.install(script, root, source);
-  if (result !== 0) {
-    io.err(
-      `haril: installer failed (exit ${result}); inspect its output. Do not assume the update succeeded.`,
-    );
-    return 1;
+    io.out(`Updating HARIL to ${available} from ${main ? "GitHub main" : "local source"} through the installer...`);
+    const result = await services.install(script, root, source);
+    if (result !== 0) {
+      io.err(
+        `haril: installer failed (exit ${result}); inspect its output. Do not assume the update succeeded.`,
+      );
+      return 1;
+    }
+    io.out(`HARIL update to ${available} completed; open a new terminal before continuing.`);
+    return EXIT_OK;
+  } finally {
+    checkout?.cleanup();
   }
-  io.out(`HARIL update to ${available} completed; open a new terminal before continuing.`);
-  return EXIT_OK;
 }
