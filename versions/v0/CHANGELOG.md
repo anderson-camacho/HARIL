@@ -4,6 +4,30 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.21.1
+
+- **Fecha:** 2026-10-19
+- **Estado:** actualización nativa local implementada; actualización desde releases y rollback siguen pendientes.
+
+### Añadido
+
+- `haril update --check` compara la versión instalada con un checkout local y no modifica archivos.
+- `haril update --from <ruta> [--yes]` usa el instalador existente con confirmación, sin descargar código remoto.
+
+### Cambiado
+
+- Documentado el origen local de las actualizaciones y la necesidad de actualizar el checkout antes de ejecutarlas.
+
+### Corregido
+
+- La actualización se rechaza con un runtime activo, un estado de lease desconocido o una versión fuente inferior.
+
+### Verificación
+
+- Añadidas pruebas herméticas del comando: lectura de versiones, confirmación, runtime, fallos y versiones no válidas. Validación integral pendiente de CI.
+
+---
+
 ## 0.21.0
 
 - **Fecha:** 2026-10-19
