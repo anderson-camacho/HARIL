@@ -18,9 +18,31 @@ export const ProviderConfigSchema = Type.Object(
 );
 export type ProviderConfig = Static<typeof ProviderConfigSchema>;
 
+export const UiLocaleSchema = Type.Union([Type.Literal("es"), Type.Literal("en")]);
+export type UiLocale = Static<typeof UiLocaleSchema>;
+export const DEFAULT_UI_LOCALE: UiLocale = "es";
+
+export const UiConfigSchema = Type.Object(
+  {
+    theme: Type.Optional(Type.String({ pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$" })),
+    locale: Type.Optional(UiLocaleSchema),
+  },
+  { additionalProperties: false },
+);
+export type UiConfig = Static<typeof UiConfigSchema>;
+
+export function isUiLocale(value: unknown): value is UiLocale {
+  return Value.Check(UiLocaleSchema, value);
+}
+
+export function effectiveUiLocale(ui: Pick<UiConfig, "locale"> | undefined): UiLocale {
+  return ui?.locale ?? DEFAULT_UI_LOCALE;
+}
+
 export const HarilConfigSchema = Type.Object(
   {
     providers: Type.Array(ProviderConfigSchema, { minItems: 1, maxItems: MAX_PROVIDERS }),
+    ui: Type.Optional(UiConfigSchema),
   },
   { additionalProperties: false },
 );

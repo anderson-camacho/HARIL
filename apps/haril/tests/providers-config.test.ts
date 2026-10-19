@@ -167,6 +167,23 @@ describe("haril.json", () => {
 
 // The ui object (TUI-D14): the shell stores ui.theme here. A file without providers means the built-in defaults.
 describe("haril.json ui object (TUI-D14)", () => {
+  it("accepts both configured locales without changing provider selection", () => {
+    for (const locale of ["es", "en"]) {
+      const path = writeConfig(JSON.stringify({ ui: { locale } }));
+      const loaded = loadProviderConfig(hostWith({ HARIL_CONFIG: path }));
+      expect(loaded.ok && loaded.source).toBe("defaults");
+    }
+  });
+
+  it("rejects an unsupported locale with its config path", () => {
+    for (const locale of ["fr", "EN", "", null, 1]) {
+      const path = writeConfig(JSON.stringify({ ui: { locale } }));
+      const loaded = loadProviderConfig(hostWith({ HARIL_CONFIG: path }));
+      expect(loaded.ok).toBe(false);
+      expect(!loaded.ok && loaded.errors.join("\n")).toContain("/ui/locale");
+    }
+  });
+
   it("accepts ui.theme next to providers", () => {
     const path = writeConfig(
       JSON.stringify({
