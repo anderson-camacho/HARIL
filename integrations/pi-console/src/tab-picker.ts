@@ -37,14 +37,16 @@ export function createTabPicker(
         return index === selected ? (theme?.fg("warning", label) ?? label) : label;
       });
       const hint =
-        theme?.fg("dim", "←/→ move · Enter open · Esc cancel") ??
-        "←/→ move · Enter open · Esc cancel";
+        theme?.fg("dim", "↑/↓ move · Enter open · Esc cancel") ??
+        "↑/↓ move · Enter open · Esc cancel";
       return [row(heading), ...options.map(row), row(hint)];
     },
     handleInput(input: string): void {
       if (closed) return;
-      if (input === "\u001b[C") selected = (selected + 1) % DASHBOARD_AREAS.length;
-      else if (input === "\u001b[D")
+      // This picker is a vertical list: ↑/↓ are primary. ←/→ remain supported.
+      if (input === "\u001b[B" || input === "\u001b[C")
+        selected = (selected + 1) % DASHBOARD_AREAS.length;
+      else if (input === "\u001b[A" || input === "\u001b[D")
         selected = (selected + DASHBOARD_AREAS.length - 1) % DASHBOARD_AREAS.length;
       else if (input === "\r" || input === "\n") {
         const area = DASHBOARD_AREAS[selected];
