@@ -2,8 +2,8 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { type UpdateServices, update } from "../src/commands/update.js";
 import type { CliIo, HostInfo } from "../src/context.js";
-import { update, type UpdateServices } from "../src/commands/update.js";
 
 let sandbox: string;
 let source: string;
@@ -120,7 +120,9 @@ describe("haril update (local verified source only)", () => {
   });
 
   it("refuses an absent source and missing install record", async () => {
-    expect(await update(["--check", "--from", join(sandbox, "missing")], io, host, services)).toBe(2);
+    expect(await update(["--check", "--from", join(sandbox, "missing")], io, host, services)).toBe(
+      2,
+    );
     rmSync(join(root, "app", "current.json"));
     expect(await update(["--check"], io, host, services)).toBe(2);
     expect(install).not.toHaveBeenCalled();
