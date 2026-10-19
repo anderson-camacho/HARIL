@@ -3,6 +3,7 @@ import { type ClaimCandidate, type HeldSurface, type LiveTask, selectClaims } fr
 import type { ClaimedTask, Clock, Store, WorkflowRecord } from "@haril/core/ports";
 import { checkLaunch } from "./model-launch.js";
 import { reachStop } from "./workflow-commit.js";
+import { evidenceStatus, workflowEvidence } from "./workflow-evidence.js";
 import {
   type DelegationOptions,
   type Task,
@@ -190,15 +191,22 @@ export function settleWorkflows(
       reason = "wall_time";
     } else if (!view.liveWork()) {
       if (view.finalAudit()?.verdict === "approved") {
-        if (reachStop(store, epoch, workflow.workflowId, { type: "workflow_completing" })) {
-          changed.push({
-            workflowId: workflow.workflowId,
-            state: "awaiting_human",
-            reason: "at_end",
-          });
-          continue;
+        const evidence = workflowEvidence(store, workflow, view.tasks, view.audits);
+        if (!evidence.ok) {
+          state = "failed";
+          reason = `host_evidence_missing: ${evidence.reason}`;
+        } else {
+          if (reachStop(store, epoch, workflow.workflowId, { type: "workflow_completing" })) {
+            changed.push({
+              workflowId: workflow.workflowId,
+              state: "awaiting_human",
+              reason: "at_end",
+            });
+            continue;
+          }
+          state = "completed";
+          reason = evidenceStatus(evidence);
         }
-        state = "completed";
       } else {
         state = "failed";
         reason = "stalled";

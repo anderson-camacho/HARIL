@@ -716,6 +716,38 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
       // Checked: the step's next turn starts here.
       store.worktrees.setVerified(epoch, workspace.worktreeId, tip);
       if (tip !== workspace.startHead) store.worktrees.setHead(epoch, workspace.worktreeId, tip);
+      if (tip !== workspace.startHead && gained !== undefined && gained.length > 0) {
+        const claim = [...store.events.list({ taskId: task.taskId })]
+          .reverse()
+          .find(
+            (event) =>
+              event.type === "task.claimed" &&
+              event.actorKind === "system" &&
+              event.payload.attempt === task.attempt &&
+              typeof event.runId === "string",
+          );
+        if (claim?.runId === undefined) {
+          throw new Error(
+            "the executor's changed commit has no host-recorded attempt; evidence was not recorded",
+          );
+        }
+        store.events.append({
+          aggregateType: "task",
+          aggregateId: task.taskId,
+          type: "worktree.committed",
+          actorKind: "system",
+          actorId: `runtime:${epoch}`,
+          payload: {
+            workflowId: view.workflow.workflowId,
+            attempt: task.attempt,
+            sha: tip,
+            paths: gained,
+          },
+          projectId: view.workflow.projectId,
+          taskId: task.taskId,
+          runId: claim.runId,
+        });
+      }
     }
     return committed.sha;
   };

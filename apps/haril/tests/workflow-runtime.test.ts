@@ -261,7 +261,12 @@ describe("a three-layer workflow through the runtime", () => {
     );
     expect(store.usageLog.verify().ok).toBe(true);
     expect(events.filter((event) => event.type === "workflow.state")).toEqual([
-      { type: "workflow.state", workflowId: workflow.workflowId, state: "completed", reason: null },
+      {
+        type: "workflow.state",
+        workflowId: workflow.workflowId,
+        state: "completed",
+        reason: "read-only consultation; no implementation or tests claimed",
+      },
     ]);
     // The continuations received their children's outcomes and the memo; the prompt carried them as data.
     expect(view.delegations.map((row) => row.tool).sort()).toEqual([
