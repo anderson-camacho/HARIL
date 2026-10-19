@@ -14,7 +14,7 @@ import { dataDirFor } from "./common.js";
 const MAIN_REPOSITORY = "https://github.com/anderson-camacho/HARIL.git";
 const USAGE = "usage: haril update [--check] [--from <repository> | --main] [--yes]";
 
-export interface MainCheckout {
+interface MainCheckout {
   readonly source: string;
   readonly revision: string;
   cleanup(): void;
