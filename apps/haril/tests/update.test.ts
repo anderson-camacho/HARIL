@@ -12,8 +12,8 @@ let host: HostInfo;
 let out: string[];
 let err: string[];
 let io: CliIo;
-let install: ReturnType<typeof vi.fn>;
-let confirm: ReturnType<typeof vi.fn>;
+let install = vi.fn(async (_script: string, _root: string, _source: string): Promise<number> => 0);
+let confirm = vi.fn(async (): Promise<boolean> => true);
 let runtime: { state: "none" | "active" | "unknown"; detail?: string };
 let services: UpdateServices;
 
@@ -42,7 +42,7 @@ beforeEach(() => {
     cwd: source,
     env: { HARIL_RUNTIME_DIR: root },
   };
-  install = vi.fn(async () => 0);
+  install = vi.fn(async (_script: string, _root: string, _source: string): Promise<number> => 0);
   confirm = vi.fn(async () => true);
   runtime = { state: "none" };
   services = {
