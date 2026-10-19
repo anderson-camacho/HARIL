@@ -172,6 +172,7 @@ describe("CONSULT and the console actions", () => {
     mode = "consult";
     const menuHost = {
       ...actionHost(),
+      locale: "en",
       orchestrationDemo: () => false,
       runtimeAvailable: () => true,
       runtime: () => "idle",

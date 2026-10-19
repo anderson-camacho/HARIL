@@ -294,9 +294,23 @@ describe("level memory", () => {
 
 describe("dashboard model controls", () => {
   it("TOOLS offers Model and level; AGENTS keeps Choose Pi model", () => {
-    const tools = controlsFor("tools", emptyDashboardData("fake-project"), "idle");
+    const tools = controlsFor(
+      "tools",
+      emptyDashboardData("fake-project"),
+      "idle",
+      true,
+      false,
+      "en",
+    );
     expect(tools.map((control) => control.label)).toContain("Model and level");
-    const agents = controlsFor("agents", emptyDashboardData("fake-project"), "idle");
+    const agents = controlsFor(
+      "agents",
+      emptyDashboardData("fake-project"),
+      "idle",
+      true,
+      false,
+      "en",
+    );
     expect(agents.find((control) => control.action === "model")?.label).toBe("Choose Pi model");
   });
 

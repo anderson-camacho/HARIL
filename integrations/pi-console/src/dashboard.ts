@@ -3,6 +3,7 @@ import { controlsFor, type DashboardAction } from "./dashboard-controls.js";
 import type { DashboardData } from "./dashboard-data.js";
 import { frameGlyph, paddedCell, visualText } from "./dashboard-theme.js";
 import { delegationSummary } from "./delegation-settings.js";
+import { DEFAULT_UI_LOCALE, type UiLocale } from "./locale.js";
 import { ASCII_GLYPHS, UNICODE_GLYPHS } from "./orchestration-draw.js";
 import type { OrchestrationState, OrchestrationTarget } from "./orchestration-state.js";
 import { renderOrchestrationSummary } from "./orchestration-view.js";
@@ -21,6 +22,7 @@ export const DASHBOARD_AREAS = [
 export type DashboardArea = (typeof DASHBOARD_AREAS)[number];
 
 export interface DashboardFacts {
+  readonly locale?: UiLocale;
   readonly project: string;
   readonly cwd: string;
   readonly branch: string | null | undefined;
@@ -453,6 +455,7 @@ export function renderDashboardLayout(
     facts.runtime,
     facts.runtimeAvailable,
     facts.orchestration.demo,
+    facts.locale ?? DEFAULT_UI_LOCALE,
   );
   const controlHits: DashboardLayout["controlHits"][number][] = [];
   const rowIndex = lines.length;

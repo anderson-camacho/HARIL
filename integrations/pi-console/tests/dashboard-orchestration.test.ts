@@ -54,14 +54,14 @@ describe("ORCHESTRATION module panel", () => {
         /Project fake-project · 0 tasks · 0 queued commands · approvals 0 pending/,
       );
       for (const label of [
-        "[D] View complete details",
-        "[V] Open orchestration view",
-        "[M] Demo on (sample data)",
-        "[A] Review approvals (0)",
-        "[T] Inspect project tasks",
-        "[G] Queue a goal for planning",
-        "[E] Project event history",
-        "[R] Refresh data",
+        "[D] Ver detalles completos",
+        "[V] Abrir vista de orquestación",
+        "[M] Activar demostración (datos de ejemplo)",
+        "[A] Revisar aprobaciones (0)",
+        "[T] Inspeccionar tareas del proyecto",
+        "[G] Encolar un objetivo para planificación",
+        "[E] Historial de eventos del proyecto",
+        "[R] Actualizar datos",
       ])
         expect(text).toContain(label);
       const kinds = layout.orchestrationHits.map((hit) => hit.target.kind);
@@ -76,7 +76,7 @@ describe("ORCHESTRATION module panel", () => {
     const text = lines.join("\n");
     expect(text).toContain(DEMO_LABEL);
     expect(text).toMatch(/138k/);
-    expect(text).toContain("[M] Demo off (sample data)");
+    expect(text).toContain("[M] Desactivar demostración (datos de ejemplo)");
     const label = (index: number): string => {
       const hit = layout.orchestrationHits[index];
       if (hit === undefined) throw new Error("no hit");
@@ -95,6 +95,16 @@ describe("ORCHESTRATION module panel", () => {
     // No summary hit-box overlaps a control's hit-box.
     for (const control of layout.controlHits)
       expect(layout.orchestrationHits.some((hit) => hit.row === control.row)).toBe(false);
+  });
+
+  it("keeps English control labels when explicitly configured", () => {
+    const englishFacts = { ...facts(false), locale: "en" as const };
+    const text = renderDashboardLayout("orchestration", englishFacts, 80, THEME, 40)
+      .lines.map(stripAnsi)
+      .join("\n");
+    expect(text).toContain("[D] View complete details");
+    expect(text).toContain("[M] Demo on (sample data)");
+    expect(text).toContain("[R] Refresh data");
   });
 
   it("an unbound folder still offers the view, the demo and registration", () => {

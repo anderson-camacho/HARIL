@@ -20,6 +20,7 @@ import { type DashboardData, emptyDashboardData, loadDashboardData } from "./das
 import { delegateFromChat } from "./delegation.js";
 import { effectText, sourceText, valueText } from "./delegation-settings.js";
 import { stopAll } from "./emergency.js";
+import { DEFAULT_UI_LOCALE, readConsoleLocale, type UiLocale } from "./locale.js";
 import { installModes } from "./mode-controller.js";
 import { levelLabel } from "./model-levels.js";
 import { chooseLevel, chooseModel, createLevelMemory, type LevelMemory } from "./model-picker.js";
@@ -71,6 +72,7 @@ const REFRESH_MS = 5_000;
 
 interface Session extends CommandHost {
   readonly ctx: ConsoleContext;
+  locale: UiLocale;
   project: BoundProject | undefined;
   pending: readonly PendingApproval[];
   pendingAvailable: boolean;
@@ -235,6 +237,7 @@ export default function harilConsole(pi: ConsolePi): void {
     const commands = safely(() => pi.getCommands(), []);
     const servers = safely(() => pi.getMcpServers(), []);
     return {
+      locale: current.locale,
       project: current.project?.slug ?? folderName(current.cwd),
       cwd: current.cwd,
       branch: current.branch,
@@ -373,6 +376,7 @@ export default function harilConsole(pi: ConsolePi): void {
   function openSession(ctx: ConsoleContext): Session {
     const current: Session = {
       ctx,
+      locale: DEFAULT_UI_LOCALE,
       cwd: ctx.cwd,
       project: undefined,
       pending: [],
@@ -602,7 +606,13 @@ export default function harilConsole(pi: ConsolePi): void {
         redraw();
       },
       async rebind() {
-        current.project = await findProject(current.cwd);
+        const [project, configuredLocale] = await Promise.all([
+          findProject(current.cwd),
+          runHarilJson(["config", "get", "ui.locale", "--json"], { timeoutMs: 10_000 }),
+        ]);
+        if (current.closed) return;
+        current.project = project;
+        current.locale = readConsoleLocale(configuredLocale);
         current.runtimeStatusAvailable = false;
         current.dashboardData = emptyDashboardData(current.project?.slug);
         if (current.area !== undefined) {

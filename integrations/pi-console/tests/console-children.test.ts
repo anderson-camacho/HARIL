@@ -59,6 +59,44 @@ afterEach(async () => {
 });
 
 describe("the console's children", () => {
+  it("loads the persisted locale before displaying console actions", async () => {
+    cli.answer("config get ui.locale", {
+      stdout: JSON.stringify({ path: "ui.locale", value: "en", source: "file" }),
+    });
+    const menus: string[][] = [];
+    (ctx.ui as { select: unknown }).select = async (_title: string, options: string[]) => {
+      menus.push(options);
+      return undefined;
+    };
+    await fake.fire("session_start", { reason: "startup" }, ctx);
+    await waitFor(
+      () => cli.calls().some((call) => call.args[0] === "status"),
+      "the locale and initial status to load",
+    );
+    await fake.commands.get("haril")?.handler("", ctx);
+    expect(cli.calls().some((call) => call.args.join(" ") === "config get ui.locale --json")).toBe(
+      true,
+    );
+    expect(menus[0]).toContain("Refresh data");
+    expect(menus[0]).not.toContain("Actualizar datos");
+  });
+
+  it("uses Spanish console actions when no locale is configured", async () => {
+    const menus: string[][] = [];
+    (ctx.ui as { select: unknown }).select = async (_title: string, options: string[]) => {
+      menus.push(options);
+      return undefined;
+    };
+    await fake.fire("session_start", { reason: "startup" }, ctx);
+    await waitFor(
+      () => cli.calls().some((call) => call.args[0] === "status"),
+      "the default locale and initial status to load",
+    );
+    await fake.commands.get("haril")?.handler("", ctx);
+    expect(menus[0]).toContain("Actualizar datos");
+    expect(menus[0]).not.toContain("Refresh data");
+  });
+
   it("end with the previous session when Pi starts a session again without shutting it down", async () => {
     await fake.fire("session_start", { reason: "startup" }, ctx);
     await fake.commands.get("orchestration")?.handler("", ctx);

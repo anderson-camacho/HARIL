@@ -141,10 +141,13 @@ describe("the delegation settings as the console shows them", () => {
     expect(delegationSummary(view())[0]).toBe(
       "Delegation: compact at 300k (orchestrator 400k) · watchdog 15 min · models set for executor",
     );
-    expect(controlsFor("tools", emptyDashboardData(), "idle").map((item) => item.label)).toContain(
-      "Delegation settings",
-    );
+    expect(
+      controlsFor("tools", emptyDashboardData(), "idle", true, false, "en").map(
+        (item) => item.label,
+      ),
+    ).toContain("Delegation settings");
     const facts = {
+      locale: "en",
       project: "fake-project",
       cwd: "fake-cwd",
       branch: "main",

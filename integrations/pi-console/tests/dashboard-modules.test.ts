@@ -9,6 +9,7 @@ import {
 import { type DashboardActionHost, openDashboardActionMenu } from "../src/dashboard-actions.js";
 import { controlsFor } from "../src/dashboard-controls.js";
 import { emptyDashboardData } from "../src/dashboard-data.js";
+import { readConsoleLocale } from "../src/locale.js";
 import { initialOrchestrationState } from "../src/orchestration-state.js";
 import type { ConsoleTheme } from "../src/pi-types.js";
 import { createTabPicker, initialTabPickerIndex } from "../src/tab-picker.js";
@@ -90,13 +91,55 @@ describe("the console's modules", () => {
     expect(actions).toEqual(
       expect.arrayContaining(["toggle-tools", "model-level", "methodologies", "commands"]),
     );
-    const text = renderDashboardLayout("tools", facts(), 100, THEME, 40)
+    const text = renderDashboardLayout("tools", { ...facts(), locale: "en" }, 100, THEME, 40)
       .lines.map(stripAnsi)
       .join("\n");
     expect(text).toContain("Methodologies: 1 HARIL methodologies");
     expect(text).toContain("[B] Browse HARIL methodologies");
     expect(text).toContain("[C] Browse HARIL commands");
     expect(text).toContain("Alt+H to choose area");
+  });
+
+  it("defaults direct control and dashboard callers to Spanish without changing mouse action IDs", () => {
+    const directFacts = facts();
+    const layout = renderDashboardLayout("tools", directFacts, 100, THEME, 40);
+    const text = layout.lines.map(stripAnsi).join("\n");
+    expect(text).toContain("[S] Ajustes de delegación");
+    expect(text).toContain("[B] Explorar metodologías de HARIL");
+    expect(text).toContain("[C] Explorar comandos de HARIL");
+    expect(controlsFor("tools", directFacts.data, "idle").map((item) => item.label)).toContain(
+      "Ajustes de delegación",
+    );
+    expect(layout.controlHits.map((hit) => hit.action)).toEqual(
+      controlsFor("tools", directFacts.data, "idle", true, false, "en").map(
+        (control) => control.action,
+      ),
+    );
+    const detailsHit = layout.controlHits.find((hit) => hit.action === "details");
+    expect(detailsHit).toBeDefined();
+    expect(stripAnsi(layout.lines[detailsHit?.row ?? -1] ?? "")).toContain(
+      "[D] Ver detalles completos",
+    );
+  });
+
+  it("renders English controls only when explicitly configured", () => {
+    const englishFacts = { ...facts(), locale: "en" as const };
+    const layout = renderDashboardLayout("tools", englishFacts, 100, THEME, 40);
+    expect(layout.lines.map(stripAnsi).join("\n")).toContain("[S] Delegation settings");
+    expect(
+      controlsFor("tools", englishFacts.data, "idle", true, false, "en").map((item) => item.label),
+    ).toContain("Delegation settings");
+    expect(layout.controlHits.map((hit) => hit.action)).toEqual(
+      controlsFor("tools", englishFacts.data, "idle").map((item) => item.action),
+    );
+  });
+
+  it("decodes only valid persisted console locales", () => {
+    expect(readConsoleLocale({ path: "ui.locale", value: "en" })).toBe("en");
+    expect(readConsoleLocale({ path: "ui.locale", value: "es" })).toBe("es");
+    expect(readConsoleLocale({ path: "other", value: "en" })).toBe("es");
+    expect(readConsoleLocale({ path: "ui.locale", value: "fr" })).toBe("es");
+    expect(readConsoleLocale(undefined)).toBe("es");
   });
 
   it("uses a compact HARIL mark without decorative ASCII in narrow and wide headers", () => {
@@ -166,6 +209,7 @@ describe("the console's modules", () => {
       return step === 1 ? "Open an area" : undefined;
     };
     const host = {
+      locale: "en",
       project: undefined,
       orchestrationDemo: () => false,
       runtimeAvailable: () => false,
@@ -178,6 +222,74 @@ describe("the console's modules", () => {
       expect.arrayContaining(["Browse methodologies", "Pick orchestration workflow"]),
     );
     expect(offered[1]).toEqual(["AGENTS", "ORCHESTRATION", "AUTOMATION", "TOOLS", "EVERYWHERE"]);
+  });
+
+  it("dispatches translated menu choices through stable action and area IDs", async () => {
+    const ctx = fakeContext();
+    const selections: { title: string; options: string[] }[] = [];
+    let nextChoice = "Actualizar datos";
+    (ctx.ui as { select: unknown }).select = async (title: string, options: string[]) => {
+      selections.push({ title, options });
+      return nextChoice;
+    };
+    const reload = vi.fn(async () => undefined);
+    const refreshStatus = vi.fn(async () => undefined);
+    const openArea = vi.fn();
+    const host = {
+      project: undefined,
+      orchestrationDemo: () => false,
+      runtimeAvailable: () => false,
+      runtime: () => "idle",
+      mode: () => "action",
+      reload,
+      refreshStatus,
+      openArea,
+    } as unknown as DashboardActionHost;
+
+    await openDashboardActionMenu(ctx, fakePi().pi, host);
+    expect(selections[0]?.title).toBe("Controles de la consola HARIL");
+    expect(selections[0]?.options).toContain("Actualizar datos");
+    expect(selections[0]?.options).toContain("Abrir un área");
+    expect(reload).toHaveBeenCalledOnce();
+    expect(refreshStatus).toHaveBeenCalledOnce();
+
+    nextChoice = "Abrir un área";
+    (ctx.ui as { select: unknown }).select = async (title: string, options: string[]) => {
+      selections.push({ title, options });
+      return title === "Área del panel" ? "HERRAMIENTAS" : nextChoice;
+    };
+    await openDashboardActionMenu(ctx, fakePi().pi, host);
+    expect(openArea).toHaveBeenCalledWith("tools");
+    expect(selections.at(-1)?.options).toContain("HERRAMIENTAS");
+
+    const englishHost = { ...host, locale: "en" } as DashboardActionHost;
+    nextChoice = "Refresh data";
+    await openDashboardActionMenu(ctx, fakePi().pi, englishHost);
+    expect(selections.at(-1)?.options).toContain("Refresh data");
+    expect(reload).toHaveBeenCalledTimes(2);
+  });
+
+  it("filters state-changing menu actions by ID in both locales", async () => {
+    for (const locale of ["es", "en"] as const) {
+      const ctx = fakeContext();
+      let options: string[] = [];
+      (ctx.ui as { select: unknown }).select = async (_title: string, offered: string[]) => {
+        options = offered;
+        return undefined;
+      };
+      const host = {
+        locale,
+        project: { slug: "fake-project" },
+        orchestrationDemo: () => false,
+        runtimeAvailable: () => true,
+        runtime: () => "idle",
+        mode: () => "consult",
+      } as unknown as DashboardActionHost;
+      await openDashboardActionMenu(ctx, fakePi().pi, host);
+      expect(options).toContain(locale === "es" ? "Inspeccionar tareas" : "Inspect tasks");
+      expect(options).not.toContain(locale === "es" ? "Encolar un objetivo" : "Queue a goal");
+      expect(options).not.toContain(locale === "es" ? "Iniciar runtime" : "Start runtime");
+    }
   });
 
   it.each(["\u001b", "\u001b[27u", "\u001b[27;1u"])(
@@ -196,6 +308,7 @@ describe("the console's modules", () => {
           handleInput = component.handleInput;
         });
       const host = {
+        locale: "en",
         details: () => ({ title: "TOOLS details", lines: ["Deterministic detail"] }),
         mode: () => "action",
         orchestrationDemo: () => false,
