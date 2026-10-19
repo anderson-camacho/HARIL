@@ -162,7 +162,7 @@ async function checkoutMain(): Promise<MainCheckout> {
 async function askConfirm(): Promise<boolean> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
-    const answer = await rl.question("Update HARIL from this local checkout? [y/N] ");
+    const answer = await rl.question("Update HARIL from the selected source? [y/N] ");
     return /^(y|yes|s|si|sí)$/i.test(answer.trim());
   } finally {
     rl.close();
