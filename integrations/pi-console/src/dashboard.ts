@@ -189,7 +189,6 @@ function frameRow(text: string, width: number, tone: "cyan" | "teal" | "yellow" 
   return `${frameGlyph("│")}${paddedCell(` ${text}`, width - 2, tone)}${frameGlyph("│")}`;
 }
 
-
 // The header is persistent, unlike Pi's startup messages in the scrolling transcript.
 // Pi exposes extension *statuses*, not a list of loaded extension filenames.
 function leftStatusPanel(facts: DashboardFacts, width: number): string[] {
