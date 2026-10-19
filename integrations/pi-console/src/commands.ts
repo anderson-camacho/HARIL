@@ -597,7 +597,7 @@ function registerDashboardCommands(pi: ConsolePi, host: () => CommandHost | unde
         if (orchestration && (await orchestrationCommand(args, current, ctx))) return;
         current.openArea(area);
         ctx.ui.notify(
-          `${area.toUpperCase()} dashboard · Ctrl+Shift+1..${DASHBOARD_AREAS.length} or /${area}`,
+          `${area.toUpperCase()} dashboard · Alt+H to choose another area or /${area}`,
           "info",
         );
       },

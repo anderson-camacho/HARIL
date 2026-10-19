@@ -6,12 +6,13 @@ import { controlsFor } from "../src/dashboard-controls.js";
 import { emptyDashboardData } from "../src/dashboard-data.js";
 import { initialOrchestrationState } from "../src/orchestration-state.js";
 import type { ConsoleTheme } from "../src/pi-types.js";
+import { createTabPicker, initialTabPickerIndex } from "../src/tab-picker.js";
 import { stripAnsi } from "../src/text.js";
 import { fakeContext, fakePi } from "./fake-pi.js";
 
 // The console's modules after F5b (spec 7.8, P19): WORKFLOWS is retired, a workflow is seen in ORCHESTRATION, and the
-// methodologies (with the HARIL command list) are browsed from TOOLS, as they were from WORKFLOWS. Five modules, five
-// shortcuts.
+// methodologies (with the HARIL command list) are browsed from TOOLS, as they were from WORKFLOWS. Alt+H opens the
+// focused area picker; arrows wrap across its five areas.
 
 const NOW = 1_800_000_000_000;
 const THEME: ConsoleTheme = { fg: (_color, text) => text, bold: (text) => text };
@@ -90,24 +91,39 @@ describe("the console's modules", () => {
     expect(text).toContain("Methodologies: 1 HARIL methodologies");
     expect(text).toContain("[B] Browse HARIL methodologies");
     expect(text).toContain("[C] Browse HARIL commands");
-    expect(text).toContain("Ctrl+Shift+1..5");
+    expect(text).toContain("Alt+H to choose area");
   });
 
-  it("have one shortcut each, Ctrl+Shift+1..5, and a /command each but /workflows", async () => {
+  it("registers one area-picker shortcut and a /command each but /workflows", async () => {
     const fake = fakePi();
     harilConsole(fake.pi);
     const ctx = fakeContext();
     await fake.fire("session_start", { reason: "startup" }, ctx);
-    const areaShortcuts = [...fake.shortcuts.keys()].filter((key) => key.startsWith("ctrl+shift+"));
-    expect(areaShortcuts).toEqual([
-      "ctrl+shift+1",
-      "ctrl+shift+2",
-      "ctrl+shift+3",
-      "ctrl+shift+4",
-      "ctrl+shift+5",
-    ]);
+    expect([...fake.shortcuts.keys()].filter((key) => key.startsWith("ctrl+shift+"))).toEqual([]);
+    expect(fake.shortcuts.has("alt+h")).toBe(true);
     expect(fake.commands.has("workflows")).toBe(false);
     for (const area of DASHBOARD_AREAS) expect(fake.commands.has(area)).toBe(true);
+  });
+
+  it("starts on the current area, wraps left and right, confirms with Enter, and cancels with Esc", () => {
+    expect(initialTabPickerIndex("tools")).toBe(3);
+    const results: unknown[] = [];
+    const picker = createTabPicker("tools", (result) => results.push(result));
+    expect(picker.render(80).join("\n")).toContain("TOOLS");
+    picker.handleInput("\u001b[C");
+    expect(picker.render(80).join("\n")).toContain("EVERYWHERE");
+    picker.handleInput("\u001b[C");
+    expect(picker.render(80).join("\n")).toContain("AGENTS");
+    picker.handleInput("\u001b[D");
+    expect(picker.render(80).join("\n")).toContain("EVERYWHERE");
+    picker.handleInput("\r");
+    picker.handleInput("\u001b[C");
+    expect(results).toEqual([{ type: "open", area: "everywhere" }]);
+
+    const cancelled: unknown[] = [];
+    const cancelPicker = createTabPicker("tools", (result) => cancelled.push(result));
+    cancelPicker.handleInput("\u001b");
+    expect(cancelled).toEqual([{ type: "cancel" }]);
   });
 
   it("are the areas the /haril menu offers", async () => {

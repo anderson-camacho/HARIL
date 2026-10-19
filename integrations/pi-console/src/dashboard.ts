@@ -473,7 +473,7 @@ export function renderDashboardLayout(
   }
   lines.push(
     boxRow(
-      `Click a control · /haril for keyboard menu · Ctrl+Shift+1..${DASHBOARD_AREAS.length} for areas`,
+      `Click a control · /haril for keyboard menu · Alt+H to choose area`,
       width,
       theme,
       "dim",

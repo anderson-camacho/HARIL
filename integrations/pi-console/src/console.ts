@@ -8,7 +8,6 @@ import { createChatLog } from "./chat-log.js";
 import { cliAvailable, NOT_LAUNCHED, runHaril, runHarilJson } from "./cli.js";
 import { type CommandHost, chooseMode, delegationHost, registerCommands } from "./commands.js";
 import {
-  DASHBOARD_AREAS,
   type DashboardArea,
   type DashboardFacts,
   renderDashboardLayout,
@@ -55,6 +54,7 @@ import type {
 } from "./pi-types.js";
 import { type BoundProject, findProject, folderName } from "./project.js";
 import { type PendingApproval, readStatus } from "./status.js";
+import { createTabPicker, type TabPickerResult } from "./tab-picker.js";
 import { clipText, plainText } from "./text.js";
 import {
   type BarFacts,
@@ -866,11 +866,24 @@ export default function harilConsole(pi: ConsolePi): void {
   }
 
   registerCommands(pi, () => session);
-  DASHBOARD_AREAS.forEach((area, index) => {
-    pi.registerShortcut(`ctrl+shift+${index + 1}`, {
-      description: `Open HARIL ${area.toUpperCase()} dashboard`,
-      handler: () => session?.openArea(area),
-    });
+  // Alt+H is absent from Pi 1.2.0's default keybindings; Alt+O/X/M are already used by this extension and are
+  // documented as working on Windows, so this follows the same terminal-compatible shortcut contract.
+  pi.registerShortcut("alt+h", {
+    description: "Choose a HARIL dashboard area",
+    handler: (ctx) => {
+      const current = session;
+      if (current === undefined || !ctx.hasUI || ctx.mode !== "tui") return;
+      void ctx.ui
+        .custom<TabPickerResult | undefined>(
+          (tui, theme, _keybindings, done) => createTabPicker(current.area, done, tui, theme),
+          { overlay: true },
+        )
+        .then((result) => {
+          if (result?.type === "open" && session === current && !current.closed) {
+            current.openArea(result.area);
+          }
+        });
+    },
   });
   // Alt+O is free in Pi 1.2.0's default keybindings (docs/keybindings.md and the pi-tui/coding-agent defaults).
   pi.registerShortcut("alt+o", {
