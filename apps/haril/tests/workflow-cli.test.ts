@@ -303,7 +303,7 @@ describe("haril workflow start, list, show and continue", () => {
     expect(await invoke(["run"])).toBe(0);
     expect(await invoke(["workflow", "list"])).toBe(0);
     expect(h.out).toHaveLength(1);
-    expect(h.out[0]).toMatch(/ {2}completed {2}.* {2}Quick job$/);
+    expect(h.out[0]).toMatch(/ {2}completed(?: \([^)]*\))? {2}.* {2}Quick job$/);
     // A node that ended has no next watchdog check: the view must not promise one.
     expect(await invoke(["workflow", "show", await workflowId(), "--json"])).toBe(0);
     const snapshot = parseJson<WorkflowSnapshot>(h.out);
