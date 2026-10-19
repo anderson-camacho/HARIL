@@ -43,6 +43,9 @@ export interface DashboardFacts {
   readonly commands: readonly string[];
   readonly mcpServers: readonly string[];
   readonly extensionStatuses: readonly string[];
+  // Observed Pi extension statuses, not the full list of loaded extension packages.
+  readonly mode?: string;
+  readonly logFailures?: number;
   readonly memory: string;
   readonly data: DashboardData;
   readonly loading: boolean;
@@ -186,6 +189,40 @@ function frameRow(text: string, width: number, tone: "cyan" | "teal" | "yellow" 
   return `${frameGlyph("│")}${paddedCell(` ${text}`, width - 2, tone)}${frameGlyph("│")}`;
 }
 
+
+// The header is persistent, unlike Pi's startup messages in the scrolling transcript.
+// Pi exposes extension *statuses*, not a list of loaded extension filenames.
+function leftStatusPanel(facts: DashboardFacts, width: number): string[] {
+  const line = (value: string, tone: "cyan" | "teal" | "yellow" | "text" | "muted" | "error") =>
+    paddedCell(` ${value}`, width, tone, "base");
+  const warnings = [
+    ...facts.data.errors,
+    ...((facts.logFailures ?? 0) > 0
+      ? [`Activity log: ${facts.logFailures} failed record(s)`]
+      : []),
+  ];
+  const statuses = facts.extensionStatuses;
+  return [
+    line(renderBrandMark(), "yellow"),
+    ...renderBrandArt().map((part) => line(part, "teal")),
+    line("Many minds. One flow.", "yellow"),
+    line("────────────────────", "muted"),
+    line("SESSION · LIVE STATUS", "cyan"),
+    line(`MODE      ${facts.mode ?? "unknown"}`, "yellow"),
+    line(`EXTENSIONS · ${statuses.length} reported statuses`, "cyan"),
+    ...(statuses.length === 0
+      ? [line("Loaded extension names: Pi startup", "muted")]
+      : statuses.slice(0, 2).map((status) => line(`• ${status}`, "text"))),
+    ...(statuses.length > 2 ? [line(`+ ${statuses.length - 2} more in Details`, "muted")] : []),
+    line(`WARNINGS · ${warnings.length}`, warnings.length ? "error" : "teal"),
+    ...(warnings.length === 0
+      ? [line("No known HARIL warnings", "muted")]
+      : warnings.slice(0, 2).map((warning) => line(`! ${warning}`, "error"))),
+    ...(warnings.length > 2 ? [line(`+ ${warnings.length - 2} more in Details`, "muted")] : []),
+    line("Alt+H areas · /haril actions", "text"),
+  ];
+}
+
 function wideHeader(
   width: number,
   version: string | undefined,
@@ -193,18 +230,13 @@ function wideHeader(
   selected: DashboardArea | undefined,
 ): HeaderLayout {
   const inside = width - 2;
-  const leftWidth = Math.floor((inside - 1) * 0.68);
+  // Reserve a readable left column for mode, extension statuses and warnings.
+  const leftWidth = Math.floor((inside - 1) * 0.43);
   const rightWidth = inside - leftWidth - 1;
   const tabLayout = tabs(width, selected);
   const title = ` ${renderBrandMark()} :: SESSION INIT  ·  ${version ?? "HARIL"} `;
   const rows = [border(width, "┌", "─", "┐"), frameRow(title, width, "yellow")];
-  const left: string[] = [
-    paddedCell(renderBrandMark(), leftWidth, "yellow", "base"),
-    ...renderBrandArt().map((line) => paddedCell(line, leftWidth, "teal", "base")),
-    paddedCell("", leftWidth, "text", "base"),
-    paddedCell("Many minds. One flow.", leftWidth, "yellow", "base"),
-    paddedCell("Alt+H · navigate areas  |  /haril · actions", leftWidth, "text", "base"),
-  ];
+  const left = leftStatusPanel(facts, leftWidth);
   const right = [
     statusRow("SESSION", "Pi console active", rightWidth),
     statusRow("PROJECT", facts.project, rightWidth),
