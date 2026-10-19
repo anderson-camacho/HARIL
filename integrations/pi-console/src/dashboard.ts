@@ -273,7 +273,11 @@ export function renderHeaderLayout(
     width >= 90 && height >= 30
       ? [
           ...renderBrandArt().map((line) => frameRow(line, width, "teal")),
-          frameRow("Many minds. One flow.   ·   Alt+H: areas   ·   /haril: actions", width, "yellow"),
+          frameRow(
+            "Many minds. One flow.   ·   Alt+H: areas   ·   /haril: actions",
+            width,
+            "yellow",
+          ),
         ]
       : [];
   const rows = [
@@ -287,7 +291,10 @@ export function renderHeaderLayout(
     ),
     border(width, "└", "─", "┘"),
   ];
-  return { lines: rows, tabHits: tabLayout.hits.map((hit) => ({ ...hit, row: hit.row + 3 + brandRows.length })) };
+  return {
+    lines: rows,
+    tabHits: tabLayout.hits.map((hit) => ({ ...hit, row: hit.row + 3 + brandRows.length })),
+  };
 }
 
 export function renderFooterNavigation(
