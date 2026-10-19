@@ -15,6 +15,8 @@ let io: CliIo;
 let install = vi.fn(async (_script: string, _root: string, _source: string): Promise<number> => 0);
 let confirm = vi.fn(async (): Promise<boolean> => true);
 let runtime: { state: "none" | "active" | "unknown"; detail?: string };
+let checkoutMain = vi.fn(async () => ({ source: "", revision: "", cleanup: () => undefined }));
+let cleanup = vi.fn();
 let services: UpdateServices;
 
 function manifest(version: string): void {
@@ -45,6 +47,8 @@ beforeEach(() => {
   install = vi.fn(async (_script: string, _root: string, _source: string): Promise<number> => 0);
   confirm = vi.fn(async () => true);
   runtime = { state: "none" };
+  cleanup = vi.fn();
+  checkoutMain = vi.fn(async () => ({ source, revision: "a".repeat(40), cleanup }));
   services = {
     readText: (path) => readFileSync(path, "utf8"),
     exists: (path) => {
@@ -58,6 +62,7 @@ beforeEach(() => {
     activeRuntime: () => runtime,
     install,
     confirm,
+    checkoutMain,
   };
 });
 
@@ -69,7 +74,7 @@ describe("haril update (local verified source only)", () => {
   it("--check compares versions without executing the installer", async () => {
     expect(await update(["--check"], io, host, services)).toBe(0);
     expect(out.join(" ")).toContain("0.21.0; local source: 0.21.1");
-    expect(out.join(" ")).toContain("no files were changed");
+    expect(out.join(" ")).toContain("installed files were not changed");
     expect(install).not.toHaveBeenCalled();
   });
 
@@ -126,6 +131,27 @@ describe("haril update (local verified source only)", () => {
     rmSync(join(root, "app", "current.json"));
     expect(await update(["--check"], io, host, services)).toBe(2);
     expect(install).not.toHaveBeenCalled();
+  });
+
+  it("checks pinned GitHub main without installing or touching the local checkout", async () => {
+    expect(await update(["--main", "--check"], io, host, services)).toBe(0);
+    expect(checkoutMain).toHaveBeenCalledOnce();
+    expect(out.join(" ")).toContain("GitHub main: 0.21.1");
+    expect(out.join(" ")).toContain("a".repeat(40));
+    expect(install).not.toHaveBeenCalled();
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it("installs from isolated GitHub main only after opt-in and cleans its checkout", async () => {
+    expect(await update(["--main", "--yes"], io, host, services)).toBe(0);
+    expect(install).toHaveBeenCalledWith(join(source, "scripts", "install.mjs"), root, source);
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(out.join(" ")).toContain("GitHub main");
+  });
+
+  it("rejects combining --main and --from without cloning", async () => {
+    expect(await update(["--main", "--from", source], io, host, services)).toBe(2);
+    expect(checkoutMain).not.toHaveBeenCalled();
   });
 
   it("refuses unsupported flags and incomplete --from values", async () => {
