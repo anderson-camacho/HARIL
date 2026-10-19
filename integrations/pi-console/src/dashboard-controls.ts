@@ -19,6 +19,7 @@ export type DashboardAction =
   | "methodologies"
   | "commands"
   | "memory"
+  | "usage-log"
   | "details"
   | "register-project"
   | "orchestration-view"
@@ -167,11 +168,13 @@ export function controlsFor(
           "Explorar metodologías de HARIL",
         ),
         control("commands", "C", "Browse HARIL commands", "Explorar comandos de HARIL"),
+        control("usage-log", "L", "Recent activity log", "Registro de actividad reciente"),
         refresh,
       ];
     case "everywhere":
       return [
         control("details", "D", "View complete details", "Ver detalles completos"),
+        control("usage-log", "L", "Recent activity log", "Registro de actividad reciente"),
         control(
           "memory",
           "M",
