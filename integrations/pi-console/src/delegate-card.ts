@@ -164,7 +164,7 @@ export function cardProblem(card: DelegateCard): string | undefined {
 }
 
 // `haril workflow start` for the card: real agents, the pinned model, the stops (none: --autonomous).
-export function workflowStartArgs(card: DelegateCard, projectSlug: string | undefined): string[] {
+export function workflowStartArgs(card: DelegateCard, projectSlug: string): string[] {
   const stops = selectedStops(card);
   return [
     "workflow",
@@ -176,7 +176,9 @@ export function workflowStartArgs(card: DelegateCard, projectSlug: string | unde
     "--agent",
     "orchestrator",
     ...(stops.length === 0 ? ["--autonomous"] : ["--stop-at", stops.join(",")]),
-    ...(projectSlug === undefined ? [] : ["--project", projectSlug]),
+    "--project",
+    projectSlug,
+    "--intake-stdin",
     "--json",
   ];
 }

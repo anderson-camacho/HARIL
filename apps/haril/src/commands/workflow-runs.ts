@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
+import { isAbsolute, resolve } from "node:path";
 import { isStop, type Stop } from "@haril/contracts";
 import { orderPreview, visibleText } from "@haril/core";
-import type { Store, WorkflowRecord } from "@haril/core/ports";
+import type { Store, WorkflowIntake, WorkflowRecord } from "@haril/core/ports";
 import { detectBaseBranch, inspectRepository } from "@haril/git";
 import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_INVALID, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
@@ -31,7 +33,7 @@ import { buildWorkflowSnapshot, headerLines, treeLines } from "./workflow-snapsh
 // says why.
 
 const START_USAGE = [
-  "usage: haril workflow start <goal> [--model <ref>] [--agent <ref>] [--autonomous | --stop-at <stops>] [--project <slug>]",
+  "usage: haril workflow start <goal> --project <slug> (--intake-file <json> | --intake-stdin) [--model <ref>] [--agent <ref>] [--autonomous | --stop-at <stops>]",
   "                            [--budget-tokens <n>] [--read-only | --base <branch>] [--idempotency-key <key>] [--json]",
   "                            [--data-dir <path>]",
   "  queues a three-layer workflow for the runtime (haril start runs it). --model is the orchestrator's model (pinned),",
@@ -42,9 +44,12 @@ const START_USAGE = [
   "  In a git project the executors write, each in its own worktree from main (or --base, or delegation.git.baseBranch),",
   "  and the delegators merge their work into the branch haril/<workflow>/integration for you to review; nothing is",
   "  merged into main or pushed. --read-only keeps the agents from writing.",
+  "  Intake JSON: {projectRoot, plan:{sourceId,revision,text}, methodology:{id,instructions}}.",
+  "  Plan and methodology instructions are required and snapshotted exactly; SHA-256 hashes are computed at start.",
 ].join("\n");
 const LIST_USAGE = "usage: haril workflow list [--project <slug>] [--json] [--data-dir <path>]";
-const SHOW_USAGE = "usage: haril workflow show <workflowId> [--json] [--data-dir <path>]";
+const SHOW_USAGE =
+  "usage: haril workflow show <workflowId> [--json | --intake-json] [--data-dir <path>]";
 const CONTINUE_USAGE =
   "usage: haril workflow continue <workflowId> [--remove-stop <stop>]... [--project <slug>] [--json] [--data-dir <path>]";
 const MODEL_ENV = "HARIL_DEFAULT_MODEL";
@@ -115,6 +120,94 @@ function projectRootFor(
   return root;
 }
 
+function hash(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+function labelOnly(id: string, instructions: string): boolean {
+  const normalized = instructions
+    .trim()
+    .toLowerCase()
+    .replace(/[.\s]+$/g, "");
+  const label = id.trim().toLowerCase();
+  return (
+    normalized === label ||
+    ["use", "follow", "apply"].some((verb) => normalized === `${verb} ${label}`)
+  );
+}
+
+function sameRoot(selected: string, registered: string): boolean {
+  if (!isAbsolute(selected)) return false;
+  const left = resolve(selected);
+  const right = resolve(registered);
+  return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
+}
+
+function readIntake(
+  io: CliIo,
+  host: HostInfo,
+  file: string | undefined,
+  stdin: boolean,
+): WorkflowIntake | string {
+  if ((file === undefined) === !stdin) {
+    return "select exactly one intake source: --intake-file <json> or --intake-stdin";
+  }
+  let raw: unknown;
+  try {
+    const text = stdin ? host.readStdin?.() : io.readFile(file as string);
+    if (text === undefined) return "stdin is unavailable for workflow intake";
+    if (text.length > 2_200_000) return "workflow intake exceeds the 2.2 MiB limit";
+    raw = JSON.parse(text) as unknown;
+  } catch {
+    return "workflow intake could not be read as JSON";
+  }
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw))
+    return "workflow intake must be an object";
+  const intake = raw as Record<string, unknown>;
+  const plan = intake.plan as Record<string, unknown> | undefined;
+  const methodology = intake.methodology as Record<string, unknown> | undefined;
+  if (
+    typeof intake.projectRoot !== "string" ||
+    intake.projectRoot.trim() === "" ||
+    typeof plan?.sourceId !== "string" ||
+    plan.sourceId.trim() === "" ||
+    typeof plan.text !== "string" ||
+    plan.text.trim() === "" ||
+    (plan.revision !== undefined &&
+      plan.revision !== null &&
+      (typeof plan.revision !== "string" || plan.revision.trim() === "")) ||
+    typeof methodology?.id !== "string" ||
+    methodology.id.trim() === "" ||
+    typeof methodology.instructions !== "string" ||
+    methodology.instructions.trim() === ""
+  )
+    return "workflow intake requires a project root, non-empty selected plan/source, and exact methodology instructions";
+  if (plan.text.length > 1_048_576 || methodology.instructions.length > 1_048_576) {
+    return "workflow plan or methodology exceeds the 1 MiB limit";
+  }
+  if (labelOnly(methodology.id, methodology.instructions)) {
+    return "methodology needs exact supplied instructions, not just a framework label";
+  }
+  const planHash = hash(plan.text);
+  const methodHash = hash(methodology.instructions);
+  if (
+    (plan.sha256 !== undefined && plan.sha256 !== planHash) ||
+    (methodology.sha256 !== undefined && methodology.sha256 !== methodHash)
+  ) {
+    return "workflow intake hash does not match its exact content";
+  }
+  return {
+    projectRoot: intake.projectRoot,
+    plan: {
+      sourceId: plan.sourceId,
+      revision: (plan.revision as string | null | undefined) ?? null,
+      sha256: planHash,
+      text: plan.text,
+    },
+    methodology: { id: methodology.id, instructions: methodology.instructions, sha256: methodHash },
+  };
+}
+
 export async function workflowStart(
   args: readonly string[],
   io: CliIo,
@@ -131,8 +224,9 @@ export async function workflowStart(
       "--idempotency-key",
       "--data-dir",
       "--base",
+      "--intake-file",
     ],
-    flags: ["--json", "--autonomous", "--read-only"],
+    flags: ["--json", "--autonomous", "--read-only", "--intake-stdin"],
   });
   const problem = argsProblem(parsed, io);
   if (problem !== null) return problem;
@@ -201,11 +295,25 @@ export async function workflowStart(
   const json = parsed.flags.has("--json");
   const dataDir = dataDirFor(host, lastValue(parsed, "--data-dir"));
   const slug = lastValue(parsed, "--project");
+  if (slug === undefined || slug.trim() === "")
+    return fail(io, "workflow start requires an explicit --project <slug>");
+  const intake = readIntake(
+    io,
+    host,
+    lastValue(parsed, "--intake-file"),
+    parsed.flags.has("--intake-stdin"),
+  );
+  if (typeof intake === "string") return fail(io, intake);
   const root = projectRootFor(host, dataDir, slug);
-  const base: WritingBase =
-    root === undefined
-      ? { writes: false, reason: "no project" }
-      : await writingBaseOf(root, readOnly, requestedBase, settings.git.baseBranch);
+  if (root === undefined) return fail(io, `no project with slug "${slug}"`);
+  if (!sameRoot(intake.projectRoot, root))
+    return fail(io, "intake project root does not match the selected project");
+  const base: WritingBase = await writingBaseOf(
+    root,
+    readOnly,
+    requestedBase,
+    settings.git.baseBranch,
+  );
   if (requestedBase !== null && !base.writes) {
     return fail(io, `--base ${requestedBase}: ${base.reason}`);
   }
@@ -239,6 +347,7 @@ export async function workflowStart(
         projectId: project.projectId,
         args: {
           goal,
+          intake,
           model,
           agent,
           autonomy,
@@ -291,7 +400,27 @@ export function workflowList(args: readonly string[], io: CliIo, host: HostInfo)
       project === undefined ? {} : { projectId: project.projectId },
     );
     if (parsed.flags.has("--json")) {
-      io.out(JSON.stringify(workflows));
+      io.out(
+        JSON.stringify(
+          workflows.map((workflow) => ({
+            ...workflow,
+            intake:
+              workflow.intake === null
+                ? null
+                : {
+                    plan: {
+                      sourceId: workflow.intake.plan.sourceId,
+                      revision: workflow.intake.plan.revision,
+                      sha256: workflow.intake.plan.sha256,
+                    },
+                    methodology: {
+                      id: workflow.intake.methodology.id,
+                      sha256: workflow.intake.methodology.sha256,
+                    },
+                  },
+          })),
+        ),
+      );
     } else if (workflows.length === 0) {
       io.out("no workflow yet (haril workflow start <goal> queues one)");
     } else {
@@ -322,13 +451,22 @@ function withWorkflow(
 }
 
 export function workflowShow(args: readonly string[], io: CliIo, host: HostInfo): number {
-  const parsed = parseArgs(args, { values: ["--data-dir"], flags: ["--json"] });
+  const parsed = parseArgs(args, { values: ["--data-dir"], flags: ["--json", "--intake-json"] });
   const problem = argsProblem(parsed, io);
   if (problem !== null) return problem;
   const [workflowId, ...extra] = parsed.positionals;
   if (workflowId === undefined || extra.length > 0) return fail(io, SHOW_USAGE);
+  if (parsed.flags.has("--json") && parsed.flags.has("--intake-json"))
+    return fail(io, "--json and --intake-json exclude each other");
   const dataDir = dataDirFor(host, lastValue(parsed, "--data-dir"));
   return withWorkflow(io, host, lastValue(parsed, "--data-dir"), workflowId, (store, workflow) => {
+    if (parsed.flags.has("--intake-json")) {
+      if (workflow.intake === null) return fail(io, "this legacy workflow has no recorded intake");
+      io.out(
+        JSON.stringify({ workflowId, projectId: workflow.projectId, intake: workflow.intake }),
+      );
+      return EXIT_OK;
+    }
     const now = clockFor(host).now();
     const snapshot = buildWorkflowSnapshot(store, workflow.workflowId, {
       now,

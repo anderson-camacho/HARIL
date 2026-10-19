@@ -91,7 +91,7 @@ describe("migrations 0007 and 0008 on a fresh database", () => {
       rules: testRules,
     });
     try {
-      expect(store.info().schemaVersion).toBe(16);
+      expect(store.info().schemaVersion).toBe(18);
     } finally {
       store.close();
     }
@@ -100,6 +100,7 @@ describe("migrations 0007 and 0008 on a fresh database", () => {
       expect(names(db, "table")).toEqual(expect.arrayContaining(NEW_TABLES));
       expect(names(db, "view")).toContain("model_stats");
       expect(columns(db, "tasks")).toEqual(expect.arrayContaining(NEW_TASK_COLUMNS));
+      expect(columns(db, "workflows")).toContain("intake");
       expect(names(db, "trigger")).toEqual(
         expect.arrayContaining([
           "orders_no_update",
@@ -128,6 +129,8 @@ describe("migrations 0007 and 0008 on a fresh database", () => {
         { version: 14, name: "worktrees", kind: "additive" },
         { version: 15, name: "run_commands", kind: "additive" },
         { version: 16, name: "worktree_verified", kind: "additive" },
+        { version: 17, name: "audited_task", kind: "additive" },
+        { version: 18, name: "workflow_intake", kind: "additive" },
       ]);
     } finally {
       db.close();
@@ -182,7 +185,7 @@ describe("migrations 0007 and 0008 on a database at schema 6", () => {
       rules: testRules,
     });
     try {
-      expect(store.info().schemaVersion).toBe(16);
+      expect(store.info().schemaVersion).toBe(18);
       expect(store.tasks.get("t-b")).toMatchObject({
         goal: "B",
         state: "pending",

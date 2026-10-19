@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import type { NewTurn, Store } from "@haril/core/ports";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -18,6 +19,15 @@ let store: Store;
 let projectId: string;
 let epoch: number;
 let keySeq = 0;
+
+const sha256 = (text: string): string => createHash("sha256").update(text).digest("hex");
+const planText = "1. Change the primary button color.\n2. Test it.\n";
+const methodText = "Follow the selected tasks and report observed tests.";
+const intake = {
+  projectRoot: "D:/demo",
+  plan: { sourceId: "file:plan.md", revision: "v1", text: planText, sha256: sha256(planText) },
+  methodology: { id: "custom", instructions: methodText, sha256: sha256(methodText) },
+};
 
 beforeEach(() => {
   clock = manualClock();
@@ -73,6 +83,7 @@ function start(change: Record<string, unknown> = {}) {
     budgetTokens: 50_000,
     timeoutMs: 600_000,
     simulated: true,
+    intake,
     ...change,
   });
   if (applied.outcome !== "applied" || applied.workflowId === undefined) {
@@ -164,6 +175,7 @@ describe("workflow.start", () => {
       projectId,
       rootTaskId,
       goal: "Change the primary button color and test it",
+      intake,
       state: "running",
       autonomy: { mode: "autonomous", stops: [] },
       limits: LIMITS,
@@ -217,12 +229,35 @@ describe("workflow.start", () => {
       const applied = enqueue("workflow.start", {
         goal: "g",
         model: "m",
+        intake,
         limits: LIMITS,
         ...change,
       });
       expect(applied.outcome).toBe("rejected");
       expect(applied.reason).toMatch(reason);
     }
+    expect(store.workflows.list()).toEqual([]);
+  });
+
+  it("rejects missing or mismatched intake rather than inventing a plan", () => {
+    expect(enqueue("workflow.start", { goal: "Improve it", model: "m" }).outcome).toBe("rejected");
+    const mismatch = enqueue("workflow.start", {
+      goal: "Improve it",
+      model: "m",
+      intake: { ...intake, plan: { ...intake.plan, sha256: "0".repeat(64) } },
+    });
+    expect(mismatch.outcome).toBe("rejected");
+    expect(mismatch.reason).toMatch(/sha256/);
+    const labelOnly = enqueue("workflow.start", {
+      goal: "Improve it",
+      model: "m",
+      intake: {
+        ...intake,
+        methodology: { id: "ODD", instructions: "Use ODD", sha256: sha256("Use ODD") },
+      },
+    });
+    expect(labelOnly.outcome).toBe("rejected");
+    expect(labelOnly.reason).toMatch(/framework label/);
     expect(store.workflows.list()).toEqual([]);
   });
 });
@@ -545,7 +580,7 @@ describe("store.workflows.applyTurns (delegation.apply)", () => {
     const { workflowId, rootTaskId } = start({ orderId: order.record.orderId });
     expect(store.workflows.get(workflowId)?.orderId).toBe(order.record.orderId);
     expect(
-      enqueue("workflow.start", { goal: "g", model: "m", orderId: "no-such-order" }),
+      enqueue("workflow.start", { goal: "g", model: "m", intake, orderId: "no-such-order" }),
     ).toMatchObject({
       outcome: "rejected",
       reason: expect.stringMatching(/names no order/),

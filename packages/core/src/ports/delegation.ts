@@ -21,12 +21,29 @@ export interface WorkflowAutonomy {
   readonly stops: readonly Stop[];
 }
 
+// Immutable, user-selected intake. Legacy workflows migrated from pre-0018 have no intake.
+export interface WorkflowIntake {
+  readonly projectRoot: string;
+  readonly plan: {
+    readonly sourceId: string;
+    readonly revision: string | null;
+    readonly sha256: string;
+    readonly text: string;
+  };
+  readonly methodology: {
+    readonly id: string;
+    readonly instructions: string;
+    readonly sha256: string;
+  };
+}
+
 export interface WorkflowRecord {
   readonly workflowId: string;
   readonly projectId: string;
   // The orchestrator's first turn.
   readonly rootTaskId: string | null;
   readonly goal: string;
+  readonly intake: WorkflowIntake | null;
   readonly state: WorkflowState;
   readonly autonomy: WorkflowAutonomy;
   // The limits snapshot taken when the workflow started (P11).

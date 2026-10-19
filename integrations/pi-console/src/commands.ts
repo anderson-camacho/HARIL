@@ -244,6 +244,10 @@ export function delegationHost(host: CommandHost): DelegationHost {
   return {
     cwd: host.cwd,
     project: host.project,
+    pending: host.pending,
+    currentPlan: () => host.lastPlan(),
+    createPlan: (ctx) => host.switchMode("plan", ctx),
+    consult: (ctx) => host.switchMode("consult", ctx),
     harilModelRef: () => host.harilModelRef(),
     harilModels: () => host.harilModels(),
     ensureRuntime: () => ensureRuntime(host),

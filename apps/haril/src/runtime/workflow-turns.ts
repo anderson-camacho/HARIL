@@ -148,6 +148,7 @@ export function buildTurnInput(
   const base = {
     workflowId: view.workflow.workflowId,
     workflowGoal: view.workflow.goal,
+    intake: view.workflow.intake,
     role: task.role,
     layer: task.layer,
     threadId: task.threadId,

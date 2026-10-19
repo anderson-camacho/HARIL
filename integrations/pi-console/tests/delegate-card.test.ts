@@ -96,16 +96,17 @@ describe("the card", () => {
       "after_plan",
       "--project",
       "fake-proj",
+      "--intake-stdin",
       "--json",
     ]);
   });
 
   it("passes --autonomous when no stop is checked", () => {
     const card = createCard("Refactor, don't stop", MODEL);
-    const args = workflowStartArgs(card, undefined);
+    const args = workflowStartArgs(card, "fake-proj");
     expect(args).toContain("--autonomous");
     expect(args).not.toContain("--stop-at");
-    expect(args).not.toContain("--project");
+    expect(args).toContain("--project");
   });
 
   it("toggles stops with the keyboard and starts on Enter", () => {
