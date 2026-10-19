@@ -24,6 +24,7 @@ interface CardStop {
 export interface DelegateCard {
   readonly goal: string;
   readonly model: string | undefined;
+  readonly preflight?: { readonly baseBranch: string; readonly testCommand: string };
   readonly stops: readonly CardStop[];
   // The stop row the keyboard is on.
   readonly cursor: number;
@@ -91,7 +92,7 @@ const STOP_TEXT: Readonly<Record<string, string>> = {
   after_plan: "after the orchestrator's first plan",
   at_end: "before the workflow is declared complete",
   on_audit_failure: "when an auditor runs out of retries",
-  before_merge: "before branches are merged (writing arrives later)",
+  before_merge: "before branches are merged",
 };
 
 function stopText(stop: string): string {
@@ -138,7 +139,11 @@ export function readAutonomy(text: string): { readonly said: boolean; readonly s
   return { said: false, stops: ["after_plan"] };
 }
 
-export function createCard(goal: string, model: string | undefined): DelegateCard {
+export function createCard(
+  goal: string,
+  model: string | undefined,
+  preflight?: DelegateCard["preflight"],
+): DelegateCard {
   const read = readAutonomy(goal);
   const rows = [
     ...USUAL_STOPS,
@@ -147,6 +152,7 @@ export function createCard(goal: string, model: string | undefined): DelegateCar
   return {
     goal: goal.trim(),
     model: model === undefined || model.trim() === "" ? undefined : model.trim(),
+    preflight,
     stops: rows.map((stop) => ({ stop, on: read.stops.includes(stop) })),
     cursor: 0,
   };
@@ -312,10 +318,16 @@ export function renderCard(
       },
     ]);
   });
-  push([
-    label("Agents"),
-    { text: "real agents (--agent orchestrator), read-only for now", tone: "text" },
-  ]);
+  push([label("Agents"), { text: "real agents (--agent orchestrator)", tone: "text" }]);
+  if (card.preflight !== undefined) {
+    push([label("Mode"), { text: "Implementation · Git worktree listing checked", tone: "text" }]);
+    push([label("Base"), { text: plainText(card.preflight.baseBranch), tone: "text" }]);
+    push([
+      label("Test"),
+      { text: `${plainText(card.preflight.testCommand)} allowed · not run`, tone: "text" },
+    ]);
+    push([label("Write"), { text: "worktree creation pending runtime", tone: "muted" }]);
+  }
   push([
     label("Limits"),
     { text: "HARIL's defaults, frozen at start (haril workflow show)", tone: "text" },

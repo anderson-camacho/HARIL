@@ -334,6 +334,8 @@ async function confirmInDialog(
       `Goal: ${card.goal}`,
       `Orchestrator model: ${card.model}`,
       `Autonomy: ${stops.length === 0 ? "autonomous, no stops" : `stops at ${stops.join(", ")}`}`,
+      `Mode: Implementation; base ${card.preflight?.baseBranch ?? "unverified"}`,
+      `Test command: ${card.preflight?.testCommand ?? "unverified"} allowed, not run; worktree creation pending runtime.`,
       "Agents may add stops; only you remove them (/continue).",
     ].join("\n"),
   );
@@ -354,7 +356,53 @@ export async function startDelegation(
   const project = host.project;
   if (project === undefined) return;
   const fallback = process.env[DEFAULT_MODEL_ENV]?.trim();
-  const card = createCard(goal, host.harilModelRef() ?? (fallback === "" ? undefined : fallback));
+  const initial = createCard(
+    goal,
+    host.harilModelRef() ?? (fallback === "" ? undefined : fallback),
+  );
+  const input = JSON.stringify({ projectRoot: project.rootPath, plan, methodology });
+  const preflightArgs = [
+    "workflow",
+    "start",
+    "--preflight",
+    ...workflowStartArgs(initial, project.slug).slice(2),
+  ];
+  const checked = await runHaril(preflightArgs, { cwd: host.cwd, input });
+  if (!checked.ok) {
+    ctx.ui.notify(firstLine(checked.stderr) || "haril workflow preflight failed", "error");
+    return;
+  }
+  let capabilities: { baseBranch: string; testCommand: string } | undefined;
+  try {
+    const reply = JSON.parse(checked.stdout) as {
+      mode?: unknown;
+      status?: unknown;
+      capabilities?: Record<string, unknown>;
+    };
+    const available = reply.capabilities;
+    if (
+      reply.mode === "implementation" &&
+      reply.status === "ready" &&
+      available?.writing === true &&
+      available.worktreeList === true &&
+      available.worktreeCreated === false &&
+      available.testsRun === false &&
+      typeof available.baseBranch === "string" &&
+      typeof available.testCommand === "string"
+    ) {
+      capabilities = { baseBranch: available.baseBranch, testCommand: available.testCommand };
+    }
+  } catch {
+    // An invalid preflight response is not permission to present an implementation confirmation.
+  }
+  if (capabilities === undefined) {
+    ctx.ui.notify(
+      "HARIL could not verify implementation preflight; no workflow was started",
+      "error",
+    );
+    return;
+  }
+  const card = createCard(goal, initial.model, capabilities);
   const confirmed =
     ctx.mode === "tui"
       ? await confirmInOverlay(ctx, card, host.harilModels())
@@ -365,18 +413,37 @@ export async function startDelegation(
   }
   const result = await runHaril(workflowStartArgs(confirmed, project.slug), {
     cwd: host.cwd,
-    input: JSON.stringify({ projectRoot: project.rootPath, plan, methodology }),
+    input,
   });
   if (!result.ok) {
     ctx.ui.notify(firstLine(result.stderr) || "haril workflow start failed", "error");
     return;
   }
   let commandId: string | undefined;
+  let queuedImplementation = false;
   try {
-    const reply = JSON.parse(result.stdout) as { commandId?: unknown };
+    const reply = JSON.parse(result.stdout) as {
+      commandId?: unknown;
+      status?: unknown;
+      mode?: unknown;
+      capabilities?: { writing?: unknown; worktreeList?: unknown; testCommand?: unknown };
+    };
     commandId = typeof reply.commandId === "string" ? reply.commandId : undefined;
+    queuedImplementation =
+      reply.status === "queued" &&
+      reply.mode === "implementation" &&
+      reply.capabilities?.writing === true &&
+      reply.capabilities.worktreeList === true &&
+      typeof reply.capabilities.testCommand === "string";
   } catch {
     commandId = undefined;
+  }
+  if (!queuedImplementation) {
+    ctx.ui.notify(
+      "HARIL queued a command but its implementation response could not be verified; inspect workflow status",
+      "error",
+    );
+    return;
   }
   const stops = selectedStops(confirmed);
   const runtime = await host.ensureRuntime();

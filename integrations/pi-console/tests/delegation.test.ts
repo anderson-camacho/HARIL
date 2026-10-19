@@ -96,14 +96,35 @@ function host(): CommandHost {
 function startCalls(): string[][] {
   return cli
     .calls()
-    .filter((call) => call.args[0] === "workflow" && call.args[1] === "start")
+    .filter(
+      (call) =>
+        call.args[0] === "workflow" &&
+        call.args[1] === "start" &&
+        !call.args.includes("--preflight"),
+    )
     .map((call) => call.args);
 }
 
 beforeEach(() => {
   cli = installFakeCli();
+  cli.answer("workflow start --preflight", {
+    stdout: JSON.stringify({
+      mode: "implementation",
+      status: "ready",
+      capabilities: {
+        writing: true,
+        worktreeList: true,
+        worktreeCreated: false,
+        testCommand: "npm test",
+        testsRun: false,
+        baseBranch: "main",
+        baseSha: "abc123",
+      },
+    }),
+  });
   cli.answer("workflow start", {
-    stdout: '{"commandId":"cmd-7","type":"workflow.start","status":"queued"}',
+    stdout:
+      '{"commandId":"cmd-7","type":"workflow.start","status":"queued","mode":"implementation","capabilities":{"writing":true,"worktreeList":true,"worktreeCreated":false,"testCommand":"npm test","testsRun":false,"baseBranch":"main","baseSha":"abc123"}}',
   });
   cli.answer("status", { stdout: "{}" });
   cli.answer("workflow list", { stdout: "[]" });
@@ -133,6 +154,9 @@ describe("/delegate", () => {
     keys = [["\r"]];
     await fake.commands.get("delegate")?.handler("Change the button color; stop at the end", ctx);
     expect(shown[0]).toContain("DELEGATE");
+    expect(shown[0]).toContain("Implementation");
+    expect(shown[0]).toContain("npm test");
+    expect(cli.calls().some((call) => call.args.includes("--preflight"))).toBe(true);
     expect(shown[0]).toContain("fake-gw/fake-model");
     expect(shown[0]).toMatch(/\[x\] at_end/);
     expect(startCalls()).toEqual([
@@ -269,6 +293,27 @@ describe("/delegate", () => {
     keys = [["\r"]];
     await fake.commands.get("delegate")?.handler("Goal", ctx);
     expect(ctx.notes.at(-1)).toEqual(['haril: no project with slug "fake-proj"', "error"]);
+    expect(opened).toEqual([]);
+  });
+
+  it("does not show confirmation or queue when implementation preflight fails", async () => {
+    cli.answer("workflow start --preflight", {
+      stderr: "haril: implementation requires Git worktrees\n",
+      code: 2,
+    });
+    keys = [["\r"]];
+    await fake.commands.get("delegate")?.handler("Goal", ctx);
+    expect(startCalls()).toEqual([]);
+    expect(shown).toEqual([]);
+    expect(ctx.notes.at(-1)).toEqual(["haril: implementation requires Git worktrees", "error"]);
+  });
+
+  it("does not announce implementation when the queued response lacks its mode", async () => {
+    cli.answer("workflow start", { stdout: '{"commandId":"cmd-7","status":"queued"}' });
+    keys = [["\r"]];
+    await fake.commands.get("delegate")?.handler("Goal", ctx);
+    expect(startCalls()).toHaveLength(1);
+    expect(ctx.notes.at(-1)?.[0]).toMatch(/response.*verified/i);
     expect(opened).toEqual([]);
   });
 });

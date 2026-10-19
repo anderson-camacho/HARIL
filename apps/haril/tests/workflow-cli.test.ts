@@ -58,7 +58,9 @@ afterEach(() => {
 
 async function invoke(args: string[]): Promise<number> {
   h = harness();
-  return await run(args, h.io, sb.host);
+  // These intake/lifecycle fixtures use a plain directory and intentionally exercise consultation.
+  const command = args[0] === "workflow" && args[1] === "start" ? [...args, "--read-only"] : args;
+  return await run(command, h.io, sb.host);
 }
 
 async function workflowId(): Promise<string> {
@@ -185,6 +187,7 @@ describe("haril workflow start, list, show and continue", () => {
           "--project",
           "demo",
           "--intake-stdin",
+          "--read-only",
           "--json",
         ],
         h.io,

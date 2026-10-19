@@ -1,14 +1,21 @@
 import { createHash } from "node:crypto";
-import { isAbsolute, resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
 import { isStop, type Stop } from "@haril/contracts";
 import { orderPreview, visibleText } from "@haril/core";
 import type { Store, WorkflowIntake, WorkflowRecord } from "@haril/core/ports";
-import { detectBaseBranch, inspectRepository } from "@haril/git";
+import {
+  detectBaseBranch,
+  inspectRepository,
+  listWorktrees,
+  WORKTREE_PATH_MAX_LENGTH,
+} from "@haril/git";
 import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_INVALID, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
 import { loadDelegationSettings } from "../delegation-config.js";
 import { delegationLimitsOf } from "../delegation-section.js";
 import { clockFor, storeAccess } from "../host.js";
+import { resolveProgram } from "../runtime/host-commands.js";
 import { dataDirFor, openExisting, queueCommand, withProject } from "./common.js";
 import { piContextUsed } from "./pi-context.js";
 import { storeQuota } from "./snapshot-quota.js";
@@ -29,12 +36,11 @@ import { buildWorkflowSnapshot, headerLines, treeLines } from "./workflow-snapsh
 // (--base, else haril.json's delegation.git.baseBranch, else main or the default branch detected when the project names
 // it otherwise) and that branch's commit, so every executor's worktree starts from it whatever happens to the branch
 // meanwhile, and the result goes to the integration branch haril/<workflow>/integration. --read-only keeps a workflow
-// from writing. Without git, or when the root is not a repository's top level, the workflow stays read-only and start
-// says why.
+// from writing. An implementation cannot silently downgrade to read-only when its writing preflight fails.
 
 const START_USAGE = [
   "usage: haril workflow start <goal> --project <slug> (--intake-file <json> | --intake-stdin) [--model <ref>] [--agent <ref>] [--autonomous | --stop-at <stops>]",
-  "                            [--budget-tokens <n>] [--read-only | --base <branch>] [--idempotency-key <key>] [--json]",
+  "                            [--budget-tokens <n>] [--read-only | --base <branch>] [--preflight] [--idempotency-key <key>] [--json]",
   "                            [--data-dir <path>]",
   "  queues a three-layer workflow for the runtime (haril start runs it). --model is the orchestrator's model (pinned),",
   "  default delegation.models.layers.orchestrator.model in haril.json, then HARIL_DEFAULT_MODEL; every child runs on it",
@@ -43,7 +49,8 @@ const START_USAGE = [
   "  after_plan); continue it with haril workflow continue. The workflow keeps haril.json's limits as they are now.",
   "  In a git project the executors write, each in its own worktree from main (or --base, or delegation.git.baseBranch),",
   "  and the delegators merge their work into the branch haril/<workflow>/integration for you to review; nothing is",
-  "  merged into main or pushed. --read-only keeps the agents from writing.",
+  "  merged into main or pushed. Implementation requires a writing base, Git worktrees and an allowed test command.",
+  "  --read-only explicitly requests consultation. --preflight checks without queueing or running tests.",
   "  Intake JSON: {projectRoot, plan:{sourceId,revision,text}, methodology:{id,instructions}}.",
   "  Plan and methodology instructions are required and snapshotted exactly; SHA-256 hashes are computed at start.",
 ].join("\n");
@@ -102,6 +109,67 @@ async function writingBaseOf(
   return requested === null && configured !== null
     ? { writes: false, reason: base.detail, configured }
     : { writes: false, reason: base.detail };
+}
+
+// This verifies a test runner is permitted for this project, not that tests exist or pass. Only known test
+// invocations with a matching project manifest qualify; an arbitrary allowed command is not evidence of tests.
+function configuredTestCommand(
+  root: string,
+  allow: readonly string[],
+  env: NodeJS.ProcessEnv,
+): string | undefined {
+  const usable = (entry: string): boolean =>
+    allow.includes(entry) && resolveProgram(entry.split(" ")[0] ?? "", env).ok;
+  const packagePath = join(root, "package.json");
+  if (existsSync(packagePath)) {
+    try {
+      const pkg = JSON.parse(readFileSync(packagePath, "utf8")) as {
+        scripts?: { test?: unknown };
+      };
+      if (typeof pkg.scripts?.test === "string" && pkg.scripts.test.trim() !== "") {
+        const packageTests = [
+          "npm test",
+          "npm run test",
+          "pnpm test",
+          "pnpm run test",
+          "yarn test",
+        ];
+        const command = packageTests.find(usable);
+        if (command !== undefined) return command;
+      }
+    } catch {
+      // An unreadable manifest cannot establish test capability.
+    }
+  }
+  if (existsSync(join(root, "go.mod")) && usable("go test ./...")) return "go test ./...";
+  if (existsSync(join(root, "Cargo.toml")) && usable("cargo test")) return "cargo test";
+  return undefined;
+}
+
+interface StartCapabilities {
+  readonly writing: boolean;
+  readonly worktreeList: boolean;
+  readonly worktreeCreated: false;
+  readonly testCommand: string | null;
+  readonly testsRun: false;
+  readonly baseBranch: string | null;
+  readonly baseSha: string | null;
+}
+
+function startCapabilities(
+  base: WritingBase,
+  worktreeList: boolean,
+  testCommand?: string,
+): StartCapabilities {
+  return {
+    writing: base.writes,
+    worktreeList,
+    worktreeCreated: false,
+    testCommand: testCommand ?? null,
+    testsRun: false,
+    baseBranch: base.writes ? base.branch : null,
+    baseSha: base.writes ? base.sha : null,
+  };
 }
 
 // The project root start would queue for: --project's, or the only one. Undefined when the store or the project is
@@ -226,10 +294,11 @@ export async function workflowStart(
       "--base",
       "--intake-file",
     ],
-    flags: ["--json", "--autonomous", "--read-only", "--intake-stdin"],
+    flags: ["--json", "--autonomous", "--read-only", "--intake-stdin", "--preflight"],
   });
   const problem = argsProblem(parsed, io);
   if (problem !== null) return problem;
+  const preflight = parsed.flags.has("--preflight");
   const goal = (lastValue(parsed, "--goal") ?? parsed.positionals.join(" ")).trim();
   if (goal === "") {
     io.err(START_USAGE);
@@ -252,7 +321,7 @@ export async function workflowStart(
     host.env?.[MODEL_ENV] ??
     ""
   ).trim();
-  if (model === "") {
+  if (model === "" && !preflight) {
     return fail(
       io,
       `the orchestrator needs a model: pass --model <ref> (see haril models), set delegation.models.layers.orchestrator.model (haril config set) or set ${MODEL_ENV}`,
@@ -323,6 +392,47 @@ export async function workflowStart(
       `delegation.git.baseBranch "${base.configured}": ${base.reason}; pass --base <branch> or --read-only, or change it with haril config set`,
     );
   }
+  let worktreeList = false;
+  let testCommand: string | undefined;
+  if (!readOnly) {
+    if (!base.writes) {
+      return fail(
+        io,
+        `implementation requires a Git repository root and writing base: ${base.reason}; select a valid base or pass --read-only for consultation`,
+      );
+    }
+    const longestPath = join(dataDir, "worktrees", "x".repeat(12), "integration");
+    if (resolve(longestPath).length > WORKTREE_PATH_MAX_LENGTH) {
+      return fail(
+        io,
+        `implementation needs a shorter data directory for Git worktrees (maximum ${WORKTREE_PATH_MAX_LENGTH} path characters); change HARIL_HOME or pass --data-dir`,
+      );
+    }
+    worktreeList = (await listWorktrees(root)) !== undefined;
+    if (!worktreeList) {
+      return fail(
+        io,
+        "implementation requires Git worktree support; `git worktree list --porcelain` failed for the selected project",
+      );
+    }
+    testCommand = configuredTestCommand(root, settings.commands.allow, {
+      ...process.env,
+      ...host.env,
+    });
+    if (testCommand === undefined) {
+      return fail(
+        io,
+        "implementation requires an allowed test command with an available runner matching the selected project's package.json test script, go.mod or Cargo.toml; configure delegation.commands.allow and PATH, or pass --read-only for consultation",
+      );
+    }
+  }
+  const mode = readOnly ? "read-only" : "implementation";
+  const capabilities = startCapabilities(base, worktreeList, testCommand);
+  if (parsed.flags.has("--preflight")) {
+    if (json) io.out(JSON.stringify({ mode, capabilities, status: "ready" }));
+    else io.out(visibleText(`${mode} preflight ready; worktree creation and tests have not run`));
+    return EXIT_OK;
+  }
   // P11: haril.json's limits. With worktrees the writers no longer share one checkout, so as many write at once as
   // execute unless the file sets limits.maxConcurrent.writers (3.9.4: the writer limit was 1 only until worktrees
   // existed); the surface locks still serialize writers whose files may overlap.
@@ -338,8 +448,14 @@ export async function workflowStart(
       projectId: project.projectId,
       idempotencyKey: `order:${idempotencyKey}`,
     });
+    const resultIo: CliIo = json
+      ? {
+          ...io,
+          out: (line) => io.out(JSON.stringify({ ...JSON.parse(line), mode, capabilities })),
+        }
+      : io;
     const code = queueCommand(
-      io,
+      resultIo,
       json,
       store,
       {

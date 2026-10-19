@@ -154,6 +154,19 @@ describe("the card", () => {
     ).toMatch(/autonomous/);
   });
 
+  it("shows implementation preflight as policy evidence rather than completed execution", () => {
+    const card = createCard("Implement the plan", MODEL, {
+      baseBranch: "main",
+      testCommand: "npm test",
+    });
+    const text = renderCard(card, 100, THEME).lines.map(stripAnsi).join("\n");
+    expect(text).toContain("Implementation");
+    expect(text).toContain("main");
+    expect(text).toContain("npm test");
+    expect(text).toMatch(/not run|pending/i);
+    expect(text).not.toContain("read-only for now");
+  });
+
   it("acts on clicks: a stop row toggles it, the buttons start, cancel or choose the model", () => {
     const card = createCard("Goal", MODEL);
     const { hits } = renderCard(card, 100, THEME);

@@ -21,7 +21,7 @@ vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 // `haril workflow start` on a git project (phase F8, docs/modos-y-delegacion.md 3.10): the workflow fixes its base
 // branch and commit and writes in worktrees; `haril run` runs it with the fake workflow agents, and `haril workflow show`
 // names the integration branch the delegators merged into. --read-only, a folder that is not a repository's top level,
-// and a project without git stay read-only.
+// and a project without git is refused unless consultation was explicitly requested.
 
 const HAS_GIT = spawnSync("git", ["--version"], { windowsHide: true }).status === 0;
 
@@ -59,6 +59,7 @@ function git(...args: string[]): string {
 function initRepo(): void {
   git("init", "--quiet", "--initial-branch=main");
   writeFileSync(join(repo, "src", "index.ts"), "export const ready = true;\n");
+  writeFileSync(join(repo, "package.json"), JSON.stringify({ scripts: { test: "node --test" } }));
   git("add", ".");
   git("commit", "--quiet", "-m", "first");
 }
@@ -143,13 +144,76 @@ describe.skipIf(!HAS_GIT)("haril workflow start on a git project", () => {
     expect(h.err.join("\n")).toContain('--base release: no local branch "release"');
   });
 
-  it("stays read-only on a project that is not a git repository", async () => {
+  it("refuses an implementation without Git instead of silently queueing consultation", async () => {
     await init();
     expect(await invoke(["workflow", "start", "Look", "--model", "fake/m", "--autonomous"])).toBe(
-      0,
+      2,
     );
-    expect(h.out.join("\n")).toMatch(/read-only {2}the agents write nothing/);
+    expect(h.err.join("\n")).toMatch(/implementation.*git|git.*implementation/i);
+    expect(await invoke(["workflow", "list", "--json"])).toBe(0);
+    expect(parseJson<unknown[]>(h.out)).toEqual([]);
+  });
+
+  it("allows explicit read-only consultation without Git and reports its mode in JSON", async () => {
+    await init();
+    expect(
+      await invoke(["workflow", "start", "Look", "--model", "fake/m", "--read-only", "--json"]),
+    ).toBe(0);
+    expect(parseJson<{ mode: string; capabilities: { writing: boolean } }>(h.out)).toMatchObject({
+      mode: "read-only",
+      capabilities: { writing: false },
+    });
     expect((await queuedStart()).baseSha).toBeUndefined();
+  });
+
+  it("refuses implementation when the allowlist has no usable test command", async () => {
+    initRepo();
+    const configPath = join(sb.root, "haril.json");
+    writeFileSync(
+      configPath,
+      JSON.stringify({ delegation: { commands: { allow: ["node --version"] } } }),
+    );
+    sb = { ...sb, host: { ...sb.host, env: { ...sb.host.env, HARIL_CONFIG: configPath } } };
+    await init();
+    expect(await invoke(["workflow", "start", "Write", "--model", "fake/m"])).toBe(2);
+    expect(h.err.join("\n")).toMatch(/test command.*allow|allow.*test command/i);
+    expect(await invoke(["workflow", "list", "--json"])).toBe(0);
+    expect(parseJson<unknown[]>(h.out)).toEqual([]);
+  });
+
+  it("does not treat an allowed package command as a test without a test script", async () => {
+    initRepo();
+    writeFileSync(
+      join(repo, "package.json"),
+      JSON.stringify({ scripts: { build: "node --version" } }),
+    );
+    await init();
+    expect(await invoke(["workflow", "start", "Write", "--model", "fake/m"])).toBe(2);
+    expect(h.err.join("\n")).toMatch(/test command/);
+  });
+
+  it("reports checked preflight capabilities without queueing a command", async () => {
+    initRepo();
+    await init();
+    expect(
+      await invoke(["workflow", "start", "Write", "--model", "fake/m", "--preflight", "--json"]),
+    ).toBe(0);
+    expect(
+      parseJson<{
+        mode: string;
+        capabilities: {
+          writing: boolean;
+          worktreeList: boolean;
+          testCommand: string;
+          testsRun: boolean;
+        };
+      }>(h.out),
+    ).toMatchObject({
+      mode: "implementation",
+      capabilities: { writing: true, worktreeList: true, testCommand: "npm test", testsRun: false },
+    });
+    expect(await invoke(["workflow", "list", "--json"])).toBe(0);
+    expect(parseJson<unknown[]>(h.out)).toEqual([]);
   });
 
   it("runs the writing workflow with the fake agents and shows its integration branch", async () => {
@@ -193,7 +257,7 @@ describe.skipIf(!HAS_GIT)("haril workflow start on a git project", () => {
     const configPath = join(sb.root, "haril.json");
     writeFileSync(
       configPath,
-      JSON.stringify({ delegation: { commands: { allow: ["node --version"] } } }),
+      JSON.stringify({ delegation: { commands: { allow: ["node --version", "npm test"] } } }),
     );
     sb = { ...sb, host: { ...sb.host, env: { ...sb.host.env, HARIL_CONFIG: configPath } } };
     await init();
