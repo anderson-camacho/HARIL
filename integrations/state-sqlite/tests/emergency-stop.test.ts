@@ -1,7 +1,13 @@
 import type { ClaimedTask, Store } from "@haril/core/ports";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openMemoryStore, type StoreError } from "../src/index.js";
-import { type ManualClock, manualClock, sequentialIds, testRules } from "./support.js";
+import {
+  type ManualClock,
+  manualClock,
+  sequentialIds,
+  testRules,
+  workflowIntake,
+} from "./support.js";
 
 // The emergency stop at the store (docs/modos-y-delegacion.md 3.14): runtime.stop {mode: "now"} halts the runtime,
 // stops every workflow, cancels their turns and the running standalone tasks, and ends each cancelled run's keys and
@@ -66,6 +72,7 @@ function command(type: string, args: Record<string, unknown>, project: string | 
 function startWorkflow(goal: string): { workflowId: string; rootTaskId: string } {
   const applied = command("workflow.start", {
     goal,
+    intake: workflowIntake("D:/demo"),
     model: "fake/high-model",
     agent: "fake:orchestrate",
     autonomy: { mode: "autonomous", stops: [] },
@@ -478,14 +485,7 @@ describe("recorded processes and run activity", () => {
     store.runs.recordProcess(epoch, stopped.runId, { pid: 77, startedAt: clock.now() });
     const live = claim(addTask("Still running"));
     store.runs.recordProcess(epoch, live.runId, { pid: 78, startedAt: clock.now() });
-    command("workflow.start", {
-      goal: "Unrelated",
-      model: "fake/high-model",
-      agent: "fake:orchestrate",
-      autonomy: { mode: "autonomous", stops: [] },
-      budgetTokens: 50_000,
-      timeoutMs: 600_000,
-    });
+    startWorkflow("Unrelated");
     store.runs.cancel(stopped.runId, "user_stop");
     // An hour later the stop's kill may have failed: the cancelled run still names a process nobody verified.
     clock.advance(3_600_000);

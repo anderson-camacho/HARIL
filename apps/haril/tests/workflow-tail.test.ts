@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type HostInfo, run } from "../src/cli.js";
 import { sessionLines } from "../src/commands/workflow-tail.js";
 import { storeAccess } from "../src/host.js";
-import { harness, makeSandbox, projectRoot, type Sandbox } from "./helpers.js";
+import { harness, makeSandbox, projectRoot, type Sandbox, withWorkflowIntake } from "./helpers.js";
 import { until } from "./process-helpers.js";
 
 // `haril workflow tail <workflowId> <node>` (docs/modos-y-delegacion.md 7.9, spike S7): what a node's agent wrote and
@@ -57,7 +57,7 @@ function withLease<T>(store: Store, work: (epoch: number) => T): T {
 async function claimedOrchestrator(store: Store): Promise<{ workflowId: string; runId: string }> {
   expect(
     await run(
-      [
+      withWorkflowIntake(sb, projectRoot(sb, "demo"), [
         "workflow",
         "start",
         "Tail me",
@@ -66,7 +66,7 @@ async function claimedOrchestrator(store: Store): Promise<{ workflowId: string; 
         "--agent",
         "orchestrator",
         "--autonomous",
-      ],
+      ]),
       harness().io,
       sb.host,
     ),
