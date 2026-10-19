@@ -228,6 +228,7 @@ function turnLike(task: Task): Omit<NewTurn, "key" | "dependsOn"> {
     layer: task.layer,
     kind: task.kind,
     parentTaskId: task.parentTaskId,
+    auditedTaskId: task.auditedTaskId,
     localId: task.localId,
     goal: task.goal,
     description: task.description,
@@ -414,7 +415,8 @@ function assignTurns(
       role: "auditor",
       layer: 3,
       kind: "verify",
-      parentTaskId: assignment.localId,
+      parentTaskId: firstTurn?.parentTaskId ?? task.taskId,
+      auditedTaskId: assignment.localId,
       localId: null,
       goal: `Audit ${assignment.localId} against its acceptance criteria`,
       description: "Judge the step's result against each of its acceptance criteria.",
@@ -453,7 +455,8 @@ function relaunch(context: TurnContext, executor: Task, auditor: Task): () => vo
         {
           ...turnLike(auditor),
           key: "relaunch:audit",
-          parentTaskId: "relaunch",
+          parentTaskId: executor.parentTaskId,
+          auditedTaskId: "relaunch",
           dependsOn: [{ on: "relaunch", kind: "completed" }],
         },
       ],
@@ -929,7 +932,7 @@ export function commitPlanOf(
     case "executor":
       return executorPlan(context, outcome);
     case "auditor": {
-      const subject = view.task(task.parentTaskId);
+      const subject = view.task(task.auditedTaskId);
       return subject?.role === "executor"
         ? taskAuditPlan(context, outcome, action, refusals, subject)
         : finalAuditPlan(context, outcome, action, refusals);

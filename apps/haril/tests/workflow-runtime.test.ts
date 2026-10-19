@@ -13,6 +13,7 @@ import type { AgentRuntime, AgentSpec, Clock, Store, WorkflowAutonomy } from "@h
 import { FakeAgentRuntime } from "@haril/core/testing";
 import { openStore } from "@haril/state-sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { buildWorkflowSnapshot } from "../src/commands/workflow-snapshot.js";
 import { createDelegationTools } from "../src/runtime/delegation-tools.js";
 import { runUntilIdle } from "../src/runtime/run-loop.js";
 import { createShutdown } from "../src/runtime/shutdown.js";
@@ -223,6 +224,21 @@ describe("a three-layer workflow through the runtime", () => {
         expect(threads.get(`audit of ${part}/step-${step}`)).toHaveLength(1);
       }
     }
+    for (const executor of view.tasks.filter((task) => task.role === "executor")) {
+      const auditor = view.auditorOf(executor.taskId);
+      expect(auditor).toBeDefined();
+      expect(auditor?.parentTaskId).toBe(executor.parentTaskId);
+      expect(auditor?.auditedTaskId).toBe(executor.taskId);
+      expect(auditor?.dependsOn).toContainEqual({ taskId: executor.taskId, kind: "completed" });
+      const snapshot = buildWorkflowSnapshot(store, workflow.workflowId, { now: Date.now() });
+      const executorNode = snapshot.nodes.find((node) => node.threadId === executor.threadId);
+      const auditorNode = snapshot.nodes.find((node) => node.threadId === auditor?.threadId);
+      expect(auditorNode).toMatchObject({
+        parentId: executorNode?.parentId,
+        auditedId: executorNode?.id,
+        label: `Auditor of ${executorNode?.id}`,
+      });
+    }
     expect(threads.get("final audit")).toHaveLength(1);
     expect(view.tasks.every((task) => task.state === "completed")).toBe(true);
     expect(view.audits.filter((audit) => audit.scope === "task")).toHaveLength(6);
@@ -316,6 +332,13 @@ describe("a three-layer workflow through the runtime", () => {
     expect(workflow.state).toBe("completed");
     const step1 = threads.get("part-1/step-1") ?? [];
     expect(step1).toHaveLength(2);
+    for (const executorId of step1) {
+      const executor = view.task(executorId);
+      const auditor = view.auditorOf(executorId);
+      expect(auditor?.parentTaskId).toBe(executor?.parentTaskId);
+      expect(auditor?.auditedTaskId).toBe(executorId);
+      expect(auditor?.dependsOn).toContainEqual({ taskId: executorId, kind: "completed" });
+    }
     expect(view.audits.filter((audit) => step1.includes(audit.subjectTaskId ?? ""))).toEqual([
       expect.objectContaining({ verdict: "rejected", reworkAction: "retry" }),
       expect.objectContaining({ verdict: "approved", reworkAction: "accept" }),

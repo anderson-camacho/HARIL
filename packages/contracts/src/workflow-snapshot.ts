@@ -48,6 +48,7 @@ const WorkflowNodeSchema = Type.Object(
   {
     id: Type.String(),
     parentId: Nullable(Type.String()),
+    auditedId: Type.Optional(Nullable(Type.String())),
     threadId: Type.String(),
     depth: Count,
     layer: Type.Union([Type.Literal(1), Type.Literal(2), Type.Literal(3)]),

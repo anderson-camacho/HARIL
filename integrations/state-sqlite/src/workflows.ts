@@ -84,7 +84,7 @@ const WORKFLOW_COLUMNS =
   "workflow_id AS workflowId, project_id AS projectId, root_task_id AS rootTaskId, goal, state, autonomy, limits, orchestrator_model AS orchestratorModel, agents_created AS agentsCreated, stop_reason AS stopReason, base_branch AS baseBranch, base_sha AS baseSha, simulated, order_id AS orderId, created_at AS createdAt, ended_at AS endedAt";
 
 const TASK_COLUMNS =
-  "task_id AS taskId, workflow_id AS workflowId, thread_id AS threadId, parent_task_id AS parentTaskId, role, layer, kind, local_id AS localId, delegation_id AS delegationId, goal, description, state, block_reason AS blockReason, cooldown_until AS cooldownUntil, agent_ref AS agentRef, model, model_pinned AS modelPinned, difficulty, difficulty_reason AS difficultyReason, priority, created_seq AS createdSeq, attempt, budget_max_tokens AS budgetTokens, timeout_ms AS timeoutMs, surface_write AS surfaceWrite, surface_read AS surfaceRead, result, next_check_at AS nextCheckAt, created_at AS createdAt, completed_at AS completedAt";
+  "task_id AS taskId, workflow_id AS workflowId, thread_id AS threadId, parent_task_id AS parentTaskId, audited_task_id AS auditedTaskId, role, layer, kind, local_id AS localId, delegation_id AS delegationId, goal, description, state, block_reason AS blockReason, cooldown_until AS cooldownUntil, agent_ref AS agentRef, model, model_pinned AS modelPinned, difficulty, difficulty_reason AS difficultyReason, priority, created_seq AS createdSeq, attempt, budget_max_tokens AS budgetTokens, timeout_ms AS timeoutMs, surface_write AS surfaceWrite, surface_read AS surfaceRead, result, next_check_at AS nextCheckAt, created_at AS createdAt, completed_at AS completedAt";
 
 const DELEGATION_COLUMNS =
   "delegation_id AS delegationId, workflow_id AS workflowId, thread_id AS threadId, parent_task_id AS parentTaskId, proposed_by_run_id AS proposedByRunId, tool, payload_hash AS payloadHash, memo, payload, created_at AS createdAt";
@@ -394,9 +394,14 @@ export function createWorkflowsFacet(options: WorkflowsFacetOptions): {
         (
           db
             .prepare(
-              "SELECT task_id AS taskId, thread_id AS threadId, role FROM tasks WHERE workflow_id = ?",
+              "SELECT task_id AS taskId, thread_id AS threadId, parent_task_id AS parentTaskId, role FROM tasks WHERE workflow_id = ?",
             )
-            .all(workflow.workflowId) as Array<{ taskId: string; threadId: string; role: string }>
+            .all(workflow.workflowId) as Array<{
+            taskId: string;
+            threadId: string;
+            parentTaskId: string | null;
+            role: string;
+          }>
         ).map((row) => [row.taskId, row]),
       );
       const byKey = new Map<string, string>();
@@ -433,6 +438,21 @@ export function createWorkflowsFacet(options: WorkflowsFacetOptions): {
           }
           const parentTaskId =
             turn.parentTaskId === null ? null : resolve(turn.parentTaskId, where);
+          const auditedTaskId =
+            turn.auditedTaskId == null ? null : resolve(turn.auditedTaskId, where);
+          const auditedTask = auditedTaskId === null ? undefined : known.get(auditedTaskId);
+          if (auditedTaskId !== null) {
+            if (turn.role !== "auditor" || auditedTask?.role !== "executor") {
+              throw conflict(
+                `${where}: auditedTaskId must reference an executor turn from an auditor`,
+              );
+            }
+            if (auditedTask.parentTaskId !== parentTaskId) {
+              throw conflict(
+                `${where}: an auditor and its executor must have the same structural parent`,
+              );
+            }
+          }
           let threadId = turn.threadId;
           if (threadId === null) {
             threadId = ids.next();
@@ -447,6 +467,9 @@ export function createWorkflowsFacet(options: WorkflowsFacetOptions): {
           const dependencies = new Map<string, DependencyKind>();
           for (const dependency of turn.dependsOn) {
             dependencies.set(resolve(dependency.on, where), dependency.kind);
+          }
+          if (auditedTaskId !== null && dependencies.get(auditedTaskId) !== "completed") {
+            throw conflict(`${where}: an auditor must wait for its audited executor to complete`);
           }
           const taskId = ids.next();
           const state = dependencies.size === 0 ? "ready" : "pending";
@@ -476,6 +499,7 @@ export function createWorkflowsFacet(options: WorkflowsFacetOptions): {
                 role: turn.role,
                 threadId,
                 parentTaskId,
+                auditedTaskId,
                 difficulty: turn.difficulty,
                 difficultyReason: turn.difficultyReason,
                 modelPinned: turn.modelPinned,
@@ -493,7 +517,7 @@ export function createWorkflowsFacet(options: WorkflowsFacetOptions): {
             layer: turn.layer,
           });
           byKey.set(turn.key, taskId);
-          known.set(taskId, { taskId, threadId, role: turn.role });
+          known.set(taskId, { taskId, threadId, parentTaskId, role: turn.role });
           taskIds[turn.key] = taskId;
           threadIds[turn.key] = threadId;
         }

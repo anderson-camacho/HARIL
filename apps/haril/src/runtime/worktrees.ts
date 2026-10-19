@@ -207,7 +207,7 @@ function isWritingWorkflow(view: WorkflowView): boolean {
 function holdsIntegrationLock(view: WorkflowView, task: Task): boolean {
   return (
     task.role === "delegator" ||
-    (task.role === "auditor" && view.task(task.parentTaskId)?.role !== "executor")
+    (task.role === "auditor" && view.task(task.auditedTaskId)?.role !== "executor")
   );
 }
 
@@ -498,7 +498,7 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
     const threads: string[] = [];
     for (const dependency of task.dependsOn) {
       const auditor = view.task(dependency.taskId);
-      const subject = auditor?.role === "auditor" ? view.task(auditor.parentTaskId) : undefined;
+      const subject = auditor?.role === "auditor" ? view.task(auditor.auditedTaskId) : undefined;
       if (subject?.role === "executor" && !threads.includes(subject.threadId)) {
         threads.push(subject.threadId);
       }
@@ -624,7 +624,7 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
   ): Promise<PreparedWorkspace> => {
     if (task.role === "executor") return ensureExecutor(store, epoch, view, task, repo);
     if (task.role === "auditor") {
-      const subject = view.task(task.parentTaskId);
+      const subject = view.task(task.auditedTaskId);
       if (subject?.role === "executor") {
         const record = store.worktrees
           .list({ workflowId: view.workflow.workflowId, kind: "executor", state: "active" })

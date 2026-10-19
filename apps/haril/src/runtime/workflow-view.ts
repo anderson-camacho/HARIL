@@ -237,7 +237,7 @@ export class WorkflowView {
   // The auditor turn created with an executor turn.
   auditorOf(executorTurnId: string): Task | undefined {
     return this.tasks.find(
-      (task) => task.role === "auditor" && task.parentTaskId === executorTurnId,
+      (task) => task.role === "auditor" && task.auditedTaskId === executorTurnId,
     );
   }
 
@@ -349,7 +349,7 @@ export class WorkflowView {
       const part = parent === null ? "" : `${this.label(parent)}/`;
       return `${part}${first.localId ?? threadId}`;
     }
-    const subject = this.task(first.parentTaskId);
+    const subject = this.task(first.auditedTaskId);
     return subject?.role === "executor"
       ? `audit of ${this.label(subject.threadId)}`
       : "final audit";

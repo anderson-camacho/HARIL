@@ -1,6 +1,9 @@
+import { DatabaseSync } from "node:sqlite";
 import type { NewTurn, Store } from "@haril/core/ports";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openMemoryStore, type StoreError } from "../src/index.js";
+import { migrate } from "../src/migrate.js";
+import { MIGRATION_0017 } from "../src/migrations/0017_audited_task.js";
 import { type ManualClock, manualClock, sequentialIds, testRules } from "./support.js";
 
 // The delegation module of the Store (docs/modos-y-delegacion.md 4.2, 4.3, 4.4): workflow.start and workflow.continue,
@@ -385,7 +388,8 @@ describe("store.workflows.applyTurns (delegation.apply)", () => {
           role: "auditor",
           layer: 3,
           kind: "verify",
-          parentTaskId: "e1",
+          parentTaskId: d1,
+          auditedTaskId: "e1",
           localId: null,
           dependsOn: [{ on: "e1", kind: "completed" }],
         }),
@@ -419,6 +423,10 @@ describe("store.workflows.applyTurns (delegation.apply)", () => {
     expect(byId.get(made.taskIds.a1 as string)?.dependsOn).toEqual([
       { taskId: made.taskIds.e1, kind: "completed" },
     ]);
+    expect(byId.get(made.taskIds.a1 as string)).toMatchObject({
+      parentTaskId: d1,
+      auditedTaskId: made.taskIds.e1,
+    });
     expect(byId.get(made.taskIds.e2 as string)?.dependsOn).toEqual([
       { taskId: retry.taskIds["e1-again"], kind: "completed" },
     ]);
@@ -436,6 +444,43 @@ describe("store.workflows.applyTurns (delegation.apply)", () => {
       mode: "stops",
       stops: ["after_node:d1", "at_end"],
     });
+  });
+
+  it("upgrades executor-parented auditors into sibling auditors with an explicit target", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      db.exec(`
+        CREATE TABLE schema_migrations (
+          version INTEGER PRIMARY KEY,
+          name TEXT NOT NULL,
+          checksum TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          applied_at INTEGER NOT NULL,
+          applied_by_release TEXT NOT NULL
+        );
+        CREATE TABLE tasks (
+          task_id TEXT PRIMARY KEY,
+          parent_task_id TEXT REFERENCES tasks(task_id),
+          role TEXT NOT NULL
+        );
+        INSERT INTO tasks VALUES ('d1', NULL, 'delegator');
+        INSERT INTO tasks VALUES ('e1', 'd1', 'executor');
+        INSERT INTO tasks VALUES ('a1', 'e1', 'auditor');
+      `);
+
+      migrate(db, clock, sequentialIds(), [MIGRATION_0017]);
+
+      expect(
+        db
+          .prepare(
+            "SELECT parent_task_id AS parentTaskId, audited_task_id AS auditedTaskId FROM tasks WHERE task_id = 'a1'",
+          )
+          .get(),
+      ).toEqual({ parentTaskId: "d1", auditedTaskId: "e1" });
+      expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 17 });
+    } finally {
+      db.close();
+    }
   });
 
   it("refuses turns whose role, layer and kind disagree, or that name what the workflow does not hold", () => {

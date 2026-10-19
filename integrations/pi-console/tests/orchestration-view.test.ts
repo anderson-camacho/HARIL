@@ -156,6 +156,14 @@ describe("orchestration full view", () => {
     expect(queued.join("\n")).toMatch(/depends on e1/);
   });
 
+  it("shows the auditor under its delegator and names the executor in its detail", () => {
+    const block = renderOrchestrationView(select(demoState(), "a1"), 140, 45, UNICODE_GLYPHS);
+    const lines = plain(block);
+    expect(lineWith(lines, "a1 Auditor of e1")).toBeTruthy();
+    expect(lines.join("\n")).toMatch(/d1 Delegator 1/);
+    expect(lines.join("\n")).toMatch(/Audits\s+e1/);
+  });
+
   it("shows the recent events newest first", () => {
     const text = plain(renderOrchestrationView(demoState(), 140, 45, UNICODE_GLYPHS));
     expect(lineWith(text, "Events")).toMatch(

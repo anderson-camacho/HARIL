@@ -36,7 +36,7 @@ function locksOf(task: Task, view: WorkflowView): string[] {
   if (!writes(view.workflow)) return [];
   const integrates =
     task.role === "delegator" ||
-    (task.role === "auditor" && view.task(task.parentTaskId)?.role !== "executor");
+    (task.role === "auditor" && view.task(task.auditedTaskId)?.role !== "executor");
   return integrates ? [`integration:${view.workflow.workflowId}`] : [];
 }
 

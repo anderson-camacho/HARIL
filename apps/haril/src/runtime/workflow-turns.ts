@@ -206,7 +206,7 @@ export function buildTurnInput(
       };
     }
     case "auditor": {
-      const subject = view.task(task.parentTaskId);
+      const subject = view.task(task.auditedTaskId);
       if (subject?.role === "executor") {
         const assignment = view.assignmentOf(subject.threadId);
         return {

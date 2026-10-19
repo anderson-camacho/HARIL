@@ -193,6 +193,7 @@ interface TaskDelegationColumns {
   readonly role: string;
   readonly threadId: string;
   readonly parentTaskId: string | null;
+  readonly auditedTaskId?: string | null;
   readonly difficulty: string | null;
   readonly difficultyReason: string | null;
   readonly modelPinned: boolean;
@@ -987,7 +988,7 @@ export class SqliteStore implements Store {
     if (turn === undefined) return;
     this.db
       .prepare(
-        "UPDATE tasks SET workflow_id = ?, layer = ?, role = ?, thread_id = ?, parent_task_id = ?, difficulty = ?, difficulty_reason = ?, model_pinned = ?, local_id = ?, delegation_id = ? WHERE task_id = ?",
+        "UPDATE tasks SET workflow_id = ?, layer = ?, role = ?, thread_id = ?, parent_task_id = ?, audited_task_id = ?, difficulty = ?, difficulty_reason = ?, model_pinned = ?, local_id = ?, delegation_id = ? WHERE task_id = ?",
       )
       .run(
         turn.workflowId,
@@ -995,6 +996,7 @@ export class SqliteStore implements Store {
         turn.role,
         turn.threadId,
         turn.parentTaskId,
+        turn.auditedTaskId ?? null,
         turn.difficulty,
         turn.difficultyReason,
         turn.modelPinned ? 1 : 0,

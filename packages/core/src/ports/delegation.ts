@@ -50,6 +50,8 @@ export interface WorkflowTaskRecord {
   readonly threadId: string;
   // A task of the parent thread (null for the orchestrator).
   readonly parentTaskId: string | null;
+  // The executor turn an auditor evaluates; null for final workflow auditors. Independent of structural parentage.
+  readonly auditedTaskId: string | null;
   readonly role: DelegationRole;
   readonly layer: 1 | 2 | 3;
   readonly kind: TaskKind;
@@ -127,6 +129,8 @@ export interface NewTurn {
   readonly layer: 1 | 2 | 3;
   readonly kind: TaskKind;
   readonly parentTaskId: string | null;
+  // The executor turn an auditor evaluates; null for final workflow auditors.
+  readonly auditedTaskId?: string | null;
   readonly localId: string | null;
   readonly goal: string;
   readonly description: string;
