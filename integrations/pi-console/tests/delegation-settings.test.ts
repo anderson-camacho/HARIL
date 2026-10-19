@@ -367,6 +367,7 @@ describe("editing a delegation setting", () => {
       readonly select?: ((title: string, options: string[]) => string | undefined)[];
       readonly confirm?: boolean;
       readonly models?: PiModel[];
+      readonly availableModels?: PiModel[];
     },
   ) {
     const ctx = fakeContext("fake-cwd");
@@ -385,7 +386,7 @@ describe("editing a delegation setting", () => {
     };
     (ctx as unknown as { modelRegistry: unknown }).modelRegistry = {
       getAll: () => answers.models ?? [],
-      getAvailable: () => answers.models ?? [],
+      getAvailable: () => answers.availableModels ?? answers.models ?? [],
       find: () => undefined,
     };
     return { ctx, selects, confirms };
@@ -446,7 +447,7 @@ describe("editing a delegation setting", () => {
       },
     );
     await openDelegationSettings(ctx, {});
-    // HARIL's providers and accounts only: a Pi provider of its own (anthropic here) serves no agent.
+    // Compatible HARIL models stay grouped by provider and account; Pi-native providers are informational only.
     expect(selects[1]?.options).toEqual([
       "haril-cliproxy · 1 models",
       "haril-cliproxy · Gemini1 · 1 models",
@@ -459,6 +460,33 @@ describe("editing a delegation setting", () => {
     expect(sets().map((call) => call.args.slice(2, 4))).toEqual([
       ["delegation.models.layers.auditor.model", "cliproxy/claude-sonnet-4-5"],
     ]);
+  });
+
+  it("explains unavailable Pi-native and unauthenticated models without saving either", async () => {
+    const unauthenticated = { ...GEMINI, id: "Gemini2/private-model" };
+    const native = { ...NOT_HARIL, provider: "openai-api", id: "gpt-native" };
+    const { ctx, selects } = scripted(
+      [{ kind: "edit", path: "delegation.models.layers.auditor.model" }],
+      {
+        models: [GEMINI, unauthenticated, native],
+        availableModels: [GEMINI, native],
+        select: [
+          () => "View unavailable models (2)",
+          (_title, options) => options.find((option) => option.startsWith("openai-api")),
+          (_title, options) => options[0],
+        ],
+      },
+    );
+    await openDelegationSettings(ctx, {});
+    expect(selects[0]?.options).toContain("View unavailable models (2)");
+    expect(selects[1]?.options).toEqual([
+      "haril-cliproxy · Gemini2 · 1 models · unavailable",
+      "openai-api · 1 models · unavailable",
+    ]);
+    expect(selects[2]?.title).toContain("informational only");
+    expect(selects[2]?.options[0]).toContain("[NOT SELECTABLE]");
+    expect(selects[2]?.options[0]).toContain("configure a HARIL provider in haril.json");
+    expect(sets()).toEqual([]);
   });
 
   it("resets a value to its default after confirming it", async () => {

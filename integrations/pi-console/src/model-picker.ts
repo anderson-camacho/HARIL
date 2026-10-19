@@ -1,3 +1,4 @@
+import { harilRefOf } from "./delegation-settings.js";
 import { levelLabel, supportedLevels, tokenCount } from "./model-levels.js";
 import type { ConsoleContext, ConsolePi, PiModel, ThinkingLevel } from "./pi-types.js";
 
@@ -15,6 +16,43 @@ const GROUP_TITLE = "Model · choose a provider or account";
 export interface ModelGroup {
   readonly label: string;
   readonly models: readonly PiModel[];
+}
+
+export interface DelegationModelCatalog {
+  readonly compatible: ModelGroup[];
+  readonly unavailable: (ModelGroup & { readonly reason: string })[];
+}
+
+// Pi's registry contains model metadata only; this catalog deliberately projects only display-safe fields and never
+// inspects provider configuration or credentials. A selectable model must be both HARIL-addressable and available.
+export function delegationModelCatalog(
+  all: readonly PiModel[],
+  available: readonly PiModel[],
+): DelegationModelCatalog {
+  const key = (model: PiModel) => `${model.provider}\0${model.id}`;
+  const connected = new Set(available.map(key));
+  const unique = new Map<string, PiModel>();
+  for (const model of [...all, ...available]) unique.set(key(model), model);
+
+  const compatible: PiModel[] = [];
+  const unavailable: PiModel[] = [];
+  for (const model of unique.values()) {
+    if (harilRefOf(model) !== undefined && connected.has(key(model))) compatible.push(model);
+    else unavailable.push(model);
+  }
+
+  const reasonFor = (model: PiModel): string => {
+    if (harilRefOf(model) !== undefined) {
+      return "Pi lists this HARIL model, but its provider has no working credentials.";
+    }
+    return `Pi provider ${model.provider} is not a HARIL delegation provider. Presence in Pi does not make it executable by agent-pi; configure a HARIL provider in haril.json or use a runtime that supports Pi-native model references.`;
+  };
+  const groups = groupModels(compatible);
+  const unavailableGroups = groupModels(unavailable).map((group) => ({
+    ...group,
+    reason: [...new Set(group.models.map(reasonFor))].join(" "),
+  }));
+  return { compatible: groups, unavailable: unavailableGroups };
 }
 
 // The level the console keeps per model, and how it reacts to Pi's model and level changes.
