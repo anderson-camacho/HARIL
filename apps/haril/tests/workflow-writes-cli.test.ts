@@ -279,9 +279,9 @@ describe.skipIf(!HAS_GIT)("haril workflow start on a git project", () => {
         .filter((event) => event.type === "workspace.command")
         .map((event) => event.payload as { command?: unknown; exitCode?: unknown });
       expect(commands.length).toBeGreaterThan(0);
-      expect(
-        commands.every((payload) => payload.command === "npm" && payload.exitCode === 0),
-      ).toBe(true);
+      expect(commands.every((payload) => payload.command === "npm" && payload.exitCode === 0)).toBe(
+        true,
+      );
       expect(store.workflows.list()[0]?.state).toBe("completed");
     } finally {
       store.close();
