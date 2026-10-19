@@ -1,4 +1,4 @@
-import { renderBrandMark } from "./dashboard-art.js";
+import { renderBrandArt, renderBrandMark } from "./dashboard-art.js";
 import { controlsFor, type DashboardAction } from "./dashboard-controls.js";
 import type { DashboardData } from "./dashboard-data.js";
 import { frameGlyph, paddedCell, visualText } from "./dashboard-theme.js";
@@ -198,7 +198,13 @@ function wideHeader(
   const tabLayout = tabs(width, selected);
   const title = ` ${renderBrandMark()} :: SESSION INIT  ·  ${version ?? "HARIL"} `;
   const rows = [border(width, "┌", "─", "┐"), frameRow(title, width, "yellow")];
-  const left: string[] = [paddedCell(renderBrandMark(), leftWidth, "yellow", "base")];
+  const left: string[] = [
+    paddedCell(renderBrandMark(), leftWidth, "yellow", "base"),
+    ...renderBrandArt().map((line) => paddedCell(line, leftWidth, "teal", "base")),
+    paddedCell("", leftWidth, "text", "base"),
+    paddedCell("Many minds. One flow.", leftWidth, "yellow", "base"),
+    paddedCell("Alt+H · navigate areas  |  /haril · actions", leftWidth, "text", "base"),
+  ];
   const right = [
     statusRow("SESSION", "Pi console active", rightWidth),
     statusRow("PROJECT", facts.project, rightWidth),
@@ -261,9 +267,23 @@ export function renderHeaderLayout(
   if (width < 10) return { lines: [fit(renderBrandMark(), width)], tabHits: [] };
   if (width >= 120 && height >= 40) return wideHeader(width, version, facts, selected);
   const tabLayout = tabs(width, selected);
+  // Wide and sufficiently tall consoles show a static, non-blinking terminal logo.
+  // Compact terminals keep the single-line mark instead of consuming chat space.
+  const brandRows =
+    width >= 90 && height >= 30
+      ? [
+          ...renderBrandArt().map((line) => frameRow(line, width, "teal")),
+          frameRow(
+            "Many minds. One flow.   ·   Alt+H: areas   ·   /haril: actions",
+            width,
+            "yellow",
+          ),
+        ]
+      : [];
   const rows = [
     border(width, "┌", "─", "┐"),
     `${frameGlyph("│")}${paddedCell(` ${renderBrandMark()} ${version ?? ""}`, width - 2, "yellow")}${frameGlyph("│")}`,
+    ...brandRows,
     `${frameGlyph("│")}${paddedCell(` ${facts.project} · ${facts.modelLevel} · ${facts.runtime} · TOOLS ${facts.activeTools.length}/${facts.tools.length} · MCP ${facts.mcpServers.length}`, width - 2, "teal")}${frameGlyph("│")}`,
     ...tabLayout.lines.map(
       (line) =>
@@ -271,7 +291,10 @@ export function renderHeaderLayout(
     ),
     border(width, "└", "─", "┘"),
   ];
-  return { lines: rows, tabHits: tabLayout.hits.map((hit) => ({ ...hit, row: hit.row + 3 })) };
+  return {
+    lines: rows,
+    tabHits: tabLayout.hits.map((hit) => ({ ...hit, row: hit.row + 3 + brandRows.length })),
+  };
 }
 
 export function renderFooterNavigation(

@@ -733,6 +733,26 @@ export async function runDashboardAction(
       }
       return;
     }
+    case "usage-log": {
+      const result = await runHaril(["usage", "log", "--since", "24h", "--limit", "40"], {
+        cwd: host.cwd,
+        timeoutMs: 10_000,
+      });
+      const lines = result.ok
+        ? result.stdout.trim().split(/\r?\n/).filter(Boolean)
+        : [
+            "Could not read HARIL activity from the local usage store.",
+            firstLine(result.stderr, "haril usage log"),
+            "Try: haril doctor",
+            "CLI: haril usage log --since 24h --limit 40",
+          ];
+      await showInlineDetails(
+        ctx,
+        "HARIL activity log · last 24 hours",
+        result.ok && lines.length === 0 ? ["No activity recorded in the last 24 hours."] : lines,
+      );
+      return;
+    }
     case "memory":
       host.output("HARIL recorded memory health", [
         host.memorySummary(),
@@ -810,6 +830,7 @@ export async function openDashboardActionMenu(
     option("delegation", "Delegation settings", "Ajustes de delegación"),
     option("methodologies", "Browse methodologies", "Explorar metodologías"),
     option("commands", "Browse HARIL commands", "Explorar comandos de HARIL"),
+    option("usage-log", "Recent activity log", "Registro de actividad reciente"),
     option("memory", "Memory status", "Estado de la memoria"),
     option("details", "View area details", "Ver detalles del área"),
     option("refresh", "Refresh data", "Actualizar datos"),

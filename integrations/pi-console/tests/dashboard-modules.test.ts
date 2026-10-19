@@ -142,24 +142,32 @@ describe("the console's modules", () => {
     expect(readConsoleLocale(undefined)).toBe("es");
   });
 
-  it("uses a compact HARIL mark without decorative ASCII in narrow and wide headers", () => {
+  it("renders a compact mark on narrow terminals and static wordmark on roomy headers", () => {
     const narrow = renderHeaderLayout("1.2.3", 60, facts(), "tools", THEME, 24);
+    const medium = renderHeaderLayout("1.2.3", 100, facts(), "tools", THEME, 35);
     const wide = renderHeaderLayout("1.2.3", 140, facts(), "tools", THEME, 45);
 
     const narrowText = narrow.lines.map(stripAnsi).join("\n");
+    const mediumText = medium.lines.map(stripAnsi).join("\n");
     const wideText = wide.lines.map(stripAnsi).join("\n");
-    for (const text of [narrowText, wideText]) {
+    for (const text of [narrowText, mediumText, wideText]) {
       expect(text).toContain("HARIL ◉");
       expect(text).not.toContain("NEURAL LINK");
-      expect(text).not.toContain("MANY MINDS. ONE FLOW.");
+      expect(text).not.toContain("NEURAL LINK");
       expect(text).toContain("fake-project");
       expect(text).toContain("fake-model · no reasoning");
     }
+    expect(narrowText).not.toContain("███████");
+    expect(mediumText).toContain("███████");
+    expect(wideText).toContain("███████");
+    expect(mediumText).toContain("Many minds. One flow.");
+    expect(wideText).toContain("Many minds. One flow.");
     expect(wideText).toContain("fake-cwd");
     expect(wideText).toContain("Pi console active");
     expect(wideText).not.toContain(".-~~~~~~~~~~-.");
     for (const [layout, width] of [
       [narrow, 60],
+      [medium, 100],
       [wide, 140],
     ] as const) {
       expect(layout.tabHits.map((hit) => hit.area)).toEqual(DASHBOARD_AREAS);
@@ -178,19 +186,23 @@ describe("the console's modules", () => {
     for (const area of DASHBOARD_AREAS) expect(fake.commands.has(area)).toBe(true);
   });
 
-  it("starts on the current area, wraps left and right, confirms with Enter, and cancels with Esc", () => {
+  it("uses up/down in a vertical list, wraps, supports legacy left/right, Enter and Esc", () => {
     expect(initialTabPickerIndex("tools")).toBe(3);
     const results: unknown[] = [];
     const picker = createTabPicker("tools", (result) => results.push(result));
-    expect(picker.render(80).join("\n")).toContain("TOOLS");
+    expect(picker.render(80).join("\n")).toContain("↑/↓ move");
+    picker.handleInput("\u001b[B");
+    expect(picker.render(80).join("\n")).toContain("▶ EVERYWHERE");
+    picker.handleInput("\u001b[B");
+    expect(picker.render(80).join("\n")).toContain("▶ AGENTS");
+    picker.handleInput("\u001b[A");
+    expect(picker.render(80).join("\n")).toContain("▶ EVERYWHERE");
     picker.handleInput("\u001b[C");
-    expect(picker.render(80).join("\n")).toContain("EVERYWHERE");
-    picker.handleInput("\u001b[C");
-    expect(picker.render(80).join("\n")).toContain("AGENTS");
+    expect(picker.render(80).join("\n")).toContain("▶ AGENTS");
     picker.handleInput("\u001b[D");
-    expect(picker.render(80).join("\n")).toContain("EVERYWHERE");
+    expect(picker.render(80).join("\n")).toContain("▶ EVERYWHERE");
     picker.handleInput("\r");
-    picker.handleInput("\u001b[C");
+    picker.handleInput("\u001b[B");
     expect(results).toEqual([{ type: "open", area: "everywhere" }]);
 
     const cancelled: unknown[] = [];
