@@ -223,7 +223,7 @@ describe.skipIf(!HAS_GIT)("haril workflow start on a git project", () => {
       await invoke([
         "workflow",
         "start",
-        "Write the part [fake:parts=1] [fake:steps=2]",
+        "Write the part [fake:parts=1] [fake:steps=2] [fake:run=npm test]",
         "--model",
         "fake/m",
         "--autonomous",
@@ -253,7 +253,7 @@ describe.skipIf(!HAS_GIT)("haril workflow start on a git project", () => {
 
   it("runs the auditors' commands with haril.json's allow list", async () => {
     initRepo();
-    // `node --version` is not in the default list: only haril.json's commands.allow lets the auditor run it.
+    // The auditor must run the project test command through the configured allow list.
     const configPath = join(sb.root, "haril.json");
     writeFileSync(
       configPath,
@@ -265,7 +265,7 @@ describe.skipIf(!HAS_GIT)("haril workflow start on a git project", () => {
       await invoke([
         "workflow",
         "start",
-        "Write the part [fake:parts=1] [fake:steps=1] [fake:run=node --version]",
+        "Write the part [fake:parts=1] [fake:steps=1] [fake:run=npm test]",
         "--model",
         "fake/m",
         "--autonomous",
@@ -280,7 +280,7 @@ describe.skipIf(!HAS_GIT)("haril workflow start on a git project", () => {
         .map((event) => event.payload as { command?: unknown; exitCode?: unknown });
       expect(commands.length).toBeGreaterThan(0);
       expect(
-        commands.every((payload) => payload.command === "node" && payload.exitCode === 0),
+        commands.every((payload) => payload.command === "npm" && payload.exitCode === 0),
       ).toBe(true);
       expect(store.workflows.list()[0]?.state).toBe("completed");
     } finally {
