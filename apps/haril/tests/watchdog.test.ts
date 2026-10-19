@@ -12,7 +12,7 @@ import { openStore } from "@haril/state-sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildWorkflowSnapshot } from "../src/commands/workflow-snapshot.js";
 import { checkLiveNodes, type WatchdogDeps, watchdogPolicy } from "../src/runtime/watchdog.js";
-import { makeSandbox, type Sandbox } from "./helpers.js";
+import { makeSandbox, type Sandbox, workflowIntake } from "./helpers.js";
 
 // One pass of the watchdog over the real store (docs/modos-y-delegacion.md 3.16): a node seen for the first time is
 // scheduled, not judged, and its schedule outlives a restart; a node whose consumer has no live turn left is residual.
@@ -107,6 +107,7 @@ function tree(): { workflowId: string; delegator: string; executor: string } {
     type: "workflow.start",
     projectId,
     args: {
+      intake: workflowIntake(store.projects.list()[0]?.rootPath as string),
       goal: "Read the notes",
       model: "fake/high-model",
       agent: "fake:orchestrate",

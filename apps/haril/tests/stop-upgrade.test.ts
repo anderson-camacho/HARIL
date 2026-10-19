@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { run } from "../src/cli.js";
 import { type RunLoopResult, runUntilIdle } from "../src/runtime/run-loop.js";
 import { createShutdown } from "../src/runtime/shutdown.js";
-import { harness, makeSandbox, projectRoot, type Sandbox } from "./helpers.js";
+import { harness, makeSandbox, projectRoot, type Sandbox, workflowIntake } from "./helpers.js";
 import { until } from "./process-helpers.js";
 
 // An emergency stop after a graceful one (docs/modos-y-delegacion.md 3.14): `haril stop --now` after a `haril stop`
@@ -244,6 +244,7 @@ describe("agents killed before their stop was applied", () => {
       type: "workflow.start",
       projectId,
       args: {
+        intake: workflowIntake(store.projects.list()[0]?.rootPath as string),
         goal: "Read the notes",
         model: "fake/high-model",
         agent: "fake:orchestrate",

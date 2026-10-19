@@ -18,7 +18,7 @@ import { createDelegationTools } from "../src/runtime/delegation-tools.js";
 import { runUntilIdle } from "../src/runtime/run-loop.js";
 import { createShutdown } from "../src/runtime/shutdown.js";
 import { WorkflowView } from "../src/runtime/workflow-view.js";
-import { makeSandbox, type Sandbox } from "./helpers.js";
+import { makeSandbox, type Sandbox, workflowIntake } from "./helpers.js";
 
 // The runtime that runs three-layer workflows (docs/modos-y-delegacion.md 3.3 to 3.9, phase F2), hermetic: the fake
 // workflow agents inside FakeAgentRuntime, the real SQLite store in a sandbox, the real concurrent loop. Each scenario is
@@ -80,6 +80,7 @@ function startWorkflow(
     type: "workflow.start",
     projectId,
     args: {
+      intake: workflowIntake(store.projects.list()[0]?.rootPath as string),
       goal,
       model: "fake/high-model",
       agent: "fake:orchestrate",

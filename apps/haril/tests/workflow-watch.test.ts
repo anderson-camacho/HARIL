@@ -5,7 +5,7 @@ import type { Store } from "@haril/core/ports";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type HostInfo, run } from "../src/cli.js";
 import { storeAccess } from "../src/host.js";
-import { harness, makeSandbox, projectRoot, type Sandbox } from "./helpers.js";
+import { harness, makeSandbox, projectRoot, type Sandbox, withWorkflowIntake } from "./helpers.js";
 import { until } from "./process-helpers.js";
 
 // `haril workflow watch <id>` (docs/modos-y-delegacion.md 6, 7.6): JSON lines of WorkflowSnapshot v1, one at once and
@@ -54,7 +54,14 @@ async function runningWorkflow(store: Store): Promise<string> {
   const queued = harness();
   expect(
     await run(
-      ["workflow", "start", "Watch me", "--model", "fake/high-model", "--autonomous"],
+      withWorkflowIntake(sb, projectRoot(sb, "demo"), [
+        "workflow",
+        "start",
+        "Watch me",
+        "--model",
+        "fake/high-model",
+        "--autonomous",
+      ]),
       queued.io,
       sb.host,
     ),

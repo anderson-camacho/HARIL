@@ -11,7 +11,7 @@ import type { Store } from "@haril/core/ports";
 import { openStore } from "@haril/state-sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { claimWorkflowTurns } from "../src/runtime/workflow-scheduler.js";
-import { makeSandbox, type Sandbox } from "./helpers.js";
+import { makeSandbox, type Sandbox, workflowIntake } from "./helpers.js";
 
 // The surface locks between workflows that write in the same project (docs/modos-y-delegacion.md 3.10.1, phase F8): a
 // writer in flight holds its surface for every other workflow of the project, whatever state its own workflow is in. A
@@ -55,6 +55,7 @@ function writingWorkflow(store: Store, epoch: number, projectId: string, surface
     type: "workflow.start",
     projectId,
     args: {
+      intake: workflowIntake(store.projects.list()[0]?.rootPath as string),
       goal: `Write ${surface.join(", ")}`,
       model: "fake/high-model",
       agent: "fake:orchestrate",

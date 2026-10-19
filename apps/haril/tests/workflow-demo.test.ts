@@ -97,6 +97,14 @@ describe("haril workflow demo", () => {
       layer: 3,
       role: "auditor",
     });
+    for (const auditor of snapshot.nodes.filter(
+      (node) => node.role === "auditor" && node.id !== "fa",
+    )) {
+      const executor = snapshot.nodes.find((node) => node.id === auditor.auditedId);
+      expect(executor?.role).toBe("executor");
+      expect(auditor.parentId).toBe(executor?.parentId);
+      expect(auditor.depth).toBe(executor?.depth);
+    }
   });
 
   it("shows every scripted mechanism: a refused proposal, a retry, an escalation with its reformulation and an idle close", async () => {

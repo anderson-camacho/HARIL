@@ -28,7 +28,7 @@ import { runUntilIdle } from "../src/runtime/run-loop.js";
 import { createShutdown, type Shutdown } from "../src/runtime/shutdown.js";
 import { createWorkspaces, integrationBranchOf } from "../src/runtime/worktrees.js";
 import { COMMIT_MAIN_SCRIPT, SNEAK_SCRIPT } from "./command-scripts.js";
-import { makeSandbox, type Sandbox } from "./helpers.js";
+import { makeSandbox, type Sandbox, workflowIntake } from "./helpers.js";
 
 // Real git and real processes: under the load of the full suite one test can take several seconds, so this file gives
 // its tests and hooks a minute instead of the suite's 15 s (a hang still fails it).
@@ -120,6 +120,7 @@ function startWorkflow(store: Store, goal: string): void {
     type: "workflow.start",
     projectId,
     args: {
+      intake: workflowIntake(store.projects.list()[0]?.rootPath as string),
       goal,
       model: "fake/high-model",
       agent: "fake:orchestrate",

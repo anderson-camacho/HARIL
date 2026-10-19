@@ -21,7 +21,7 @@ import { runUntilIdle } from "../src/runtime/run-loop.js";
 import { createShutdown } from "../src/runtime/shutdown.js";
 import { claimWorkflowTurns } from "../src/runtime/workflow-scheduler.js";
 import type { DelegationOptions } from "../src/runtime/workflow-view.js";
-import { makeSandbox, type Sandbox } from "./helpers.js";
+import { makeSandbox, type Sandbox, workflowIntake } from "./helpers.js";
 
 // Cooldown and retry on provider errors (docs/modos-y-delegacion.md 3.11, phase F6), hermetic: the fake workflow agents
 // answer a scripted provider error ([fake:provider=<target>:<status>] in the goal) and the real loop and store decide. A
@@ -82,6 +82,7 @@ function startWorkflow(store: Store, goal: string): void {
     type: "workflow.start",
     projectId,
     args: {
+      intake: workflowIntake(store.projects.list()[0]?.rootPath as string),
       goal,
       model: ORCHESTRATOR,
       agent: "fake:orchestrate",

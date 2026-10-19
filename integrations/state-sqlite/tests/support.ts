@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,7 +9,18 @@ import {
   checkPlanSubmission,
   checkTaskKind,
 } from "@haril/core";
-import type { Clock, Ids, StoreRules } from "@haril/core/ports";
+import type { Clock, Ids, StoreRules, WorkflowIntake } from "@haril/core/ports";
+
+export function workflowIntake(root: string): WorkflowIntake {
+  const text = "1. Complete the selected task.\n2. Verify the result.\n";
+  const instructions = "Follow the selected plan and report the observed verification results.";
+  const sha256 = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
+  return {
+    projectRoot: root,
+    plan: { sourceId: "test:plan", revision: "v1", text, sha256: sha256(text) },
+    methodology: { id: "test-method", instructions, sha256: sha256(instructions) },
+  };
+}
 
 // The Core rules the composition root injects into the store (the store never imports Core values).
 export const testRules: StoreRules = {

@@ -14,6 +14,8 @@ import {
   parseJson,
   projectRoot,
   type Sandbox,
+  withWorkflowIntake,
+  workflowIntake,
 } from "./helpers.js";
 
 // The runtime and haril workflow start read haril.json's delegation section (docs/modos-y-delegacion.md 5, 3.11, 3.13,
@@ -52,7 +54,7 @@ function host() {
 
 async function invoke(args: string[]): Promise<number> {
   h = harness();
-  return await run(args, h.io, host());
+  return await run(withWorkflowIntake(sb, projectRoot(sb, "demo"), args), h.io, host());
 }
 
 function writeDelegation(delegation: unknown): void {
@@ -200,6 +202,7 @@ describe("the models of a real workflow and haril.json", () => {
       type: "workflow.start",
       projectId: store.projects.list()[0]?.projectId,
       args: {
+        intake: workflowIntake(store.projects.list()[0]?.rootPath as string),
         goal: "Answer from the notes",
         model: "cliproxy/Gemini1/gemini-3-flash",
         agent: "orchestrator",

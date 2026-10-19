@@ -1,7 +1,13 @@
 import type { Store } from "@haril/core/ports";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openMemoryStore, type StoreError } from "../src/index.js";
-import { type ManualClock, manualClock, sequentialIds, testRules } from "./support.js";
+import {
+  type ManualClock,
+  manualClock,
+  sequentialIds,
+  testRules,
+  workflowIntake,
+} from "./support.js";
 
 // The worktrees of workflows that write (docs/modos-y-delegacion.md 3.10, phase F8; migration 0014): one per executor
 // thread and one integration worktree per workflow, recorded so a restart reuses them, the snapshot names their
@@ -32,6 +38,7 @@ beforeEach(() => {
     type: "workflow.start",
     projectId,
     args: {
+      intake: workflowIntake("D:/demo"),
       goal: "Change the button",
       model: "fake/high-model",
       agent: "fake:orchestrate",

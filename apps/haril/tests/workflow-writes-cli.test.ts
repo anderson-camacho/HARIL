@@ -5,7 +5,14 @@ import { validateWorkflowSnapshot, type WorkflowSnapshot } from "@haril/contract
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { run } from "../src/cli.js";
 import { storeAccess } from "../src/host.js";
-import { type Harness, harness, makeSandbox, parseJson, type Sandbox } from "./helpers.js";
+import {
+  type Harness,
+  harness,
+  makeSandbox,
+  parseJson,
+  type Sandbox,
+  withWorkflowIntake,
+} from "./helpers.js";
 
 // Real git and real processes: under the load of the full suite one test can take several seconds, so this file gives
 // its tests and hooks a minute instead of the suite's 15 s (a hang still fails it).
@@ -58,7 +65,7 @@ function initRepo(): void {
 
 async function invoke(args: string[]): Promise<number> {
   h = harness();
-  return await run(args, h.io, sb.host);
+  return await run(withWorkflowIntake(sb, repo, args), h.io, sb.host);
 }
 
 async function init(): Promise<void> {

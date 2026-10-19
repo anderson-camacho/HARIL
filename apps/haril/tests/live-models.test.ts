@@ -7,7 +7,7 @@ import { storeAccess } from "../src/host.js";
 import { readModelCatalog } from "../src/model-catalog.js";
 import type { ProviderQuota } from "../src/quota-source.js";
 import { createLiveModels } from "../src/runtime/live-models.js";
-import { harness, makeSandbox, projectRoot, type Sandbox } from "./helpers.js";
+import { harness, makeSandbox, projectRoot, type Sandbox, workflowIntake } from "./helpers.js";
 
 // The models of real workflows while a runtime runs (docs/modos-y-delegacion.md 3.11; phase F6): the live catalog of the
 // providers, the difficulty table expanded against it, the quota policy, and the background quota sampling that writes
@@ -79,6 +79,7 @@ function workflowOf(store: Store, agent: string): WorkflowRecord {
     type: "workflow.start",
     projectId: store.projects.list()[0]?.projectId,
     args: {
+      intake: workflowIntake(store.projects.list()[0]?.rootPath as string),
       goal: "Answer from the notes",
       model: "cliproxy/Gemini1/gemini-3-pro",
       agent,

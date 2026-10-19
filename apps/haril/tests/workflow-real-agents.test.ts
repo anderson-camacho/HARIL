@@ -13,7 +13,7 @@ import { openStore } from "@haril/state-sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { run } from "../src/cli.js";
 import { WorkflowView } from "../src/runtime/workflow-view.js";
-import { harness, makeSandbox, projectRoot, type Sandbox } from "./helpers.js";
+import { harness, makeSandbox, projectRoot, type Sandbox, withWorkflowIntake } from "./helpers.js";
 
 // A workflow of real archetype agents (phase F2b), end to end through `haril workflow start` and `haril run`: the real
 // run loop, the real Broker and the real Pi adapter, with Pi replaced by the test-only seam HARIL_PI_CLI_OVERRIDE. The
@@ -177,7 +177,7 @@ function realHost() {
 
 async function cli(args: string[], host = sb.host) {
   const h = harness();
-  const code = await run(args, h.io, host);
+  const code = await run(withWorkflowIntake(sb, projectRoot(sb, "demo"), args), h.io, host);
   return { code, out: h.out, err: h.err };
 }
 
