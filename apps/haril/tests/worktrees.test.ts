@@ -527,7 +527,8 @@ describe.skipIf(!HAS_GIT)("a step's next turn after a crash", () => {
       role: "auditor",
       taskId: "t-a",
       threadId: "th-a",
-      parentTaskId: "t-e",
+      parentTaskId: "t-d",
+      auditedTaskId: "t-e",
     } as unknown as Task;
     const view = {
       workflow: { workflowId: "wf3", projectId: "p1", baseBranch: "main", baseSha: base },
