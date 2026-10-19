@@ -102,7 +102,6 @@ function installFrom(script: string, root: string, source: string): Promise<numb
   });
 }
 
-
 function git(args: readonly string[], cwd?: string): Promise<string> {
   return new Promise((resolveOutput, reject) => {
     const child = spawn("git", [...args], {
@@ -127,7 +126,7 @@ function git(args: readonly string[], cwd?: string): Promise<string> {
     child.once("close", (code) => {
       clearTimeout(timer);
       if (code === 0) resolveOutput(stdout);
-      else reject(new Error("git failed (exit " + String(code) + "): " + stderr.trim()));
+      else reject(new Error(`git failed (exit ${String(code)}): ${stderr.trim()}`));
     });
   });
 }
@@ -217,12 +216,16 @@ export async function update(
       io.out("Checking GitHub main (development channel; not a signed release)...");
       checkout = await services.checkoutMain();
     } catch (error) {
-      io.err("haril: cannot fetch main: " + (error instanceof Error ? error.message : String(error)));
+      io.err(
+        `haril: cannot fetch main: ${error instanceof Error ? error.message : String(error)}`,
+      );
       return 1;
     }
   }
   try {
-    const source = checkout?.source ?? resolve(host.cwd ?? process.cwd(), sourceArg ?? host.env?.HARIL_SOURCE_DIR ?? ".");
+    const source =
+      checkout?.source ??
+      resolve(host.cwd ?? process.cwd(), sourceArg ?? host.env?.HARIL_SOURCE_DIR ?? ".");
     const script = join(source, "scripts", "install.mjs");
     const manifest = join(source, "apps", "haril", "package.json");
     const root = runtimeRootFor(host);
@@ -242,7 +245,9 @@ export async function update(
       return EXIT_USAGE;
     }
 
-    io.out(`HARIL installed: ${current}; ${main ? "GitHub main" : "local source"}: ${available} (${checkout?.revision ?? source})`);
+    io.out(
+      `HARIL installed: ${current}; ${main ? "GitHub main" : "local source"}: ${available} (${checkout?.revision ?? source})`,
+    );
     const comparison = compareVersions(available, current);
     if (comparison < 0) {
       io.err("haril: the selected source is older; downgrades are not automatic");
@@ -277,7 +282,9 @@ export async function update(
       }
     }
 
-    io.out(`Updating HARIL to ${available} from ${main ? "GitHub main" : "local source"} through the installer...`);
+    io.out(
+      `Updating HARIL to ${available} from ${main ? "GitHub main" : "local source"} through the installer...`,
+    );
     const result = await services.install(script, root, source);
     if (result !== 0) {
       io.err(
