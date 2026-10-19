@@ -17,7 +17,10 @@ const USAGE = "usage: haril update [--check] [--from <repository>] [--yes]";
 export interface UpdateServices {
   readonly readText: (path: string) => string;
   readonly exists: (path: string) => boolean;
-  readonly activeRuntime: (dataDir: string) => { state: "none" | "active" | "unknown"; detail?: string };
+  readonly activeRuntime: (dataDir: string) => {
+    state: "none" | "active" | "unknown";
+    detail?: string;
+  };
   readonly install: (script: string, root: string, source: string) => Promise<number>;
   readonly confirm: () => Promise<boolean>;
 }
@@ -195,7 +198,9 @@ export async function update(
   io.out(`Updating HARIL to ${available} through the repository installer...`);
   const result = await services.install(script, root, source);
   if (result !== 0) {
-    io.err(`haril: installer failed (exit ${result}); inspect its output. Do not assume the update succeeded.`);
+    io.err(
+      `haril: installer failed (exit ${result}); inspect its output. Do not assume the update succeeded.`,
+    );
     return 1;
   }
   io.out(`HARIL update to ${available} completed; open a new terminal before continuing.`);
