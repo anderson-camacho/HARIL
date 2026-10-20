@@ -42,7 +42,11 @@ jobs:
           # (scripts/check-version.mjs, HARIL_VERSION_CHECK).
           HARIL_VERSION_CHECK: ${{ github.event_name == 'pull_request' && 'full' || 'consistency' }}
         run: pnpm run check
+      - name: Test (vitest + node:test; Windows serialized)
+        if: runner.os == 'Windows'
+        run: pnpm run test:ci:windows
       - name: Test (vitest + node:test)
+        if: runner.os != 'Windows'
         run: pnpm test
       - name: Smoke (build CLI and run it)
         run: pnpm run smoke
