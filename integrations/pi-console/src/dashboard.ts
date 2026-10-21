@@ -243,7 +243,7 @@ function rightRailContent(
   const mode = facts.mode ?? "unknown";
   const currentArea = area ?? "tools";
   const lang = facts.locale ?? DEFAULT_UI_LOCALE;
-  const tr = (english: string, spanish: string): string => lang === "es" ? spanish : english;
+  const tr = (english: string, spanish: string): string => (lang === "es" ? spanish : english);
   const controls = controlsFor(
     currentArea,
     facts.data,
@@ -277,7 +277,9 @@ function rightRailContent(
     hit: { action: "focus" },
   });
   add(`${tr("I am in", "Estoy en")}: ${facts.cwd}`, "muted", { action: "focus" });
-  add(`${tr("Mode", "Modo")}: ${mode}  ·  ${tr("change", "cambiar")} ↗`, "yellow", { action: "mode" });
+  add(`${tr("Mode", "Modo")}: ${mode}  ·  ${tr("change", "cambiar")} ↗`, "yellow", {
+    action: "mode",
+  });
   add(`${tr("Project", "Proyecto")}: ${facts.project}`, "muted");
   add(`${tr("Model", "Modelo")}: ${facts.modelLevel}`, "text");
 
