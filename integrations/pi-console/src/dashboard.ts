@@ -223,6 +223,8 @@ function rightRailContent(facts: DashboardFacts, area: DashboardArea | undefined
     line("Click to focus · Alt+F · Alt+R hide", "muted"),
     statusRow("SESSION", "Pi console active", width),
     statusRow("PROJECT", facts.project, width),
+    statusRow("PATH", facts.cwd, width),
+    statusRow("GIT", facts.branch === undefined ? "unavailable" : (facts.branch ?? "not a repository"), width),
     statusRow("MODE", facts.mode ?? "unknown", width),
     statusRow("MODEL", facts.modelLevel, width),
     statusRow("RUNTIME", facts.runtime, width),
