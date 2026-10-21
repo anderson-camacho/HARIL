@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -142,11 +142,80 @@ function git(args: readonly string[], cwd?: string): Promise<string> {
   });
 }
 
+// Prefer a ZIP archive over Git so updates work even when Git is not installed.
+// This is an unsigned development snapshot: the printed 'archive:main' is not a commit SHA.
+async function checkoutArchive(temp: string): Promise<MainCheckout> {
+  const archive = join(temp, "main.zip");
+  const extracted = join(temp, "unpacked");
+  const response = await fetch("https://codeload.github.com/anderson-camacho/HARIL/zip/refs/heads/main", {
+    signal: AbortSignal.timeout(60_000),
+    headers: { "User-Agent": "HARIL-updater" },
+  });
+  if (!response.ok || response.body === null) {
+    throw new Error(`GitHub archive HTTP ${response.status}`);
+  }
+  const limit = 32 * 1024 * 1024;
+  let size = 0;
+  const chunks: Uint8Array[] = [];
+  for await (const chunk of response.body) {
+    size += chunk.length;
+    if (size > limit) throw new Error("GitHub archive exceeds 32 MiB");
+    chunks.push(chunk);
+  }
+  writeFileSync(archive, Buffer.concat(chunks));
+  mkdirSync(extracted);
+  if (process.platform === "win32") {
+    const quoted = (value: string) => `'${value.replaceAll("'", "''")}'`;
+    await systemCommand("powershell.exe", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      `Expand-Archive -LiteralPath ${quoted(archive)} -DestinationPath ${quoted(extracted)} -Force`,
+    ]);
+  } else {
+    await systemCommand("unzip", ["-q", archive, "-d", extracted]);
+  }
+  const source = join(extracted, "HARIL-main");
+  if (!existsSync(join(source, "scripts", "install.mjs"))) {
+    throw new Error("GitHub archive lacks HARIL installer");
+  }
+  return { source, revision: "archive:main (no verified commit SHA)", cleanup: () => rmSync(temp, { recursive: true, force: true }) };
+}
+
+function systemCommand(command: string, args: readonly string[]): Promise<void> {
+  return new Promise((done, reject) => {
+    const child = spawn(command, [...args], {
+      windowsHide: true,
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let detail = "";
+    const timer = setTimeout(() => child.kill(), 90_000);
+    child.stderr.on("data", (bytes: Buffer) => {
+      detail = (detail + bytes.toString("utf8")).slice(-1000);
+    });
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once("close", (code) => {
+      clearTimeout(timer);
+      if (code === 0) done();
+      else reject(new Error(`${command} failed (exit ${code ?? "interrupted"}): ${detail}`));
+    });
+  });
+}
+
 // Clone main into an isolated temporary directory: never switch or pull the user's worktree.
 async function checkoutMain(): Promise<MainCheckout> {
   const temp = mkdtempSync(join(tmpdir(), "haril-main-"));
   const source = join(temp, "checkout");
   const cleanup = () => rmSync(temp, { recursive: true, force: true });
+  let archiveFailure: unknown;
+  try {
+    return await checkoutArchive(temp);
+  } catch (error) {
+    archiveFailure = error;
+  }
   try {
     await git(["init", "--quiet", source]);
     await git(["-C", source, "remote", "add", "origin", MAIN_REPOSITORY]);
@@ -183,7 +252,9 @@ async function checkoutMain(): Promise<MainCheckout> {
     return { source, revision, cleanup };
   } catch (error) {
     cleanup();
-    throw error;
+    const archive = archiveFailure instanceof Error ? archiveFailure.message : String(archiveFailure);
+    const gitError = error instanceof Error ? error.message : String(error);
+    throw new Error(`archive failed (${archive}); Git fallback failed (${gitError})`);
   }
 }
 
