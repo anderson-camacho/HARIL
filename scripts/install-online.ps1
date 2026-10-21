@@ -25,9 +25,13 @@ function Download-Archive {
     $url = "https://codeload.github.com/anderson-camacho/HARIL/zip/refs/heads/$Ref"
     & curl.exe --fail --location --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 180 --output $zip $url
     if ($LASTEXITCODE -eq 0 -and (Test-Path $zip) -and (Get-Item $zip).Length -gt 1000) {
-      Expand-Archive -LiteralPath $zip -DestinationPath $root
-      $folder = Get-ChildItem $root -Directory | Where-Object { $_.Name -like "HARIL-*" } | Select-Object -First 1
-      if ($folder) { return $folder.FullName }
+      try {
+        Expand-Archive -LiteralPath $zip -DestinationPath $root -ErrorAction Stop
+        $folder = Get-ChildItem $root -Directory | Where-Object { $_.Name -like "HARIL-*" } | Select-Object -First 1
+        if ($folder) { return $folder.FullName }
+      } catch {
+        Write-Warning "Downloaded archive could not be extracted: $($_.Exception.Message)"
+      }
     }
   }
   return $null
