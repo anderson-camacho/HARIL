@@ -67,6 +67,26 @@ function Add-HarilToUserPath {
     if (-not $already) {
       $newPath = if ([string]::IsNullOrWhiteSpace($raw)) { $bin } else { $raw.TrimEnd(';') + ";" + $bin }
       $key.SetValue("Path", $newPath, $kind)
+      # Notify Explorer and new terminals without changing REG_EXPAND_SZ into REG_SZ.
+      try {
+        if (-not ("HarilEnvironmentNotifier" -as [type])) {
+          Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class HarilEnvironmentNotifier {
+  [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  public static extern IntPtr SendMessageTimeout(
+    IntPtr hwnd, uint message, UIntPtr wParam, string lParam,
+    uint flags, uint timeout, out UIntPtr result);
+}
+'@
+        }
+        $result = [UIntPtr]::Zero
+        [void][HarilEnvironmentNotifier]::SendMessageTimeout(
+          [IntPtr]65535, 0x1A, [UIntPtr]::Zero, "Environment", 2, 5000, [ref]$result)
+      } catch {
+        Write-Warning "PATH was saved, but Windows was not notified. Sign out and back in if a new terminal cannot find haril."
+      }
       Write-Host "Added $bin to the current user's PATH (open a new terminal)."
     }
     if (-not (@($env:Path -split ';' | Where-Object { $_.TrimEnd('\') -ieq $bin.TrimEnd('\') }).Count -gt 0)) {
