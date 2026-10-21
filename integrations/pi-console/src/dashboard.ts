@@ -251,7 +251,8 @@ function rightRailContent(
     facts.locale ?? DEFAULT_UI_LOCALE,
   );
   const isExpanded = (section: RailSection): boolean =>
-    expanded[section] ?? (section === "actions" || section === "warnings" || section === "orchestration");
+    expanded[section] ??
+    (section === "actions" || section === "warnings" || section === "orchestration");
   const add = (
     content: string,
     tone: "cyan" | "teal" | "yellow" | "text" | "muted" | "error",
@@ -282,8 +283,7 @@ function rightRailContent(
   if (isExpanded("warnings")) {
     if (warnings.length === 0) add("Sin alertas conocidas", "muted");
     else {
-      for (const warning of warnings.slice(0, 3))
-        add(`! ${warning}`, "error", { action: "focus" });
+      for (const warning of warnings.slice(0, 3)) add(`! ${warning}`, "error", { action: "focus" });
       if (warnings.length > 3)
         add(`+ ${warnings.length - 3} avisos · clic para ver todos`, "yellow", {
           action: "focus",
