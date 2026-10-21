@@ -198,7 +198,8 @@ function frameRow(text: string, width: number, tone: "cyan" | "teal" | "yellow" 
 // Pi's extension API exposes statuses, not its startup inventory of loaded extensions.
 // The HARIL rail lives in the header: Pi 1.2.0 does not expose a full-height split-pane API.
 const RIGHT_RAIL_MIN_COLUMNS = 120;
-const RIGHT_RAIL_MIN_ROWS = 40;
+const RIGHT_RAIL_MIN_ROWS = 24;
+const RIGHT_RAIL_FULL_ROWS = 40;
 
 function railWarnings(facts: DashboardFacts): string[] {
   return [
@@ -343,6 +344,59 @@ function rightRailContent(
   return rows;
 }
 
+// Compact rail for wide, laptop-height windows: always surface the alerts,
+// extension status and current module instead of showing just a full-width logo.
+function compactRightRailContent(
+  facts: DashboardFacts,
+  area: DashboardArea | undefined,
+  width: number,
+  height: number,
+): RailRow[] {
+  const rows: RailRow[] = [];
+  const currentArea = area ?? "tools";
+  const warnings = railWarnings(facts);
+  const add = (
+    content: string,
+    tone: "cyan" | "teal" | "yellow" | "text" | "muted" | "error",
+    hit?: RailRow["hit"],
+  ) => rows.push({ line: paddedCell(` ${content}`, width, tone, "panel"), hit });
+  const eye = visualText("◉", eyeTone(facts), "panel");
+  rows.push({
+    line: eye + paddedCell(` HARIL · ${LABELS[currentArea]} · panel`, width - 1, "yellow", "panel"),
+    hit: { action: "focus" },
+  });
+  add(`Modo: ${facts.mode ?? "unknown"} · cambiar`, "yellow", { action: "mode" });
+  add(`AVISOS · ${warnings.length} · ver detalles`, warnings.length ? "yellow" : "teal", {
+    action: "details",
+  });
+  if (warnings.length > 0) add(`! ${warnings[0]}`, "error", { action: "details" });
+  add(`EXTENSIONES · ${facts.extensionStatuses.length} · ver detalles`, "cyan", {
+    action: "details",
+  });
+  if (height >= 28 && facts.extensionStatuses.length > 0)
+    add(`• ${facts.extensionStatuses[0]}`, "text", { action: "details" });
+  const snapshot = facts.orchestration.snapshot;
+  if (currentArea === "orchestration") {
+    add(
+      snapshot === undefined
+        ? "ORQUESTACIÓN · sin workflow"
+        : `ORQUESTACIÓN · ${snapshot.workflow.state}`,
+      "cyan",
+      { action: "focus" },
+    );
+    if (height >= 28 && snapshot !== undefined)
+      add(
+        `Agentes: ${snapshot.totals.agentsCreated}/${snapshot.totals.agentsCap} · cola: ${snapshot.totals.queued}`,
+        "text",
+        { action: "focus" },
+      );
+  } else {
+    add(`SESIÓN · ${facts.project} · ${facts.runtime}`, "cyan", { action: "focus" });
+  }
+  add(`ACCIONES · ${LABELS[currentArea]} · /haril`, "teal", { action: "menu" });
+  return rows;
+}
+
 function wideHeader(
   width: number,
   version: string | undefined,
@@ -358,14 +412,24 @@ function wideHeader(
   const tabLayout = tabs(width, selected);
   const title = ` ${renderBrandMark()} :: SESSION INIT  ·  ${version ?? "HARIL"} `;
   const rows = [border(width, "┌", "─", "┐"), frameRow(title, width, "yellow")];
-  const left = [
-    paddedCell(` ${renderBrandMark()}`, leftWidth, "yellow", "base"),
-    ...renderBrandArt().map((part) => paddedCell(` ${part}`, leftWidth, "teal", "base")),
-    paddedCell(" Many minds. One flow.", leftWidth, "yellow", "base"),
-    paddedCell(" Alt+H áreas · Alt+R mostrar/ocultar · /haril acciones", leftWidth, "text", "base"),
-  ];
-  const right = rightRailContent(facts, selected, railWidth, expanded);
-  const budget = Math.max(10, Math.min(24, height - 18));
+  const compact = height < RIGHT_RAIL_FULL_ROWS;
+  const left = compact
+    ? [
+        paddedCell(" HARIL · Many minds. One flow.", leftWidth, "teal", "base"),
+        paddedCell(" Alt+H áreas · Alt+R panel · /haril acciones", leftWidth, "text", "base"),
+      ]
+    : [
+        paddedCell(` ${renderBrandMark()}`, leftWidth, "yellow", "base"),
+        ...renderBrandArt().map((part) => paddedCell(` ${part}`, leftWidth, "teal", "base")),
+        paddedCell(" Many minds. One flow.", leftWidth, "yellow", "base"),
+        paddedCell(" Alt+H áreas · Alt+R mostrar/ocultar · /haril acciones", leftWidth, "text", "base"),
+      ];
+  const right = compact
+    ? compactRightRailContent(facts, selected, railWidth, height)
+    : rightRailContent(facts, selected, railWidth, expanded);
+  const budget = compact
+    ? Math.min(10, Math.max(7, height - 16))
+    : Math.max(10, Math.min(24, height - 18));
   const clipped = right.length > budget;
   const shown = clipped
     ? [
