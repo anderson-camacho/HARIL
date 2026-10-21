@@ -46,6 +46,7 @@ export interface DashboardFacts {
   // Observed Pi extension statuses, not the full list of loaded extension packages.
   readonly mode?: string;
   readonly logFailures?: number;
+  readonly providerWarnings?: readonly string[];
   readonly memory: string;
   readonly data: DashboardData;
   readonly loading: boolean;
@@ -56,6 +57,13 @@ export interface DashboardFacts {
 
 export interface HeaderLayout {
   readonly lines: string[];
+  // Clickable side rail: the full HARIL view opens without covering the chat while docked.
+  readonly railHits?: readonly {
+    readonly row: number;
+    readonly start: number;
+    readonly end: number;
+    readonly action: "focus";
+  }[];
   readonly tabHits: readonly {
     readonly row: number;
     readonly start: number;
@@ -189,37 +197,63 @@ function frameRow(text: string, width: number, tone: "cyan" | "teal" | "yellow" 
   return `${frameGlyph("│")}${paddedCell(` ${text}`, width - 2, tone)}${frameGlyph("│")}`;
 }
 
-// The header is persistent, unlike Pi's startup messages in the scrolling transcript.
-// Pi exposes extension *statuses*, not a list of loaded extension filenames.
-function leftStatusPanel(facts: DashboardFacts, width: number): string[] {
-  const line = (value: string, tone: "cyan" | "teal" | "yellow" | "text" | "muted" | "error") =>
-    paddedCell(` ${value}`, width, tone, "base");
-  const warnings = [
-    ...facts.data.errors,
-    ...((facts.logFailures ?? 0) > 0
-      ? [`Activity log: ${facts.logFailures} failed record(s)`]
-      : []),
-  ];
-  const statuses = facts.extensionStatuses;
+// Pi's extension API exposes statuses, not its startup inventory of loaded extensions.
+// The HARIL rail lives in the header: Pi 1.2.0 does not expose a full-height split-pane API.
+export const RIGHT_RAIL_MIN_COLUMNS = 120;
+export const RIGHT_RAIL_MIN_ROWS = 40;
+
+export function railWarnings(facts: DashboardFacts): string[] {
   return [
-    line(renderBrandMark(), "yellow"),
-    ...renderBrandArt().map((part) => line(part, "teal")),
-    line("Many minds. One flow.", "yellow"),
-    line("────────────────────", "muted"),
-    line("SESSION · LIVE STATUS", "cyan"),
-    line(`MODE      ${facts.mode ?? "unknown"}`, "yellow"),
-    line(`EXTENSIONS · ${statuses.length} reported statuses`, "cyan"),
-    ...(statuses.length === 0
-      ? [line("Loaded extension names: Pi startup", "muted")]
-      : statuses.slice(0, 2).map((status) => line(`• ${status}`, "text"))),
-    ...(statuses.length > 2 ? [line(`+ ${statuses.length - 2} more in Details`, "muted")] : []),
-    line(`WARNINGS · ${warnings.length}`, warnings.length ? "error" : "teal"),
-    ...(warnings.length === 0
-      ? [line("No known HARIL warnings", "muted")]
-      : warnings.slice(0, 2).map((warning) => line(`! ${warning}`, "error"))),
-    ...(warnings.length > 2 ? [line(`+ ${warnings.length - 2} more in Details`, "muted")] : []),
-    line("Alt+H areas · /haril actions", "text"),
+    ...new Set([
+      ...(facts.providerWarnings ?? []),
+      ...facts.data.errors,
+      ...((facts.logFailures ?? 0) > 0
+        ? [`Activity log: ${facts.logFailures} failed record(s)`]
+        : []),
+    ]),
   ];
+}
+
+function rightRailContent(facts: DashboardFacts, area: DashboardArea | undefined, width: number): string[] {
+  const line = (label: string, tone: "cyan" | "teal" | "yellow" | "text" | "muted" | "error") =>
+    paddedCell(` ${label}`, width, tone, "panel");
+  const warnings = railWarnings(facts);
+  const lines: string[] = [
+    line(`HARIL RIGHT RAIL · ${area === "orchestration" ? "ORCHESTRATION" : "STATUS"}`, "cyan"),
+    line("Click to focus · Alt+F · Alt+R hide", "muted"),
+    statusRow("SESSION", "Pi console active", width),
+    statusRow("PROJECT", facts.project, width),
+    statusRow("MODE", facts.mode ?? "unknown", width),
+    statusRow("MODEL", facts.modelLevel, width),
+    statusRow("RUNTIME", facts.runtime, width),
+  ];
+  const snapshot = facts.orchestration.snapshot;
+  if (area === "orchestration") {
+    lines.push(line("WORKFLOW", "yellow"));
+    if (snapshot === undefined) {
+      lines.push(line("No workflow selected · Alt+O to focus", "muted"));
+    } else {
+      lines.push(
+        statusRow("STATE", snapshot.workflow.state, width),
+        statusRow("ID", snapshot.workflow.id, width),
+        statusRow("AGENTS", `${snapshot.totals.agentsCreated}/${snapshot.totals.agentsCap}`, width),
+        statusRow("QUEUE", String(snapshot.totals.queued), width),
+        statusRow("TOKENS", String(snapshot.totals.tokensUsed), width),
+      );
+    }
+  }
+  lines.push(
+    line(`EXTENSIONS · ${facts.extensionStatuses.length} reported statuses`, "cyan"),
+    ...(facts.extensionStatuses.length
+      ? facts.extensionStatuses.slice(0, 2).map((status) => line(`• ${status}`, "text"))
+      : [line("Loaded extension names: Pi startup", "muted")]),
+    line(`WARNINGS · ${warnings.length}`, warnings.length ? "error" : "teal"),
+    ...(warnings.length
+      ? warnings.slice(0, 3).map((warning) => line(`! ${warning}`, "error"))
+      : [line("No known HARIL warnings", "muted")]),
+    ...(warnings.length > 3 ? [line(`+ ${warnings.length - 3} more · focus for details`, "muted")] : []),
+  );
+  return lines;
 }
 
 function wideHeader(
@@ -229,49 +263,33 @@ function wideHeader(
   selected: DashboardArea | undefined,
 ): HeaderLayout {
   const inside = width - 2;
-  // Reserve a readable left column for mode, extension statuses and warnings.
-  const leftWidth = Math.floor((inside - 1) * 0.43);
-  const rightWidth = inside - leftWidth - 1;
+  // Dock to the FAR RIGHT, not beside the logo. Leave the middle free of status text.
+  const railWidth = Math.min(54, Math.max(42, Math.floor(width * 0.3)));
+  const leftWidth = inside - railWidth - 1;
   const tabLayout = tabs(width, selected);
   const title = ` ${renderBrandMark()} :: SESSION INIT  ·  ${version ?? "HARIL"} `;
   const rows = [border(width, "┌", "─", "┐"), frameRow(title, width, "yellow")];
-  const left = leftStatusPanel(facts, leftWidth);
-  const right = [
-    statusRow("SESSION", "Pi console active", rightWidth),
-    statusRow("PROJECT", facts.project, rightWidth),
-    statusRow(
-      "GIT",
-      facts.branch === undefined ? "unavailable" : (facts.branch ?? "not a repository"),
-      rightWidth,
-    ),
-    statusRow("PATH", facts.cwd, rightWidth),
-    statusRow("RUNTIME", facts.runtime, rightWidth),
-    statusRow("MODEL", facts.modelLevel, rightWidth),
-    statusRow(
-      "TOOLS",
-      `${facts.activeTools.length} active / ${facts.tools.length} observed`,
-      rightWidth,
-    ),
-    statusRow("MCP", `${facts.mcpServers.length} observed`, rightWidth),
-    statusRow("PROVIDERS", `${facts.providers.length} registered`, rightWidth),
-    statusRow("PI COMMANDS", `${facts.commands.length} observed`, rightWidth),
-    statusRow("SKILLS", "not exposed by Pi API", rightWidth),
-    statusRow("EXTENSIONS", `${facts.extensionStatuses.length} observed statuses`, rightWidth),
-    statusRow(
-      "APPROVALS",
-      facts.pending === undefined ? "unavailable" : `${facts.pending} pending`,
-      rightWidth,
-    ),
+  const left = [
+    paddedCell(` ${renderBrandMark()}`, leftWidth, "yellow", "base"),
+    ...renderBrandArt().map((part) => paddedCell(` ${part}`, leftWidth, "teal", "base")),
+    paddedCell(" Many minds. One flow.", leftWidth, "yellow", "base"),
+    paddedCell(" Alt+H areas · Alt+R rail · Alt+F focus", leftWidth, "text", "base"),
   ];
+  const right = rightRailContent(facts, selected, railWidth);
   const contentRows = Math.max(left.length, right.length);
+  const railHits: NonNullable<HeaderLayout["railHits"]>[number][] = [];
   for (let index = 0; index < contentRows; index++) {
     const leftCell = left[index] ?? paddedCell("", leftWidth, "text", "base");
-    const rightCell = right[index] ?? paddedCell("", rightWidth, "text", "panel");
+    const rightCell = right[index] ?? paddedCell("", railWidth, "text", "panel");
+    const row = rows.length;
     rows.push(`${frameGlyph("│")}${leftCell}${frameGlyph("│")}${rightCell}${frameGlyph("│")}`);
+    if (index < right.length) {
+      railHits.push({ row, start: leftWidth + 2, end: width - 1, action: "focus" });
+    }
   }
   rows.push(
     frameRow(
-      `MEMORY ${facts.memory}  ·  CONTEXT ${facts.context}  ·  COST ${facts.cost}`,
+      `MEMORY ${facts.memory} · CONTEXT ${facts.context} · COST ${facts.cost}`,
       width,
       "yellow",
     ),
@@ -284,7 +302,11 @@ function wideHeader(
     ),
   );
   rows.push(border(width, "└", "─", "┘"));
-  return { lines: rows, tabHits: tabLayout.hits.map((hit) => ({ ...hit, row: hit.row + tabRow })) };
+  return {
+    lines: rows,
+    railHits,
+    tabHits: tabLayout.hits.map((hit) => ({ ...hit, row: hit.row + tabRow })),
+  };
 }
 
 export function renderHeaderLayout(
@@ -294,9 +316,11 @@ export function renderHeaderLayout(
   selected: DashboardArea | undefined,
   _theme: ConsoleTheme,
   height = 24,
+  railVisible = true,
 ): HeaderLayout {
   if (width < 10) return { lines: [fit(renderBrandMark(), width)], tabHits: [] };
-  if (width >= 120 && height >= 40) return wideHeader(width, version, facts, selected);
+  if (railVisible && width >= RIGHT_RAIL_MIN_COLUMNS && height >= RIGHT_RAIL_MIN_ROWS)
+    return wideHeader(width, version, facts, selected);
   const tabLayout = tabs(width, selected);
   // Wide and sufficiently tall consoles show a static, non-blinking terminal logo.
   // Compact terminals keep the single-line mark instead of consuming chat space.
@@ -315,7 +339,7 @@ export function renderHeaderLayout(
     border(width, "┌", "─", "┐"),
     `${frameGlyph("│")}${paddedCell(` ${renderBrandMark()} ${version ?? ""}`, width - 2, "yellow")}${frameGlyph("│")}`,
     ...brandRows,
-    `${frameGlyph("│")}${paddedCell(` ${facts.project} · ${facts.modelLevel} · ${facts.runtime} · TOOLS ${facts.activeTools.length}/${facts.tools.length} · MCP ${facts.mcpServers.length}`, width - 2, "teal")}${frameGlyph("│")}`,
+    `${frameGlyph("│")}${paddedCell(` ${facts.project} · ${facts.modelLevel} · ${facts.runtime} · Alt+R sidebar · Alt+F focus`, width - 2, "teal")}${frameGlyph("│")}`,
     ...tabLayout.lines.map(
       (line) =>
         `${frameGlyph("│")}${paddedCell(line.trimEnd(), width - 2, "cyan")}${frameGlyph("│")}`,
