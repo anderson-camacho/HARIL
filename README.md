@@ -101,6 +101,35 @@ haril update --yes
 
 `haril update` consulta `main` sin checkout local y solo instala una versión superior con confirmación. Cierra los procesos de HARIL antes de actualizar.
 
+### Recuperación: Gentle Shell tiene lanzador pero falta el módulo
+
+Si `gentle-shell.cmd --version` termina con `Cannot find module ...\AppData\Roaming\npm\node_modules\gentle-pi\bin\gentle-shell.mjs`, **Gentle Shell quedó parcialmente instalado**. No es un problema de HARIL ni de `ExecutionPolicy`. El instalador actual solo comprueba si el comando existe, así que puede pasar por alto un lanzador huérfano. Después de actualizar Node a una versión compatible:
+
+```powershell
+Test-Path "$env:APPDATA\npm\node_modules\gentle-pi\bin\gentle-shell.mjs"
+npm.cmd install --global gentle-pi@4.1.0 --no-fund --no-audit
+gentle-shell.cmd --version
+```
+
+Si npm detecta un conflicto de instalación anterior, repara el paquete sin borrar los hogares o configuraciones `~\.gentle-shell` ni `~\.pi`:
+
+```powershell
+npm.cmd uninstall --global gentle-pi
+npm.cmd install --global gentle-pi@4.1.0 --no-fund --no-audit
+gentle-shell.cmd --version
+```
+
+Comprueba HARIL **por su ruta real**, aunque el comando global no esté en el PATH:
+
+```powershell
+$haril = Join-Path $env:LOCALAPPDATA "HARIL\bin\haril.cmd"
+Test-Path $haril
+& $haril --version
+& $haril doctor
+```
+
+`Test-Path = True` solo prueba que el archivo existe; `& $haril --version` confirma que funciona. Para habilitarlo en la terminal actual: `$env:Path += ";$env:LOCALAPPDATA\HARIL\bin"`. Si se actualizó Node hace poco, abre **una terminal nueva** antes de probar.
+
 ### Solución de errores habituales
 
 - **`node` no existe**: instala Node, reabre PowerShell y ejecuta `where.exe node`.
