@@ -422,7 +422,12 @@ function wideHeader(
         paddedCell(` ${renderBrandMark()}`, leftWidth, "yellow", "base"),
         ...renderBrandArt().map((part) => paddedCell(` ${part}`, leftWidth, "teal", "base")),
         paddedCell(" Many minds. One flow.", leftWidth, "yellow", "base"),
-        paddedCell(" Alt+H áreas · Alt+R mostrar/ocultar · /haril acciones", leftWidth, "text", "base"),
+        paddedCell(
+          " Alt+H áreas · Alt+R mostrar/ocultar · /haril acciones",
+          leftWidth,
+          "text",
+          "base",
+        ),
       ];
   const right = compact
     ? compactRightRailContent(facts, selected, railWidth, height)
