@@ -275,6 +275,8 @@ function rightRailContent(
   });
   add(`Estoy en: ${facts.cwd}`, "muted", { action: "focus" });
   add(`Modo: ${mode}  ·  cambiar ↗`, "yellow", { action: "mode" });
+  add(`Proyecto: ${facts.project}`, "muted");
+  add(`Modelo: ${facts.modelLevel}`, "text");
 
   section(`ACCIONES · ${LABELS[currentArea]}`, "actions", controls.length);
   if (isExpanded("actions")) {
