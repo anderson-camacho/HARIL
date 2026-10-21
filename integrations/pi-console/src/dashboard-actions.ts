@@ -11,6 +11,7 @@ import {
   readMethodologyDefinition,
   summarizeApproval,
 } from "./dashboard-data.js";
+import { paddedCell, visualText } from "./dashboard-theme.js";
 import { openDelegationSettings } from "./delegation-panel.js";
 import { DEFAULT_UI_LOCALE, localized, type UiLocale } from "./locale.js";
 import { chooseLevel, chooseModel, type LevelMemory, openModelAndLevel } from "./model-picker.js";
@@ -19,7 +20,7 @@ import { demoNotice, keyOf } from "./orchestration-state.js";
 import type { ConsoleContext, ConsolePi } from "./pi-types.js";
 import { type BoundProject, folderName } from "./project.js";
 import type { PendingApproval } from "./status.js";
-import { plainText, textWidth, truncate, wrap } from "./text.js";
+import { plainText, wrap } from "./text.js";
 
 const HARIL_COMMANDS = [
   "/mode",
@@ -113,32 +114,33 @@ async function showInlineDetails(
   lines: readonly string[],
 ): Promise<void> {
   await ctx.ui.custom(
-    (tui, theme, _keybindings, done) => {
+    (tui, _theme, _keybindings, done) => {
       let offset = 0;
       const cleanLines = lines.map((line) => plainText(line));
       return {
         render(nextWidth) {
           const width = Math.max(1, nextWidth);
-          const contentWidth = Math.max(1, width - 4);
+          if (width < 12) return [plainText(title).slice(0, width)];
+          const inside = width - 2;
+          const contentWidth = Math.max(1, inside - 2);
           const wrapped = cleanLines.flatMap((line) => wrap(line, contentWidth));
           const pageSize = Math.min(14, Math.max(3, wrapped.length));
           offset = Math.max(0, Math.min(offset, wrapped.length - pageSize));
           const shown = wrapped.slice(offset, offset + pageSize);
-          const padRow = (line: string): string => {
-            const fitted = truncate(plainText(line), width);
-            return fitted + " ".repeat(Math.max(0, width - textWidth(fitted)));
-          };
+          const side = visualText("│", "teal", "panel");
+          const borderTop = visualText(`╭${"─".repeat(inside)}╮`, "teal", "panel");
+          const borderBottom = visualText(`╰${"─".repeat(inside)}╯`, "teal", "panel");
+          const cell = (label: string, tone: "yellow" | "text" | "muted"): string =>
+            `${side}${paddedCell(` ${label}`, inside, tone, "panel")}${side}`;
           return [
-            theme.bold(theme.fg("warning", padRow(title))),
-            ...Array.from({ length: pageSize }, (_, index) =>
-              theme.fg("text", padRow(shown[index] ?? "")),
+            borderTop,
+            cell(`HARIL ◉ · ${title}`, "yellow"),
+            ...Array.from({ length: pageSize }, (_, index) => cell(shown[index] ?? "", "text")),
+            cell(
+              `${wrapped.length ? offset + 1 : 0}-${Math.min(wrapped.length, offset + pageSize)} of ${wrapped.length} · ↑/↓ or wheel · PgUp/PgDn · Esc closes`,
+              "muted",
             ),
-            theme.fg(
-              "dim",
-              padRow(
-                `${wrapped.length ? offset + 1 : 0}-${Math.min(wrapped.length, offset + pageSize)} of ${wrapped.length} · ↑/↓ or wheel · PgUp/PgDn · Esc closes`,
-              ),
-            ),
+            borderBottom,
           ];
         },
         handleInput(input) {

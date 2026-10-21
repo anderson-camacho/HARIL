@@ -10,7 +10,7 @@ import { type DashboardActionHost, openDashboardActionMenu } from "../src/dashbo
 import { controlsFor } from "../src/dashboard-controls.js";
 import { emptyDashboardData } from "../src/dashboard-data.js";
 import { readConsoleLocale } from "../src/locale.js";
-import { initialOrchestrationState } from "../src/orchestration-state.js";
+import { initialOrchestrationState, reduceOrchestration } from "../src/orchestration-state.js";
 import type { ConsoleTheme } from "../src/pi-types.js";
 import { createTabPicker, initialTabPickerIndex } from "../src/tab-picker.js";
 import { stripAnsi } from "../src/text.js";
@@ -162,7 +162,7 @@ describe("the console's modules", () => {
     expect(wideText).toContain("███████");
     expect(mediumText).toContain("Many minds. One flow.");
     expect(wideText).toContain("Many minds. One flow.");
-    expect(wideText).toContain("fake-cwd");
+    expect(wideText).toContain("fake-project");
     expect(wideText).toContain("Pi console active");
     expect(wideText).not.toContain(".-~~~~~~~~~~-.");
     for (const [layout, width] of [
@@ -175,25 +175,27 @@ describe("the console's modules", () => {
     }
   });
 
-  it("pins the current mode, observed extension statuses, and warnings in the left header column", () => {
+  it("docks mode, extension statuses and provider warnings at the far right", () => {
     const base = facts();
     const observed: DashboardFacts = {
       ...base,
       mode: "DELEGATION",
       extensionStatuses: ["pi-bridge: ready", "indexer: healthy"],
+      providerWarnings: ["HARIL provider cliproxy: unreachable"],
       logFailures: 2,
       data: { ...base.data, errors: ["Project status: unavailable"] },
     };
     const layout = renderHeaderLayout("0.21.3", 150, observed, "tools", THEME, 48);
     const text = layout.lines.map(stripAnsi).join("\n");
-    expect(text).toContain("SESSION · LIVE STATUS");
-    expect(text).toContain("MODE      DELEGATION");
+    expect(text).toContain("HARIL RIGHT RAIL");
+    expect(text).toContain("DELEGATION");
     expect(text).toContain("EXTENSIONS · 2 reported statuses");
     expect(text).toContain("pi-bridge: ready");
-    expect(text).toContain("WARNINGS · 2");
-    expect(text).toContain("Project status: unavailable");
-    expect(text).toContain("Activity log: 2 failed record(s)");
+    expect(text).toContain("WARNINGS · 3");
+    expect(text).toContain("HARIL provider cliproxy: unreachable");
+    expect(text).toContain("+ 2 more · focus for details");
     expect(text).toContain("Pi console active");
+    expect(layout.railHits?.every((hit) => hit.start >= 90)).toBe(true);
     expect(layout.tabHits.map((hit) => hit.area)).toEqual(DASHBOARD_AREAS);
     expect(layout.tabHits.every((hit) => hit.end <= 150 && hit.row < layout.lines.length)).toBe(
       true,
@@ -215,6 +217,38 @@ describe("the console's modules", () => {
     expect(text).toContain("WARNINGS · 0");
   });
 
+  it("auto-hides the right rail in narrow or short terminals, and supports manual collapse", () => {
+    for (const [width, height, visible] of [
+      [90, 40, true],
+      [140, 24, true],
+      [140, 45, false],
+    ] as const) {
+      const layout = renderHeaderLayout("0.21.6", width, facts(), "tools", THEME, height, visible);
+      expect(layout.railHits).toBeUndefined();
+      expect(layout.lines.map(stripAnsi).join("\n")).toContain("Alt+R sidebar");
+    }
+  });
+
+  it("can show the current workflow as a compact, clickable right-side summary", () => {
+    const state = reduceOrchestration(initialOrchestrationState(), {
+      type: "toggle-demo",
+      now: NOW,
+    }).state;
+    const layout = renderHeaderLayout(
+      "0.21.6",
+      160,
+      { ...facts(), orchestration: state },
+      "orchestration",
+      THEME,
+      48,
+    );
+    const text = layout.lines.map(stripAnsi).join("\n");
+    expect(text).toContain("RIGHT RAIL · ORCHESTRATION");
+    expect(text).toContain("WORKFLOW");
+    expect(text).toContain("AGENTS");
+    expect(layout.railHits?.length).toBeGreaterThan(5);
+  });
+
   it("registers one area-picker shortcut and a /command each but /workflows", async () => {
     const fake = fakePi();
     harilConsole(fake.pi);
@@ -222,6 +256,8 @@ describe("the console's modules", () => {
     await fake.fire("session_start", { reason: "startup" }, ctx);
     expect([...fake.shortcuts.keys()].filter((key) => key.startsWith("ctrl+shift+"))).toEqual([]);
     expect(fake.shortcuts.has("alt+h")).toBe(true);
+    expect(fake.shortcuts.has("alt+r")).toBe(true);
+    expect(fake.shortcuts.has("alt+f")).toBe(true);
     expect(fake.commands.has("workflows")).toBe(false);
     for (const area of DASHBOARD_AREAS) expect(fake.commands.has(area)).toBe(true);
   });
@@ -365,9 +401,13 @@ describe("the console's modules", () => {
       const ctx = fakeContext();
       (ctx.ui as { select: unknown }).select = async () => "View area details";
       let handleInput: ((data: string) => void) | undefined;
+      let overlayRender: ((width: number) => string[]) | undefined;
       let overlayOptions: unknown;
       (ctx.ui as { custom: unknown }).custom = (
-        factory: (...args: unknown[]) => { handleInput(data: string): void },
+        factory: (...args: unknown[]) => {
+          handleInput(data: string): void;
+          render(width: number): string[];
+        },
         options: unknown,
       ) =>
         new Promise<void>((resolve) => {
@@ -376,6 +416,7 @@ describe("the console's modules", () => {
             resolve(),
           );
           handleInput = component.handleInput;
+          overlayRender = component.render;
         });
       const host = {
         locale: "en",
@@ -392,6 +433,11 @@ describe("the console's modules", () => {
         overlay: true,
         overlayOptions: { width: "100%", maxHeight: "100%" },
       });
+      const frame = overlayRender?.(60).map(stripAnsi) ?? [];
+      expect(frame[0]?.startsWith("╭")).toBe(true);
+      expect(frame.at(-1)?.startsWith("╰")).toBe(true);
+      expect(frame.every((line) => line.length === 60)).toBe(true);
+      expect(frame.join("\\n")).toContain("HARIL ◉ · TOOLS details");
       handleInput?.(input);
       await opening;
     },
