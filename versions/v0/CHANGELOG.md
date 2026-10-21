@@ -4,6 +4,17 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.21.6
+
+- **Fecha:** 2026-10-21
+- **Estado:** panel de estado a la derecha en el encabezado TUI, con warnings reales y resumen de orquestación según la sección activa.
+- En terminales grandes muestra la columna a la derecha del todo; `Alt+R` alterna mostrar/ocultar; `Alt+F` o clic abre el visor enfocado. En terminales pequeñas se oculta automáticamente y `Alt+R` abre el detalle.
+- Captura avisos reales emitidos por el registro de proveedores de HARIL, incluido `HARIL provider cliproxy: unreachable`, junto con errores locales y fallos de log. Los nombres de extensiones impresos por Pi al iniciar no están disponibles a través de su API.
+- El módulo grande que interrumpía el chat se elimina del widget vertical permanente; comandos y detalles se mantienen a través del menú /haril, las áreas y los visores existentes.
+- **Límite de la API de Pi:** esta columna se ancla dentro del encabezado de HARIL, no ocupa toda la altura del historial del chat. Un split-pane real de toda la terminal requeriría un host TUI propio.
+
+---
+
 ## 0.21.5
 
 - **Fecha:** 2026-10-21
