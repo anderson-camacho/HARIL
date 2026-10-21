@@ -190,12 +190,6 @@ function tabs(
   };
 }
 
-function statusRow(label: string, value: string, width: number): string {
-  const labelWidth = Math.min(12, Math.max(6, Math.floor(width * 0.32)));
-  const safeValue = fit(value, Math.max(0, width - labelWidth - 1));
-  return `${visualText(label.padEnd(labelWidth), "teal", "panel")}${paddedCell(safeValue, width - labelWidth, "text", "panel")}`;
-}
-
 function frameRow(text: string, width: number, tone: "cyan" | "teal" | "yellow" = "cyan"): string {
   if (width < 2) return "";
   return `${frameGlyph("│")}${paddedCell(` ${text}`, width - 2, tone)}${frameGlyph("│")}`;
@@ -364,7 +358,12 @@ function wideHeader(
     ? [
         ...right.slice(0, budget - 1),
         {
-          line: paddedCell(` … ${right.length - budget + 1} filas ocultas · /haril`, railWidth, "yellow", "panel"),
+          line: paddedCell(
+            ` … ${right.length - budget + 1} filas ocultas · /haril`,
+            railWidth,
+            "yellow",
+            "panel",
+          ),
           hit: { action: "menu" as const },
         },
       ]
