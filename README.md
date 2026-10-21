@@ -10,10 +10,10 @@
 curl.exe -fL --retry 3 --connect-timeout 20 https://raw.githubusercontent.com/anderson-camacho/HARIL/main/scripts/install-online.ps1 -o "$env:TEMP\haril-install-online.ps1"; if ($LASTEXITCODE -eq 0) { powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\haril-install-online.ps1" }
 ```
 
-**macOS o Linux** (necesitas `curl` y `unzip`, o `git` para la alternativa):
+**macOS o Linux** (necesitas `bash`, `curl` y `unzip`, o `git` para la alternativa; `pipefail` impide que una descarga fallida parezca exitosa):
 
 ```sh
-curl -fsSL --retry 3 https://raw.githubusercontent.com/anderson-camacho/HARIL/main/scripts/install-online.sh | sh
+bash -o pipefail -c 'curl -fsSL --retry 3 https://raw.githubusercontent.com/anderson-camacho/HARIL/main/scripts/install-online.sh | bash'
 ```
 
 Requisitos: Node **24.21.0+** (o 26.8.0+), conectividad para bajar componentes y npm. El instalador primero intenta el ZIP de GitHub (codeload) y, si no llega, hace un fetch de Git temporal con HTTP/1.1 y hasta tres intentos. No modifica ramas ni commits de tus proyectos. Si ambos métodos fallan, informa el error y no inventa un éxito.
