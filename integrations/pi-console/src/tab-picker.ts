@@ -1,18 +1,11 @@
-import { DASHBOARD_AREAS, type DashboardArea } from "./dashboard.js";
+import { DASHBOARD_AREAS, areaLabel, type DashboardArea } from "./dashboard.js";
 import { paddedCell, visualText } from "./dashboard-theme.js";
+import { DEFAULT_UI_LOCALE, localized, type UiLocale } from "./locale.js";
 import type { ConsoleTheme } from "./pi-types.js";
 
 export type TabPickerResult =
   | { readonly type: "open"; readonly area: DashboardArea }
   | { readonly type: "cancel" };
-
-const LABELS: Readonly<Record<DashboardArea, string>> = {
-  agents: "AGENTS",
-  orchestration: "ORCHESTRATION",
-  automation: "AUTOMATION",
-  tools: "TOOLS",
-  everywhere: "EVERYWHERE",
-};
 
 export function initialTabPickerIndex(current: DashboardArea | undefined): number {
   const index = current === undefined ? -1 : DASHBOARD_AREAS.indexOf(current);
@@ -24,6 +17,7 @@ export function createTabPicker(
   done: (result: TabPickerResult) => void,
   tui?: { requestRender(): void },
   _theme?: ConsoleTheme,
+  locale: UiLocale = DEFAULT_UI_LOCALE,
 ) {
   let selected = initialTabPickerIndex(current);
   let closed = false;
@@ -34,7 +28,7 @@ export function createTabPicker(
       if (span < 12)
         return [
           "HARIL".slice(0, span),
-          ...DASHBOARD_AREAS.map((area) => LABELS[area].slice(0, span)),
+          ...DASHBOARD_AREAS.map((area) => areaLabel(area, locale).slice(0, span)),
         ];
       const inside = span - 2;
       const horizontal = visualText(`╭${"─".repeat(inside)}╮`, "teal", "panel");
@@ -48,16 +42,16 @@ export function createTabPicker(
         `${side}${paddedCell(` ${label}`, inside, tone, active ? "selected" : "panel")}${side}`;
       return [
         horizontal,
-        cell("HARIL ◉  ·  Choose dashboard area", "yellow"),
-        cell("↑/↓ move · Enter open · Esc cancel", "muted"),
+        cell(localized(locale, "HARIL ◉ · Choose dashboard area", "HARIL ◉ · Elegir sección"), "yellow"),
+        cell(localized(locale, "↑/↓ move · Enter open · Esc cancel", "↑/↓ mover · Enter abrir · Esc cancelar"), "muted"),
         ...DASHBOARD_AREAS.map((area, index) =>
           cell(
-            `${index === selected ? "▶" : " "} ${LABELS[area]}`,
+            `${index === selected ? "▶" : " "} ${areaLabel(area, locale)}`,
             index === selected ? "yellow" : "text",
             index === selected,
           ),
         ),
-        cell("Enter: open  ·  Esc: close", "teal"),
+        cell(localized(locale, "Enter: open · Esc: close", "Enter: abrir · Esc: cerrar"), "teal"),
         bottom,
       ];
     },
