@@ -39,12 +39,13 @@ export function createTabPicker(
       const inside = span - 2;
       const horizontal = visualText(`╭${"─".repeat(inside)}╮`, "teal", "panel");
       const bottom = visualText(`╰${"─".repeat(inside)}╯`, "teal", "panel");
+      const side = visualText("│", "teal", "panel");
       const cell = (
         label: string,
         tone: "cyan" | "teal" | "yellow" | "text" | "muted",
         active = false,
       ): string =>
-        `${visualText("│", "teal", "panel")}${paddedCell(` ${label}`, inside, tone, active ? "selected" : "panel")}${visualText("│", "teal", "panel")}`;
+        `${side}${paddedCell(` ${label}`, inside, tone, active ? "selected" : "panel")}${side}`;
       return [
         horizontal,
         cell("HARIL ◉  ·  Choose dashboard area", "yellow"),
