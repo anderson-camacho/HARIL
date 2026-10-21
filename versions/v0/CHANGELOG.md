@@ -4,6 +4,17 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.21.4
+
+- **Fecha:** 2026-10-20
+- **Estado:** instaladores para usuarios sin clonar repositorio y actualizador con fuente remota por defecto.
+- Windows: `scripts/install-online.ps1` con ZIP de GitHub, respaldo por Git (HTTP/1.1, reintentos), instalación en perfil de usuario y registro PATH de usuario preservando el tipo de registro. Acompañante Gentle Shell standalone opcional si falta, sin modificar configuraciones existentes.
+- macOS/Linux: `scripts/install-online.sh` con misma prioridad ZIP/Git, instalación de usuario y acompañante opcional.
+- `haril update`, `haril update --check`, `haril update --yes` consultan main automáticamente. `--from <carpeta>` permanece para la instalación local avanzada. Git usa reintentos y reporta timeouts explícitos.
+- **Límites:** no hay releases firmadas, artefacto binario propio ni rollback; la fuente de main temporal aún requiere compilar desde código descargado; todas las dependencias necesitan acceso a sus orígenes.
+
+---
+
 ## 0.21.3
 
 - **Fecha:** 2026-10-19
