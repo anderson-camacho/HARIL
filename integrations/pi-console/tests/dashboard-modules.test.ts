@@ -226,6 +226,21 @@ describe("the console's modules", () => {
     for (const area of DASHBOARD_AREAS) expect(fake.commands.has(area)).toBe(true);
   });
 
+  it("draws a fixed-width HARIL teal border around the area chooser", () => {
+    const picker = createTabPicker("tools", () => undefined);
+    const rows = picker.render(80).map(stripAnsi);
+    expect(rows[0]).toBe(`╭${"─".repeat(52)}╮`);
+    expect(rows.at(-1)).toBe(`╰${"─".repeat(52)}╯`);
+    expect(rows.every((row) => row.length === 54)).toBe(true);
+    expect(rows.join("\\n")).toContain("HARIL ◉");
+    expect(rows.join("\\n")).toContain("▶ TOOLS");
+    expect(rows.join("\\n")).toContain("Esc: close");
+    for (const width of [12, 19, 30]) {
+      const narrow = picker.render(width).map(stripAnsi);
+      expect(narrow.every((row) => row.length <= width)).toBe(true);
+    }
+  });
+
   it("uses up/down in a vertical list, wraps, supports legacy left/right, Enter and Esc", () => {
     expect(initialTabPickerIndex("tools")).toBe(3);
     const results: unknown[] = [];

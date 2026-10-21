@@ -1,4 +1,5 @@
 import { DASHBOARD_AREAS, type DashboardArea } from "./dashboard.js";
+import { frameGlyph, paddedCell } from "./dashboard-theme.js";
 import type { ConsoleTheme } from "./pi-types.js";
 
 export type TabPickerResult =
@@ -22,24 +23,42 @@ export function createTabPicker(
   current: DashboardArea | undefined,
   done: (result: TabPickerResult) => void,
   tui?: { requestRender(): void },
-  theme?: ConsoleTheme,
+  _theme?: ConsoleTheme,
 ) {
   let selected = initialTabPickerIndex(current);
   let closed = false;
   return {
     render(width: number): string[] {
-      const limit = Math.max(1, width);
-      const row = (text: string): string => (text.length > limit ? text.slice(0, limit) : text);
-      const heading =
-        theme?.bold(theme.fg("warning", "Choose dashboard area")) ?? "Choose dashboard area";
-      const options = DASHBOARD_AREAS.map((area, index) => {
-        const label = `${index === selected ? "▶ " : "  "}${LABELS[area]}`;
-        return index === selected ? (theme?.fg("warning", label) ?? label) : label;
-      });
-      const hint =
-        theme?.fg("dim", "↑/↓ move · Enter open · Esc cancel") ??
-        "↑/↓ move · Enter open · Esc cancel";
-      return [row(heading), ...options.map(row), row(hint)];
+      // Bounded overlay: use HARIL's logo color for borders without stealing the whole terminal.
+      const span = Math.max(1, Math.min(width, 54));
+      if (span < 12)
+        return [
+          "HARIL".slice(0, span),
+          ...DASHBOARD_AREAS.map((area) => LABELS[area].slice(0, span)),
+        ];
+      const inside = span - 2;
+      const horizontal = frameGlyph(`╭${"─".repeat(inside)}╮`);
+      const bottom = frameGlyph(`╰${"─".repeat(inside)}╯`);
+      const cell = (
+        label: string,
+        tone: "cyan" | "teal" | "yellow" | "text" | "muted",
+        active = false,
+      ): string =>
+        `${frameGlyph("│")}${paddedCell(` ${label}`, inside, tone, active ? "selected" : "panel")}${frameGlyph("│")}`;
+      return [
+        horizontal,
+        cell("HARIL ◉  ·  Choose dashboard area", "yellow"),
+        cell("↑/↓ move · Enter open · Esc cancel", "muted"),
+        ...DASHBOARD_AREAS.map((area, index) =>
+          cell(
+            `${index === selected ? "▶" : " "} ${LABELS[area]}`,
+            index === selected ? "yellow" : "text",
+            index === selected,
+          ),
+        ),
+        cell("Enter: open  ·  Esc: close", "teal"),
+        bottom,
+      ];
     },
     handleInput(input: string): void {
       if (closed) return;

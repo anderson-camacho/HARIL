@@ -2,7 +2,8 @@
 
 ## Estado actual
 
-- **Versión actual:** 0.21.4.
+- **Versión actual:** 0.21.5.
+- **Estado (0.21.5):** selector Alt+H con marco HARIL cian/teal, título, selección resaltada y comportamiento adaptable a terminales pequeñas.
 - **Estado (0.21.4):** instalador web temporal Windows/Unix y Gentle Shell standalone, actualización desde main con `haril update` sin argumentos ni checkout local, reintentos HTTP/1.1 y documentación de un comando. Todavía no hay releases firmadas ni actualización con rollback.
 - **Estado (0.21.3):** cabecera con columna izquierda persistente para modo de la sesión, estados de extensiones reportados por Pi y advertencias de HARIL; diseño adaptable sin invadir el editor ni ocultar el historial de Pi. Pi no expone una lista completa de extensiones cargadas por esta API.
 - **Estado (0.21.2):** selector vertical accesible con ↑/↓ (compatibilidad ←/→), logotipo de terminal estático adaptable y acceso de solo lectura al registro de actividad reciente desde TOOLS y EVERYWHERE.
