@@ -916,7 +916,10 @@ export default function harilConsole(pi: ConsolePi): void {
         return;
       }
       if (choice === current.locale) {
-        ctx.ui.notify(choice === "es" ? "HARIL ya está en español." : "HARIL is already in English.", "info");
+        ctx.ui.notify(
+          choice === "es" ? "HARIL ya está en español." : "HARIL is already in English.",
+          "info",
+        );
         return;
       }
       if (!cliAvailable()) {
