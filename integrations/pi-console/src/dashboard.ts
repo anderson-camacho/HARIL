@@ -214,7 +214,11 @@ export function railWarnings(facts: DashboardFacts): string[] {
   ];
 }
 
-function rightRailContent(facts: DashboardFacts, area: DashboardArea | undefined, width: number): string[] {
+function rightRailContent(
+  facts: DashboardFacts,
+  area: DashboardArea | undefined,
+  width: number,
+): string[] {
   const line = (label: string, tone: "cyan" | "teal" | "yellow" | "text" | "muted" | "error") =>
     paddedCell(` ${label}`, width, tone, "panel");
   const warnings = railWarnings(facts);
@@ -224,7 +228,11 @@ function rightRailContent(facts: DashboardFacts, area: DashboardArea | undefined
     statusRow("SESSION", "Pi console active", width),
     statusRow("PROJECT", facts.project, width),
     statusRow("PATH", facts.cwd, width),
-    statusRow("GIT", facts.branch === undefined ? "unavailable" : (facts.branch ?? "not a repository"), width),
+    statusRow(
+      "GIT",
+      facts.branch === undefined ? "unavailable" : (facts.branch ?? "not a repository"),
+      width,
+    ),
     statusRow("MODE", facts.mode ?? "unknown", width),
     statusRow("MODEL", facts.modelLevel, width),
     statusRow("RUNTIME", facts.runtime, width),
@@ -253,7 +261,9 @@ function rightRailContent(facts: DashboardFacts, area: DashboardArea | undefined
     ...(warnings.length
       ? warnings.slice(0, 3).map((warning) => line(`! ${warning}`, "error"))
       : [line("No known HARIL warnings", "muted")]),
-    ...(warnings.length > 3 ? [line(`+ ${warnings.length - 3} more · focus for details`, "muted")] : []),
+    ...(warnings.length > 3
+      ? [line(`+ ${warnings.length - 3} more · focus for details`, "muted")]
+      : []),
   );
   return lines;
 }
