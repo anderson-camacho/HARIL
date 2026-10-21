@@ -9,8 +9,8 @@ import { defaultPidAlive } from "../host.js";
 import { runtimeRootFor } from "../runtime.js";
 import { dataDirFor } from "./common.js";
 
-// Local updates by default, with explicit --main opt-in to the fixed development branch.
-// This source is NOT an official verified release artifact.
+// Without --from, HARIL fetches its own main branch into an isolated temporary directory.
+// This is a development channel, NOT a signed release; confirmation is still required.
 const MAIN_REPOSITORY = "https://github.com/anderson-camacho/HARIL.git";
 const USAGE = "usage: haril update [--check] [--from <repository> | --main] [--yes]";
 
@@ -112,7 +112,11 @@ function git(args: readonly string[], cwd?: string): Promise<string> {
     });
     let stdout = "";
     let stderr = "";
-    const timer = setTimeout(() => child.kill(), 60_000);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+    }, 90_000);
     child.stdout.on("data", (bytes: Buffer) => {
       stdout = (stdout + bytes.toString("utf8")).slice(-4096);
     });
@@ -126,7 +130,14 @@ function git(args: readonly string[], cwd?: string): Promise<string> {
     child.once("close", (code) => {
       clearTimeout(timer);
       if (code === 0) resolveOutput(stdout);
-      else reject(new Error(`git failed (exit ${String(code)}): ${stderr.trim()}`));
+      else
+        reject(
+          new Error(
+            timedOut
+              ? "git timed out after 90s; check GitHub connection, VPN, proxy or firewall"
+              : `git failed (exit ${String(code)}): ${stderr.trim() || "connection closed or process interrupted"}`,
+          ),
+        );
     });
   });
 }
@@ -137,19 +148,37 @@ async function checkoutMain(): Promise<MainCheckout> {
   const source = join(temp, "checkout");
   const cleanup = () => rmSync(temp, { recursive: true, force: true });
   try {
-    await git([
-      "clone",
-      "--quiet",
-      "--depth",
-      "1",
-      "--no-tags",
-      "--single-branch",
-      "--branch",
-      "main",
-      MAIN_REPOSITORY,
-      source,
-    ]);
-    const revision = (await git(["rev-parse", "--verify", "HEAD"], source)).trim();
+    await git(["init", "--quiet", source]);
+    await git(["-C", source, "remote", "add", "origin", MAIN_REPOSITORY]);
+    // A fetch is more resilient than 'clone' on intermittent Windows HTTPS connections.
+    // HTTP/1.1 avoids the TLS resets seen by some Git for Windows installations.
+    let lastError: unknown;
+    let fetched = false;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await git([
+          "-c",
+          "http.version=HTTP/1.1",
+          "-C",
+          source,
+          "fetch",
+          "--quiet",
+          "--depth",
+          "1",
+          "--no-tags",
+          "origin",
+          "main",
+        ]);
+        fetched = true;
+        break;
+      } catch (error) {
+        lastError = error;
+        if (attempt < 2) await new Promise((done) => setTimeout(done, 1_000 * (attempt + 1)));
+      }
+    }
+    if (!fetched) throw lastError ?? new Error("GitHub main is unreachable");
+    await git(["-C", source, "checkout", "--quiet", "--detach", "FETCH_HEAD"]);
+    const revision = (await git(["-C", source, "rev-parse", "--verify", "HEAD"])).trim();
     if (!/^[0-9a-f]{40}$/.test(revision)) throw new Error("Git returned an invalid commit SHA");
     return { source, revision, cleanup };
   } catch (error) {
@@ -210,8 +239,11 @@ export async function update(
     io.err("haril: choose either --main or --from");
     return EXIT_USAGE;
   }
+  // Explicit --from (or the advanced HARIL_SOURCE_DIR override) retains local updates.
+  // Otherwise 'haril update', '--check' and '--yes' all use the main channel.
+  const useMain = main || (sourceArg === undefined && !host.env?.HARIL_SOURCE_DIR);
   let checkout: MainCheckout | undefined;
-  if (main) {
+  if (useMain) {
     try {
       io.out("Checking GitHub main (development channel; not a signed release)...");
       checkout = await services.checkoutMain();
@@ -233,7 +265,7 @@ export async function update(
       current = installedVersion(root, services);
       if (!services.exists(script) || !services.exists(manifest)) {
         io.err(
-          `haril: no local HARIL checkout at ${source}; use --from <repository>. No official release auto-updater is configured.`,
+          `haril: no usable HARIL source at ${source}; use --from <local-repository> or retry the GitHub connection.`,
         );
         return EXIT_USAGE;
       }
@@ -244,7 +276,7 @@ export async function update(
     }
 
     io.out(
-      `HARIL installed: ${current}; ${main ? "GitHub main" : "local source"}: ${available} (${checkout?.revision ?? source})`,
+      `HARIL installed: ${current}; ${useMain ? "GitHub main" : "local source"}: ${available} (${checkout?.revision ?? source})`,
     );
     const comparison = compareVersions(available, current);
     if (comparison < 0) {
@@ -281,7 +313,7 @@ export async function update(
     }
 
     io.out(
-      `Updating HARIL to ${available} from ${main ? "GitHub main" : "local source"} through the installer...`,
+      `Updating HARIL to ${available} from ${useMain ? "GitHub main" : "local source"} through the installer...`,
     );
     const result = await services.install(script, root, source);
     if (result !== 0) {
