@@ -488,3 +488,18 @@ test("install.cmd forwards --help on Windows", {
   assert.equal(help.status, 0, help.stderr);
   assert.match(help.stdout, /usage: /);
 });
+
+test("remote installers offer a no-checkout path and protect existing agents", () => {
+  const powershell = readFileSync(join(REPO, "scripts", "install-online.ps1"), "utf8");
+  const posix = readFileSync(join(REPO, "scripts", "install-online.sh"), "utf8");
+  for (const source of [powershell, posix]) {
+    assert.match(source, /codeload\.github\.com\/anderson-camacho\/HARIL/);
+    assert.match(source, /http\.version=HTTP\/1\.1/);
+    assert.match(source, /gentle-pi@4\.1\.0/);
+    assert.match(source, /gentle-shell/);
+    assert.doesNotMatch(source, /reset\s+--hard|git\s+pull/);
+  }
+  assert.match(powershell, /-NoGentleShell|\[switch\]\$NoGentleShell/);
+  assert.match(powershell, /DoNotExpandEnvironmentNames/);
+  assert.match(posix, /HARIL_NO_GENTLE_SHELL/);
+});
