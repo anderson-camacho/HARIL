@@ -933,7 +933,7 @@ export default function harilConsole(pi: ConsolePi): void {
         cwd: current.cwd,
         timeoutMs: 10_000,
       });
-      if (result.exitCode !== 0) {
+      if (!result.ok) {
         ctx.ui.notify(
           choice === "es"
             ? "No se pudo guardar el idioma. La preferencia anterior se mantiene."
