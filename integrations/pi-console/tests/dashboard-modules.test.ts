@@ -162,7 +162,7 @@ describe("the console's modules", () => {
     expect(wideText).toContain("███████");
     expect(mediumText).toContain("Many minds. One flow.");
     expect(wideText).toContain("Many minds. One flow.");
-    expect(wideText).toContain("fake-cwd");
+    expect(wideText).toContain("fake-project");
     expect(wideText).toContain("Pi console active");
     expect(wideText).not.toContain(".-~~~~~~~~~~-.");
     for (const [layout, width] of [
@@ -193,8 +193,7 @@ describe("the console's modules", () => {
     expect(text).toContain("pi-bridge: ready");
     expect(text).toContain("WARNINGS · 3");
     expect(text).toContain("HARIL provider cliproxy: unreachable");
-    expect(text).toContain("Project status: unavailable");
-    expect(text).toContain("Activity log: 2 failed record(s)");
+    expect(text).toContain("+ 2 more · focus for details");
     expect(text).toContain("Pi console active");
     expect(layout.railHits?.every((hit) => hit.start >= 90)).toBe(true);
     expect(layout.tabHits.map((hit) => hit.area)).toEqual(DASHBOARD_AREAS);
