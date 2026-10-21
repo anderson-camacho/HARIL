@@ -38,8 +38,8 @@ function Download-Git {
     throw "Archive download failed and git was not found. Check GitHub access or install Git."
   }
   New-Item -ItemType Directory -Path $source -Force | Out-Null
-  Run-Git @("-C", $source, "init", "--quiet")
-  Run-Git @("-C", $source, "remote", "add", "origin", $repo)
+  Run-Git -GitArgs @("-C", $source, "init", "--quiet")
+  Run-Git -GitArgs @("-C", $source, "remote", "add", "origin", $repo)
   $downloaded = $false
   for ($attempt = 1; $attempt -le 3; $attempt++) {
     & git -c http.version=HTTP/1.1 -C $source fetch --quiet --no-tags --depth 1 origin $Ref
@@ -48,7 +48,7 @@ function Download-Git {
     Start-Sleep -Seconds (2 * $attempt)
   }
   if (-not $downloaded) { throw "Unable to download HARIL from GitHub after three attempts." }
-  Run-Git @("-C", $source, "checkout", "--quiet", "--detach", "FETCH_HEAD")
+  Run-Git -GitArgs @("-C", $source, "checkout", "--quiet", "--detach", "FETCH_HEAD")
   return $source
 }
 
@@ -75,7 +75,7 @@ try {
   if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
     throw "Node 24.21+ is required. Install it from https://nodejs.org/en/download, then retry."
   }
-  if (-not $Ref -match '^[a-zA-Z0-9._/-]+$' -or $Ref.Contains("..")) {
+  if (-not ($Ref -match '^[a-zA-Z0-9._/-]+$' ) -or $Ref.Contains("..")) {
     throw "Invalid source ref."
   }
   Write-Host "HARIL installer: fetching $Ref into a temporary directory (no local clone required)."
