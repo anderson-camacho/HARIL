@@ -42,7 +42,7 @@ beforeEach(() => {
     arch: "x64",
     homeDir: sandbox,
     cwd: source,
-    env: { HARIL_RUNTIME_DIR: root },
+    env: { HARIL_RUNTIME_DIR: root, HARIL_SOURCE_DIR: source },
   };
   install = vi.fn(async (_script: string, _root: string, _source: string): Promise<number> => 0);
   confirm = vi.fn(async () => true);
@@ -130,6 +130,31 @@ describe("haril update (local verified source only)", () => {
     );
     rmSync(join(root, "app", "current.json"));
     expect(await update(["--check"], io, host, services)).toBe(2);
+    expect(install).not.toHaveBeenCalled();
+  });
+
+  it("uses GitHub main by default, without requiring a local repository", async () => {
+    host = { ...host, cwd: sandbox, env: { HARIL_RUNTIME_DIR: root } };
+    expect(await update(["--check"], io, host, services)).toBe(0);
+    expect(checkoutMain).toHaveBeenCalledOnce();
+    expect(out.join(" ")).toContain("GitHub main: 0.21.1");
+    expect(install).not.toHaveBeenCalled();
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it("installs GitHub main with the simple update --yes command", async () => {
+    host = { ...host, cwd: sandbox, env: { HARIL_RUNTIME_DIR: root } };
+    expect(await update(["--yes"], io, host, services)).toBe(0);
+    expect(checkoutMain).toHaveBeenCalledOnce();
+    expect(install).toHaveBeenCalledWith(join(source, "scripts", "install.mjs"), root, source);
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it("reports GitHub failures clearly and never starts the installer", async () => {
+    host = { ...host, cwd: sandbox, env: { HARIL_RUNTIME_DIR: root } };
+    checkoutMain.mockRejectedValue(new Error("git timed out after 90s"));
+    expect(await update(["--yes"], io, host, services)).toBe(1);
+    expect(err.join(" ")).toContain("git timed out");
     expect(install).not.toHaveBeenCalled();
   });
 

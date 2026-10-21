@@ -1,5 +1,41 @@
 # HARIL
 
+## Instalación sencilla (Windows, macOS y Linux)
+
+**No necesitas clonar HARIL, ejecutar `git pull` ni conservar una copia del repositorio.** El instalador descarga la versión de `main` a una carpeta temporal, ejecuta el instalador de HARIL, agrega su ejecutable al PATH de usuario y limpia la carpeta temporal. **Por ahora `main` es un canal de desarrollo sin artefactos firmados**: revisa los scripts antes de ejecutarlos.
+
+**Windows 11, PowerShell** (un solo comando, usando `curl.exe` en lugar de `Invoke-WebRequest` para reducir errores TLS observados):
+
+```powershell
+curl.exe -fL --retry 3 --connect-timeout 20 https://raw.githubusercontent.com/anderson-camacho/HARIL/main/scripts/install-online.ps1 -o "$env:TEMP\haril-install-online.ps1"; if ($LASTEXITCODE -eq 0) { powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\haril-install-online.ps1" }
+```
+
+**macOS o Linux** (necesitas `bash`, `curl` y `unzip`, o `git` para la alternativa; `pipefail` impide que una descarga fallida parezca exitosa):
+
+```sh
+bash -o pipefail -c 'curl -fsSL --retry 3 https://raw.githubusercontent.com/anderson-camacho/HARIL/main/scripts/install-online.sh | bash'
+```
+
+Requisitos: Node **24.21.0+** (o 26.8.0+), conectividad para bajar componentes y npm. El instalador primero intenta el ZIP de GitHub (codeload) y, si no llega, hace un fetch de Git temporal con HTTP/1.1 y hasta tres intentos. No modifica ramas ni commits de tus proyectos. Si ambos métodos fallan, informa el error y no inventa un éxito.
+
+Instala HARIL para tu usuario y, cuando no existe, **Gentle Shell standalone** mediante `npm install -g gentle-pi@4.1.0`: incluye el acompañante Gentle AI nativo de `gentle-pi`; no instala ni actualiza un `gentle-ai` global independiente ni altera el Pi de HARIL. Si Gentle Shell ya existe, se conserva sin cambios. Si falla únicamente el acompañante, informa cómo reintentarlo sin ocultar que HARIL ya está instalado.
+
+Después de abrir una terminal **nueva**:
+
+```powershell
+haril --version
+haril doctor
+haril update --check
+haril update
+```
+
+`haril update` verifica una versión mayor en `main` y solicita confirmación en una consola interactiva; `haril update --yes` la instala sin preguntar; `haril update --check` solamente consulta. Sigue disponible `haril update --from <ruta-local>` para trabajo de desarrollo. Las actualizaciones se rechazan cuando HARIL detecta un runtime activo o no puede validar su estado, y nunca bajan la versión automáticamente.
+
+Opciones del instalador: en Windows ejecuta el script descargado con `-NoGentleShell`, `-NoPath` o `-KeepSource` para omitir el acompañante, no agregar PATH de usuario o conservar la descarga temporal, respectivamente. En macOS/Linux usa `HARIL_NO_GENTLE_SHELL=1`, `HARIL_NO_PATH=1` o `HARIL_KEEP_SOURCE=1` como variables de entorno.
+
+> **Seguridad y límites:** el comando remoto ejecuta código del repositorio; consulta `scripts/install-online.ps1` o `scripts/install-online.sh` antes de ejecutarlo. Esta vía no ofrece todavía firmas de release, pinning criptográfico del contenido descargado ni actualización/rollback atómicos. Si la red bloquea GitHub o npm, ninguna variante puede instalar sus dependencias sin una fuente alternativa confiable.
+
+
 > **Many minds. One flow.**
 
 Una consola, múltiples inteligencias, un solo propósito.
@@ -239,58 +275,22 @@ El vigilante es código, no un modelo, y no gasta tokens: cada 15 minutos el del
 .\bin\haril.ps1 workflow stop <id>
 ```
 
-### Actualizar HARIL desde un repositorio local (0.21.1)
+### Actualizar HARIL (sin repositorio local)
 
-HARIL incorpora `haril update`. Por defecto opera sobre una copia local del
-repositorio, que puedes actualizar con `git pull --ff-only`. También puedes
-seleccionar explícitamente **`--main`**, el canal de desarrollo de
-`anderson-camacho/HARIL` en GitHub. Esta opción realiza un clon superficial
-de `main` en una carpeta temporal, registra el SHA exacto, no cambia tu rama
-actual ni tu carpeta de trabajo, y borra el clon al terminar. **No es una
-release oficial firmada:** actualizar desde `main` ejecuta su código de
-instalación, por lo que solo debe hacerse cuando confíes en el contenido de
-esa rama. Todavía no se publica un canal de releases verificadas.
-
-Desde PowerShell, con HARIL instalado y los agentes detenidos:
+Para consultar y actualizar desde cualquier carpeta:
 
 ```powershell
-git -C "D:\github\HARIL" pull --ff-only
-haril update --check --from "D:\github\HARIL"
-haril update --from "D:\github\HARIL" --yes
-haril --version
-haril doctor
+haril update --check
+haril update
+# Para automatización sin confirmación:
+haril update --yes
 ```
 
-Para consultar e instalar directamente la versión de `main`, desde cualquier
-carpeta (requiere Git y conexión a GitHub):
-
-```powershell
-haril update --main --check
-haril update --main
-# O sin confirmación interactiva:
-haril update --main --yes
-```
-
-Estos comandos instalan la versión declarada en el último commit obtenido de
-`main` **solo si es mayor que la instalada**. No cambian tu rama
-`codex/release-0.9.0` ni realizan pull sobre tu repositorio local.
-
-Si ejecutas el comando desde la raíz del repositorio, `--from` es opcional.
-`HARIL_SOURCE_DIR` también puede indicar la copia local. Sin `--yes`, se pide
-confirmación en una terminal interactiva; fuera de una terminal se rechaza. El
-comando compara `app/current.json` con la versión declarada por la fuente y
-rechaza versiones anteriores o un runtime activo; una base SQLite que no pueda
-inspeccionarse también bloquea la actualización. El instalador existente compila,
-instala en una carpeta de versión y ejecuta `doctor`. La configuración, los
-proyectos y los datos se conservan.
-
-**Limitación:** `haril update --main` utiliza código de desarrollo, no releases verificadas. Tampoco dispone de
-`--rollback` integrado. Si el instalador falla, revisa sus mensajes antes de
-usar la nueva versión. No actualices cuando HARIL esté ejecutando workflows.
+El canal predeterminado es `main` (desarrollo, no release firmada). Usa un directorio temporal con `git fetch` sobre HTTP/1.1, reintentos y verificación de versión; la descarga no cambia tu repositorio local. Si falta conexión, se muestra el motivo y la versión instalada se conserva. Las versiones iguales no se reinstalan, ni se hacen downgrades. Para una copia local explícita, ejecuta `haril update --from D:\github\haril --yes`; el checkout debe tener el instalador de HARIL.
 
 ### Instalar HARIL en tu usuario
 
-Un solo comando desde la raíz del repositorio:
+**Alternativa de desarrollo, solo si ya tienes un checkout:** desde la raíz del repositorio:
 
 - Windows (PowerShell o cmd): `.\install.cmd`, o `.\install.ps1`. `install.cmd` lanza `install.ps1` sin que la política de ejecución lo bloquee.
 - macOS y Linux: `./install.sh`.
@@ -713,7 +713,7 @@ Los dossiers de `docs/research/` se leen solo bajo demanda, cuando un documento 
 
 ## Versiones
 
-Versión actual: **0.21.3**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
+Versión actual: **0.21.4**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
 
 ## Licencia
 

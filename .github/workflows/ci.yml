@@ -35,6 +35,12 @@ jobs:
         run: corepack enable
       - name: Install
         run: pnpm install --frozen-lockfile
+      - name: Check remote installers syntax
+        run: |
+          sh -n scripts/install-online.sh
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            powershell.exe -NoProfile -NonInteractive -Command '$tokens=$null; $errors=$null; [System.Management.Automation.Language.Parser]::ParseFile("scripts/install-online.ps1", [ref]$tokens, [ref]$errors) | Out-Null; if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }'
+          fi
       - name: Check (biome, tsc, layer/purity/forbidden scripts, knip, compat, version)
         env:
           # A pull request is the delivery, so it gets the full bump comparison. A push (work in progress on a feature
