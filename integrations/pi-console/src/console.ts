@@ -915,7 +915,7 @@ export default function harilConsole(pi: ConsolePi): void {
     handler: (ctx) => {
       const current = session;
       if (current === undefined || !ctx.hasUI || ctx.mode !== "tui") return;
-      if ((current.tui?.terminal.columns ?? 0) < 120 || (current.tui?.terminal.rows ?? 0) < 40) {
+      if ((current.tui?.terminal.columns ?? 0) < 120 || (current.tui?.terminal.rows ?? 0) < 24) {
         void current.openActions(current.ctx);
         return;
       }

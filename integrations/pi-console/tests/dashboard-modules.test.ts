@@ -222,13 +222,74 @@ describe("the console's modules", () => {
   it("auto-hides the right rail in narrow or short terminals, and supports manual collapse", () => {
     for (const [width, height, visible] of [
       [90, 40, true],
-      [140, 24, true],
+      [140, 20, true],
       [140, 45, false],
     ] as const) {
       const layout = renderHeaderLayout("0.21.6", width, facts(), "tools", THEME, height, visible);
       expect(layout.railHits).toBeUndefined();
       expect(layout.lines.map(stripAnsi).join("\n")).toContain("Alt+R panel");
     }
+  });
+
+  it("shows a compact right rail at laptop heights without hiding warnings or extensions", () => {
+    const base = facts();
+    const observed: DashboardFacts = {
+      ...base,
+      mode: "ACTION",
+      providerWarnings: ["HARIL provider cliproxy: unreachable"],
+      extensionStatuses: ["pi-console: ready"],
+    };
+    for (const height of [24, 27, 32, 39]) {
+      const layout = renderHeaderLayout("0.21.10", 150, observed, "tools", THEME, height);
+      const rows = layout.lines.map(stripAnsi);
+      const screen = rows.join("\n");
+      expect(screen).toContain("HARIL · TOOLS · panel");
+      expect(screen).toContain("AVISOS · 1");
+      expect(screen).toContain("HARIL provider cliproxy");
+      expect(screen).toContain("EXTENSIONES · 1");
+      expect(screen).toContain("SESIÓN");
+      expect(screen).toContain("ACCIONES · TOOLS");
+      expect(screen).not.toContain("Many minds. One flow.   ·");
+      expect(layout.railHits?.some((hit) => hit.action === "details")).toBe(true);
+      expect(layout.railHits?.some((hit) => hit.action === "menu")).toBe(true);
+      expect(layout.tabHits.map((hit) => hit.area)).toEqual(DASHBOARD_AREAS);
+      expect(rows.length).toBeLessThanOrEqual(Math.ceil(height * 0.6));
+      expect(rows.every((row) => row.length === 150)).toBe(true);
+    }
+  });
+
+  it("shows orchestration in a compact right rail, with collapse and narrow fallbacks", () => {
+    const state = reduceOrchestration(initialOrchestrationState(), {
+      type: "toggle-demo",
+      now: NOW,
+    }).state;
+    const base = facts();
+    const observed: DashboardFacts = {
+      ...base,
+      orchestration: state,
+      providerWarnings: ["Missing CLIProxy key"],
+    };
+    const layout = renderHeaderLayout("0.21.10", 144, observed, "orchestration", THEME, 31);
+    const screen = layout.lines.map(stripAnsi).join("\n");
+    expect(screen).toContain("ORQUESTACIÓN");
+    expect(screen).toContain("Agentes:");
+    expect(screen).toContain("AVISOS · 1");
+    expect(screen).toContain("EXTENSIONES");
+    expect(layout.railHits?.some((hit) => hit.action === "focus")).toBe(true);
+    expect(layout.railHits?.some((hit) => hit.action === "details")).toBe(true);
+
+    const collapsed = renderHeaderLayout(
+      "0.21.10",
+      144,
+      observed,
+      "orchestration",
+      THEME,
+      31,
+      false,
+    );
+    expect(collapsed.railHits).toBeUndefined();
+    const tooShort = renderHeaderLayout("0.21.10", 144, observed, "orchestration", THEME, 23);
+    expect(tooShort.railHits).toBeUndefined();
   });
 
   it("can show the current workflow as a compact, clickable right-side summary", () => {

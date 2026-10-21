@@ -4,6 +4,16 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.21.10
+
+- **Fecha:** 2026-10-21
+- **Estado:** corrección del panel lateral HARIL que desaparecía en ventanas portátiles con altura inferior a 40 filas.
+- En terminales desde 120 columnas y 24 filas, aparece panel compacto a la derecha dentro del encabezado: título del área, modo, avisos reales, extensiones reportadas, sesión u orquestación y enlace al menú de acciones.
+- Entre 24 y 39 filas se limita la altura del panel para mantener visible el editor y la conversación. Desde 40 filas se conserva el panel ampliado, con las tarjetas existentes.
+- Alt+R permite ocultar/mostrar el panel compacto; los clics en avisos/extensiones abren detalles, y los módulos mantienen sus accesos y menú completo /haril. Por debajo de 24 filas o de 120 columnas sigue la cabecera simplificada.
+
+---
+
 ## 0.21.9
 
 - **Fecha:** 2026-10-21
