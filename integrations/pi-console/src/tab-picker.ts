@@ -1,5 +1,5 @@
 import { DASHBOARD_AREAS, type DashboardArea } from "./dashboard.js";
-import { frameGlyph, paddedCell } from "./dashboard-theme.js";
+import { paddedCell, visualText } from "./dashboard-theme.js";
 import type { ConsoleTheme } from "./pi-types.js";
 
 export type TabPickerResult =
@@ -37,14 +37,14 @@ export function createTabPicker(
           ...DASHBOARD_AREAS.map((area) => LABELS[area].slice(0, span)),
         ];
       const inside = span - 2;
-      const horizontal = frameGlyph(`╭${"─".repeat(inside)}╮`);
-      const bottom = frameGlyph(`╰${"─".repeat(inside)}╯`);
+      const horizontal = visualText(`╭${"─".repeat(inside)}╮`, "teal", "panel");
+      const bottom = visualText(`╰${"─".repeat(inside)}╯`, "teal", "panel");
       const cell = (
         label: string,
         tone: "cyan" | "teal" | "yellow" | "text" | "muted",
         active = false,
       ): string =>
-        `${frameGlyph("│")}${paddedCell(` ${label}`, inside, tone, active ? "selected" : "panel")}${frameGlyph("│")}`;
+        `${visualText("│", "teal", "panel")}${paddedCell(` ${label}`, inside, tone, active ? "selected" : "panel")}${visualText("│", "teal", "panel")}`;
       return [
         horizontal,
         cell("HARIL ◉  ·  Choose dashboard area", "yellow"),
