@@ -242,6 +242,8 @@ function rightRailContent(
   const warnings = railWarnings(facts);
   const mode = facts.mode ?? "unknown";
   const currentArea = area ?? "tools";
+  const lang = facts.locale ?? DEFAULT_UI_LOCALE;
+  const tr = (english: string, spanish: string): string => lang === "es" ? spanish : english;
   const controls = controlsFor(
     currentArea,
     facts.data,
@@ -274,14 +276,14 @@ function rightRailContent(
       paddedCell(` HARIL · ${LABELS[currentArea]} · panel`, width - 1, "yellow", "panel"),
     hit: { action: "focus" },
   });
-  add(`Estoy en: ${facts.cwd}`, "muted", { action: "focus" });
-  add(`Modo: ${mode}  ·  cambiar ↗`, "yellow", { action: "mode" });
-  add(`Proyecto: ${facts.project}`, "muted");
-  add(`Modelo: ${facts.modelLevel}`, "text");
+  add(`${tr("I am in", "Estoy en")}: ${facts.cwd}`, "muted", { action: "focus" });
+  add(`${tr("Mode", "Modo")}: ${mode}  ·  ${tr("change", "cambiar")} ↗`, "yellow", { action: "mode" });
+  add(`${tr("Project", "Proyecto")}: ${facts.project}`, "muted");
+  add(`${tr("Model", "Modelo")}: ${facts.modelLevel}`, "text");
 
-  section("AVISOS", "warnings", warnings.length);
+  section(tr("WARNINGS", "AVISOS"), "warnings", warnings.length);
   if (isExpanded("warnings")) {
-    if (warnings.length === 0) add("Sin alertas conocidas", "muted");
+    if (warnings.length === 0) add(tr("No known warnings", "Sin alertas conocidas"), "muted");
     else {
       for (const warning of warnings.slice(0, 3))
         add(`! ${warning}`, "error", { action: "details" });
@@ -292,7 +294,7 @@ function rightRailContent(
     }
   }
 
-  section("EXTENSIONES", "extensions", facts.extensionStatuses.length);
+  section(tr("EXTENSIONS", "EXTENSIONES"), "extensions", facts.extensionStatuses.length);
   if (isExpanded("extensions")) {
     if (facts.extensionStatuses.length === 0) {
       add("Pi no expone inventario completo", "muted");
@@ -322,14 +324,14 @@ function rightRailContent(
     }
   }
 
-  section("SESIÓN", "status");
+  section(tr("SESSION", "SESIÓN"), "status");
   if (isExpanded("status")) {
     add(`Modelo: ${facts.modelLevel}`, "text");
     add(`Runtime: ${facts.runtime}`, "text");
     add(`Proyecto: ${facts.project}`, "text");
     add(`Memoria: ${facts.memory}`, "text");
   }
-  section(`ACCIONES · ${LABELS[currentArea]}`, "actions", controls.length);
+  section(`${tr("ACTIONS", "ACCIONES")} · ${LABELS[currentArea]}`, "actions", controls.length);
   if (isExpanded("actions")) {
     for (const control of controls) {
       add(`[${control.hint}] ${control.label}`, "teal", {
@@ -337,7 +339,7 @@ function rightRailContent(
         control: control.action,
       });
     }
-    add("↗ Abrir menú completo /haril", "muted", { action: "menu" });
+    add(tr("↗ Open full /haril menu", "↗ Abrir menú completo /haril"), "muted", { action: "menu" });
   }
 
   return rows;
