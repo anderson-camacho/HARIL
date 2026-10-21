@@ -4,7 +4,6 @@ import { join, relative, resolve } from "node:path";
 import { runHaril } from "./cli.js";
 import { DASHBOARD_AREAS, type DashboardArea } from "./dashboard.js";
 import type { DashboardAction } from "./dashboard-controls.js";
-import { paddedCell, visualText } from "./dashboard-theme.js";
 import {
   type DashboardEvent,
   type DashboardMethodology,
@@ -12,6 +11,7 @@ import {
   readMethodologyDefinition,
   summarizeApproval,
 } from "./dashboard-data.js";
+import { paddedCell, visualText } from "./dashboard-theme.js";
 import { openDelegationSettings } from "./delegation-panel.js";
 import { DEFAULT_UI_LOCALE, localized, type UiLocale } from "./locale.js";
 import { chooseLevel, chooseModel, type LevelMemory, openModelAndLevel } from "./model-picker.js";
