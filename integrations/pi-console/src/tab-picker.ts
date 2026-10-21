@@ -31,7 +31,11 @@ export function createTabPicker(
     render(width: number): string[] {
       // Bounded overlay: use HARIL's logo color for borders without stealing the whole terminal.
       const span = Math.max(1, Math.min(width, 54));
-      if (span < 12) return ["HARIL".slice(0, span), ...DASHBOARD_AREAS.map((area) => LABELS[area].slice(0, span))];
+      if (span < 12)
+        return [
+          "HARIL".slice(0, span),
+          ...DASHBOARD_AREAS.map((area) => LABELS[area].slice(0, span)),
+        ];
       const inside = span - 2;
       const horizontal = frameGlyph(`╭${"─".repeat(inside)}╮`);
       const bottom = frameGlyph(`╰${"─".repeat(inside)}╯`);
@@ -46,7 +50,11 @@ export function createTabPicker(
         cell("HARIL ◉  ·  Choose dashboard area", "yellow"),
         cell("↑/↓ move · Enter open · Esc cancel", "muted"),
         ...DASHBOARD_AREAS.map((area, index) =>
-          cell(`${index === selected ? "▶" : " "} ${LABELS[area]}`, index === selected ? "yellow" : "text", index === selected),
+          cell(
+            `${index === selected ? "▶" : " "} ${LABELS[area]}`,
+            index === selected ? "yellow" : "text",
+            index === selected,
+          ),
         ),
         cell("Enter: open  ·  Esc: close", "teal"),
         bottom,
