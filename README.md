@@ -1,5 +1,149 @@
 # HARIL
 
+## Windows 11: instalar desde cero, sin clonar HARIL (PowerShell)
+
+Los comandos funcionan desde cualquier carpeta, también `C:\Windows\System32`. Instala primero Node.js y Corepack; después ejecuta el instalador remoto de HARIL. No necesitas `git clone`, `git pull` ni conservar fuentes.
+
+### Paso 1. Instalar Node.js
+
+En PowerShell:
+
+```powershell
+winget --version
+winget install --id OpenJS.NodeJS.LTS --exact --accept-package-agreements --accept-source-agreements
+```
+
+**Cierra PowerShell completamente y vuelve a abrirlo** al terminar. Comprueba:
+
+```powershell
+node --version
+npm.cmd --version
+Get-Command node
+```
+
+HARIL necesita **Node 24.21.0 o superior de la serie 24, o Node 26.8.0 o superior**. Por ejemplo, `v24.19.0` no sirve aunque sea LTS. Si la versión instalada es anterior:
+
+```powershell
+winget upgrade --id OpenJS.NodeJS.LTS --exact --accept-package-agreements --accept-source-agreements
+```
+
+Si `winget` no tiene una versión compatible o no está disponible, instala Node desde [nodejs.org/en/download](https://nodejs.org/en/download) (en equipos corporativos puede requerir autorización de TI). Vuelve a abrir PowerShell y verifica `node --version`.
+
+### Paso 2. Instalar Corepack si hace falta
+
+```powershell
+corepack.cmd --version
+```
+
+Si no se reconoce:
+
+```powershell
+npm.cmd install --global corepack
+corepack.cmd --version
+```
+
+Se utiliza `npm.cmd` para evitar la restricción habitual de PowerShell sobre `npm.ps1`. No necesitas instalar `pnpm` por separado: HARIL utiliza Corepack y la versión de pnpm fijada en el proyecto.
+
+### Paso 3. Instalar HARIL y Gentle Shell
+
+**Copia este bloque completo en PowerShell**. Descarga el script a una carpeta temporal y comprueba los códigos de salida:
+
+```powershell
+$script = Join-Path $env:TEMP "haril-install-online.ps1"
+
+curl.exe -fL --retry 3 --connect-timeout 20 "https://raw.githubusercontent.com/anderson-camacho/HARIL/main/scripts/install-online.ps1" -o $script
+
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $script)) {
+    throw "No se pudo descargar el instalador de HARIL."
+}
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script
+
+if ($LASTEXITCODE -ne 0) {
+    throw "La instalación falló. Revisa el error anterior."
+}
+```
+
+El instalador obtiene la fuente de `main` en una carpeta temporal (primero ZIP y, si falla, Git), ejecuta el instalador estándar, registra HARIL para tu usuario en `%LOCALAPPDATA%\HARIL` e intenta instalar `gentle-pi@4.1.0` (**Gentle Shell**) solo si no existe. Mantiene la configuración existente de Gentle Shell. No instala ni modifica el `gentle-ai` global independiente.
+
+### Paso 4. Verificar (nueva ventana de PowerShell)
+
+```powershell
+haril --version
+haril doctor
+gentle-shell --version
+```
+
+Si `haril` no se reconoce pero se instaló:
+
+```powershell
+& "$env:LOCALAPPDATA\HARIL\bin\haril.cmd" --version
+$env:Path += ";$env:LOCALAPPDATA\HARIL\bin"
+haril --version
+```
+
+Si únicamente falla Gentle Shell:
+
+```powershell
+npm.cmd install --global gentle-pi@4.1.0 --no-fund --no-audit
+gentle-shell --version
+```
+
+### Paso 5. Usar y actualizar
+
+```powershell
+haril
+haril update --check
+haril update
+# Sin pregunta de confirmación:
+haril update --yes
+```
+
+`haril update` consulta `main` sin checkout local y solo instala una versión superior con confirmación. Cierra los procesos de HARIL antes de actualizar.
+
+### Recuperación: Gentle Shell tiene lanzador pero falta el módulo
+
+Si `gentle-shell.cmd --version` termina con `Cannot find module ...\AppData\Roaming\npm\node_modules\gentle-pi\bin\gentle-shell.mjs`, **Gentle Shell quedó parcialmente instalado**. No es un problema de HARIL ni de `ExecutionPolicy`. El instalador actual solo comprueba si el comando existe, así que puede pasar por alto un lanzador huérfano. Después de actualizar Node a una versión compatible:
+
+```powershell
+Test-Path "$env:APPDATA\npm\node_modules\gentle-pi\bin\gentle-shell.mjs"
+npm.cmd install --global gentle-pi@4.1.0 --no-fund --no-audit
+gentle-shell.cmd --version
+```
+
+Si npm detecta un conflicto de instalación anterior, repara el paquete sin borrar los hogares o configuraciones `~\.gentle-shell` ni `~\.pi`:
+
+```powershell
+npm.cmd uninstall --global gentle-pi
+npm.cmd install --global gentle-pi@4.1.0 --no-fund --no-audit
+gentle-shell.cmd --version
+```
+
+Comprueba HARIL **por su ruta real**, aunque el comando global no esté en el PATH:
+
+```powershell
+$haril = Join-Path $env:LOCALAPPDATA "HARIL\bin\haril.cmd"
+Test-Path $haril
+& $haril --version
+& $haril doctor
+```
+
+`Test-Path = True` solo prueba que el archivo existe; `& $haril --version` confirma que funciona. Para habilitarlo en la terminal actual: `$env:Path += ";$env:LOCALAPPDATA\HARIL\bin"`. Si se actualizó Node hace poco, abre **una terminal nueva** antes de probar.
+
+### Solución de errores habituales
+
+- **`node` no existe**: instala Node, reabre PowerShell y ejecuta `where.exe node`.
+- **`Node 24.21+ is required`**: tienes una versión antigua; revisa `node --version` y actualízala.
+- **`corepack` no existe**: prueba `corepack.cmd --version`; si falla, ejecuta `npm.cmd install --global corepack`.
+- **Errores TLS o GitHub bloqueado**: revisa conexión a `raw.githubusercontent.com`, `codeload.github.com` y al registro de npm; la alternativa Git puede funcionar con HTTP/1.1, pero no evita todas las restricciones de red.
+- **`haril` no se reconoce**: ejecuta el lanzador en `%LOCALAPPDATA%\HARIL\bin\haril.cmd` y agrega la carpeta al PATH con el comando anterior.
+- **`gentle-shell` no se reconoce**: instala ese componente separado con `npm.cmd install --global gentle-pi@4.1.0` y reabre PowerShell.
+- **Bloqueos corporativos**: solicita los permisos a TI; no desactives TLS, antivirus ni la política global de ejecución.
+
+**Seguridad:** actualmente el instalador remoto ejecuta código de la rama `main` (canal de desarrollo, sin artefactos oficiales firmados). [Inspecciona el script](https://github.com/anderson-camacho/HARIL/blob/main/scripts/install-online.ps1) antes de ejecutarlo.
+
+---
+
 ## Instalación sencilla (Windows, macOS y Linux)
 
 **No necesitas clonar HARIL, ejecutar `git pull` ni conservar una copia del repositorio.** El instalador descarga la versión de `main` a una carpeta temporal, ejecuta el instalador de HARIL, agrega su ejecutable al PATH de usuario y limpia la carpeta temporal. **Por ahora `main` es un canal de desarrollo sin artefactos firmados**: revisa los scripts antes de ejecutarlos.
@@ -729,7 +873,7 @@ Los dossiers de `docs/research/` se leen solo bajo demanda, cuando un documento 
 
 ## Versiones
 
-Versión actual: **0.21.8**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
+Versión actual: **0.21.9**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
 
 ## Licencia
 
