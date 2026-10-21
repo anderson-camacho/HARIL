@@ -276,10 +276,12 @@ describe("the console's modules", () => {
       extensionStatuses: ["indexer: ready", "provider: ok"],
       providerWarnings: ["HARIL provider cliproxy: unreachable"],
     };
-    const collapsed = renderHeaderLayout(
-      "0.21.7", 165, observed, "tools", THEME, 60, true,
-      { actions: false, warnings: false, extensions: false, status: false },
-    );
+    const collapsed = renderHeaderLayout("0.21.7", 165, observed, "tools", THEME, 60, true, {
+      actions: false,
+      warnings: false,
+      extensions: false,
+      status: false,
+    });
     expect(collapsed.railHits?.filter((hit) => hit.action === "run")).toHaveLength(0);
     const collapsedText = collapsed.lines.map(stripAnsi).join("\n");
     expect(collapsedText).toContain("▶ ACCIONES");
@@ -287,15 +289,19 @@ describe("the console's modules", () => {
     expect(collapsedText).toContain("Modo: DELEGATION");
     expect(collapsed.railHits?.some((hit) => hit.action === "mode")).toBe(true);
 
-    const expanded = renderHeaderLayout(
-      "0.21.7", 165, observed, "tools", THEME, 65, true,
-      { actions: false, warnings: true, extensions: true, status: true },
-    );
+    const expanded = renderHeaderLayout("0.21.7", 165, observed, "tools", THEME, 65, true, {
+      actions: false,
+      warnings: true,
+      extensions: true,
+      status: true,
+    });
     const expandedText = expanded.lines.map(stripAnsi).join("\n");
     expect(expandedText).toContain("HARIL provider cliproxy: unreachable");
     expect(expandedText).toContain("indexer: ready");
     expect(expandedText).toContain("Modelo: fake-model");
-    expect(expanded.railHits?.some((hit) => hit.action === "toggle" && hit.section === "extensions")).toBe(true);
+    expect(
+      expanded.railHits?.some((hit) => hit.action === "toggle" && hit.section === "extensions"),
+    ).toBe(true);
   });
 
   it("registers one area-picker shortcut and a /command each but /workflows", async () => {
