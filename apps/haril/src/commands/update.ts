@@ -147,10 +147,13 @@ function git(args: readonly string[], cwd?: string): Promise<string> {
 async function checkoutArchive(temp: string): Promise<MainCheckout> {
   const archive = join(temp, "main.zip");
   const extracted = join(temp, "unpacked");
-  const response = await fetch("https://codeload.github.com/anderson-camacho/HARIL/zip/refs/heads/main", {
-    signal: AbortSignal.timeout(60_000),
-    headers: { "User-Agent": "HARIL-updater" },
-  });
+  const response = await fetch(
+    "https://codeload.github.com/anderson-camacho/HARIL/zip/refs/heads/main",
+    {
+      signal: AbortSignal.timeout(60_000),
+      headers: { "User-Agent": "HARIL-updater" },
+    },
+  );
   if (!response.ok || response.body === null) {
     throw new Error(`GitHub archive HTTP ${response.status}`);
   }
@@ -179,7 +182,11 @@ async function checkoutArchive(temp: string): Promise<MainCheckout> {
   if (!existsSync(join(source, "scripts", "install.mjs"))) {
     throw new Error("GitHub archive lacks HARIL installer");
   }
-  return { source, revision: "archive:main (no verified commit SHA)", cleanup: () => rmSync(temp, { recursive: true, force: true }) };
+  return {
+    source,
+    revision: "archive:main (no verified commit SHA)",
+    cleanup: () => rmSync(temp, { recursive: true, force: true }),
+  };
 }
 
 function systemCommand(command: string, args: readonly string[]): Promise<void> {
@@ -252,7 +259,8 @@ async function checkoutMain(): Promise<MainCheckout> {
     return { source, revision, cleanup };
   } catch (error) {
     cleanup();
-    const archive = archiveFailure instanceof Error ? archiveFailure.message : String(archiveFailure);
+    const archive =
+      archiveFailure instanceof Error ? archiveFailure.message : String(archiveFailure);
     const gitError = error instanceof Error ? error.message : String(error);
     throw new Error(`archive failed (${archive}); Git fallback failed (${gitError})`);
   }
