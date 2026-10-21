@@ -648,8 +648,9 @@ export default function harilConsole(pi: ConsolePi): void {
           case "toggle":
             if (rail.section !== undefined) {
               const baseline = rail.section === "actions" || rail.section === "warnings";
-              current.railExpanded[rail.section] =
-                !(current.railExpanded[rail.section] ?? baseline);
+              current.railExpanded[rail.section] = !(
+                current.railExpanded[rail.section] ?? baseline
+              );
               redraw();
             }
             break;
