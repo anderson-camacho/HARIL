@@ -22,10 +22,13 @@ trap cleanup EXIT HUP INT TERM
 source_dir=''
 if command -v curl >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1; then
   if curl -fL --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 180 "https://codeload.github.com/anderson-camacho/HARIL/zip/refs/heads/$ref" -o "$tmp/source.zip"; then
-    unzip -q "$tmp/source.zip" -d "$tmp"
-    for entry in "$tmp"/HARIL-*/install.sh; do
-      if [ -f "$entry" ]; then source_dir="$(dirname "$entry")"; break; fi
-    done
+    if unzip -q "$tmp/source.zip" -d "$tmp"; then
+      for entry in "$tmp"/HARIL-*/install.sh; do
+        if [ -f "$entry" ]; then source_dir="$(dirname "$entry")"; break; fi
+      done
+    else
+      echo "Downloaded archive is corrupt; trying Git fallback." >&2
+    fi
   fi
 fi
 if [ -z "$source_dir" ]; then
