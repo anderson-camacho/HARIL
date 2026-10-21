@@ -375,12 +375,13 @@ function wideHeader(
     const rightCell = shown[index]?.line ?? paddedCell("", railWidth, "text", "panel");
     const row = rows.length;
     rows.push(`${frameGlyph("│")}${leftCell}${frameGlyph("│")}${rightCell}${frameGlyph("│")}`);
-    if (shown[index]?.hit) {
+    const hit = shown[index]?.hit;
+    if (hit !== undefined) {
       railHits.push({
         row,
         start: leftWidth + 2,
         end: width - 1,
-        ...shown[index].hit,
+        ...hit,
       });
     }
   }
