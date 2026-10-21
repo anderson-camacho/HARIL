@@ -2,7 +2,8 @@
 
 ## Estado actual
 
-- **Versión actual:** 0.21.9.
+- **Versión actual:** 0.21.10.
+- **Estado (0.21.10):** panel lateral derecho compacto visible en terminales anchas desde 24 filas de alto (antes requería 40), con sección AVISOS, EXTENSIONES, SESIÓN y acciones, más orquestación en su contexto; Alt+R controla la visibilidad también en pantallas bajas y se preserva espacio para el chat.
 - **Estado (0.21.9):** documentación integral de instalación Windows 11 sin clonar repositorio: requisitos Node/Corepack, winget, PowerShell de un comando, verificación de Gentle Shell, diagnósticos de PATH, actualizaciones y enlaces oficiales.
 - **Estado (0.21.8):** prioridad visual del panel derecho: avisos y extensiones por encima de acciones largas, límites claros de elementos y acceso a detalles completos; orquestación expandida por defecto para su propia área sin cubrir el chat.
 - **Estado (0.21.7):** menú completo de acciones por módulo en panel derecho interactivo; tarjetas plegables, warnings/extensiones visibles, ruta `Estoy en:`, pequeño indicador ◉ dependiente de métricas; elimina conflicto Alt+F y lo sustituye por `/haril-focus`.
