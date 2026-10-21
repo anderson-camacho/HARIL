@@ -288,6 +288,8 @@ function rightRailContent(
   });
   add(`${say("I am in", "Estoy en")}: ${facts.cwd}`, "muted", { action: "focus" });
   add(`${say("Mode", "Modo")}: ${mode} · ${say("change", "cambiar")} ↗`, "yellow", { action: "mode" });
+  add(`${say("Project", "Proyecto")}: ${facts.project}`, "muted");
+  add(`${say("Model", "Modelo")}: ${facts.modelLevel}`, "text");
 
   section(`${say("ACTIONS", "ACCIONES")} · ${areaLabel(currentArea, locale)}`, "actions", controls.length);
   if (isExpanded("actions")) {
