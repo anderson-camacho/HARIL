@@ -275,6 +275,17 @@ El vigilante es código, no un modelo, y no gasta tokens: cada 15 minutos el del
 .\bin\haril.ps1 workflow stop <id>
 ```
 
+### Columna lateral y modo enfoque de HARIL
+
+En terminales de **120 columnas y 40 filas o más**, el encabezado HARIL muestra una **columna a la derecha del todo** con sesión, proyecto, modelo, estado de extensiones observadas, avisos de proveedor (como `HARIL provider cliproxy: unreachable`), errores de HARIL y, al seleccionar ORCHESTRATION, el workflow y su progreso. La zona principal no vuelve a mostrar el gran widget de herramientas encima del editor.
+
+- `Alt+R`: ocultar/mostrar la columna derecha. En una terminal pequeña, donde se oculta automáticamente, abre el detalle.
+- `Alt+F`: abrir la vista enfocada de la sección activa (visor de orquestación si estás en ORCHESTRATION).
+- Clic en la columna: abrir el detalle en el visor; `Alt+H` o las pestañas seleccionan la sección.
+- `/haril`: menú de las acciones originales.
+
+**Limitación real de Pi 1.2.0:** su API solo dibuja encabezado, pie y widgets verticales; no ofrece una división del historial a altura completa. Por eso la columna está **anclada al extremo derecho del encabezado**, no sobre el contenido desplazable del chat. Los nombres de extensiones del banner inicial de Pi tampoco son accesibles por la API; se muestran los estados que Pi comunica y los avisos propios de HARIL.
+
 ### Actualizar HARIL (sin repositorio local)
 
 Para consultar y actualizar desde cualquier carpeta:
@@ -713,7 +724,7 @@ Los dossiers de `docs/research/` se leen solo bajo demanda, cuando un documento 
 
 ## Versiones
 
-Versión actual: **0.21.5**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
+Versión actual: **0.21.6**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
 
 ## Licencia
 
