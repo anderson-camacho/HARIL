@@ -326,6 +326,7 @@ describe("the console's modules", () => {
     expect(screen).toContain("+ 2 estados · ver detalles");
     expect(screen).toContain("ACCIONES · TOOLS");
     expect(layout.railHits?.some((hit) => hit.action === "menu")).toBe(true);
+    expect(layout.railHits?.some((hit) => hit.action === "details")).toBe(true);
     expect(layout.railHits?.some((hit) => hit.action === "focus")).toBe(true);
     expect(layout.lines.length).toBeLessThan(28);
   });
@@ -353,6 +354,7 @@ describe("the console's modules", () => {
     expect(screen).toContain("Agentes:");
     expect(screen).toContain("AVISOS · 1");
     expect(screen).toContain("HARIL provider cliproxy: unreachable");
+    expect(layout.railHits?.some((hit) => hit.action === "details")).toBe(true);
     expect(
       layout.railHits?.some((hit) => hit.action === "toggle" && hit.section === "orchestration"),
     ).toBe(true);
