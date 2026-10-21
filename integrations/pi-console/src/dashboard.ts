@@ -283,7 +283,8 @@ function rightRailContent(
   if (isExpanded("warnings")) {
     if (warnings.length === 0) add("Sin alertas conocidas", "muted");
     else {
-      for (const warning of warnings.slice(0, 3)) add(`! ${warning}`, "error", { action: "details" });
+      for (const warning of warnings.slice(0, 3))
+        add(`! ${warning}`, "error", { action: "details" });
       if (warnings.length > 3)
         add(`+ ${warnings.length - 3} avisos · clic para ver todos`, "yellow", {
           action: "details",
