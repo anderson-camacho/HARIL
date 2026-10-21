@@ -10,7 +10,7 @@ import { type DashboardActionHost, openDashboardActionMenu } from "../src/dashbo
 import { controlsFor } from "../src/dashboard-controls.js";
 import { emptyDashboardData } from "../src/dashboard-data.js";
 import { readConsoleLocale } from "../src/locale.js";
-import { initialOrchestrationState } from "../src/orchestration-state.js";
+import { initialOrchestrationState, reduceOrchestration } from "../src/orchestration-state.js";
 import type { ConsoleTheme } from "../src/pi-types.js";
 import { createTabPicker, initialTabPickerIndex } from "../src/tab-picker.js";
 import { stripAnsi } from "../src/text.js";
