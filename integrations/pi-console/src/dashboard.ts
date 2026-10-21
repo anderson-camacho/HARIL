@@ -64,7 +64,7 @@ export interface HeaderLayout {
     readonly row: number;
     readonly start: number;
     readonly end: number;
-    readonly action: "focus" | "toggle" | "run" | "mode" | "menu";
+    readonly action: "focus" | "details" | "toggle" | "run" | "mode" | "menu";
     readonly section?: RailSection;
     readonly control?: DashboardAction;
   }[];
@@ -251,7 +251,8 @@ function rightRailContent(
     facts.locale ?? DEFAULT_UI_LOCALE,
   );
   const isExpanded = (section: RailSection): boolean =>
-    expanded[section] ?? (section === "actions" || section === "warnings");
+    expanded[section] ??
+    (section === "actions" || section === "warnings" || section === "orchestration");
   const add = (
     content: string,
     tone: "cyan" | "teal" | "yellow" | "text" | "muted" | "error",
@@ -278,15 +279,31 @@ function rightRailContent(
   add(`Proyecto: ${facts.project}`, "muted");
   add(`Modelo: ${facts.modelLevel}`, "text");
 
-  section(`ACCIONES · ${LABELS[currentArea]}`, "actions", controls.length);
-  if (isExpanded("actions")) {
-    for (const control of controls) {
-      add(`[${control.hint}] ${control.label}`, "teal", {
-        action: "run",
-        control: control.action,
-      });
+  section("AVISOS", "warnings", warnings.length);
+  if (isExpanded("warnings")) {
+    if (warnings.length === 0) add("Sin alertas conocidas", "muted");
+    else {
+      for (const warning of warnings.slice(0, 3))
+        add(`! ${warning}`, "error", { action: "details" });
+      if (warnings.length > 3)
+        add(`+ ${warnings.length - 3} avisos · clic para ver todos`, "yellow", {
+          action: "details",
+        });
     }
-    add("↗ Abrir menú completo /haril", "muted", { action: "menu" });
+  }
+
+  section("EXTENSIONES", "extensions", facts.extensionStatuses.length);
+  if (isExpanded("extensions")) {
+    if (facts.extensionStatuses.length === 0) {
+      add("Pi no expone inventario completo", "muted");
+    } else {
+      for (const status of facts.extensionStatuses.slice(0, 3))
+        add(`• ${status}`, "text", { action: "details" });
+      if (facts.extensionStatuses.length > 3)
+        add(`+ ${facts.extensionStatuses.length - 3} estados · ver detalles`, "yellow", {
+          action: "details",
+        });
+    }
   }
 
   if (currentArea === "orchestration") {
@@ -305,23 +322,6 @@ function rightRailContent(
     }
   }
 
-  section("AVISOS", "warnings", warnings.length);
-  if (isExpanded("warnings")) {
-    if (warnings.length === 0) add("Sin alertas conocidas", "muted");
-    else {
-      for (const warning of warnings) add(`! ${warning}`, "error", { action: "focus" });
-    }
-  }
-
-  section("EXTENSIONES", "extensions", facts.extensionStatuses.length);
-  if (isExpanded("extensions")) {
-    if (facts.extensionStatuses.length === 0) {
-      add("Pi no expone inventario completo", "muted");
-    } else {
-      for (const status of facts.extensionStatuses) add(`• ${status}`, "text");
-    }
-  }
-
   section("SESIÓN", "status");
   if (isExpanded("status")) {
     add(`Modelo: ${facts.modelLevel}`, "text");
@@ -329,6 +329,17 @@ function rightRailContent(
     add(`Proyecto: ${facts.project}`, "text");
     add(`Memoria: ${facts.memory}`, "text");
   }
+  section(`ACCIONES · ${LABELS[currentArea]}`, "actions", controls.length);
+  if (isExpanded("actions")) {
+    for (const control of controls) {
+      add(`[${control.hint}] ${control.label}`, "teal", {
+        action: "run",
+        control: control.action,
+      });
+    }
+    add("↗ Abrir menú completo /haril", "muted", { action: "menu" });
+  }
+
   return rows;
 }
 

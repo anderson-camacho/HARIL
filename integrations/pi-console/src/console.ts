@@ -647,7 +647,10 @@ export default function harilConsole(pi: ConsolePi): void {
         switch (rail.action) {
           case "toggle":
             if (rail.section !== undefined) {
-              const baseline = rail.section === "actions" || rail.section === "warnings";
+              const baseline =
+                rail.section === "actions" ||
+                rail.section === "warnings" ||
+                rail.section === "orchestration";
               current.railExpanded[rail.section] = !(
                 current.railExpanded[rail.section] ?? baseline
               );
@@ -665,6 +668,9 @@ export default function harilConsole(pi: ConsolePi): void {
             break;
           case "focus":
             focusRightRail(current);
+            break;
+          case "details":
+            openDashboardAction(current, "details");
             break;
         }
         return { handled: true, render: true };
@@ -729,6 +735,13 @@ export default function harilConsole(pi: ConsolePi): void {
     ];
     if (knownWarnings.length > 0)
       lines.push("HARIL WARNINGS", ...knownWarnings.map((warning) => `! ${warning}`), "");
+    lines.push(
+      "PI EXTENSION STATUS REPORTS",
+      ...(facts.extensionStatuses.length
+        ? facts.extensionStatuses
+        : ["Pi reports no extension statuses; this is not a list of installed packages."]),
+      "",
+    );
     switch (area) {
       case "agents":
         lines.push(`Pi model: ${facts.modelLevel}`, "Observed agents in task records:");
@@ -843,8 +856,6 @@ export default function harilConsole(pi: ConsolePi): void {
           `Memory: ${facts.memory}`,
           `MCP servers (${facts.mcpServers.length}):`,
           ...(facts.mcpServers.length ? facts.mcpServers : ["None reported"]),
-          "Extension statuses:",
-          ...(facts.extensionStatuses.length ? facts.extensionStatuses : ["No status reported"]),
           `Runtime: ${facts.runtime} · pending approvals: ${facts.pending === undefined ? "unavailable" : facts.pending}`,
           `Mode: ${modeLabel(modes.mode())}`,
           !cliAvailable()

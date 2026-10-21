@@ -2,7 +2,8 @@
 
 ## Estado actual
 
-- **Versión actual:** 0.21.7.
+- **Versión actual:** 0.21.8.
+- **Estado (0.21.8):** prioridad visual del panel derecho: avisos y extensiones por encima de acciones largas, límites claros de elementos y acceso a detalles completos; orquestación expandida por defecto para su propia área sin cubrir el chat.
 - **Estado (0.21.7):** menú completo de acciones por módulo en panel derecho interactivo; tarjetas plegables, warnings/extensiones visibles, ruta `Estoy en:`, pequeño indicador ◉ dependiente de métricas; elimina conflicto Alt+F y lo sustituye por `/haril-focus`.
 - **Estado (0.21.6):** columna lateral derecha adaptativa en el encabezado de Pi, modo/extensiones/warnings/proveedor/actividad y resumen de orquestación; Alt+R oculta y Alt+F abre vista enfocada, clic en la columna abre detalle. Terminales estrechas la ocultan automáticamente.
 - **Estado (0.21.5):** selector Alt+H con marco HARIL cian/teal, título, selección resaltada y comportamiento adaptable a terminales pequeñas.

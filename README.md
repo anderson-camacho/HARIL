@@ -277,6 +277,8 @@ El vigilante es código, no un modelo, y no gasta tokens: cada 15 minutos el del
 
 ### Columna lateral y modo enfoque de HARIL
 
+En HARIL 0.21.8 los **avisos**, los **estados de extensiones** y la **orquestación** tienen prioridad sobre las acciones largas cuando el alto de la terminal es reducido. Los bloques muestran hasta tres entradas y dejan abrir el detalle completo desde su fila «ver todos». La orquestación se despliega por defecto en su área, y el menú `/haril` sigue mostrando todas las acciones. La lista de extensiones es de **estados reportados**, no un inventario de extensiones instaladas.
+
 **0.21.7 — panel interactivo:** El bloque derecho contiene tarjetas plegables con flechas ▶/▼ para las **acciones del módulo seleccionado**, avisos, extensiones, sesión y progreso de orquestación. Haz clic en una acción para ejecutarla (se conservan las confirmaciones y restricciones de permisos), o en un título para contraer/expandir. Si hay más contenido del que cabe en la terminal, usa `/haril` para acceder al menú completo. Se muestra `Estoy en: <ruta>` y un indicador discreto `◉`: teal sin actividad, amarillo con runtime o ejecutores activos, rojo cuando el contexto alcanza 85% o está ocupada al menos el 80% de la capacidad de ejecución. El color representa métricas, no supuestos sobre la IA. `Alt+F` **no se utiliza** porque colisiona con el editor de Pi; `/haril-focus` abre el visor completo.
 
 
@@ -727,7 +729,7 @@ Los dossiers de `docs/research/` se leen solo bajo demanda, cuando un documento 
 
 ## Versiones
 
-Versión actual: **0.21.7**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
+Versión actual: **0.21.8**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
 
 ## Licencia
 

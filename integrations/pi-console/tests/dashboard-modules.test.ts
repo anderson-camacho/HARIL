@@ -304,6 +304,62 @@ describe("the console's modules", () => {
     ).toBe(true);
   });
 
+  it("keeps warnings, extension counts and the action menu visible with overflow", () => {
+    const base = facts();
+    const observed: DashboardFacts = {
+      ...base,
+      providerWarnings: ["HARIL provider cliproxy: unreachable"],
+      extensionStatuses: ["ext-1", "ext-2", "ext-3", "ext-4", "ext-5"],
+      data: {
+        ...base.data,
+        errors: Array.from({ length: 10 }, (_, i) => `Provider warning ${i + 1}`),
+      },
+    };
+    const layout = renderHeaderLayout("0.21.8", 160, observed, "tools", THEME, 40, true, {
+      extensions: true,
+    });
+    const screen = layout.lines.map(stripAnsi).join("\n");
+    expect(screen).toContain("AVISOS · 11");
+    expect(screen).toContain("HARIL provider cliproxy: unreachable");
+    expect(screen).toContain("+ 8 avisos · clic para ver todos");
+    expect(screen).toContain("EXTENSIONES · 5");
+    expect(screen).toContain("+ 2 estados · ver detalles");
+    expect(screen).toContain("ACCIONES · TOOLS");
+    expect(layout.railHits?.some((hit) => hit.action === "menu")).toBe(true);
+    expect(layout.railHits?.some((hit) => hit.action === "details")).toBe(true);
+    expect(layout.railHits?.some((hit) => hit.action === "focus")).toBe(true);
+    expect(layout.lines.length).toBeLessThan(28);
+  });
+
+  it("expands the orchestration snapshot by default without hiding warnings", () => {
+    const state = reduceOrchestration(initialOrchestrationState(), {
+      type: "toggle-demo",
+      now: NOW,
+    }).state;
+    const base = facts();
+    const layout = renderHeaderLayout(
+      "0.21.8",
+      160,
+      {
+        ...base,
+        orchestration: state,
+        providerWarnings: ["HARIL provider cliproxy: unreachable"],
+      },
+      "orchestration",
+      THEME,
+      45,
+    );
+    const screen = layout.lines.map(stripAnsi).join("\n");
+    expect(screen).toContain("ORQUESTACIÓN");
+    expect(screen).toContain("Agentes:");
+    expect(screen).toContain("AVISOS · 1");
+    expect(screen).toContain("HARIL provider cliproxy: unreachable");
+    expect(layout.railHits?.some((hit) => hit.action === "details")).toBe(true);
+    expect(
+      layout.railHits?.some((hit) => hit.action === "toggle" && hit.section === "orchestration"),
+    ).toBe(true);
+  });
+
   it("registers one area-picker shortcut and a /command each but /workflows", async () => {
     const fake = fakePi();
     harilConsole(fake.pi);

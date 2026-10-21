@@ -4,6 +4,16 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.21.8
+
+- **Fecha:** 2026-10-20
+- **Estado:** visibilidad de alertas y estado de extensiones en el panel HARIL aunque el menú de acciones sea largo.
+- Los avisos, extensiones y orquestación se muestran antes del menú de acciones para que el recorte por altura no los oculte. Cada grupo muestra hasta tres filas y ofrece acceso al visor completo cuando quedan más.
+- La tarjeta de orquestación se despliega por defecto al seleccionar esa área; otras tarjetas conservan su estado plegado/extendido.
+- El visor de detalles presenta todos los estados de extensiones que Pi comunique, sin confundir estados publicados con paquetes instalados. Mantiene el menú `/haril` como alternativa accesible.
+
+---
+
 ## 0.21.7
 
 - **Fecha:** 2026-10-20
