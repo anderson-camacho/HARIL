@@ -55,14 +55,18 @@ export interface DashboardFacts {
   readonly asciiGlyphs: boolean;
 }
 
+export type RailSection = "actions" | "warnings" | "extensions" | "status" | "orchestration";
+
 export interface HeaderLayout {
   readonly lines: string[];
-  // Clickable side rail: the full HARIL view opens without covering the chat while docked.
+  // Clickable HARIL cards in the header (Pi doesn't expose side-by-side editor panes).
   readonly railHits?: readonly {
     readonly row: number;
     readonly start: number;
     readonly end: number;
-    readonly action: "focus";
+    readonly action: "focus" | "toggle" | "run" | "mode" | "menu";
+    readonly section?: RailSection;
+    readonly control?: DashboardAction;
   }[];
   readonly tabHits: readonly {
     readonly row: number;
@@ -214,49 +218,122 @@ function railWarnings(facts: DashboardFacts): string[] {
   ];
 }
 
+type RailHit = NonNullable<HeaderLayout["railHits"]>[number];
+interface RailRow {
+  readonly line: string;
+  readonly hit?: Pick<RailHit, "action" | "section" | "control">;
+}
+
+function eyeTone(facts: DashboardFacts): "teal" | "yellow" | "error" {
+  // A small, steady indicator driven by measurable context usage or active workers.
+  // It is NOT a guess about the AI's internal feelings or effort.
+  const context = Number.parseFloat(facts.context);
+  const workers = facts.orchestration.snapshot?.capacity.executors;
+  if (
+    context >= 85 ||
+    (workers !== undefined && workers.max > 0 && workers.live / workers.max >= 0.8)
+  )
+    return "error";
+  if (facts.runtime === "running" || (workers?.live ?? 0) > 0) return "yellow";
+  return "teal";
+}
+
 function rightRailContent(
   facts: DashboardFacts,
   area: DashboardArea | undefined,
   width: number,
-): string[] {
-  const line = (label: string, tone: "cyan" | "teal" | "yellow" | "text" | "muted" | "error") =>
-    paddedCell(` ${label}`, width, tone, "panel");
+  expanded: Readonly<Partial<Record<RailSection, boolean>>>,
+): RailRow[] {
+  const rows: RailRow[] = [];
   const warnings = railWarnings(facts);
-  const lines: string[] = [
-    line(`HARIL RIGHT RAIL · ${area === "orchestration" ? "ORCHESTRATION" : "STATUS"}`, "cyan"),
-    line("Click to focus · Alt+F · Alt+R hide", "muted"),
-    statusRow("SESSION", "Pi console active", width),
-    statusRow("PROJECT", facts.project, width),
-    statusRow("MODE", facts.mode ?? "unknown", width),
-    statusRow("MODEL", facts.modelLevel, width),
-    statusRow("RUNTIME", facts.runtime, width),
-  ];
-  const snapshot = facts.orchestration.snapshot;
-  if (area === "orchestration") {
-    if (snapshot === undefined) {
-      lines.push(line("WORKFLOW · none selected", "muted"));
-    } else {
-      lines.push(
-        statusRow("WORKFLOW", snapshot.workflow.state, width),
-        statusRow("AGENTS", `${snapshot.totals.agentsCreated}/${snapshot.totals.agentsCap}`, width),
-        statusRow("QUEUE", String(snapshot.totals.queued), width),
-      );
+  const mode = facts.mode ?? "unknown";
+  const currentArea = area ?? "tools";
+  const controls = controlsFor(
+    currentArea,
+    facts.data,
+    facts.runtime,
+    facts.runtimeAvailable,
+    facts.orchestration.demo,
+    facts.locale ?? DEFAULT_UI_LOCALE,
+  );
+  const isExpanded = (section: RailSection): boolean =>
+    expanded[section] ?? (section === "actions" || section === "warnings");
+  const add = (
+    content: string,
+    tone: "cyan" | "teal" | "yellow" | "text" | "muted" | "error",
+    hit?: RailRow["hit"],
+  ) => rows.push({ line: paddedCell(` ${content}`, width, tone, "panel"), hit });
+  const section = (name: string, id: RailSection, count?: number) => {
+    const countLabel = count === undefined ? "" : ` · ${count}`;
+    add(
+      `${isExpanded(id) ? "▼" : "▶"} ${name}${countLabel}`,
+      id === "warnings" && warnings.length ? "yellow" : "cyan",
+      { action: "toggle", section: id },
+    );
+  };
+
+  const statusEye = visualText("◉", eyeTone(facts), "panel");
+  rows.push({
+    line:
+      statusEye +
+      paddedCell(` HARIL · ${LABELS[currentArea]} · panel`, width - 1, "yellow", "panel"),
+    hit: { action: "focus" },
+  });
+  add(`Estoy en: ${facts.cwd}`, "muted", { action: "focus" });
+  add(`Modo: ${mode}  ·  cambiar ↗`, "yellow", { action: "mode" });
+
+  section(`ACCIONES · ${LABELS[currentArea]}`, "actions", controls.length);
+  if (isExpanded("actions")) {
+    for (const control of controls) {
+      add(`[${control.hint}] ${control.label}`, "teal", {
+        action: "run",
+        control: control.action,
+      });
+    }
+    add("↗ Abrir menú completo /haril", "muted", { action: "menu" });
+  }
+
+  if (currentArea === "orchestration") {
+    section("ORQUESTACIÓN", "orchestration");
+    if (isExpanded("orchestration")) {
+      const snapshot = facts.orchestration.snapshot;
+      if (snapshot === undefined) add("Sin workflow seleccionado", "muted", { action: "focus" });
+      else {
+        add(`Estado: ${snapshot.workflow.state}`, "text", { action: "focus" });
+        add(
+          `Agentes: ${snapshot.totals.agentsCreated}/${snapshot.totals.agentsCap} · cola: ${snapshot.totals.queued}`,
+          "text",
+          { action: "focus" },
+        );
+      }
     }
   }
-  lines.push(
-    line(`EXTENSIONS · ${facts.extensionStatuses.length} reported statuses`, "cyan"),
-    ...(facts.extensionStatuses.length
-      ? [line(`• ${facts.extensionStatuses[0]}`, "text")]
-      : [line("Loaded extension names: Pi startup", "muted")]),
-    line(`WARNINGS · ${warnings.length}`, warnings.length ? "error" : "teal"),
-    ...(warnings.length
-      ? [line(`! ${warnings[0]}`, "error")]
-      : [line("No known HARIL warnings", "muted")]),
-    ...(warnings.length > 1
-      ? [line(`+ ${warnings.length - 1} more · focus for details`, "muted")]
-      : []),
-  );
-  return lines;
+
+  section("AVISOS", "warnings", warnings.length);
+  if (isExpanded("warnings")) {
+    if (warnings.length === 0) add("Sin alertas conocidas", "muted");
+    else {
+      for (const warning of warnings) add(`! ${warning}`, "error", { action: "focus" });
+    }
+  }
+
+  section("EXTENSIONES", "extensions", facts.extensionStatuses.length);
+  if (isExpanded("extensions")) {
+    if (facts.extensionStatuses.length === 0) {
+      add("Pi no expone inventario completo", "muted");
+    } else {
+      for (const status of facts.extensionStatuses) add(`• ${status}`, "text");
+    }
+  }
+
+  section("SESIÓN", "status");
+  if (isExpanded("status")) {
+    add(`Modelo: ${facts.modelLevel}`, "text");
+    add(`Runtime: ${facts.runtime}`, "text");
+    add(`Proyecto: ${facts.project}`, "text");
+    add(`Memoria: ${facts.memory}`, "text");
+  }
+  return rows;
 }
 
 function wideHeader(
@@ -264,10 +341,12 @@ function wideHeader(
   version: string | undefined,
   facts: DashboardFacts,
   selected: DashboardArea | undefined,
+  height: number,
+  expanded: Readonly<Partial<Record<RailSection, boolean>>>,
 ): HeaderLayout {
   const inside = width - 2;
-  // Dock to the FAR RIGHT, not beside the logo. Leave the middle free of status text.
-  const railWidth = Math.min(54, Math.max(42, Math.floor(width * 0.3)));
+  // Right-hand panel is bounded: do not reduce the chat to a few rows.
+  const railWidth = Math.min(56, Math.max(42, Math.floor(width * 0.3)));
   const leftWidth = inside - railWidth - 1;
   const tabLayout = tabs(width, selected);
   const title = ` ${renderBrandMark()} :: SESSION INIT  ·  ${version ?? "HARIL"} `;
@@ -276,18 +355,34 @@ function wideHeader(
     paddedCell(` ${renderBrandMark()}`, leftWidth, "yellow", "base"),
     ...renderBrandArt().map((part) => paddedCell(` ${part}`, leftWidth, "teal", "base")),
     paddedCell(" Many minds. One flow.", leftWidth, "yellow", "base"),
-    paddedCell(" Alt+H areas · Alt+R rail · Alt+F focus", leftWidth, "text", "base"),
+    paddedCell(" Alt+H áreas · Alt+R mostrar/ocultar · /haril acciones", leftWidth, "text", "base"),
   ];
-  const right = rightRailContent(facts, selected, railWidth);
-  const contentRows = Math.max(left.length, right.length);
-  const railHits: NonNullable<HeaderLayout["railHits"]>[number][] = [];
+  const right = rightRailContent(facts, selected, railWidth, expanded);
+  const budget = Math.max(10, Math.min(24, height - 18));
+  const clipped = right.length > budget;
+  const shown = clipped
+    ? [
+        ...right.slice(0, budget - 1),
+        {
+          line: paddedCell(` … ${right.length - budget + 1} filas ocultas · /haril`, railWidth, "yellow", "panel"),
+          hit: { action: "menu" as const },
+        },
+      ]
+    : right;
+  const contentRows = Math.max(left.length, shown.length);
+  const railHits: RailHit[] = [];
   for (let index = 0; index < contentRows; index++) {
     const leftCell = left[index] ?? paddedCell("", leftWidth, "text", "base");
-    const rightCell = right[index] ?? paddedCell("", railWidth, "text", "panel");
+    const rightCell = shown[index]?.line ?? paddedCell("", railWidth, "text", "panel");
     const row = rows.length;
     rows.push(`${frameGlyph("│")}${leftCell}${frameGlyph("│")}${rightCell}${frameGlyph("│")}`);
-    if (index < right.length) {
-      railHits.push({ row, start: leftWidth + 2, end: width - 1, action: "focus" });
+    if (shown[index]?.hit) {
+      railHits.push({
+        row,
+        start: leftWidth + 2,
+        end: width - 1,
+        ...shown[index].hit,
+      });
     }
   }
   rows.push(
@@ -320,10 +415,11 @@ export function renderHeaderLayout(
   _theme: ConsoleTheme,
   height = 24,
   railVisible = true,
+  expanded: Readonly<Partial<Record<RailSection, boolean>>> = {},
 ): HeaderLayout {
   if (width < 10) return { lines: [fit(renderBrandMark(), width)], tabHits: [] };
   if (railVisible && width >= RIGHT_RAIL_MIN_COLUMNS && height >= RIGHT_RAIL_MIN_ROWS)
-    return wideHeader(width, version, facts, selected);
+    return wideHeader(width, version, facts, selected, height, expanded);
   const tabLayout = tabs(width, selected);
   // Wide and sufficiently tall consoles show a static, non-blinking terminal logo.
   // Compact terminals keep the single-line mark instead of consuming chat space.
@@ -342,7 +438,7 @@ export function renderHeaderLayout(
     border(width, "┌", "─", "┐"),
     `${frameGlyph("│")}${paddedCell(` ${renderBrandMark()} ${version ?? ""}`, width - 2, "yellow")}${frameGlyph("│")}`,
     ...brandRows,
-    `${frameGlyph("│")}${paddedCell(` ${facts.project} · ${facts.modelLevel} · ${facts.runtime} · Alt+R sidebar · Alt+F focus`, width - 2, "teal")}${frameGlyph("│")}`,
+    `${frameGlyph("│")}${paddedCell(` ${facts.project} · ${facts.modelLevel} · ${facts.runtime} · Alt+R panel · /haril menú`, width - 2, "teal")}${frameGlyph("│")}`,
     ...tabLayout.lines.map(
       (line) =>
         `${frameGlyph("│")}${paddedCell(line.trimEnd(), width - 2, "cyan")}${frameGlyph("│")}`,
