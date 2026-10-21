@@ -365,9 +365,13 @@ describe("the console's modules", () => {
       const ctx = fakeContext();
       (ctx.ui as { select: unknown }).select = async () => "View area details";
       let handleInput: ((data: string) => void) | undefined;
+      let overlayRender: ((width: number) => string[]) | undefined;
       let overlayOptions: unknown;
       (ctx.ui as { custom: unknown }).custom = (
-        factory: (...args: unknown[]) => { handleInput(data: string): void },
+        factory: (...args: unknown[]) => {
+          handleInput(data: string): void;
+          render(width: number): string[];
+        },
         options: unknown,
       ) =>
         new Promise<void>((resolve) => {
@@ -376,6 +380,7 @@ describe("the console's modules", () => {
             resolve(),
           );
           handleInput = component.handleInput;
+          overlayRender = component.render;
         });
       const host = {
         locale: "en",
@@ -392,6 +397,11 @@ describe("the console's modules", () => {
         overlay: true,
         overlayOptions: { width: "100%", maxHeight: "100%" },
       });
+      const frame = overlayRender?.(60).map(stripAnsi) ?? [];
+      expect(frame[0]?.startsWith("╭")).toBe(true);
+      expect(frame.at(-1)?.startsWith("╰")).toBe(true);
+      expect(frame.every((line) => line.length === 60)).toBe(true);
+      expect(frame.join("\\n")).toContain("HARIL ◉ · TOOLS details");
       handleInput?.(input);
       await opening;
     },
