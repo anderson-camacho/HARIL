@@ -10,6 +10,7 @@ import { type CommandHost, chooseMode, delegationHost, registerCommands } from "
 import {
   type DashboardArea,
   type DashboardFacts,
+  type RailSection,
   renderFooterNavigation,
   renderHeaderLayout,
 } from "./dashboard.js";
@@ -79,6 +80,7 @@ interface Session extends CommandHost {
   extensionStatuses: readonly string[];
   providerWarnings: readonly string[];
   railVisible: boolean;
+  railExpanded: Partial<Record<RailSection, boolean>>;
   model: PiModel | undefined;
   // HARIL's providers as registered in Pi; undefined until `haril models` answers.
   registration: ModelRegistration | undefined;
@@ -378,6 +380,7 @@ export default function harilConsole(pi: ConsolePi): void {
       extensionStatuses: [],
       providerWarnings: [],
       railVisible: true,
+      railExpanded: {},
       model: ctx.model,
       registration: undefined,
       levels: createLevelMemory(pi, () => current.registration?.defaultLevels ?? new Map()),
@@ -624,6 +627,7 @@ export default function harilConsole(pi: ConsolePi): void {
           theme,
           tui.terminal.rows,
           current.railVisible,
+          current.railExpanded,
         );
         return headerLayout.lines;
       },
@@ -640,7 +644,29 @@ export default function harilConsole(pi: ConsolePi): void {
           (item) => item.row === event.y && event.x >= item.start && event.x < item.end,
         );
         if (rail === undefined) return undefined;
-        focusRightRail(current);
+        switch (rail.action) {
+          case "toggle":
+            if (rail.section !== undefined) {
+              const baseline = rail.section === "actions" || rail.section === "warnings";
+              current.railExpanded[rail.section] = !(
+                current.railExpanded[rail.section] ?? baseline
+              );
+              redraw();
+            }
+            break;
+          case "run":
+            if (rail.control !== undefined) openDashboardAction(current, rail.control);
+            break;
+          case "mode":
+            void chooseMode(current, current.ctx);
+            break;
+          case "menu":
+            void current.openActions(current.ctx);
+            break;
+          case "focus":
+            focusRightRail(current);
+            break;
+        }
         return { handled: true, render: true };
       },
       invalidate() {},
@@ -879,16 +905,17 @@ export default function harilConsole(pi: ConsolePi): void {
       const current = session;
       if (current === undefined || !ctx.hasUI || ctx.mode !== "tui") return;
       if ((current.tui?.terminal.columns ?? 0) < 120 || (current.tui?.terminal.rows ?? 0) < 40) {
-        focusRightRail(current);
+        void current.openActions(current.ctx);
         return;
       }
       current.railVisible = !current.railVisible;
       redraw();
     },
   });
-  pi.registerShortcut("alt+f", {
-    description: "Focus the selected HARIL area in a full-screen viewer",
-    handler: (ctx) => {
+  // Alt+F belongs to Pi's editor.cursorWordRight; never override a built-in shortcut.
+  pi.registerCommand("haril-focus", {
+    description: "Open a focused view of the selected HARIL area",
+    handler: async (_args, ctx) => {
       const current = session;
       if (current === undefined || !ctx.hasUI || ctx.mode !== "tui") return;
       focusRightRail(current);

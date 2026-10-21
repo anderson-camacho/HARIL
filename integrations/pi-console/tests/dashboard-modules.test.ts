@@ -155,7 +155,7 @@ describe("the console's modules", () => {
       expect(text).not.toContain("NEURAL LINK");
       expect(text).not.toContain("NEURAL LINK");
       expect(text).toContain("fake-project");
-      expect(text).toContain("fake-model · no reasoning");
+      if (text !== wideText) expect(text).toContain("fake-model · no reasoning");
     }
     expect(narrowText).not.toContain("███████");
     expect(mediumText).toContain("███████");
@@ -163,7 +163,8 @@ describe("the console's modules", () => {
     expect(mediumText).toContain("Many minds. One flow.");
     expect(wideText).toContain("Many minds. One flow.");
     expect(wideText).toContain("fake-project");
-    expect(wideText).toContain("Pi console active");
+    expect(wideText).toContain("Estoy en: fake-cwd");
+    expect(wideText).toContain("Modo: unknown");
     expect(wideText).not.toContain(".-~~~~~~~~~~-.");
     for (const [layout, width] of [
       [narrow, 60],
@@ -187,14 +188,15 @@ describe("the console's modules", () => {
     };
     const layout = renderHeaderLayout("0.21.3", 150, observed, "tools", THEME, 48);
     const text = layout.lines.map(stripAnsi).join("\n");
-    expect(text).toContain("HARIL RIGHT RAIL");
+    expect(text).toContain("HARIL · TOOLS · panel");
     expect(text).toContain("DELEGATION");
-    expect(text).toContain("EXTENSIONS · 2 reported statuses");
-    expect(text).toContain("pi-bridge: ready");
-    expect(text).toContain("WARNINGS · 3");
+    expect(text).toContain("EXTENSIONES · 2");
+    expect(text).not.toContain("pi-bridge: ready");
+    expect(text).toContain("AVISOS · 3");
     expect(text).toContain("HARIL provider cliproxy: unreachable");
-    expect(text).toContain("+ 2 more · focus for details");
-    expect(text).toContain("Pi console active");
+    expect(text).toContain("Project status: unavailable");
+    expect(text).toContain("Activity log: 2 failed record(s)");
+    expect(text).toContain("Estoy en: fake-cwd");
     expect(layout.railHits?.every((hit) => hit.start >= 90)).toBe(true);
     expect(layout.tabHits.map((hit) => hit.area)).toEqual(DASHBOARD_AREAS);
     expect(layout.tabHits.every((hit) => hit.end <= 150 && hit.row < layout.lines.length)).toBe(
@@ -212,9 +214,9 @@ describe("the console's modules", () => {
       48,
     );
     const text = layout.lines.map(stripAnsi).join("\n");
-    expect(text).toContain("EXTENSIONS · 0 reported statuses");
-    expect(text).toContain("Loaded extension names: Pi startup");
-    expect(text).toContain("WARNINGS · 0");
+    expect(text).toContain("EXTENSIONES · 0");
+    expect(text).not.toContain("Pi no expone inventario completo");
+    expect(text).toContain("AVISOS · 0");
   });
 
   it("auto-hides the right rail in narrow or short terminals, and supports manual collapse", () => {
@@ -225,7 +227,7 @@ describe("the console's modules", () => {
     ] as const) {
       const layout = renderHeaderLayout("0.21.6", width, facts(), "tools", THEME, height, visible);
       expect(layout.railHits).toBeUndefined();
-      expect(layout.lines.map(stripAnsi).join("\n")).toContain("Alt+R sidebar");
+      expect(layout.lines.map(stripAnsi).join("\n")).toContain("Alt+R panel");
     }
   });
 
@@ -241,12 +243,65 @@ describe("the console's modules", () => {
       "orchestration",
       THEME,
       48,
+      true,
+      { orchestration: true },
     );
     const text = layout.lines.map(stripAnsi).join("\n");
-    expect(text).toContain("RIGHT RAIL · ORCHESTRATION");
-    expect(text).toContain("WORKFLOW");
-    expect(text).toContain("AGENTS");
+    expect(text).toContain("HARIL · ORCHESTRATION · panel");
+    expect(text).toContain("ORQUESTACIÓN");
+    expect(text).toContain("Agentes:");
     expect(layout.railHits?.length).toBeGreaterThan(5);
+  });
+
+  it("restores real module commands as clickable items in the rail", () => {
+    const base = facts();
+    for (const area of DASHBOARD_AREAS) {
+      const layout = renderHeaderLayout("0.21.7", 160, base, area, THEME, 55);
+      const actions = controlsFor(area, base.data, base.runtime, true, false, "es");
+      const hits = layout.railHits?.filter((hit) => hit.action === "run") ?? [];
+      expect(hits.map((hit) => hit.control)).toEqual(actions.map((control) => control.action));
+      const screen = layout.lines.map(stripAnsi).join("\n");
+      expect(screen).toContain("ACCIONES");
+      expect(screen).toContain("Abrir menú completo");
+      expect(screen).toContain("Estoy en: fake-cwd");
+      expect(screen).toContain("◉");
+    }
+  });
+
+  it("toggles individual rail cards and provides full extensions and mode", () => {
+    const observed: DashboardFacts = {
+      ...facts(),
+      mode: "DELEGATION",
+      context: "91%",
+      extensionStatuses: ["indexer: ready", "provider: ok"],
+      providerWarnings: ["HARIL provider cliproxy: unreachable"],
+    };
+    const collapsed = renderHeaderLayout("0.21.7", 165, observed, "tools", THEME, 60, true, {
+      actions: false,
+      warnings: false,
+      extensions: false,
+      status: false,
+    });
+    expect(collapsed.railHits?.filter((hit) => hit.action === "run")).toHaveLength(0);
+    const collapsedText = collapsed.lines.map(stripAnsi).join("\n");
+    expect(collapsedText).toContain("▶ ACCIONES");
+    expect(collapsedText).toContain("▶ AVISOS");
+    expect(collapsedText).toContain("Modo: DELEGATION");
+    expect(collapsed.railHits?.some((hit) => hit.action === "mode")).toBe(true);
+
+    const expanded = renderHeaderLayout("0.21.7", 165, observed, "tools", THEME, 65, true, {
+      actions: false,
+      warnings: true,
+      extensions: true,
+      status: true,
+    });
+    const expandedText = expanded.lines.map(stripAnsi).join("\n");
+    expect(expandedText).toContain("HARIL provider cliproxy: unreachable");
+    expect(expandedText).toContain("indexer: ready");
+    expect(expandedText).toContain("Modelo: fake-model");
+    expect(
+      expanded.railHits?.some((hit) => hit.action === "toggle" && hit.section === "extensions"),
+    ).toBe(true);
   });
 
   it("registers one area-picker shortcut and a /command each but /workflows", async () => {
@@ -257,7 +312,8 @@ describe("the console's modules", () => {
     expect([...fake.shortcuts.keys()].filter((key) => key.startsWith("ctrl+shift+"))).toEqual([]);
     expect(fake.shortcuts.has("alt+h")).toBe(true);
     expect(fake.shortcuts.has("alt+r")).toBe(true);
-    expect(fake.shortcuts.has("alt+f")).toBe(true);
+    expect(fake.shortcuts.has("alt+f")).toBe(false);
+    expect(fake.commands.has("haril-focus")).toBe(true);
     expect(fake.commands.has("workflows")).toBe(false);
     for (const area of DASHBOARD_AREAS) expect(fake.commands.has(area)).toBe(true);
   });

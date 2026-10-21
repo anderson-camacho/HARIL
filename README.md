@@ -277,10 +277,13 @@ El vigilante es código, no un modelo, y no gasta tokens: cada 15 minutos el del
 
 ### Columna lateral y modo enfoque de HARIL
 
+**0.21.7 — panel interactivo:** El bloque derecho contiene tarjetas plegables con flechas ▶/▼ para las **acciones del módulo seleccionado**, avisos, extensiones, sesión y progreso de orquestación. Haz clic en una acción para ejecutarla (se conservan las confirmaciones y restricciones de permisos), o en un título para contraer/expandir. Si hay más contenido del que cabe en la terminal, usa `/haril` para acceder al menú completo. Se muestra `Estoy en: <ruta>` y un indicador discreto `◉`: teal sin actividad, amarillo con runtime o ejecutores activos, rojo cuando el contexto alcanza 85% o está ocupada al menos el 80% de la capacidad de ejecución. El color representa métricas, no supuestos sobre la IA. `Alt+F` **no se utiliza** porque colisiona con el editor de Pi; `/haril-focus` abre el visor completo.
+
+
 En terminales de **120 columnas y 40 filas o más**, el encabezado HARIL muestra una **columna a la derecha del todo** con sesión, proyecto, modelo, estado de extensiones observadas, avisos de proveedor (como `HARIL provider cliproxy: unreachable`), errores de HARIL y, al seleccionar ORCHESTRATION, el workflow y su progreso. La zona principal no vuelve a mostrar el gran widget de herramientas encima del editor.
 
 - `Alt+R`: ocultar/mostrar la columna derecha. En una terminal pequeña, donde se oculta automáticamente, abre el detalle.
-- `Alt+F`: abrir la vista enfocada de la sección activa (visor de orquestación si estás en ORCHESTRATION).
+- `/haril-focus`: abrir la vista enfocada de la sección activa (visor de orquestación si estás en ORCHESTRATION).
 - Clic en la columna: abrir el detalle en el visor; `Alt+H` o las pestañas seleccionan la sección.
 - `/haril`: menú de las acciones originales.
 
@@ -724,7 +727,7 @@ Los dossiers de `docs/research/` se leen solo bajo demanda, cuando un documento 
 
 ## Versiones
 
-Versión actual: **0.21.6**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
+Versión actual: **0.21.7**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
 
 ## Licencia
 

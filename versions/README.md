@@ -2,7 +2,8 @@
 
 ## Estado actual
 
-- **Versión actual:** 0.21.6.
+- **Versión actual:** 0.21.7.
+- **Estado (0.21.7):** menú completo de acciones por módulo en panel derecho interactivo; tarjetas plegables, warnings/extensiones visibles, ruta `Estoy en:`, pequeño indicador ◉ dependiente de métricas; elimina conflicto Alt+F y lo sustituye por `/haril-focus`.
 - **Estado (0.21.6):** columna lateral derecha adaptativa en el encabezado de Pi, modo/extensiones/warnings/proveedor/actividad y resumen de orquestación; Alt+R oculta y Alt+F abre vista enfocada, clic en la columna abre detalle. Terminales estrechas la ocultan automáticamente.
 - **Estado (0.21.5):** selector Alt+H con marco HARIL cian/teal, título, selección resaltada y comportamiento adaptable a terminales pequeñas.
 - **Estado (0.21.4):** instalador web temporal Windows/Unix y Gentle Shell standalone, actualización desde main con `haril update` sin argumentos ni checkout local, reintentos HTTP/1.1 y documentación de un comando. Todavía no hay releases firmadas ni actualización con rollback.
