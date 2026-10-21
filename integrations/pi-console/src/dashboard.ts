@@ -3,7 +3,7 @@ import { controlsFor, type DashboardAction } from "./dashboard-controls.js";
 import type { DashboardData } from "./dashboard-data.js";
 import { frameGlyph, paddedCell, visualText } from "./dashboard-theme.js";
 import { delegationSummary } from "./delegation-settings.js";
-import { DEFAULT_UI_LOCALE, type UiLocale } from "./locale.js";
+import { DEFAULT_UI_LOCALE, localized, type UiLocale } from "./locale.js";
 import { ASCII_GLYPHS, UNICODE_GLYPHS } from "./orchestration-draw.js";
 import type { OrchestrationState, OrchestrationTarget } from "./orchestration-state.js";
 import { renderOrchestrationSummary } from "./orchestration-view.js";
@@ -105,6 +105,16 @@ const LABELS: Readonly<Record<DashboardArea, string>> = {
   tools: "TOOLS",
   everywhere: "EVERYWHERE",
 };
+const LABELS_ES: Readonly<Record<DashboardArea, string>> = {
+  agents: "AGENTES",
+  orchestration: "ORQUESTACIÓN",
+  automation: "AUTOMATIZACIÓN",
+  tools: "HERRAMIENTAS",
+  everywhere: "EN TODAS PARTES",
+};
+export function areaLabel(area: DashboardArea, locale: UiLocale = DEFAULT_UI_LOCALE): string {
+  return localized(locale, LABELS[area], LABELS_ES[area]);
+}
 const YELLOW: ThemeColor = "warning";
 
 function fit(text: string, width: number): string {
@@ -140,6 +150,7 @@ function boxRow(
 function tabs(
   width: number,
   selected: DashboardArea | undefined,
+  locale: UiLocale = DEFAULT_UI_LOCALE,
 ): {
   lines: string[];
   hits: HeaderLayout["tabHits"];
@@ -154,7 +165,7 @@ function tabs(
     width: 0,
   };
   for (const [index, area] of DASHBOARD_AREAS.entries()) {
-    let label = `${selected === area ? "▶" : ""}[${index + 1} ${LABELS[area]}]`;
+    let label = `${selected === area ? "▶" : ""}[${index + 1} ${areaLabel(area, locale)}]`;
     if (textWidth(label) > usable)
       label = usable >= 3 ? `[${index + 1}]` : usable >= 2 ? `>${index + 1}` : `${index + 1}`;
     const gap = current.items.length === 0 ? 0 : 1;
@@ -239,6 +250,8 @@ function rightRailContent(
   expanded: Readonly<Partial<Record<RailSection, boolean>>>,
 ): RailRow[] {
   const rows: RailRow[] = [];
+  const locale = facts.locale ?? DEFAULT_UI_LOCALE;
+  const say = (en: string, es: string) => localized(locale, en, es);
   const warnings = railWarnings(facts);
   const mode = facts.mode ?? "unknown";
   const currentArea = area ?? "tools";
@@ -270,13 +283,13 @@ function rightRailContent(
   rows.push({
     line:
       statusEye +
-      paddedCell(` HARIL · ${LABELS[currentArea]} · panel`, width - 1, "yellow", "panel"),
+      paddedCell(` HARIL · ${areaLabel(currentArea, locale)} · panel`, width - 1, "yellow", "panel"),
     hit: { action: "focus" },
   });
-  add(`Estoy en: ${facts.cwd}`, "muted", { action: "focus" });
-  add(`Modo: ${mode}  ·  cambiar ↗`, "yellow", { action: "mode" });
+  add(`${say("I am in", "Estoy en")}: ${facts.cwd}`, "muted", { action: "focus" });
+  add(`${say("Mode", "Modo")}: ${mode} · ${say("change", "cambiar")} ↗`, "yellow", { action: "mode" });
 
-  section(`ACCIONES · ${LABELS[currentArea]}`, "actions", controls.length);
+  section(`${say("ACTIONS", "ACCIONES")} · ${areaLabel(currentArea, locale)}`, "actions", controls.length);
   if (isExpanded("actions")) {
     for (const control of controls) {
       add(`[${control.hint}] ${control.label}`, "teal", {
@@ -284,18 +297,18 @@ function rightRailContent(
         control: control.action,
       });
     }
-    add("↗ Abrir menú completo /haril", "muted", { action: "menu" });
+    add(say("↗ Open full /haril menu", "↗ Abrir menú completo /haril"), "muted", { action: "menu" });
   }
 
   if (currentArea === "orchestration") {
-    section("ORQUESTACIÓN", "orchestration");
+    section(say("ORCHESTRATION", "ORQUESTACIÓN"), "orchestration");
     if (isExpanded("orchestration")) {
       const snapshot = facts.orchestration.snapshot;
-      if (snapshot === undefined) add("Sin workflow seleccionado", "muted", { action: "focus" });
+      if (snapshot === undefined) add(say("No workflow selected", "Sin flujo seleccionado"), "muted", { action: "focus" });
       else {
-        add(`Estado: ${snapshot.workflow.state}`, "text", { action: "focus" });
+        add(`${say("State", "Estado")}: ${snapshot.workflow.state}`, "text", { action: "focus" });
         add(
-          `Agentes: ${snapshot.totals.agentsCreated}/${snapshot.totals.agentsCap} · cola: ${snapshot.totals.queued}`,
+          `${say("Agents", "Agentes")}: ${snapshot.totals.agentsCreated}/${snapshot.totals.agentsCap} · ${say("queue", "cola")}: ${snapshot.totals.queued}`,
           "text",
           { action: "focus" },
         );
@@ -303,29 +316,29 @@ function rightRailContent(
     }
   }
 
-  section("AVISOS", "warnings", warnings.length);
+  section(say("WARNINGS", "AVISOS"), "warnings", warnings.length);
   if (isExpanded("warnings")) {
-    if (warnings.length === 0) add("Sin alertas conocidas", "muted");
+    if (warnings.length === 0) add(say("No known warnings", "Sin alertas conocidas"), "muted");
     else {
       for (const warning of warnings) add(`! ${warning}`, "error", { action: "focus" });
     }
   }
 
-  section("EXTENSIONES", "extensions", facts.extensionStatuses.length);
+  section(say("EXTENSIONS", "EXTENSIONES"), "extensions", facts.extensionStatuses.length);
   if (isExpanded("extensions")) {
     if (facts.extensionStatuses.length === 0) {
-      add("Pi no expone inventario completo", "muted");
+      add(say("Pi does not expose the full inventory", "Pi no expone inventario completo"), "muted");
     } else {
       for (const status of facts.extensionStatuses) add(`• ${status}`, "text");
     }
   }
 
-  section("SESIÓN", "status");
+  section(say("SESSION", "SESIÓN"), "status");
   if (isExpanded("status")) {
-    add(`Modelo: ${facts.modelLevel}`, "text");
+    add(`${say("Model", "Modelo")}: ${facts.modelLevel}`, "text");
     add(`Runtime: ${facts.runtime}`, "text");
-    add(`Proyecto: ${facts.project}`, "text");
-    add(`Memoria: ${facts.memory}`, "text");
+    add(`${say("Project", "Proyecto")}: ${facts.project}`, "text");
+    add(`${say("Memory", "Memoria")}: ${facts.memory}`, "text");
   }
   return rows;
 }
@@ -342,14 +355,14 @@ function wideHeader(
   // Right-hand panel is bounded: do not reduce the chat to a few rows.
   const railWidth = Math.min(56, Math.max(42, Math.floor(width * 0.3)));
   const leftWidth = inside - railWidth - 1;
-  const tabLayout = tabs(width, selected);
-  const title = ` ${renderBrandMark()} :: SESSION INIT  ·  ${version ?? "HARIL"} `;
+  const tabLayout = tabs(width, selected, facts.locale ?? DEFAULT_UI_LOCALE);
+  const title = ` ${renderBrandMark()} :: ${localized(facts.locale ?? DEFAULT_UI_LOCALE, "SESSION INIT", "INICIO DE SESIÓN")} · ${version ?? "HARIL"} `;
   const rows = [border(width, "┌", "─", "┐"), frameRow(title, width, "yellow")];
   const left = [
     paddedCell(` ${renderBrandMark()}`, leftWidth, "yellow", "base"),
     ...renderBrandArt().map((part) => paddedCell(` ${part}`, leftWidth, "teal", "base")),
     paddedCell(" Many minds. One flow.", leftWidth, "yellow", "base"),
-    paddedCell(" Alt+H áreas · Alt+R mostrar/ocultar · /haril acciones", leftWidth, "text", "base"),
+    paddedCell(localized(facts.locale ?? DEFAULT_UI_LOCALE, " Alt+H areas · Alt+R show/hide · /haril actions", " Alt+H áreas · Alt+R mostrar/ocultar · /haril acciones"), leftWidth, "text", "base"),
   ];
   const right = rightRailContent(facts, selected, railWidth, expanded);
   const budget = Math.max(10, Math.min(24, height - 18));
@@ -359,7 +372,7 @@ function wideHeader(
         ...right.slice(0, budget - 1),
         {
           line: paddedCell(
-            ` … ${right.length - budget + 1} filas ocultas · /haril`,
+            ` … ${right.length - budget + 1} ${localized(facts.locale ?? DEFAULT_UI_LOCALE, "hidden rows", "filas ocultas")} · /haril`,
             railWidth,
             "yellow",
             "panel",
@@ -387,7 +400,7 @@ function wideHeader(
   }
   rows.push(
     frameRow(
-      `MEMORY ${facts.memory} · CONTEXT ${facts.context} · COST ${facts.cost}`,
+      `${localized(facts.locale ?? DEFAULT_UI_LOCALE, "MEMORY", "MEMORIA")} ${facts.memory} · ${localized(facts.locale ?? DEFAULT_UI_LOCALE, "CONTEXT", "CONTEXTO")} ${facts.context} · ${localized(facts.locale ?? DEFAULT_UI_LOCALE, "COST", "COSTO")} ${facts.cost}`,
       width,
       "yellow",
     ),
@@ -420,7 +433,7 @@ export function renderHeaderLayout(
   if (width < 10) return { lines: [fit(renderBrandMark(), width)], tabHits: [] };
   if (railVisible && width >= RIGHT_RAIL_MIN_COLUMNS && height >= RIGHT_RAIL_MIN_ROWS)
     return wideHeader(width, version, facts, selected, height, expanded);
-  const tabLayout = tabs(width, selected);
+  const tabLayout = tabs(width, selected, facts.locale ?? DEFAULT_UI_LOCALE);
   // Wide and sufficiently tall consoles show a static, non-blinking terminal logo.
   // Compact terminals keep the single-line mark instead of consuming chat space.
   const brandRows =
@@ -428,7 +441,7 @@ export function renderHeaderLayout(
       ? [
           ...renderBrandArt().map((line) => frameRow(line, width, "teal")),
           frameRow(
-            "Many minds. One flow.   ·   Alt+H: areas   ·   /haril: actions",
+            localized(facts.locale ?? DEFAULT_UI_LOCALE, "Many minds. One flow. · Alt+H: areas · /haril: actions", "Muchas mentes. Un flujo. · Alt+H: áreas · /haril: acciones"),
             width,
             "yellow",
           ),
@@ -438,7 +451,7 @@ export function renderHeaderLayout(
     border(width, "┌", "─", "┐"),
     `${frameGlyph("│")}${paddedCell(` ${renderBrandMark()} ${version ?? ""}`, width - 2, "yellow")}${frameGlyph("│")}`,
     ...brandRows,
-    `${frameGlyph("│")}${paddedCell(` ${facts.project} · ${facts.modelLevel} · ${facts.runtime} · Alt+R panel · /haril menú`, width - 2, "teal")}${frameGlyph("│")}`,
+    `${frameGlyph("│")}${paddedCell(` ${facts.project} · ${facts.modelLevel} · ${facts.runtime} · Alt+R panel · /haril ${localized(facts.locale ?? DEFAULT_UI_LOCALE, "menu", "menú")}`, width - 2, "teal")}${frameGlyph("│")}`,
     ...tabLayout.lines.map(
       (line) =>
         `${frameGlyph("│")}${paddedCell(line.trimEnd(), width - 2, "cyan")}${frameGlyph("│")}`,
@@ -455,8 +468,9 @@ export function renderFooterNavigation(
   width: number,
   selected: DashboardArea | undefined,
   _theme: ConsoleTheme,
+  locale: UiLocale = DEFAULT_UI_LOCALE,
 ): FooterNavigationLayout {
-  const layout = tabs(width, selected);
+  const layout = tabs(width, selected, locale);
   return {
     lines: layout.lines,
     tabHits: layout.hits.map((hit) => ({
