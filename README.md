@@ -419,6 +419,18 @@ El vigilante es código, no un modelo, y no gasta tokens: cada 15 minutos el del
 .\bin\haril.ps1 workflow stop <id>
 ```
 
+### Idioma de la interfaz HARIL / HARIL UI language
+
+Puedes cambiar el idioma de los menús y mensajes **propios de HARIL** sin reiniciar la consola:
+
+```text
+/language
+/language es
+/language en
+```
+
+`/language` muestra un selector entre **Español** y **English**; `/language es` y `/language en` cambian directamente. La elección se guarda mediante `haril config set ui.locale <es|en>` y se recupera al iniciar otra sesión. Si falla el guardado, se conserva el idioma anterior y se informa el error. Pi, las extensiones de terceros y el contenido escrito por los modelos mantienen su propio idioma.
+
 ### Columna lateral y modo enfoque de HARIL
 
 En HARIL 0.21.8 los **avisos**, los **estados de extensiones** y la **orquestación** tienen prioridad sobre las acciones largas cuando el alto de la terminal es reducido. Los bloques muestran hasta tres entradas y dejan abrir el detalle completo desde su fila «ver todos». La orquestación se despliega por defecto en su área, y el menú `/haril` sigue mostrando todas las acciones. La lista de extensiones es de **estados reportados**, no un inventario de extensiones instaladas.
