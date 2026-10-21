@@ -669,6 +669,9 @@ export default function harilConsole(pi: ConsolePi): void {
           case "focus":
             focusRightRail(current);
             break;
+          case "details":
+            openDashboardAction(current, "details");
+            break;
         }
         return { handled: true, render: true };
       },
