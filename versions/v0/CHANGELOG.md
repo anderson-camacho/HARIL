@@ -4,6 +4,17 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.21.7
+
+- **Fecha:** 2026-10-20
+- **Estado:** corrección de regresión de HARIL 0.21.6: los controles de cada área vuelven a estar disponibles para clic dentro del panel lateral derecho.
+- Bloques plegables con ▶/▼ para acciones, warnings, extensiones, estado y orquestación; sin widgets grandes en el centro. Menú completo siempre accesible con `/haril`.
+- `Estoy en: <ruta>` en el panel; ojo `◉` discreto que cambia de teal (reposo) a amarillo (runtime/ejecutores activos) o rojo (contexto ≥85% o capacidad de ejecución ≥80%).
+- Retira `Alt+F`, reservado por Pi `tui.editor.cursorWordRight`; `/haril-focus` abre el visor, `Alt+R` muestra/oculta panel y abre el menú de acciones en terminales pequeñas.
+- El historial de Pi sigue desplazándose de forma nativa y puede mostrar líneas de arranque; HARIL no puede moverlas fuera del historial sin una modificación de Pi.
+
+---
+
 ## 0.21.6
 
 - **Fecha:** 2026-10-21
