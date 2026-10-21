@@ -1,6 +1,6 @@
 {
   "name": "haril-monorepo",
-  "version": "0.21.2",
+  "version": "0.21.3",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
@@ -34,7 +34,8 @@
     "e2e:real": "npm run build && npm run build:bridge && node scripts/e2e-real.mjs",
     "e2e:workflow-real": "npm run build && npm run build:bridge && node scripts/e2e-workflow-real.mjs",
     "e2e:stop-real": "npm run build && npm run build:bridge && node scripts/e2e-stop-real.mjs",
-    "e2e:writes-real": "npm run build && npm run build:bridge && node scripts/e2e-writes-real.mjs"
+    "e2e:writes-real": "npm run build && npm run build:bridge && node scripts/e2e-writes-real.mjs",
+    "test:ci:windows": "vitest run --no-file-parallelism --testTimeout=45000 --hookTimeout=30000 --exclude \"**/emergency-stop-processes.test.ts\" --exclude \"**/process-tree.test.ts\" --exclude \"**/startup-sweep.test.ts\" --exclude \"**/process-control.test.ts\" && npm run test:stop && npm run test:scripts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",

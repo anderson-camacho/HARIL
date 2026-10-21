@@ -175,6 +175,46 @@ describe("the console's modules", () => {
     }
   });
 
+  it("pins the current mode, observed extension statuses, and warnings in the left header column", () => {
+    const base = facts();
+    const observed: DashboardFacts = {
+      ...base,
+      mode: "DELEGATION",
+      extensionStatuses: ["pi-bridge: ready", "indexer: healthy"],
+      logFailures: 2,
+      data: { ...base.data, errors: ["Project status: unavailable"] },
+    };
+    const layout = renderHeaderLayout("0.21.3", 150, observed, "tools", THEME, 48);
+    const text = layout.lines.map(stripAnsi).join("\n");
+    expect(text).toContain("SESSION · LIVE STATUS");
+    expect(text).toContain("MODE      DELEGATION");
+    expect(text).toContain("EXTENSIONS · 2 reported statuses");
+    expect(text).toContain("pi-bridge: ready");
+    expect(text).toContain("WARNINGS · 2");
+    expect(text).toContain("Project status: unavailable");
+    expect(text).toContain("Activity log: 2 failed record(s)");
+    expect(text).toContain("Pi console active");
+    expect(layout.tabHits.map((hit) => hit.area)).toEqual(DASHBOARD_AREAS);
+    expect(layout.tabHits.every((hit) => hit.end <= 150 && hit.row < layout.lines.length)).toBe(
+      true,
+    );
+  });
+
+  it("does not mistake missing Pi extension status reports for zero loaded extensions", () => {
+    const layout = renderHeaderLayout(
+      "0.21.3",
+      150,
+      { ...facts(), mode: "ACTION" },
+      "agents",
+      THEME,
+      48,
+    );
+    const text = layout.lines.map(stripAnsi).join("\n");
+    expect(text).toContain("EXTENSIONS · 0 reported statuses");
+    expect(text).toContain("Loaded extension names: Pi startup");
+    expect(text).toContain("WARNINGS · 0");
+  });
+
   it("registers one area-picker shortcut and a /command each but /workflows", async () => {
     const fake = fakePi();
     harilConsole(fake.pi);

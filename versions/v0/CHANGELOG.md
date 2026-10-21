@@ -4,6 +4,16 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.21.3
+
+- **Fecha:** 2026-10-19
+- **Estado:** columna izquierda de estado integrada al encabezado de la terminal.
+- El modo ACTION/CONSULT/PLAN/DELEGATION, los estados de extensiones efectivamente reportados y las advertencias (incluidos errores del log de actividad) tienen un panel ordenado en el encabezado persistente.
+- Se aprovecha mejor la anchura en pantallas grandes; las terminales pequeñas mantienen la vista compacta sin consumir más espacio del chat.
+- La lista de nombres de extensiones cargadas que Pi imprime al iniciar sigue perteneciendo al historial de Pi: el API de estado de extensiones no proporciona ese inventario.
+
+---
+
 ## 0.21.2
 
 - **Fecha:** 2026-10-19

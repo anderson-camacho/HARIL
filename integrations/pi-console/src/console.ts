@@ -264,6 +264,8 @@ export default function harilConsole(pi: ConsolePi): void {
       commands: commands.map((command) => command.name).sort(),
       mcpServers: servers.map((server) => server.name).sort(),
       extensionStatuses: current.extensionStatuses,
+      mode: modeLabel(modes.mode()),
+      logFailures: chatLog.status().failed,
       memory: current.dashboardData.memorySummary,
       data: current.dashboardData,
       loading: current.dashboardLoading,
