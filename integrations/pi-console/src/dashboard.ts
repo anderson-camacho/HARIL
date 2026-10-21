@@ -199,10 +199,10 @@ function frameRow(text: string, width: number, tone: "cyan" | "teal" | "yellow" 
 
 // Pi's extension API exposes statuses, not its startup inventory of loaded extensions.
 // The HARIL rail lives in the header: Pi 1.2.0 does not expose a full-height split-pane API.
-export const RIGHT_RAIL_MIN_COLUMNS = 120;
-export const RIGHT_RAIL_MIN_ROWS = 40;
+const RIGHT_RAIL_MIN_COLUMNS = 120;
+const RIGHT_RAIL_MIN_ROWS = 40;
 
-export function railWarnings(facts: DashboardFacts): string[] {
+function railWarnings(facts: DashboardFacts): string[] {
   return [
     ...new Set([
       ...(facts.providerWarnings ?? []),
