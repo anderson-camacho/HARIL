@@ -4,6 +4,15 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.21.9
+
+- **Fecha:** 2026-10-21
+- **Estado:** guía desde cero de instalación de HARIL en Windows desde PowerShell.
+- README: instalar/verificar Node compatible usando winget o el instalador oficial; instalar Corepack si hace falta; ejecutar el script remoto completo sin clonar repositorio; verificar HARIL/Gentle Shell; resolver PATH y problemas frecuentes; ejecutar haril update.
+- **Sin cambios en el instalador ni en las dependencias**: únicamente documentación y versión de paquete, para respetar las verificaciones automáticas del repositorio.
+
+---
+
 ## 0.21.8
 
 - **Fecha:** 2026-10-20
