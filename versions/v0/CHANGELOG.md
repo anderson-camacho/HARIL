@@ -4,6 +4,14 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.21.5
+
+- **Fecha:** 2026-10-21
+- **Estado:** borde cian/teal y encabezado uniforme para el selector de áreas Alt+H.
+- El selector respeta el ancho disponible, no cambia las flechas ↑/↓, Enter o Esc, y mantiene compatibilidad con ←/→.
+
+---
+
 ## 0.21.4
 
 - **Fecha:** 2026-10-20
