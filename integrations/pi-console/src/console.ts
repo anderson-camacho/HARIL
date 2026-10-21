@@ -10,7 +10,6 @@ import { type CommandHost, chooseMode, delegationHost, registerCommands } from "
 import {
   type DashboardArea,
   type DashboardFacts,
-  renderDashboardLayout,
   renderFooterNavigation,
   renderHeaderLayout,
 } from "./dashboard.js";
@@ -38,8 +37,6 @@ import {
   initialOrchestrationState,
   type OrchestrationAction,
   type OrchestrationState,
-  type OrchestrationTarget,
-  orchestrationClick,
   reduceOrchestration,
   selectedNode,
 } from "./orchestration-state.js";
@@ -80,6 +77,8 @@ interface Session extends CommandHost {
   area: DashboardArea | undefined;
   branch: string | null | undefined;
   extensionStatuses: readonly string[];
+  providerWarnings: readonly string[];
+  railVisible: boolean;
   model: PiModel | undefined;
   // HARIL's providers as registered in Pi; undefined until `haril models` answers.
   registration: ModelRegistration | undefined;
@@ -264,6 +263,7 @@ export default function harilConsole(pi: ConsolePi): void {
       commands: commands.map((command) => command.name).sort(),
       mcpServers: servers.map((server) => server.name).sort(),
       extensionStatuses: current.extensionStatuses,
+      providerWarnings: current.providerWarnings,
       mode: modeLabel(modes.mode()),
       logFailures: chatLog.status().failed,
       memory: current.dashboardData.memorySummary,
@@ -316,18 +316,6 @@ export default function harilConsole(pi: ConsolePi): void {
         ? undefined
         : { workflowId: snapshot.workflow.id, nodeId: node.id },
     );
-  }
-
-  // A click on the ORCHESTRATION summary: a row, a view or "Open full view" opens the overlay there; "Stop all"
-  // simulates in demo and otherwise is STOP ALL.
-  function orchestrationPanelClick(current: Session, target: OrchestrationTarget): void {
-    const transition = orchestrationClick(current.orchestration, target, Date.now(), "panel");
-    current.orchestration = transition.state;
-    if (transition.effect === "open-view") void current.openOrchestrationView(current.ctx);
-    else if (transition.effect === "emergency-stop") void runStopAll(current.ctx);
-    else if (target.kind === "stop" && transition.state.status !== undefined)
-      current.ctx.ui.notify(transition.state.status, "info");
-    redraw();
   }
 
   async function refreshDashboard(current: Session): Promise<void> {
@@ -388,6 +376,8 @@ export default function harilConsole(pi: ConsolePi): void {
       area: undefined,
       branch: undefined,
       extensionStatuses: [],
+      providerWarnings: [],
+      railVisible: true,
       model: ctx.model,
       registration: undefined,
       levels: createLevelMemory(pi, () => current.registration?.defaultLevels ?? new Map()),
@@ -565,46 +555,9 @@ export default function harilConsole(pi: ConsolePi): void {
         ) {
           void refreshDashboard(current);
         }
-        ctx.ui.setWidget(
-          "haril-dashboard",
-          (tui, theme) => {
-            let layout = renderDashboardLayout(
-              area,
-              dashboardFacts(current),
-              80,
-              theme,
-              tui.terminal.rows,
-            );
-            return {
-              render(width) {
-                layout = renderDashboardLayout(
-                  area,
-                  dashboardFacts(current),
-                  width,
-                  theme,
-                  tui.terminal.rows,
-                );
-                return layout.lines;
-              },
-              handleMouse(event: ConsoleMouseEvent) {
-                if (event.type !== "click" || event.button !== "left") return undefined;
-                const inside = (item: { row: number; start: number; end: number }): boolean =>
-                  item.row === event.y && event.x >= item.start && event.x < item.end;
-                const hit = layout.controlHits.find(inside);
-                if (hit !== undefined) {
-                  openDashboardAction(current, hit.action);
-                  return { handled: true, render: true };
-                }
-                const panelHit = layout.orchestrationHits.find(inside);
-                if (panelHit === undefined) return undefined;
-                orchestrationPanelClick(current, panelHit.target);
-                return { handled: true, render: true };
-              },
-              invalidate() {},
-            };
-          },
-          { placement: "aboveEditor" },
-        );
+        // Pi stacks widgets vertically. Hide the huge central module widget:
+        // the area is summarized in the right rail and can be focused with Alt+F.
+        ctx.ui.setWidget("haril-dashboard", undefined);
         redraw();
       },
       async rebind() {
@@ -670,6 +623,7 @@ export default function harilConsole(pi: ConsolePi): void {
           current.area,
           theme,
           tui.terminal.rows,
+          current.railVisible,
         );
         return headerLayout.lines;
       },
@@ -678,8 +632,15 @@ export default function harilConsole(pi: ConsolePi): void {
         const hit = headerLayout.tabHits.find(
           (item) => item.row === event.y && event.x >= item.start && event.x < item.end,
         );
-        if (hit === undefined) return undefined;
-        current.openArea(hit.area);
+        if (hit !== undefined) {
+          current.openArea(hit.area);
+          return { handled: true, render: true };
+        }
+        const rail = headerLayout.railHits?.find(
+          (item) => item.row === event.y && event.x >= item.start && event.x < item.end,
+        );
+        if (rail === undefined) return undefined;
+        focusRightRail(current);
         return { handled: true, render: true };
       },
       invalidate() {},
@@ -731,8 +692,17 @@ export default function harilConsole(pi: ConsolePi): void {
     const data = current.dashboardData;
     const facts = dashboardFacts(current);
     const lines: string[] = [];
-    if (data.errors.length)
-      lines.push("DATA WARNINGS", ...data.errors.map((error) => `! ${error}`), "");
+    const knownWarnings = [
+      ...new Set([
+        ...current.providerWarnings,
+        ...data.errors,
+        ...(chatLog.status().failed > 0
+          ? [`Activity log: ${chatLog.status().failed} failed record(s)`]
+          : []),
+      ]),
+    ];
+    if (knownWarnings.length > 0)
+      lines.push("HARIL WARNINGS", ...knownWarnings.map((warning) => `! ${warning}`), "");
     switch (area) {
       case "agents":
         lines.push(`Pi model: ${facts.modelLevel}`, "Observed agents in task records:");
@@ -867,6 +837,7 @@ export default function harilConsole(pi: ConsolePi): void {
     const registration = await registerHarilModels(pi, current.ctx);
     if (current.closed) return;
     current.registration = registration;
+    current.providerWarnings = registration.notes;
     if (current.ctx.hasUI && (reason === "startup" || reason === "reload")) {
       for (const note of registration.notes) current.ctx.ui.notify(note, "warning");
     }
@@ -875,6 +846,11 @@ export default function harilConsole(pi: ConsolePi): void {
       if (restored !== undefined && !current.closed) current.model = restored;
     }
     redraw();
+  }
+
+  function focusRightRail(current: Session): void {
+    if (current.area === "orchestration") void current.openOrchestrationView(current.ctx);
+    else openDashboardAction(current, "details");
   }
 
   registerCommands(pi, () => session);
@@ -897,6 +873,28 @@ export default function harilConsole(pi: ConsolePi): void {
         });
     },
   });
+  pi.registerShortcut("alt+r", {
+    description: "Show or hide the HARIL right rail (focus on narrow terminals)",
+    handler: (ctx) => {
+      const current = session;
+      if (current === undefined || !ctx.hasUI || ctx.mode !== "tui") return;
+      if ((current.tui?.terminal.columns ?? 0) < 120 || (current.tui?.terminal.rows ?? 0) < 40) {
+        focusRightRail(current);
+        return;
+      }
+      current.railVisible = !current.railVisible;
+      redraw();
+    },
+  });
+  pi.registerShortcut("alt+f", {
+    description: "Focus the selected HARIL area in a full-screen viewer",
+    handler: (ctx) => {
+      const current = session;
+      if (current === undefined || !ctx.hasUI || ctx.mode !== "tui") return;
+      focusRightRail(current);
+    },
+  });
+
   // Alt+O is free in Pi 1.2.0's default keybindings (docs/keybindings.md and the pi-tui/coding-agent defaults).
   pi.registerShortcut("alt+o", {
     description: "Open the HARIL orchestration view",
