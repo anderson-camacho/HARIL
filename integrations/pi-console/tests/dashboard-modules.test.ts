@@ -288,14 +288,7 @@ describe("the console's modules", () => {
       false,
     );
     expect(collapsed.railHits).toBeUndefined();
-    const tooShort = renderHeaderLayout(
-      "0.21.10",
-      144,
-      observed,
-      "orchestration",
-      THEME,
-      23,
-    );
+    const tooShort = renderHeaderLayout("0.21.10", 144, observed, "orchestration", THEME, 23);
     expect(tooShort.railHits).toBeUndefined();
   });
 
