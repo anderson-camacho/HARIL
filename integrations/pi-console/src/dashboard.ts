@@ -227,42 +227,33 @@ function rightRailContent(
     line("Click to focus · Alt+F · Alt+R hide", "muted"),
     statusRow("SESSION", "Pi console active", width),
     statusRow("PROJECT", facts.project, width),
-    statusRow("PATH", facts.cwd, width),
-    statusRow(
-      "GIT",
-      facts.branch === undefined ? "unavailable" : (facts.branch ?? "not a repository"),
-      width,
-    ),
     statusRow("MODE", facts.mode ?? "unknown", width),
     statusRow("MODEL", facts.modelLevel, width),
     statusRow("RUNTIME", facts.runtime, width),
   ];
   const snapshot = facts.orchestration.snapshot;
   if (area === "orchestration") {
-    lines.push(line("WORKFLOW", "yellow"));
     if (snapshot === undefined) {
-      lines.push(line("No workflow selected · Alt+O to focus", "muted"));
+      lines.push(line("WORKFLOW · none selected", "muted"));
     } else {
       lines.push(
-        statusRow("STATE", snapshot.workflow.state, width),
-        statusRow("ID", snapshot.workflow.id, width),
+        statusRow("WORKFLOW", snapshot.workflow.state, width),
         statusRow("AGENTS", `${snapshot.totals.agentsCreated}/${snapshot.totals.agentsCap}`, width),
         statusRow("QUEUE", String(snapshot.totals.queued), width),
-        statusRow("TOKENS", String(snapshot.totals.tokensUsed), width),
       );
     }
   }
   lines.push(
     line(`EXTENSIONS · ${facts.extensionStatuses.length} reported statuses`, "cyan"),
     ...(facts.extensionStatuses.length
-      ? facts.extensionStatuses.slice(0, 2).map((status) => line(`• ${status}`, "text"))
+      ? [line(`• ${facts.extensionStatuses[0]}`, "text")]
       : [line("Loaded extension names: Pi startup", "muted")]),
     line(`WARNINGS · ${warnings.length}`, warnings.length ? "error" : "teal"),
     ...(warnings.length
-      ? warnings.slice(0, 3).map((warning) => line(`! ${warning}`, "error"))
+      ? [line(`! ${warnings[0]}`, "error")]
       : [line("No known HARIL warnings", "muted")]),
-    ...(warnings.length > 3
-      ? [line(`+ ${warnings.length - 3} more · focus for details`, "muted")]
+    ...(warnings.length > 1
+      ? [line(`+ ${warnings.length - 1} more · focus for details`, "muted")]
       : []),
   );
   return lines;
