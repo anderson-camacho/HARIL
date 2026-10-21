@@ -681,7 +681,7 @@ export default function harilConsole(pi: ConsolePi): void {
           const statuses = [...footerData.getExtensionStatuses().values()];
           current.branch = footerData.getGitBranch();
           current.extensionStatuses = statuses;
-          navigation = renderFooterNavigation(width, current.area, theme);
+          navigation = renderFooterNavigation(width, current.area, theme, current.locale);
           bar = renderBarLayout(facts(current, statuses, footerData.getGitBranch()), width, theme);
           return [...bar.lines, ...navigation.lines];
         },
@@ -880,6 +880,69 @@ export default function harilConsole(pi: ConsolePi): void {
   }
 
   registerCommands(pi, () => session);
+
+  // /language and its friendly /lenguage alias apply immediately and persist to haril.json.
+  // We reuse HARIL's validated config CLI; never hand-edit project configuration here.
+  async function selectLanguage(raw: string, ctx: ConsoleContext): Promise<void> {
+    const current = session;
+    if (current === undefined) return;
+    const term = raw.trim().toLowerCase();
+    let selection: "es" | "en" | undefined;
+    if (["es", "esp", "español", "espanol", "spanish"].includes(term)) selection = "es";
+    else if (["en", "eng", "english", "inglés", "ingles"].includes(term)) selection = "en";
+    else if (term === "") {
+      if (!ctx.hasUI) return;
+      const spanish = current.locale === "es" ? "Español (es) ✓" : "Español (es)";
+      const english = current.locale === "en" ? "English (en) ✓" : "English (en)";
+      const picked = await ctx.ui.select(
+        current.locale === "es" ? "Idioma de HARIL" : "HARIL language",
+        [spanish, english],
+      );
+      if (picked === undefined || session !== current || current.closed) return;
+      selection = picked === spanish ? "es" : "en";
+    } else {
+      ctx.ui.notify(
+        current.locale === "es"
+          ? "Uso: /language [es|en] (alias: /lenguage)"
+          : "Usage: /language [es|en] (alias: /lenguage)",
+        "warning",
+      );
+      return;
+    }
+    if (selection === undefined) return;
+    if (selection === current.locale) {
+      ctx.ui.notify(selection === "es" ? "HARIL ya está en español." : "HARIL is already in English.", "info");
+      return;
+    }
+    const saved = await runHaril(["config", "set", "ui.locale", selection, "--json"], {
+      cwd: current.cwd,
+      timeoutMs: 10_000,
+    });
+    if (!saved.ok || session !== current || current.closed) {
+      ctx.ui.notify(
+        `${selection === "es" ? "No se pudo guardar el idioma" : "Could not save language"}: ${saved.stderr.trim() || NOT_LAUNCHED}`,
+        "error",
+      );
+      return;
+    }
+    current.locale = selection;
+    current.showOutput(
+      selection === "es" ? "Idioma actualizado" : "Language updated",
+      [
+        selection === "es"
+          ? "Los controles y menús de HARIL ahora están en español."
+          : "HARIL controls and menus are now in English.",
+      ],
+    );
+    redraw();
+  }
+  for (const name of ["language", "lenguage"]) {
+    pi.registerCommand(name, {
+      description: "HARIL: switch interface language / cambiar idioma (es/en)",
+      handler: (raw, ctx) => selectLanguage(raw, ctx),
+    });
+  }
+
   // Alt+H is absent from Pi 1.2.0's default keybindings; Alt+O/X/M are already used by this extension and are
   // documented as working on Windows, so this follows the same terminal-compatible shortcut contract.
   pi.registerShortcut("alt+h", {
@@ -889,7 +952,7 @@ export default function harilConsole(pi: ConsolePi): void {
       if (current === undefined || !ctx.hasUI || ctx.mode !== "tui") return;
       void ctx.ui
         .custom<TabPickerResult | undefined>(
-          (tui, theme, _keybindings, done) => createTabPicker(current.area, done, tui, theme),
+          (tui, theme, _keybindings, done) => createTabPicker(current.area, done, tui, theme, current.locale),
           { overlay: true },
         )
         .then((result) => {
