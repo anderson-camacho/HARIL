@@ -368,10 +368,24 @@ describe("the console's modules", () => {
     expect([...fake.shortcuts.keys()].filter((key) => key.startsWith("ctrl+shift+"))).toEqual([]);
     expect(fake.shortcuts.has("alt+h")).toBe(true);
     expect(fake.shortcuts.has("alt+r")).toBe(true);
+    expect(fake.commands.has("language")).toBe(true);
     expect(fake.shortcuts.has("alt+f")).toBe(false);
     expect(fake.commands.has("haril-focus")).toBe(true);
     expect(fake.commands.has("workflows")).toBe(false);
     for (const area of DASHBOARD_AREAS) expect(fake.commands.has(area)).toBe(true);
+  });
+
+  it("renders English or Spanish rail labels according to ui.locale", () => {
+    for (const [locale, expected] of [
+      ["es", "Estoy en: fake-cwd"],
+      ["en", "I am in: fake-cwd"],
+    ] as const) {
+      const rendered = renderHeaderLayout(
+        "0.21.9", 160, { ...facts(), locale }, "tools", THEME, 55,
+      ).lines.map(stripAnsi).join("\n");
+      expect(rendered).toContain(expected);
+      expect(rendered).toContain(locale === "es" ? "ACCIONES" : "ACTIONS");
+    }
   });
 
   it("draws a fixed-width HARIL teal border around the area chooser", () => {
