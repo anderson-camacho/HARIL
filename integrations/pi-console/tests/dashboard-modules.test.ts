@@ -380,9 +380,9 @@ describe("the console's modules", () => {
       ["es", "Estoy en: fake-cwd"],
       ["en", "I am in: fake-cwd"],
     ] as const) {
-      const rendered = renderHeaderLayout(
-        "0.21.9", 160, { ...facts(), locale }, "tools", THEME, 55,
-      ).lines.map(stripAnsi).join("\n");
+      const rendered = renderHeaderLayout("0.21.9", 160, { ...facts(), locale }, "tools", THEME, 55)
+        .lines.map(stripAnsi)
+        .join("\n");
       expect(rendered).toContain(expected);
       expect(rendered).toContain(locale === "es" ? "ACCIONES" : "ACTIONS");
     }
