@@ -64,7 +64,7 @@ export interface HeaderLayout {
     readonly row: number;
     readonly start: number;
     readonly end: number;
-    readonly action: "focus" | "toggle" | "run" | "mode" | "menu";
+    readonly action: "focus" | "details" | "toggle" | "run" | "mode" | "menu";
     readonly section?: RailSection;
     readonly control?: DashboardAction;
   }[];
@@ -283,10 +283,10 @@ function rightRailContent(
   if (isExpanded("warnings")) {
     if (warnings.length === 0) add("Sin alertas conocidas", "muted");
     else {
-      for (const warning of warnings.slice(0, 3)) add(`! ${warning}`, "error", { action: "focus" });
+      for (const warning of warnings.slice(0, 3)) add(`! ${warning}`, "error", { action: "details" });
       if (warnings.length > 3)
         add(`+ ${warnings.length - 3} avisos · clic para ver todos`, "yellow", {
-          action: "focus",
+          action: "details",
         });
     }
   }
@@ -296,10 +296,11 @@ function rightRailContent(
     if (facts.extensionStatuses.length === 0) {
       add("Pi no expone inventario completo", "muted");
     } else {
-      for (const status of facts.extensionStatuses.slice(0, 3)) add(`• ${status}`, "text");
+      for (const status of facts.extensionStatuses.slice(0, 3))
+        add(`• ${status}`, "text", { action: "details" });
       if (facts.extensionStatuses.length > 3)
         add(`+ ${facts.extensionStatuses.length - 3} estados · ver detalles`, "yellow", {
-          action: "focus",
+          action: "details",
         });
     }
   }
