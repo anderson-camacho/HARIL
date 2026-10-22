@@ -4,6 +4,32 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.22.0
+
+- **Fecha:** 2026-10-21
+- **Estado:** cambio de idioma de la interfaz propia de HARIL mediante /language; traducción inicial de la barra derecha, con persistencia de preferencia y comunicación de fallos.
+
+### Añadido
+
+- Comando `/language` con selector Español / English y opciones directas `/language es` y `/language en`.
+- Persistencia de `ui.locale` a través del CLI, manteniendo la selección anterior si falla el guardado.
+- Prueba de etiquetas principales de la barra lateral en ambos idiomas.
+
+### Cambiado
+
+- Etiquetas principales de ruta, modo, proyecto, modelo, avisos, extensiones, sesión y acciones según el idioma configurado.
+- README con instrucciones de selección de idioma y límites respecto a mensajes de Pi, modelos y extensiones externas.
+
+### Corregido
+
+- Formato exigido por Biome en la implementación del comando, el panel y sus pruebas.
+
+### Verificación
+
+- En la ejecución previa del CI de Ubuntu pasaron Biome, TypeScript, comprobaciones de arquitectura y dependencias. La suite completa de CI de esta versión requiere confirmación.
+
+---
+
 ## 0.21.9
 
 - **Fecha:** 2026-10-21
