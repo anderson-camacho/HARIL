@@ -2,7 +2,8 @@
 
 ## Estado actual
 
-- **Versión actual:** 0.21.9.
+- **Versión actual:** 0.22.0.
+- **Estado (0.22.0):** selector /language para cambiar entre español e inglés en la interfaz propia de HARIL, persistencia ui.locale, mensajes de error si falla el guardado y traducción inicial del panel derecho. La localización completa de diagnósticos y pantallas adicionales sigue pendiente.
 - **Estado (0.21.9):** documentación integral de instalación Windows 11 sin clonar repositorio: requisitos Node/Corepack, winget, PowerShell de un comando, verificación de Gentle Shell, diagnósticos de PATH, actualizaciones y enlaces oficiales.
 - **Estado (0.21.8):** prioridad visual del panel derecho: avisos y extensiones por encima de acciones largas, límites claros de elementos y acceso a detalles completos; orquestación expandida por defecto para su propia área sin cubrir el chat.
 - **Estado (0.21.7):** menú completo de acciones por módulo en panel derecho interactivo; tarjetas plegables, warnings/extensiones visibles, ruta `Estoy en:`, pequeño indicador ◉ dependiente de métricas; elimina conflicto Alt+F y lo sustituye por `/haril-focus`.
@@ -59,4 +60,4 @@ Las versiones 0.x son preliminares: pueden cambiar sin compatibilidad hacia atr�
 
 Más reciente primero. Cada carpeta contiene el archivo de cambios de su versión mayor, con las versiones menores y de parche, la más nueva arriba.
 
-- [v0](v0/CHANGELOG.md): versiones 0.1.0 a 0.21.0.
+- [v0](v0/CHANGELOG.md): versiones 0.1.0 a 0.22.0.

@@ -890,6 +890,71 @@ export default function harilConsole(pi: ConsolePi): void {
     else openDashboardAction(current, "details");
   }
 
+  // HARIL-only language switch. Pi's own diagnostics and model text retain their original language.
+  pi.registerCommand("language", {
+    description: "HARIL: cambiar idioma / change UI language (es, en)",
+    getArgumentCompletions: (prefix: string) =>
+      [
+        { value: "es", label: "es", description: "Español" },
+        { value: "en", label: "en", description: "English" },
+      ].filter((item) => item.value.startsWith(prefix.trim().toLowerCase())),
+    async handler(args, ctx) {
+      const current = session;
+      if (current === undefined) return;
+      const input = args.trim().toLowerCase();
+      let choice = input;
+      if (choice === "") {
+        const picked = await ctx.ui.select(
+          current.locale === "es" ? "Idioma de HARIL" : "HARIL language",
+          ["Español", "English"],
+        );
+        if (picked === undefined) return;
+        choice = picked === "Español" ? "es" : "en";
+      }
+      if (choice !== "es" && choice !== "en") {
+        ctx.ui.notify("Uso / Usage: /language [es|en]", "warning");
+        return;
+      }
+      if (choice === current.locale) {
+        ctx.ui.notify(
+          choice === "es" ? "HARIL ya está en español." : "HARIL is already in English.",
+          "info",
+        );
+        return;
+      }
+      if (!cliAvailable()) {
+        ctx.ui.notify(
+          choice === "es"
+            ? "No se puede guardar el idioma sin el CLI de HARIL."
+            : "Cannot save language without the HARIL CLI.",
+          "error",
+        );
+        return;
+      }
+      const previous = current.locale;
+      const result = await runHaril(["config", "set", "ui.locale", choice, "--json"], {
+        cwd: current.cwd,
+        timeoutMs: 10_000,
+      });
+      if (!result.ok) {
+        ctx.ui.notify(
+          choice === "es"
+            ? "No se pudo guardar el idioma. La preferencia anterior se mantiene."
+            : "Could not save language. The previous preference remains active.",
+          "error",
+        );
+        return;
+      }
+      current.locale = choice;
+      redraw();
+      ctx.ui.notify(
+        choice === "es" ? "Idioma de HARIL: Español" : "HARIL language: English",
+        "info",
+      );
+      if (previous !== choice && current.area !== undefined) current.openArea(current.area);
+    },
+  });
+
   registerCommands(pi, () => session);
   // Alt+H is absent from Pi 1.2.0's default keybindings; Alt+O/X/M are already used by this extension and are
   // documented as working on Windows, so this follows the same terminal-compatible shortcut contract.
