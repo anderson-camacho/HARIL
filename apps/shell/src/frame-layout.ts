@@ -111,6 +111,36 @@ export function joinColumns(
   return lines;
 }
 
+// Three persistent, full-height panes share one terminal renderer. Unlike a Pi extension header,
+// this compositor reserves columns on every body row, so a future chat viewport can sit between
+// a plugin dock and HARIL controls without either sidebar entering the conversation history.
+// This is a rendering primitive only; it does not attach a Pi session or change the active shell.
+export function joinThreeColumns(
+  left: readonly Line[],
+  leftWidth: number,
+  center: readonly Line[],
+  centerWidth: number,
+  right: readonly Line[],
+  rightWidth: number,
+  height: number,
+): Segment[][] {
+  if (
+    [leftWidth, centerWidth, rightWidth, height].some((size) => !Number.isInteger(size) || size < 0)
+  )
+    throw new RangeError("pane widths and height must be non-negative integers");
+  const lines: Segment[][] = [];
+  for (let index = 0; index < height; index++) {
+    lines.push([
+      ...padLine(left[index] ?? [], leftWidth),
+      segment(" ", "text"),
+      ...padLine(center[index] ?? [], centerWidth),
+      segment(" ", "text"),
+      ...padLine(right[index] ?? [], rightWidth),
+    ]);
+  }
+  return lines;
+}
+
 // One line of `width` cells with `left` at the start and `right` at the end. When both do not fit, the left part is
 // cut so the right part stays whole.
 export function bar(left: Line, right: Line, width: number): Segment[] {
