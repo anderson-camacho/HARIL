@@ -666,6 +666,21 @@ El lanzador selecciona `--tui-mode fullscreen` para habilitar los eventos de mou
 
 `haril shell` sigue abriendo la interfaz anterior, descrita a continuación, ya sin la caja Taxis.
 
+### Preferencias del futuro panel de plugins (0.22.2)
+
+El futuro panel izquierdo tendrá inicialmente cinco espacios: Explorador, Git, YouTube, Memoria y Temas. Ya se puede guardar su **orden y visibilidad** desde PowerShell, sin abrir la interfaz:
+
+```powershell
+haril plugins list
+haril plugins hide youtube
+haril plugins move youtube up
+haril plugins show youtube
+haril plugins list --json
+haril plugins reset
+```
+
+Las preferencias se guardan en `ui.plugins` de `haril.json`, sin borrar otras opciones. **Este paso todavía no instala, carga ni desactiva extensiones de Pi, ni modifica visualmente la consola `haril`.** Es la base comprobable que usará el próximo panel real; la integración con paquetes/extensiones de Pi se validará por separado.
+
 ### M4: interfaz de terminal (`haril shell`)
 
 `haril shell` abre la interfaz de terminal propia de HARIL, la que abría `haril` hasta la 0.7.0; desde la 0.8.0, `haril` sin subcomando abre la [consola sobre Pi](#m4-consola-de-haril-sobre-pi-haril) y esta interfaz se abre con `haril shell`. Necesita una terminal real (Windows Terminal o PowerShell); sin ella `haril shell` sale con 2. La interfaz no escribe en la base: cada acción ejecuta un comando `haril` corto. No consulta la base en bucle: los datos se cargan al abrir, con `r`, después de cada acción y cuando el runtime en marcha avisa de un cambio.
@@ -885,7 +900,7 @@ Los dossiers de `docs/research/` se leen solo bajo demanda, cuando un documento 
 
 ## Versiones
 
-Versión actual: **0.22.1**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
+Versión actual: **0.22.2**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
 
 ## Licencia
 

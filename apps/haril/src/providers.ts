@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { posix, win32 } from "node:path";
 import {
+  dockPreferenceErrors,
   envSecretRef,
   HARIL_CONFIG_TOP_LEVEL_KEYS,
   isUiLocale,
@@ -141,7 +142,7 @@ export function loadProviderConfig(
 // F7; delegation-section.ts). Anything else is refused. haril shell reads the same list from @haril/contracts.
 const TOP_LEVEL_KEYS: ReadonlySet<string> = new Set(HARIL_CONFIG_TOP_LEVEL_KEYS);
 const THEME_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-const UI_KEYS: ReadonlySet<string> = new Set(["theme", "locale"]);
+const UI_KEYS: ReadonlySet<string> = new Set(["theme", "locale", "plugins"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -185,6 +186,7 @@ function uiErrors(ui: unknown): string[] {
   if ("locale" in ui && !isUiLocale(ui.locale)) {
     errors.push('/ui/locale: must be "es" or "en"');
   }
+  if ("plugins" in ui) errors.push(...dockPreferenceErrors(ui.plugins));
   return errors;
 }
 

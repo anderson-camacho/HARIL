@@ -2,7 +2,8 @@
 
 ## Estado actual
 
-- **Versión actual:** 0.22.1.
+- **Versión actual:** 0.22.2.
+- **Estado (0.22.2):** preferencias persistentes del futuro dock de plugins izquierdo (`haril plugins list|show|hide|move|reset`), sin instalar ni descargar extensiones Pi todavía. Se mantiene sin cambios el aspecto de la consola Pi actual.
 - **Estado (0.22.1):** prueba técnica de tres columnas de altura completa en el compositor del shell y decisión de arquitectura documentada. La consola Pi de `haril` no cambia; la compatibilidad RPC/SDK y los paneles definitivos quedan expresamente pendientes de validación.
 - **Estado (0.22.0):** selector /language para cambiar entre español e inglés en la interfaz propia de HARIL, persistencia ui.locale, mensajes de error si falla el guardado y traducción inicial del panel derecho. La localización completa de diagnósticos y pantallas adicionales sigue pendiente.
 - **Estado (0.21.9):** documentación integral de instalación Windows 11 sin clonar repositorio: requisitos Node/Corepack, winget, PowerShell de un comando, verificación de Gentle Shell, diagnósticos de PATH, actualizaciones y enlaces oficiales.
@@ -61,4 +62,4 @@ Las versiones 0.x son preliminares: pueden cambiar sin compatibilidad hacia atr�
 
 Más reciente primero. Cada carpeta contiene el archivo de cambios de su versión mayor, con las versiones menores y de parche, la más nueva arriba.
 
-- [v0](v0/CHANGELOG.md): versiones 0.1.0 a 0.22.1.
+- [v0](v0/CHANGELOG.md): versiones 0.1.0 a 0.22.2.

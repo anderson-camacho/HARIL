@@ -12,6 +12,7 @@ import { methodology } from "./commands/methodology.js";
 import { metrics } from "./commands/metrics.js";
 import { models } from "./commands/models.js";
 import { plan } from "./commands/plan.js";
+import { plugins } from "./commands/plugins.js";
 import { project } from "./commands/project.js";
 import { quota } from "./commands/quota.js";
 import { resume } from "./commands/resume.js";
@@ -64,6 +65,7 @@ const HELP_LINES = [
   "  haril config get [<path>] [--json]   a setting or a group of haril.json (default: delegation) with its source",
   "  haril config set <path> <value> | --reset [--json]   change one delegation setting (checked, other keys kept)",
   "  haril models [--json] [--provider <id>]   list the models of every provider as <provider>/<model> (haril.json)",
+  "  haril plugins list|show|hide|move|reset   save plugin dock visibility and order (Pi extensions unchanged)",
   "  haril quota [--json] [--provider <id>]   5-hour and weekly quota of each account (CLIProxyAPI management API,",
   "    key in CLIPROXYAPI_MANAGEMENT_KEY or delegation.quota.managementKeyEnv) and the model cooldowns; sin dato if unknown",
   "  haril difficulty show [--json]   the difficulty table: per class its recommended models and cost levels, and the",
@@ -180,6 +182,8 @@ function dispatch(argv: readonly string[], io: CliIo, host: HostInfo): number | 
       return quota(rest, io, host);
     case "models":
       return models(rest, io, host);
+    case "plugins":
+      return plugins(rest, io, host);
     case "states":
       return states(rest, io);
     case "plan":
