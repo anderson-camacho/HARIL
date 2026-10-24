@@ -4,6 +4,30 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.22.2
+
+- **Fecha:** 2026-10-24
+- **Estado:** registro y preferencias persistentes de los cinco espacios del futuro dock izquierdo; no altera aún el aspecto de Pi ni su mecanismo de extensiones.
+
+### Añadido
+
+- Contrato de slots `explorer`, `git`, `youtube`, `memory` y `themes`, con orden y visibilidad definidos.
+- Comando `haril plugins list|show|hide|move|reset` (también `--json`) y pruebas herméticas de persistencia y validación.
+
+### Cambiado
+
+- `ui.plugins` se guarda en `haril.json`, manteniendo otras preferencias y formato del archivo; la operación es atómica.
+
+### Corregido
+
+- Configuraciones duplicadas, desconocidas o mal formadas se rechazan antes de escribir; la interfaz no confunde preferencias de visualización con el inventario real de extensiones instaladas en Pi.
+
+### Verificación
+
+- Pruebas de CLI y configuración, tipos TypeScript, Biome y comprobaciones de versión del monorepositorio.
+
+---
+
 ## 0.22.1
 
 - **Fecha:** 2026-10-24

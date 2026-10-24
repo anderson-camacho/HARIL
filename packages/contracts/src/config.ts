@@ -26,6 +26,15 @@ export const UiConfigSchema = Type.Object(
   {
     theme: Type.Optional(Type.String({ pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$" })),
     locale: Type.Optional(UiLocaleSchema),
+    plugins: Type.Optional(
+      Type.Array(
+        Type.Object(
+          { id: Type.String(), visible: Type.Boolean() },
+          { additionalProperties: false },
+        ),
+        { maxItems: 5 },
+      ),
+    ),
   },
   { additionalProperties: false },
 );
