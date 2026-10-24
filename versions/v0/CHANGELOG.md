@@ -4,6 +4,30 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.22.1
+
+- **Fecha:** 2026-10-24
+- **Estado:** estudio de viabilidad de una consola de tres columnas reales, sin alterar la interfaz Pi predeterminada.
+
+### Añadido
+
+- Compositor puro `joinThreeColumns()` en `apps/shell`, con pruebas de dimensiones, truncamiento Unicode, estilos y geometría inválida.
+- Documento `apps/shell/ARCHITECTURE.md` con inventario de las dos interfaces existentes y las puertas de compatibilidad antes de integrar Pi en un host visual propio.
+
+### Cambiado
+
+- Se fija una ruta propuesta que reutiliza la TUI y los temas de `apps/shell`; la elección RPC/SDK queda condicionada a probar el Pi instalado por HARIL y sus extensiones.
+
+### Corregido
+
+- Se documenta explícitamente que los paneles del encabezado de Pi no son laterales a toda altura y que `ctx.ui.custom()` y otros métodos de interfaz no se trasladan directamente a RPC.
+
+### Verificación
+
+- Se completaron 283 pruebas del paquete shell, `tsc --noEmit -p apps/shell` y Biome en los archivos editados; la comprobación integral del monorepositorio se repetirá con esta versión.
+
+---
+
 ## 0.22.0
 
 - **Fecha:** 2026-10-21

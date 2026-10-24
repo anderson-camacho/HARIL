@@ -5,6 +5,7 @@ import {
   box,
   fitLine,
   joinColumns,
+  joinThreeColumns,
   type Line,
   lineText,
   padLine,
@@ -80,6 +81,49 @@ describe("joinColumns", () => {
   it("cuts a column line that is wider than its column", () => {
     const [line] = joinColumns([text("abcdefghij")], 5, [text("xyz")], 3, 1).map(lineText);
     expect(line).toBe("abcd… xyz");
+  });
+});
+
+describe("joinThreeColumns (three-pane feasibility spike)", () => {
+  it("reserves independent left, chat and right widths on every row", () => {
+    const rows = joinThreeColumns(
+      [text("plugins"), text("Git")],
+      10,
+      [text("conversation"), text("Pi streaming")],
+      14,
+      [text("orchestration")],
+      12,
+      3,
+    ).map(lineText);
+    expect(rows).toHaveLength(3);
+    expect(rows.every((row) => visibleWidth(row) === 38)).toBe(true);
+    expect(rows[0]?.slice(0, 10).trimEnd()).toBe("plugins");
+    expect(rows[0]?.slice(11, 25).trimEnd()).toBe("conversation");
+    expect(rows[0]?.slice(26)).toBe("orchestrati…");
+    expect(rows[1]?.slice(26)).toBe(" ".repeat(12));
+    expect(rows[2]).toBe(" ".repeat(38));
+  });
+
+  it("clips one pane without moving neighbors and keeps segment tones", () => {
+    const lines = joinThreeColumns(
+      [[{ text: "界世界", tone: "accent" }]],
+      5,
+      [[{ text: "chat", tone: "text" }]],
+      6,
+      [[{ text: "agents", tone: "ok" }]],
+      6,
+      1,
+    );
+    expect(lines).toHaveLength(1);
+    expect(visibleWidth(lineText(lines[0] ?? []))).toBe(19);
+    expect(lines[0]?.map((part) => part.tone)).toContain("accent");
+    expect(lines[0]?.map((part) => part.tone)).toContain("ok");
+    expect(lineText(lines[0] ?? []).endsWith("agents")).toBe(true);
+  });
+
+  it("rejects invalid geometry before writing terminal output", () => {
+    expect(() => joinThreeColumns([], -1, [], 10, [], 10, 20)).toThrow(RangeError);
+    expect(() => joinThreeColumns([], 4, [], 4, [], 4, 1.5)).toThrow(RangeError);
   });
 });
 
