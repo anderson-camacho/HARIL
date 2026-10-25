@@ -2,6 +2,7 @@
 // install only when its layoutRoot implements the @earendil-works/pi-tui layout-node contract. Never replace Pi's
 // editor, scrollback or chat; reuse its original layout node as the centre of the three-column stack.
 import { paddedCell, visualText } from "./dashboard-theme.js";
+import type { DockDetails } from "./dock-details.js";
 import type { ConsoleMouseEvent, ConsoleTui } from "./pi-types.js";
 import { plainText } from "./text.js";
 
@@ -56,6 +57,7 @@ export function readDockSlots(raw: unknown): DockSlot[] {
 export interface PaneSettings {
   slots: DockSlot[];
   selected: DockId;
+  detail: DockDetails | undefined;
   leftVisible: boolean;
   rightVisible: boolean;
 }
@@ -64,6 +66,7 @@ export function initialPaneSettings(): PaneSettings {
   return {
     slots: readDockSlots(undefined),
     selected: "explorer",
+    detail: undefined,
     leftVisible: true,
     rightVisible: true,
   };
@@ -74,6 +77,7 @@ export function renderLeftDock(
   height: number,
   state: PaneSettings,
   project: string,
+  detailOffset = 0,
 ): string[] {
   if (width < 3 || height < 1) return [];
   const inside = width - 1;
@@ -101,9 +105,19 @@ export function renderLeftDock(
     );
   }
   rows.push(line("", "muted"));
+  const selection = LABELS.get(state.selected)?.label ?? state.selected;
+  rows.push(line(` ─ ${selection.toUpperCase()} ─`, "cyan"));
+  rows.push(line(` ${state.detail?.status ?? "Cargando vista…"}`, "teal"));
+  const detail = state.detail?.id === state.selected ? state.detail.lines : [];
+  const budget = Math.max(0, height - rows.length - 10);
+  for (const item of detail.slice(detailOffset, detailOffset + budget)) rows.push(line(` ${item}`));
+  if (detailOffset + budget < detail.length) rows.push(line(" ↕ rueda para más", "muted"));
+  rows.push(line("", "muted"));
   rows.push(line(" ─ ACCESOS ─", "cyan"));
+  rows.push(line(" /haril-plugin", "teal"));
   rows.push(line(" /haril-plugins", "teal"));
   rows.push(line(" /haril-dock", "teal"));
+  if (process.platform === "win32") rows.push(line(" Alt+Z  Plugins", "muted"));
   rows.push(line(" Alt+H  Áreas", "muted"));
   rows.push(line(" Alt+R  Panel der.", "muted"));
   rows.push(line("", "muted"));
@@ -162,14 +176,28 @@ export function attachNativePanes(
   if (root[HARIL_OWNER] !== undefined || root[GENTLE_SIDEBAR] !== undefined) return inactive();
   const original = root[LAYOUT_NODE] as LayoutFn;
   let alive = true;
+  let detailOffset = 0;
   const left = {
     render(width: number) {
-      return renderLeftDock(width, Math.max(1, tui.terminal.rows), state, options.project());
+      return renderLeftDock(
+        width,
+        Math.max(1, tui.terminal.rows),
+        state,
+        options.project(),
+        detailOffset,
+      );
     },
     handleMouse(event: ConsoleMouseEvent) {
+      if (event.type === "wheel") {
+        const max = Math.max(0, (state.detail?.lines.length ?? 0) - 6);
+        detailOffset = Math.max(0, Math.min(max, detailOffset + (event.wheelDelta ?? 0)));
+        tui.requestRender();
+        return { handled: true, render: true };
+      }
       if (event.type !== "click" || event.button !== "left") return undefined;
       const selected = state.slots.filter((slot) => slot.visible)[event.y - 4];
       if (!selected) return undefined;
+      detailOffset = 0;
       options.select(selected.id);
       return { handled: true, render: true };
     },

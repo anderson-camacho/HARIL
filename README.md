@@ -685,6 +685,20 @@ Desde la interfaz Pi, `/haril-plugins` abre un menú para mostrar, ocultar, subi
 
 Las preferencias quedan en `ui.plugins` de `haril.json`, sin borrar otras opciones. **Un espacio visible no significa que su extensión Pi exista o esté ejecutándose**: YouTube, Explorador, Git, Memoria y Temas son lugares reservados para la integración de extensiones reales en próximos PR. Este PR no instala ni desactiva paquetes Pi. La unión de paneles se realiza mediante un adaptador interno experimental, se revierte al cerrar la sesión y deberá validarse manualmente en Windows Terminal antes de considerarse estable.
 
+#### Navegación y vistas de plugins (0.22.4)
+
+En **Windows nativo**, `Alt+Z` abre un selector de plugins: presiona inmediatamente `1`–`5` según el orden de **espacios visibles**, o usa ↑/↓ y `Enter`; `Esc` cancela sin tocar el texto que estabas escribiendo a Pi. En **WSL**, Pi reserva `Alt+Z` para deshacer texto, así que HARIL no intercepta ese atajo: usa `/haril-plugin` como alternativa. La selección cambia la información visible dentro de la columna izquierda; la conversación central permanece intacta.
+
+| Acción dentro de Pi | Resultado |
+| --- | --- |
+| `Alt+Z`, después número (Windows nativo) | Abre directamente el espacio visible correspondiente; también ↑/↓ + Enter. |
+| `/haril-plugin` | Abre el selector de espacios. |
+| `/haril-plugin git` o `/haril-plugin 2` | Selecciona el espacio y muestra sus detalles completos en una vista cerrable con `Esc`. |
+| `/haril-plugin details` | Abre el detalle del espacio actual. |
+| Clic en un espacio de la izquierda | Lo selecciona y actualiza su ficha sin sustituir el chat. |
+
+Las fichas disponibles son de **solo lectura**: Explorador muestra archivos/carpetas del directorio abierto (sin abrir sus contenidos); Git muestra `git status`; Memoria consulta `haril memory status`. YouTube informa si Pi expone el comando `/yt` y cómo acceder a [pi-youtube-player](https://github.com/CinloDev/pi-youtube-player); **no instala ni inicia el reproductor**. Temas explica los temas incluidos de Pi y el acceso a `/settings → Theme`; el cambio directo de tema desde el dock se deja para otra etapa.
+
 ### M4: interfaz de terminal (`haril shell`)
 
 `haril shell` abre la interfaz de terminal propia de HARIL, la que abría `haril` hasta la 0.7.0; desde la 0.8.0, `haril` sin subcomando abre la [consola sobre Pi](#m4-consola-de-haril-sobre-pi-haril) y esta interfaz se abre con `haril shell`. Necesita una terminal real (Windows Terminal o PowerShell); sin ella `haril shell` sale con 2. La interfaz no escribe en la base: cada acción ejecuta un comando `haril` corto. No consulta la base en bucle: los datos se cargan al abrir, con `r`, después de cada acción y cuando el runtime en marcha avisa de un cambio.
@@ -904,7 +918,7 @@ Los dossiers de `docs/research/` se leen solo bajo demanda, cuando un documento 
 
 ## Versiones
 
-Versión actual: **0.22.3**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
+Versión actual: **0.22.4**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
 
 ## Licencia
 

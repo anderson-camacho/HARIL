@@ -108,7 +108,7 @@ function samePath(left: string, right: string): boolean {
   return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 
-async function showInlineDetails(
+export async function showInlineDetails(
   ctx: ConsoleContext,
   title: string,
   lines: readonly string[],

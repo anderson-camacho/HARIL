@@ -4,6 +4,31 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.22.4
+
+- **Fecha:** 2026-10-24
+- **Estado:** primer teclado numérico para el dock y vistas read-only de plugins integradas en las columnas reales de Pi.
+
+### Añadido
+
+- `Alt+Z`, después `1`–`5` o flechas y Enter, para seleccionar plugins visibles en Windows; `/haril-plugin [id|número|details]` para elegir y ver sus detalles.
+- Vistas del Explorador (nombres de archivos y directorios), Git (`git status`), Memoria (`haril memory status`) y estado honesto de YouTube/Temas.
+- Pruebas del selector, lectura de datos y flujo completo del comando dentro de la extensión de Pi.
+
+### Cambiado
+
+- La columna izquierda reutiliza espacio libre para mostrar la ficha del plugin seleccionado, con desplazamiento mediante rueda y sin reemplazar el chat de Pi.
+
+### Corregido
+
+- En WSL se preserva `Alt+Z` para deshacer texto de Pi, en lugar de robar su atajo; no se confunden ranuras visuales con extensiones realmente instaladas.
+
+### Verificación
+
+- TypeScript, Biome, suite de Pi y compilación de su extensión; revisión manual del selector en Windows Terminal pendiente al crear el PR.
+
+---
+
 ## 0.22.3
 
 - **Fecha:** 2026-10-24

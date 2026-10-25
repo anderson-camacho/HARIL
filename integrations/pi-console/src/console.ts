@@ -15,12 +15,18 @@ import {
   renderHeaderLayout,
   renderNativeRailContent,
 } from "./dashboard.js";
-import { openDashboardActionMenu, runDashboardAction } from "./dashboard-actions.js";
+import {
+  openDashboardActionMenu,
+  runDashboardAction,
+  showInlineDetails,
+} from "./dashboard-actions.js";
 import type { DashboardAction } from "./dashboard-controls.js";
 import { type DashboardData, emptyDashboardData, loadDashboardData } from "./dashboard-data.js";
 import { paddedCell } from "./dashboard-theme.js";
 import { delegateFromChat } from "./delegation.js";
 import { effectText, sourceText, valueText } from "./delegation-settings.js";
+import { loadDockDetails } from "./dock-details.js";
+import { createDockPicker, type DockPickerResult, dockSlotAt } from "./dock-navigation.js";
 import { stopAll } from "./emergency.js";
 import { DEFAULT_UI_LOCALE, readConsoleLocale, type UiLocale } from "./locale.js";
 import { installModes } from "./mode-controller.js";
@@ -89,6 +95,7 @@ interface Session extends CommandHost {
   tui: ConsoleTui | undefined;
   nativePanes: NativePanes | undefined;
   dock: PaneSettings;
+  dockLoadSeq: number;
   area: DashboardArea | undefined;
   branch: string | null | undefined;
   extensionStatuses: readonly string[];
@@ -391,6 +398,7 @@ export default function harilConsole(pi: ConsolePi): void {
       tui: undefined,
       nativePanes: undefined,
       dock: initialPaneSettings(),
+      dockLoadSeq: 0,
       area: undefined,
       branch: undefined,
       extensionStatuses: [],
@@ -774,8 +782,7 @@ export default function harilConsole(pi: ConsolePi): void {
         ];
       },
       select(id) {
-        current.dock.selected = id;
-        redraw();
+        void openDockSlot(current, id);
       },
     });
     if (mounted.attached) current.nativePanes = mounted;
@@ -791,7 +798,36 @@ export default function harilConsole(pi: ConsolePi): void {
     if (!current.dock.slots.some((slot) => slot.visible && slot.id === current.dock.selected)) {
       current.dock.selected = current.dock.slots.find((slot) => slot.visible)?.id ?? "explorer";
     }
+    if (current.dock.detail?.id !== current.dock.selected)
+      void openDockSlot(current, current.dock.selected);
     current.nativePanes?.refresh();
+  }
+
+  async function openDockSlot(current: Session, id: PaneSettings["selected"]): Promise<void> {
+    if (!current.dock.slots.some((slot) => slot.id === id && slot.visible)) {
+      current.ctx.ui.notify("Ese espacio está oculto. Muéstralo con /haril-plugins.", "warning");
+      return;
+    }
+    const seq = ++current.dockLoadSeq;
+    current.dock.selected = id;
+    current.dock.detail = undefined;
+    redraw();
+    const commands = safely(() => pi.getCommands().map((command) => command.name), []);
+    const details = await loadDockDetails(id, current.cwd, { piCommands: commands });
+    if (current.closed || session !== current || current.dockLoadSeq !== seq) return;
+    current.dock.detail = details;
+    current.nativePanes?.refresh();
+  }
+
+  async function pickDockSlot(current: Session, ctx: ConsoleContext): Promise<void> {
+    if (!ctx.hasUI || ctx.mode !== "tui") return;
+    const result = await ctx.ui.custom<DockPickerResult | undefined>(
+      (tui, _theme, _keys, done) =>
+        createDockPicker(current.dock.slots, current.dock.selected, done, tui),
+      { overlay: true },
+    );
+    if (result?.type !== "open" || current.closed || session !== current) return;
+    await openDockSlot(current, result.id);
   }
 
   function dashboardDetails(
@@ -1033,6 +1069,48 @@ export default function harilConsole(pi: ConsolePi): void {
   });
 
   registerCommands(pi, () => session);
+  pi.registerCommand("haril-plugin", {
+    description:
+      "Open a HARIL dock view: /haril-plugin [explorer|git|youtube|memory|themes|1..5|details]",
+    handler: async (args, ctx) => {
+      const current = session;
+      if (current === undefined || !ctx.hasUI || ctx.mode !== "tui") return;
+      const word = args.trim().toLowerCase();
+      if (word === "") {
+        await pickDockSlot(current, ctx);
+        return;
+      }
+      const id =
+        word === "details"
+          ? current.dock.selected
+          : /^[1-9]$/.test(word)
+            ? dockSlotAt(current.dock.slots, Number(word))?.id
+            : DOCK_LABELS.find((slot) => slot.id === word)?.id;
+      if (id === undefined) {
+        ctx.ui.notify(
+          "Uso: /haril-plugin [explorer|git|youtube|memory|themes|1..5|details]",
+          "warning",
+        );
+        return;
+      }
+      if (word !== "details") await openDockSlot(current, id);
+      const detail = current.dock.detail;
+      if (detail?.id === id && !current.closed && session === current) {
+        await showInlineDetails(ctx, detail.title, [detail.status, ...detail.lines]);
+      }
+    },
+  });
+  // In Pi 1.2.0 Alt+Z is the WSL undo shortcut. On native Windows it is free; leave WSL's editor binding alone.
+  if (process.platform === "win32") {
+    pi.registerShortcut("alt+z", {
+      description: "Open HARIL's plugin selector (then press 1..5, arrows, Enter or Esc)",
+      handler: (ctx) => {
+        const current = session;
+        if (current === undefined || !ctx.hasUI || ctx.mode !== "tui") return;
+        void pickDockSlot(current, ctx);
+      },
+    });
+  }
   pi.registerCommand("haril-plugins", {
     description:
       "Manage HARIL's visible plugin dock slots and their order (not installed Pi packages)",
@@ -1180,6 +1258,7 @@ export default function harilConsole(pi: ConsolePi): void {
     modes.restore(ctx);
     installUi(current);
     current.openArea("agents");
+    void openDockSlot(current, current.dock.selected);
     if (!cliAvailable()) return;
     void reloadDockSlots(current);
     // The project, the HARIL state and the models arrive after the first frame: the bar shows the folder until then.
