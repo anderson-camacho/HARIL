@@ -13,10 +13,12 @@ import {
   type RailSection,
   renderFooterNavigation,
   renderHeaderLayout,
+  renderNativeRailContent,
 } from "./dashboard.js";
 import { openDashboardActionMenu, runDashboardAction } from "./dashboard-actions.js";
 import type { DashboardAction } from "./dashboard-controls.js";
 import { type DashboardData, emptyDashboardData, loadDashboardData } from "./dashboard-data.js";
+import { paddedCell } from "./dashboard-theme.js";
 import { delegateFromChat } from "./delegation.js";
 import { effectText, sourceText, valueText } from "./delegation-settings.js";
 import { stopAll } from "./emergency.js";
@@ -31,6 +33,16 @@ import {
   restoreHarilModel,
 } from "./models.js";
 import { modeLabel } from "./modes.js";
+import {
+  attachNativePanes,
+  DOCK_LABELS,
+  initialPaneSettings,
+  MIN_PANE_COLUMNS,
+  MIN_PANE_ROWS,
+  type NativePanes,
+  type PaneSettings,
+  readDockSlots,
+} from "./native-panes.js";
 import { ASCII_GLYPHS, orchestrationGlyphs } from "./orchestration-draw.js";
 import { createWorkflowFeed, type WorkflowFeed } from "./orchestration-feed.js";
 import { openOrchestrationOverlay } from "./orchestration-overlay.js";
@@ -75,6 +87,8 @@ interface Session extends CommandHost {
   pending: readonly PendingApproval[];
   pendingAvailable: boolean;
   tui: ConsoleTui | undefined;
+  nativePanes: NativePanes | undefined;
+  dock: PaneSettings;
   area: DashboardArea | undefined;
   branch: string | null | undefined;
   extensionStatuses: readonly string[];
@@ -375,6 +389,8 @@ export default function harilConsole(pi: ConsolePi): void {
       pendingAvailable: false,
       started: undefined,
       tui: undefined,
+      nativePanes: undefined,
+      dock: initialPaneSettings(),
       area: undefined,
       branch: undefined,
       extensionStatuses: [],
@@ -619,6 +635,21 @@ export default function harilConsole(pi: ConsolePi): void {
     let headerLayout: ReturnType<typeof renderHeaderLayout> = { lines: [], tabHits: [] };
     ctx.ui.setHeader((tui, theme) => ({
       render(width) {
+        // Full-height sidebars own the panels; repeat neither the giant logo nor the old header rail above Pi chat.
+        if (
+          current.nativePanes?.attached &&
+          tui.terminal.columns >= MIN_PANE_COLUMNS &&
+          tui.terminal.rows >= MIN_PANE_ROWS &&
+          (current.dock.leftVisible || current.dock.rightVisible)
+        ) {
+          headerLayout = { lines: [], tabHits: [] };
+          return [
+            theme.fg(
+              "warning",
+              ` ◉ HARIL ${version ?? ""}  ·  ${current.project?.slug ?? folderName(current.cwd)}  ·  Alt+H áreas  ·  /haril`,
+            ),
+          ];
+        }
         headerLayout = renderHeaderLayout(
           version === "" ? undefined : version,
           width,
@@ -679,6 +710,7 @@ export default function harilConsole(pi: ConsolePi): void {
     }));
     ctx.ui.setFooter((tui, theme, footerData) => {
       current.tui = tui;
+      mountNativePanes(current, tui);
       const unsubscribe = footerData.onBranchChange(() => tui.requestRender());
       let navigation = renderFooterNavigation(80, current.area, theme);
       let bar: BarLayout = { lines: [], hits: [] };
@@ -715,6 +747,51 @@ export default function harilConsole(pi: ConsolePi): void {
         dispose: unsubscribe,
       };
     });
+    // A zero-row widget gives access to Pi's live TUI after its layout root is ready. It does not push the editor,
+    // consume transcript rows, or create an output panel. Footer mounting above is a second safe attempt.
+    ctx.ui.setWidget("haril-native-panes-anchor", (tui) => {
+      mountNativePanes(current, tui);
+      return { render: () => [], invalidate() {} };
+    });
+  }
+
+  function mountNativePanes(current: Session, tui: ConsoleTui): void {
+    if (current.closed || current.nativePanes?.attached) return;
+    const mounted = attachNativePanes(tui, current.dock, {
+      project: () => current.project?.slug ?? folderName(current.cwd),
+      right: (width) => {
+        const selection = DOCK_LABELS.find((item) => item.id === current.dock.selected);
+        const label = selection?.label ?? current.dock.selected;
+        return [
+          // The selected item is a UI slot, not a claim about the installation state of a Pi extension.
+          paddedCell(` ▣ Espacio: ${label}`, width, "yellow", "panel"),
+          ...renderNativeRailContent(
+            dashboardFacts(current),
+            current.area,
+            width,
+            current.railExpanded,
+          ),
+        ];
+      },
+      select(id) {
+        current.dock.selected = id;
+        redraw();
+      },
+    });
+    if (mounted.attached) current.nativePanes = mounted;
+  }
+
+  async function reloadDockSlots(current: Session): Promise<void> {
+    if (!cliAvailable()) return;
+    const config = await runHarilJson(["config", "get", "ui.plugins", "--json"], {
+      timeoutMs: 10_000,
+    });
+    if (current.closed) return;
+    current.dock.slots = readDockSlots(config);
+    if (!current.dock.slots.some((slot) => slot.visible && slot.id === current.dock.selected)) {
+      current.dock.selected = current.dock.slots.find((slot) => slot.visible)?.id ?? "explorer";
+    }
+    current.nativePanes?.refresh();
   }
 
   function dashboardDetails(
@@ -956,6 +1033,61 @@ export default function harilConsole(pi: ConsolePi): void {
   });
 
   registerCommands(pi, () => session);
+  pi.registerCommand("haril-plugins", {
+    description:
+      "Manage HARIL's visible plugin dock slots and their order (not installed Pi packages)",
+    handler: async (_args, ctx) => {
+      const current = session;
+      if (current === undefined || !ctx.hasUI || ctx.mode !== "tui") return;
+      if (!cliAvailable()) {
+        ctx.ui.notify(NOT_LAUNCHED, "warning");
+        return;
+      }
+      await reloadDockSlots(current);
+      const choices = current.dock.slots.map((slot, index) => {
+        const label = DOCK_LABELS.find((item) => item.id === slot.id)?.label ?? slot.id;
+        return `${index + 1}. ${label} · ${slot.visible ? "visible" : "oculto"}`;
+      });
+      const picked = await ctx.ui.select("Administrar dock izquierdo", choices);
+      if (!picked || session !== current || current.closed) return;
+      const selected = current.dock.slots[choices.indexOf(picked)];
+      if (!selected) return;
+      const operations = ["Mostrar", "Ocultar", "Subir", "Bajar"];
+      const action = await ctx.ui.select("¿Qué quieres hacer?", operations);
+      if (!action || session !== current || current.closed) return;
+      const index = operations.indexOf(action);
+      const args =
+        index < 2
+          ? ["plugins", index === 0 ? "show" : "hide", selected.id]
+          : ["plugins", "move", selected.id, index === 2 ? "up" : "down"];
+      const result = await runHaril(args, { cwd: current.cwd });
+      if (!result.ok) {
+        ctx.ui.notify(result.stderr || "No fue posible modificar los plugins", "error");
+        return;
+      }
+      await reloadDockSlots(current);
+      ctx.ui.notify("Dock actualizado (no se instalaron ni desactivaron extensiones Pi)", "info");
+    },
+  });
+  pi.registerCommand("haril-dock", {
+    description: "Show or hide HARIL's native left and right sidebars: /haril-dock left|right|both",
+    handler: async (args, ctx) => {
+      const current = session;
+      if (current === undefined || !ctx.hasUI || ctx.mode !== "tui") return;
+      const target = args.trim().toLowerCase() || "right";
+      if (target !== "left" && target !== "right" && target !== "both") {
+        ctx.ui.notify("Uso: /haril-dock left|right|both", "warning");
+        return;
+      }
+      if (target === "both") {
+        const visible = !(current.dock.leftVisible && current.dock.rightVisible);
+        current.dock.leftVisible = visible;
+        current.dock.rightVisible = visible;
+      } else if (target === "left") current.dock.leftVisible = !current.dock.leftVisible;
+      else current.dock.rightVisible = !current.dock.rightVisible;
+      current.nativePanes?.refresh();
+    },
+  });
   // Alt+H is absent from Pi 1.2.0's default keybindings; Alt+O/X/M are already used by this extension and are
   // documented as working on Windows, so this follows the same terminal-compatible shortcut contract.
   pi.registerShortcut("alt+h", {
@@ -980,6 +1112,11 @@ export default function harilConsole(pi: ConsolePi): void {
     handler: (ctx) => {
       const current = session;
       if (current === undefined || !ctx.hasUI || ctx.mode !== "tui") return;
+      if (current.nativePanes?.attached) {
+        current.dock.rightVisible = !current.dock.rightVisible;
+        current.nativePanes.refresh();
+        return;
+      }
       if ((current.tui?.terminal.columns ?? 0) < 120 || (current.tui?.terminal.rows ?? 0) < 40) {
         void current.openActions(current.ctx);
         return;
@@ -1027,6 +1164,8 @@ export default function harilConsole(pi: ConsolePi): void {
   // A session ends: its timer stops and its watch and tail children end with it.
   function closeSession(ended: Session): void {
     ended.closed = true;
+    ended.nativePanes?.close();
+    ended.nativePanes = undefined;
     followTimer(ended);
     ended.feed.close();
   }
@@ -1042,6 +1181,7 @@ export default function harilConsole(pi: ConsolePi): void {
     installUi(current);
     current.openArea("agents");
     if (!cliAvailable()) return;
+    void reloadDockSlots(current);
     // The project, the HARIL state and the models arrive after the first frame: the bar shows the folder until then.
     void current.rebind().then(() => current.refresh());
     void loadModels(current, event.reason);

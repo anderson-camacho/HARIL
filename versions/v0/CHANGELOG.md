@@ -4,6 +4,31 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.22.3
+
+- **Fecha:** 2026-10-24
+- **Estado:** primera integración experimental de tres columnas reales en la consola Pi predeterminada, conservando intacto el chat y los controles nativos; fallback automático a la interfaz anterior.
+
+### Añadido
+
+- Adaptador del layout nativo de Pi para dock izquierdo, conversación central y rail derecho a toda altura; reutiliza el contenido vivo de agentes, avisos, orquestación, acciones y eventos recientes.
+- Menú `/haril-plugins` para gestionar orden/visibilidad sin abandonar Pi y comando `/haril-dock left|right|both` para alternar columnas.
+- Pruebas de composición, restauración, preferencias y montaje real de la extensión contra un Pi simulado.
+
+### Cambiado
+
+- El encabezado gigante se transforma en una barra compacta mientras el dock funciona; `Alt+R` alterna el panel derecho y las preferencias del CLI se sincronizan al iniciar o abrir su menú.
+
+### Corregido
+
+- Protección ante versiones sin `layoutRoot`, conflictos con un rail Gentle Shell y terminales menores de 132×24; el layout original se restaura al cerrar.
+
+### Verificación
+
+- TypeScript y pruebas focalizadas de la consola Pi; CI Windows/Ubuntu y validación visual en Windows Terminal pendientes al publicar el PR.
+
+---
+
 ## 0.22.2
 
 - **Fecha:** 2026-10-24
