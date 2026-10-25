@@ -347,6 +347,30 @@ function rightRailContent(
   return rows;
 }
 
+// The native full-height right dock reuses the same live facts as the legacy header rail. Its lines are rendered
+// inside a dedicated Pi layout component, not within the header, so activity and agent details can remain visible.
+export function renderNativeRailContent(
+  facts: DashboardFacts,
+  area: DashboardArea | undefined,
+  width: number,
+  expanded: Readonly<Partial<Record<RailSection, boolean>>>,
+): string[] {
+  const safeWidth = Math.max(1, width);
+  const rows = rightRailContent(facts, area, safeWidth, expanded).map((item) => item.line);
+  const add = (line: string, tone: "cyan" | "teal" | "muted" | "text" = "text") =>
+    rows.push(paddedCell(` ${line}`, safeWidth, tone, "panel"));
+  add("", "muted");
+  add("─ ACTIVIDAD RECIENTE ─", "cyan");
+  const recent = facts.data.events.slice(-5).reverse();
+  if (recent.length === 0) add("Sin eventos registrados", "muted");
+  for (const event of recent) {
+    add(`#${event.seq} ${event.type}`, "teal");
+  }
+  add("", "muted");
+  add("Alt+H áreas · Alt+R panel", "muted");
+  return rows;
+}
+
 function wideHeader(
   width: number,
   version: string | undefined,

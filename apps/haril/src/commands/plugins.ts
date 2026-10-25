@@ -4,14 +4,14 @@ import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
 import { configDocumentErrors, harilConfigPath } from "../providers.js";
 import { readConfigDocument, serializeConfig, writeConfigAtomically } from "./config-file.js";
 
-// Only manages the future HARIL plugin dock's visibility/order. It deliberately does not
+// Manages the native HARIL dock's visibility/order. It deliberately does not
 // install, enable, unload or inspect Pi extensions: Pi's live inventory is not available here.
 const USAGE = [
   "usage: haril plugins list [--json]",
   "       haril plugins show|hide <explorer|git|youtube|memory|themes> [--json]",
   "       haril plugins move <id> up|down [--json]",
   "       haril plugins reset [--json]",
-  "These settings prepare HARIL's future left dock; Pi extensions are not changed.",
+  "These settings control HARIL's visual left dock; Pi extensions are not changed.",
 ].join("\n");
 
 type Slot = ReturnType<typeof resolveDockSlots>[number];
@@ -26,7 +26,7 @@ function display(io: CliIo, slots: readonly Slot[], configPath: string, json: bo
     io.out(JSON.stringify({ configPath, scope: "dock-preferences-only", plugins: slots }));
     return;
   }
-  io.out("HARIL · plugin dock (layout preferences, not loaded Pi extensions)");
+  io.out("HARIL · plugin dock (visible in compatible Pi terminals; not loaded Pi extensions)");
   for (const [index, slot] of slots.entries()) {
     const label = DOCK_SLOTS.find((item) => item.id === slot.id)?.label ?? slot.id;
     io.out(
@@ -34,7 +34,7 @@ function display(io: CliIo, slots: readonly Slot[], configPath: string, json: bo
     );
   }
   io.out(
-    "Use haril plugins show/hide/move; these changes do not affect the current Pi console yet.",
+    "Use haril plugins show/hide/move; reopen haril or use /haril-plugins to refresh the native dock.",
   );
 }
 

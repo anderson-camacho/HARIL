@@ -2,6 +2,8 @@
 
 **Estado:** propuesta técnica y prueba de viabilidad. No habilitar como consola predeterminada hasta completar las comprobaciones de Pi.
 
+**Actualización 0.22.3:** se incorpora una **ruta experimental distinta del host RPC/SDK**: un adaptador de extensión sobre el `layoutRoot` privado de `@earendil-works/pi-tui`, inspirado en el patrón usado por dc-pi. La TUI sigue siendo propiedad de Pi; el adaptador compone un `hstack` a toda altura que incorpora el layout original del chat como nodo central y lo restaura al cerrar. Se activa únicamente cuando se detecta el contrato de layout conocido y no hay ya una barra Gentle Shell; falla hacia la cabecera antigua y evita un fork de Pi. Esta ruta requiere validación manual en Windows y no elimina el estudio de RPC/SDK si Pi cambia su internals o las extensiones interactúan mal. El estado descrito más abajo corresponde al estudio original de 0.22.1.
+
 ## Objetivo
 
 Una columna izquierda de plugins/explorador, la conversación de Pi en el centro y una columna derecha con Agents, Orchestration, Automation, Tools, Everywhere, avisos y logs. Las zonas deben ocupar toda la altura del área de trabajo, con foco y scroll independientes. Las pestañas, visibilidad, ancho y orden serán configurables. `Alt+Z`, luego `1`–`9`, es la combinación acordada para seleccionar pestañas; se validarán posibles conflictos antes de habilitarla.

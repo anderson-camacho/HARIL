@@ -666,9 +666,11 @@ El lanzador selecciona `--tui-mode fullscreen` para habilitar los eventos de mou
 
 `haril shell` sigue abriendo la interfaz anterior, descrita a continuación, ya sin la caja Taxis.
 
-### Preferencias del futuro panel de plugins (0.22.2)
+### Dock nativo de plugins y estado (0.22.3, integración experimental)
 
-El futuro panel izquierdo tendrá inicialmente cinco espacios: Explorador, Git, YouTube, Memoria y Temas. Ya se puede guardar su **orden y visibilidad** desde PowerShell, sin abrir la interfaz:
+La consola `haril` / `haril console` intenta mostrar **tres columnas verticales** en Pi: cinco espacios de plugins a la izquierda, el chat/editor originales de Pi en el centro y un panel con avisos, herramientas, orquestación y actividad a la derecha. El encabezado grande se compacta cuando el dock nativo está activo. Requiere una terminal de **al menos 132 columnas × 24 filas** y un Pi compatible con el layout interno de `@earendil-works/pi-tui`; si falta esa API, si Gentle Shell ya ocupa el layout o si el terminal es pequeño, HARIL conserva la cabecera anterior de forma segura.
+
+Los espacios visuales iniciales son Explorador, Git, YouTube, Memoria y Temas. Su **orden y visibilidad** se pueden guardar desde PowerShell:
 
 ```powershell
 haril plugins list
@@ -679,7 +681,9 @@ haril plugins list --json
 haril plugins reset
 ```
 
-Las preferencias se guardan en `ui.plugins` de `haril.json`, sin borrar otras opciones. **Este paso todavía no instala, carga ni desactiva extensiones de Pi, ni modifica visualmente la consola `haril`.** Es la base comprobable que usará el próximo panel real; la integración con paquetes/extensiones de Pi se validará por separado.
+Desde la interfaz Pi, `/haril-plugins` abre un menú para mostrar, ocultar, subir o bajar espacios y actualiza inmediatamente la columna izquierda. `/haril-dock left|right|both` alterna las columnas y `Alt+R` alterna el panel derecho. La columna derecha puede desplazarse con la rueda del ratón. Los cambios realizados **externamente** desde PowerShell se cargan al iniciar una nueva sesión de `haril` o al abrir `/haril-plugins`.
+
+Las preferencias quedan en `ui.plugins` de `haril.json`, sin borrar otras opciones. **Un espacio visible no significa que su extensión Pi exista o esté ejecutándose**: YouTube, Explorador, Git, Memoria y Temas son lugares reservados para la integración de extensiones reales en próximos PR. Este PR no instala ni desactiva paquetes Pi. La unión de paneles se realiza mediante un adaptador interno experimental, se revierte al cerrar la sesión y deberá validarse manualmente en Windows Terminal antes de considerarse estable.
 
 ### M4: interfaz de terminal (`haril shell`)
 
@@ -900,7 +904,7 @@ Los dossiers de `docs/research/` se leen solo bajo demanda, cuando un documento 
 
 ## Versiones
 
-Versión actual: **0.22.2**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
+Versión actual: **0.22.3**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
 
 ## Licencia
 

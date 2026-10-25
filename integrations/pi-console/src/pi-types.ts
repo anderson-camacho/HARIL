@@ -30,7 +30,7 @@ export interface ConsoleMouseEvent {
   readonly wheelDelta?: number;
 }
 
-interface ConsoleComponent {
+export interface ConsoleComponent {
   render(width: number): string[];
   handleInput?(data: string): void;
   handleMouse?(
