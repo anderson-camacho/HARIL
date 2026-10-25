@@ -31,6 +31,8 @@ describe("native dock integration with the HARIL Pi extension", () => {
       expect(anchor).toBeDefined();
       expect(fake.commands.has("haril-plugins")).toBe(true);
       expect(fake.commands.has("haril-dock")).toBe(true);
+      expect(fake.commands.has("haril-plugin")).toBe(true);
+      expect(fake.shortcuts.has("alt+z")).toBe(process.platform === "win32");
 
       const original = () => ({ type: "vstack", gap: 0, align: "stretch", entries: [] });
       const root = {
@@ -53,7 +55,8 @@ describe("native dock integration with the HARIL Pi extension", () => {
       expect(newLayout.type).toBe("hstack");
       const middle = newLayout.entries[1];
       const rightPane = newLayout.entries[2];
-      if (!middle || !rightPane) throw new Error("Expected three Pi panes");
+      const leftPane = newLayout.entries[0];
+      if (!leftPane || !middle || !rightPane) throw new Error("Expected three Pi panes");
       expect(middle.component.render(60)).toEqual(["Pi chat"]);
 
       const newHeader = header?.(tui, THEME).render(96).map(stripAnsi).join("\n");
@@ -62,6 +65,11 @@ describe("native dock integration with the HARIL Pi extension", () => {
       expect(newHeader?.split("\n")).toHaveLength(1);
       const right = rightPane.component.render(40).map(stripAnsi).join("\n");
       expect(right).toContain("ACTIVIDAD");
+
+      await fake.commands.get("haril-plugin")?.handler("youtube", ctx);
+      const left = leftPane.component.render(23).map(stripAnsi).join("\n");
+      expect(left).toContain("YOUTUBE");
+      expect(left).toContain("Extensión /yt");
 
       await fake.fire("session_shutdown", {}, ctx);
       expect(root[LAYOUT_NODE]).toBe(original);
