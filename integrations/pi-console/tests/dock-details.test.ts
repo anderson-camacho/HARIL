@@ -10,9 +10,9 @@ describe("plugin views backed by read-only sources", () => {
         { name: "README.md", isDirectory: () => false },
       ],
     });
-    expect(result.status).toContain("3 elementos");
+    expect(result.status).toContain("3 entradas");
     expect(result.lines[1]).toContain("src");
-    expect(result.lines).toContain("· main.ts");
+    expect(result.lines).toContain("· ◇ main.ts");
   });
 
   it("puts ordinary items before hidden folders so the dock does not start with a wall of dotfiles", async () => {
@@ -26,19 +26,53 @@ describe("plugin views backed by read-only sources", () => {
       ],
     });
     expect(result.lines.slice(1)).toEqual([
-      "▸ Documents",
-      "▸ projects",
-      "· README.md",
-      "▸ .cache",
-      "▸ .config",
+      "▸ ▣ Documents",
+      "▸ ▣ projects",
+      "· ◇ README.md",
+      "▸ ▣ .cache",
+      "▸ ▣ .config",
     ]);
+  });
+
+  it("expands only requested tree branches and never descends into unrelated directories", async () => {
+    const scanned: string[] = [];
+    const directory = async (folder: string) => {
+      scanned.push(folder);
+      return folder === "repo/src"
+        ? [{ name: "main.ts", isDirectory: () => false }]
+        : [
+            { name: "src", isDirectory: () => true },
+            { name: "private", isDirectory: () => true },
+          ];
+    };
+    const closed = await loadDockDetails("explorer", "repo", { directory });
+    expect(scanned).toEqual(["repo"]);
+    expect(closed.treeNodes).toHaveLength(2);
+    const expanded = await loadDockDetails("explorer", "repo", {
+      directory,
+      expandedPaths: new Set(["repo/src"]),
+    });
+    expect(scanned).toEqual(["repo", "repo", "repo/src"]);
+    expect(expanded.lines).toContain("▾ ▣ src");
+    expect(expanded.lines).toContain("  · ◇ main.ts");
   });
 
   it("shows real Git and HARIL memory diagnostics", async () => {
     const git = await loadDockDetails("git", ".", {
       git: async () => "## main\n M app.ts\n?? new-file.ts\n",
+      gitHistory: async () => "* 123abcd latest commit\n* abcd999 initial\n",
+      gitChanges: async () => "src/app.ts | 2 ++\n",
     });
-    expect(git.lines).toEqual(["## main", " M app.ts", "?? new-file.ts"]);
+    expect(git.lines).toEqual([
+      "## main",
+      " M app.ts",
+      "?? new-file.ts",
+      "── CAMBIOS ──",
+      "src/app.ts | 2 ++",
+      "── HISTORIAL ──",
+      "* 123abcd latest commit",
+      "* abcd999 initial",
+    ]);
     const memory = await loadDockDetails("memory", ".", {
       memory: async () => ({ ok: true, stdout: "Memory provider: Engram\nReady", stderr: "" }),
     });

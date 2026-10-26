@@ -98,6 +98,7 @@ const REFRESH_MS = 5_000;
 interface Session extends CommandHost {
   readonly ctx: ConsoleContext;
   explorerPath: string;
+  explorerExpanded: Set<string>;
   locale: UiLocale;
   project: BoundProject | undefined;
   pending: readonly PendingApproval[];
@@ -400,6 +401,7 @@ export default function harilConsole(pi: ConsolePi): void {
     const current: Session = {
       ctx,
       explorerPath: ctx.cwd,
+      explorerExpanded: new Set(),
       locale: DEFAULT_UI_LOCALE,
       cwd: ctx.cwd,
       project: undefined,
@@ -793,11 +795,26 @@ export default function harilConsole(pi: ConsolePi): void {
         ];
       },
       select(id) {
-        if (id === "explorer" && current.dock.selected === "explorer") {
-          void chooseExplorerFolder(current, current.ctx);
-        } else {
-          void openDockSlot(current, id);
-        }
+        void openDockSlot(current, id);
+      },
+      toggleExplorer(path) {
+        void (async () => {
+          try {
+            const folder = await resolveExplorerFolder(
+              current.explorerPath,
+              current.explorerPath,
+              path,
+            );
+            if (current.explorerExpanded.has(folder)) current.explorerExpanded.delete(folder);
+            else current.explorerExpanded.add(folder);
+            await openDockSlot(current, "explorer");
+          } catch (error) {
+            current.ctx.ui.notify(
+              error instanceof Error ? error.message : "Carpeta inválida",
+              "warning",
+            );
+          }
+        })();
       },
     });
     if (mounted.attached) current.nativePanes = mounted;
@@ -833,6 +850,7 @@ export default function harilConsole(pi: ConsolePi): void {
       id === "explorer" ? current.explorerPath : current.cwd,
       {
         piCommands: commands,
+        expandedPaths: current.explorerExpanded,
       },
     );
     if (current.closed || session !== current || current.dockLoadSeq !== seq) return;

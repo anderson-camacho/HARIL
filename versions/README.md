@@ -2,8 +2,8 @@
 
 ## Estado actual
 
-- **Versión actual:** 0.22.8.
-- **Estado (0.22.8):** instalación y desinstalación de paquetes Pi con confirmación explícita, desde `/haril-extensions` o `haril extensions install|remove`, exclusivamente mediante el Pi y el agente aislados de HARIL; se validan orígenes npm/GitHub y se exige reiniciar para cargar cambios.
+- **Versión actual:** 0.22.9.
+- **Estado (0.22.9):** dock compacto por pestañas dentro de la consola Pi, Explorador expandible en su panel, historial y cambios Git en su propia pestaña. El registro de espacios visuales es independiente de los paquetes Pi instalados, y se conserva el orden y la visibilidad del usuario.
 - **Estado (0.22.7):** `/haril-extensions` y `haril extensions list|enable|disable` gestionan las declaraciones de paquetes de Pi dentro del directorio aislado de HARIL, con confirmación, sin ejecutar ni instalar paquetes por sorpresa; el estado real cargado y la configuración de paquetes de proyecto siguen siendo responsabilidad de Pi.
 - **Estado (0.22.6):** los selectores de plugins y áreas aceptan flechas ↑/↓ en los protocolos ANSI, SS3 y Kitty de Windows Terminal/Pi, además de Enter/Esc. El visor de comandos desplaza su lista con esas mismas flechas; el selector corrige la ayuda obsoleta `Alt+Z` por `Alt+L`.
 - **Estado (0.22.5):** `Alt+C` y `/haril-commands` muestran los comandos expuestos por Pi en la sesión y los atajos HARIL; `/haril-explore` permite navegar dentro de carpetas del proyecto sin editar archivos, con listado del Explorador que prioriza carpetas visibles sobre directorios ocultos y scroll que se reinicia al cambiar la vista.
@@ -68,4 +68,4 @@ Las versiones 0.x son preliminares: pueden cambiar sin compatibilidad hacia atr�
 
 Más reciente primero. Cada carpeta contiene el archivo de cambios de su versión mayor, con las versiones menores y de parche, la más nueva arriba.
 
-- [v0](v0/CHANGELOG.md): versiones 0.1.0 a 0.22.8.
+- [v0](v0/CHANGELOG.md): versiones 0.1.0 a 0.22.9.

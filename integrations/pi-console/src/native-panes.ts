@@ -3,6 +3,7 @@
 // editor, scrollback or chat; reuse its original layout node as the centre of the three-column stack.
 import { paddedCell, visualText } from "./dashboard-theme.js";
 import type { DockDetails } from "./dock-details.js";
+import { type DockId, type DockSlot, dockDefinition, readDockSlots } from "./dock-registry.js";
 import type { ConsoleMouseEvent, ConsoleTui } from "./pi-types.js";
 import { plainText } from "./text.js";
 
@@ -12,46 +13,35 @@ const GENTLE_SIDEBAR = Symbol.for("gentle-pi.experimental-sidebar.state");
 export const MIN_PANE_COLUMNS = 132;
 export const MIN_PANE_ROWS = 24;
 
-export const DOCK_LABELS = [
-  { id: "explorer", label: "Explorador", glyph: "▤" },
-  { id: "git", label: "Git", glyph: "⑂" },
-  { id: "youtube", label: "YouTube", glyph: "▶" },
-  { id: "memory", label: "Memoria", glyph: "◈" },
-  { id: "themes", label: "Temas", glyph: "◐" },
-] as const;
+export type { DockId, DockSlot } from "./dock-registry.js";
+export { DOCK_LABELS, readDockSlots } from "./dock-registry.js";
 
-export type DockId = (typeof DOCK_LABELS)[number]["id"];
-export interface DockSlot {
-  readonly id: DockId;
-  readonly visible: boolean;
+interface DockTabRow {
+  readonly text: string;
+  readonly cells: readonly { id: DockId; start: number; end: number }[];
 }
 
-const LABELS = new Map<string, (typeof DOCK_LABELS)[number]>(
-  DOCK_LABELS.map((item) => [item.id, item]),
-);
-
-// Local decoding deliberately never executes anything from the user's config. This dock describes UI slots, not
-// whether Pi packages have been installed or enabled.
-export function readDockSlots(raw: unknown): DockSlot[] {
-  const value =
-    typeof raw === "object" && raw !== null && !Array.isArray(raw) && "value" in raw
-      ? (raw as { readonly value: unknown }).value
-      : undefined;
-  if (
-    !Array.isArray(value) ||
-    value.length !== DOCK_LABELS.length ||
-    new Set(value.map((entry) => entry?.id)).size !== DOCK_LABELS.length ||
-    !value.every(
-      (entry) =>
-        typeof entry === "object" &&
-        entry !== null &&
-        LABELS.has(entry.id) &&
-        typeof entry.visible === "boolean",
-    )
-  ) {
-    return DOCK_LABELS.map(({ id }) => ({ id, visible: true }));
+// The left rail is a tab host. A plugin owns its view only when selected; the rest
+// occupy small tabs, so a file tree cannot push the entire navigation off screen.
+function dockTabs(state: PaneSettings, width: number): DockTabRow[] {
+  const rows: DockTabRow[] = [];
+  let label = "";
+  let cells: { id: DockId; start: number; end: number }[] = [];
+  for (const [index, slot] of state.slots.filter((entry) => entry.visible).entries()) {
+    const name = `${index + 1}:${dockDefinition(slot.id)?.tab ?? slot.id}`;
+    const token = slot.id === state.selected ? `[${name}]` : ` ${name} `;
+    const part = `${label ? " " : ""}${token}`;
+    if (label && label.length + part.length > width) {
+      rows.push({ text: label, cells });
+      label = "";
+      cells = [];
+    }
+    const start = label.length + (label ? 1 : 0);
+    label += `${label ? " " : ""}${token}`;
+    cells.push({ id: slot.id, start, end: label.length });
   }
-  return value.map(({ id, visible }: DockSlot) => ({ id, visible }));
+  if (label) rows.push({ text: label, cells });
+  return rows;
 }
 
 export interface PaneSettings {
@@ -88,45 +78,32 @@ export function renderLeftDock(
     selected = false,
   ) =>
     `${paddedCell(value, inside, tone, selected ? "selected" : "panel")}${visualText("│", "cyan", "base")}`;
-  rows.push(line(" ◉ HARIL", "yellow"));
-  rows.push(line(" Many minds. One flow.", "muted"));
-  rows.push(line(` ${plainText(project)}`, "teal"));
-  rows.push(line(" ─ PLUGINS ─", "cyan"));
-  for (const slot of state.slots.filter((item) => item.visible)) {
-    const entry = LABELS.get(slot.id);
-    if (entry === undefined) continue;
-    const active = slot.id === state.selected;
+  rows.push(line(" ◉ HARIL  ·  Many minds.", "yellow"));
+  rows.push(line(` 📁 ${plainText(project)}`, "teal"));
+  rows.push(line(" ────────────────────", "muted"));
+  rows.push(line(" VISTAS · Alt+L", "cyan"));
+  for (const tab of dockTabs(state, Math.max(1, inside - 1))) {
     rows.push(
       line(
-        ` ${active ? "▸" : " "} ${entry.glyph} ${entry.label}`,
-        active ? "yellow" : "text",
-        active,
+        ` ${tab.text}`,
+        tab.cells.some((cell) => cell.id === state.selected) ? "yellow" : "text",
       ),
     );
   }
-  rows.push(line("", "muted"));
-  const selection = LABELS.get(state.selected)?.label ?? state.selected;
-  rows.push(line(` ─ ${selection.toUpperCase()} ─`, "cyan"));
+  rows.push(line(" ────────────────────", "muted"));
+  const selection = dockDefinition(state.selected)?.label ?? state.selected;
+  rows.push(line(` ${selection.toUpperCase()}`, "cyan"));
   rows.push(line(` ${state.detail?.status ?? "Cargando vista…"}`, "teal"));
   const detail = state.detail?.id === state.selected ? state.detail.lines : [];
-  const budget = Math.max(0, height - rows.length - 10);
+  const budget = Math.max(0, height - rows.length - 2);
   for (const item of detail.slice(detailOffset, detailOffset + budget)) rows.push(line(` ${item}`));
-  if (detailOffset + budget < detail.length) rows.push(line(" ↕ rueda para más", "muted"));
-  rows.push(line("", "muted"));
-  rows.push(line(" ─ ACCESOS ─", "cyan"));
-  rows.push(line(" /haril-commands", "teal"));
-  rows.push(line(" /haril-explore", "teal"));
-  rows.push(line(" /haril-plugin", "teal"));
-  rows.push(line(" /haril-plugins", "teal"));
-  rows.push(line(" /haril-extensions", "teal"));
-  rows.push(line(" /haril-dock", "teal"));
-  rows.push(line(" Alt+L  Plugins", "muted"));
-  rows.push(line(" Alt+C  Comandos", "muted"));
-  rows.push(line(" Alt+H  Áreas", "muted"));
-  rows.push(line(" Alt+I  Panel der.", "muted"));
-  rows.push(line("", "muted"));
-  rows.push(line(" Espacios visuales", "muted"));
-  rows.push(line(" ≠ extensiones Pi", "muted"));
+  rows.push(line(" ────────────────────", "muted"));
+  rows.push(
+    line(
+      detailOffset + budget < detail.length ? " ↕ Rueda · más elementos" : " Alt+C · comandos",
+      "muted",
+    ),
+  );
   return Array.from({ length: height }, (_value, index) => rows[index] ?? line("", "muted"));
 }
 
@@ -171,6 +148,7 @@ export function attachNativePanes(
     readonly project: () => string;
     readonly right: (width: number) => readonly string[];
     readonly select: (id: DockId) => void;
+    readonly toggleExplorer?: (path: string) => void;
   },
 ): NativePanes {
   const host = tui as PaneTui;
@@ -200,16 +178,31 @@ export function attachNativePanes(
     },
     handleMouse(event: ConsoleMouseEvent) {
       if (event.type === "wheel") {
-        const max = Math.max(0, (state.detail?.lines.length ?? 0) - 6);
+        const headerRows = 7 + dockTabs(state, Math.max(1, 22)).length;
+        const max = Math.max(
+          0,
+          (state.detail?.lines.length ?? 0) - (tui.terminal.rows - headerRows - 2),
+        );
         detailOffset = Math.max(0, Math.min(max, detailOffset + (event.wheelDelta ?? 0)));
         tui.requestRender();
         return { handled: true, render: true };
       }
       if (event.type !== "click" || event.button !== "left") return undefined;
-      const selected = state.slots.filter((slot) => slot.visible)[event.y - 4];
-      if (!selected) return undefined;
-      detailOffset = 0;
-      options.select(selected.id);
+      const tabs = dockTabs(state, Math.max(1, 22));
+      const tab = tabs[event.y - 4];
+      if (tab) {
+        const clicked = tab.cells.find(
+          (cell) => event.x >= cell.start + 1 && event.x < cell.end + 1,
+        );
+        if (!clicked) return undefined;
+        detailOffset = 0;
+        options.select(clicked.id);
+        return { handled: true, render: true };
+      }
+      const row = event.y - (7 + tabs.length) + detailOffset - 1;
+      const node = state.selected === "explorer" ? state.detail?.treeNodes?.[row] : undefined;
+      if (!node?.directory) return undefined;
+      options.toggleExplorer?.(node.path);
       return { handled: true, render: true };
     },
     invalidate() {},

@@ -4,6 +4,29 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.22.9
+
+- **Fecha:** 2026-10-26
+- **Estado:** primer PR del rediseño de interfaz: dock modular compacto con vistas reales.
+
+### Añadido
+
+- Un registro explícito para las vistas visuales de HARIL, separado de los paquetes de extensiones Pi y compatible con ajustes anteriores de visibilidad y orden.
+- Pestañas compactas y seleccionables por clic para TREE, GIT, YT, MEM y THEME dentro del panel fijo izquierdo, sin desplazar el chat central de Pi.
+- Explorador de carpetas expandible y colapsable por clic dentro de TREE, con lectura limitada y rutas confinadas al proyecto.
+- Historial de ocho commits y resumen de cambios en la vista Git, además del estado de archivos existente.
+
+### Corregido
+
+- La lista completa de plugins y rutas ya no ocupa de manera permanente toda la columna de navegación.
+- Los cambios de tamaño de terminal o la falta de la API privada de paneles dejan intacta la disposición original de Pi.
+
+### Verificación
+
+- Pruebas del dock por pestañas, clics y redimensionado; árbol anidado con carga explícita; datos Git inyectados; TypeScript, Biome y pruebas de la extensión Pi.
+
+---
+
 ## 0.22.8
 
 - **Fecha:** 2026-10-26
