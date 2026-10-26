@@ -1,4 +1,5 @@
 import { paddedCell, visualText } from "./dashboard-theme.js";
+import type { UiLocale } from "./locale.js";
 import { DOCK_LABELS, type DockId, type DockSlot } from "./native-panes.js";
 import { keyOf } from "./orchestration-state.js";
 
@@ -21,6 +22,7 @@ export function createDockPicker(
   selectedId: DockId,
   done: (result: DockPickerResult) => void,
   tui?: { requestRender(): void },
+  locale: UiLocale = "es",
 ) {
   const visible = visibleDockSlots(slots);
   let selected = Math.max(
@@ -42,17 +44,26 @@ export function createDockPicker(
         `${visualText("│", "cyan", "panel")}${paddedCell(` ${label}`, inner, tone, active ? "selected" : "panel")}${visualText("│", "cyan", "panel")}`;
       return [
         visualText(`╭${"─".repeat(inner)}╮`, "teal", "panel"),
-        line("HARIL ◉ · Seleccionar plugin", "yellow"),
+        line(
+          locale === "es" ? "HARIL ◉ · Seleccionar plugin" : "HARIL ◉ · Select plugin",
+          "yellow",
+        ),
         line("Alt+L → número · ↑↓ · Enter · Esc", "muted"),
         ...visible.map((slot, index) => {
-          const label = DOCK_LABELS.find((item) => item.id === slot.id)?.label ?? slot.id;
+          const definition = DOCK_LABELS.find((item) => item.id === slot.id);
+          const label = (locale === "es" ? definition?.label : definition?.labelEn) ?? slot.id;
           return line(
             `${index === selected ? "▸" : " "} ${index + 1}. ${label}`,
             index === selected ? "yellow" : "text",
             index === selected,
           );
         }),
-        line("Solo espacios visibles · sin instalar Pi", "muted"),
+        line(
+          locale === "es"
+            ? "Solo espacios visibles · sin instalar Pi"
+            : "Visible slots only · Pi unchanged",
+          "muted",
+        ),
         visualText(`╰${"─".repeat(inner)}╯`, "teal", "panel"),
       ];
     },

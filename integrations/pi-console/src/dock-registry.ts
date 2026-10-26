@@ -1,11 +1,18 @@
 // HARIL's visual dock describes independently selectable spaces. These are not
 // declarations that a third-party Pi package is installed or running.
 export const DOCK_LABELS = [
-  { id: "explorer", label: "Explorador", tab: "TREE", glyph: "▤", readOnly: true },
-  { id: "git", label: "Git", tab: "GIT", glyph: "⑂", readOnly: true },
-  { id: "youtube", label: "YouTube", tab: "YT", glyph: "▶", readOnly: true },
-  { id: "memory", label: "Memoria", tab: "MEM", glyph: "◈", readOnly: true },
-  { id: "themes", label: "Temas", tab: "THEME", glyph: "◐", readOnly: true },
+  {
+    id: "explorer",
+    label: "Explorador",
+    labelEn: "Explorer",
+    tab: "TREE",
+    glyph: "▤",
+    readOnly: true,
+  },
+  { id: "git", label: "Git", labelEn: "Git", tab: "GIT", glyph: "⑂", readOnly: true },
+  { id: "youtube", label: "YouTube", labelEn: "YouTube", tab: "YT", glyph: "▶", readOnly: true },
+  { id: "memory", label: "Memoria", labelEn: "Memory", tab: "MEM", glyph: "◈", readOnly: true },
+  { id: "themes", label: "Temas", labelEn: "Themes", tab: "THEME", glyph: "◐", readOnly: true },
 ] as const;
 
 export type DockId = (typeof DOCK_LABELS)[number]["id"];
