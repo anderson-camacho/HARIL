@@ -60,7 +60,9 @@ describe("Pi's native split-pane adapter", () => {
       original.mock.results.at(-1)?.value,
     );
     expect(centre.component.render(40)).toEqual(["Pi chat and editor"]);
-    expect(left.component.render(23).map(stripAnsi).join("\n")).toContain("Explorador");
+    const dock = left.component.render(23).map(stripAnsi).join("\n");
+    expect(dock).toContain("VISTAS");
+    expect(dock).toContain("[1:TREE]");
     expect(right.component.render(40)).toHaveLength(tui.terminal.rows);
 
     left.component.handleMouse?.({ type: "click", button: "left", y: 4, x: 3 });
@@ -109,9 +111,73 @@ describe("Pi's native split-pane adapter", () => {
     expect(lines).toHaveLength(25);
     expect(lines.every((line) => textWidth(line) === 23)).toBe(true);
     const text = lines.join("\n");
-    expect(text.indexOf("YouTube")).toBeLessThan(text.indexOf("Explorador"));
+    expect(text.indexOf("1:YT")).toBeLessThan(text.indexOf("2:TREE"));
     expect(text).not.toContain(" Git ");
     expect(readDockSlots({ value: [{ id: "explorer", visible: true }] })).toHaveLength(5);
+    const oldSettings = readDockSlots({
+      value: [
+        { id: "git", visible: false },
+        { id: "explorer", visible: true },
+        { id: "untrusted", visible: false },
+      ],
+    });
+    expect(oldSettings[0]).toEqual({ id: "git", visible: false });
+    expect(oldSettings[1]).toEqual({ id: "explorer", visible: true });
+    expect(oldSettings).toHaveLength(5);
     expect(renderRightDock(20, 4, [" ".repeat(19)]).map(stripAnsi)).toHaveLength(4);
+  });
+
+  it("keeps the dock fixed through resize and does not consume Pi layout when terminal is narrow", () => {
+    const { tui, root, original } = fakeTui();
+    const state = initialPaneSettings();
+    const pane = attachNativePanes(tui, state, {
+      project: () => "repo",
+      right: () => [],
+      select: () => undefined,
+    });
+    for (const columns of [135, 156, 180, 132]) {
+      tui.terminal.columns = columns;
+      const layout = (root[LAYOUT_NODE] as () => NativeLayout)();
+      expect(layout.type).toBe("hstack");
+      expect(layout.entries[0]?.component.render(23)).toHaveLength(tui.terminal.rows);
+      expect(layout.entries[0]?.basis).toBe(23);
+    }
+    tui.terminal.columns = 131;
+    expect((root[LAYOUT_NODE] as () => NativeLayout)().type).toBe("vstack");
+    pane.close();
+    expect(root[LAYOUT_NODE]).toBe(original);
+  });
+
+  it("clicks a compact tab without consuming the main chat or opening an Explorer modal", () => {
+    const { tui, root } = fakeTui();
+    const state = initialPaneSettings();
+    const select = vi.fn();
+    const toggleExplorer = vi.fn();
+    const panel = attachNativePanes(tui, state, {
+      project: () => "repo",
+      right: () => [],
+      select,
+      toggleExplorer,
+    });
+    const layout = (root[LAYOUT_NODE] as () => NativeLayout)();
+    const left = layout.entries[0]?.component;
+    const tabRows = left?.render(23).map(stripAnsi);
+    expect(tabRows?.[4]).toContain("1:TREE");
+    left?.handleMouse?.({ type: "click", button: "left", y: 4, x: 11 });
+    expect(select).toHaveBeenCalledWith("git");
+
+    state.detail = {
+      id: "explorer",
+      title: "Explorador",
+      status: "Árbol",
+      lines: ["repo", "▸ ▣ src"],
+      treeNodes: [{ path: "/repo/src", directory: true, depth: 0 }],
+    };
+    const treeRows = left?.render(23).map(stripAnsi) ?? [];
+    const folderRow = treeRows.findIndex((row) => row.includes("src"));
+    expect(folderRow).toBeGreaterThan(4);
+    left?.handleMouse?.({ type: "click", button: "left", y: folderRow, x: 4 });
+    expect(toggleExplorer).toHaveBeenCalledWith("/repo/src");
+    panel.close();
   });
 });

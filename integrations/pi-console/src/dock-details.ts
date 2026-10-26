@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { readdir } from "node:fs/promises";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { runHaril } from "./cli.js";
 import { DOCK_LABELS, type DockId } from "./native-panes.js";
@@ -14,6 +15,13 @@ export interface DockDetails {
   readonly title: string;
   readonly status: string;
   readonly lines: readonly string[];
+  readonly treeNodes?: readonly ExplorerTreeNode[];
+}
+
+interface ExplorerTreeNode {
+  readonly path: string;
+  readonly directory: boolean;
+  readonly depth: number;
 }
 
 export interface DockSource {
@@ -21,12 +29,15 @@ export interface DockSource {
     cwd: string,
   ) => Promise<readonly { name: string; isDirectory(): boolean }[]>;
   readonly git?: (cwd: string) => Promise<string>;
+  readonly gitHistory?: (cwd: string) => Promise<string>;
+  readonly gitChanges?: (cwd: string) => Promise<string>;
   readonly memory?: () => Promise<{
     readonly ok: boolean;
     readonly stdout: string;
     readonly stderr: string;
   }>;
   readonly piCommands?: readonly string[];
+  readonly expandedPaths?: ReadonlySet<string>;
 }
 
 function linesOf(input: string): string[] {
@@ -37,13 +48,68 @@ function linesOf(input: string): string[] {
     .slice(0, MAX_LINES);
 }
 
-function view(id: DockId, status: string, lines: readonly string[]): DockDetails {
+function view(
+  id: DockId,
+  status: string,
+  lines: readonly string[],
+  treeNodes?: readonly ExplorerTreeNode[],
+): DockDetails {
   return {
     id,
     title: DOCK_LABELS.find((slot) => slot.id === id)?.label ?? id,
     status,
     lines: lines.slice(0, MAX_LINES),
+    ...(treeNodes === undefined ? {} : { treeNodes }),
   };
+}
+
+// Directory expansion is explicit: never follow symlinks, enter a hidden folder on its own,
+// or recurse without a user click. A fixed row budget prevents large repositories freezing Pi.
+async function explorerTree(
+  cwd: string,
+  source: DockSource,
+): Promise<{
+  lines: string[];
+  nodes: ExplorerTreeNode[];
+  count: number;
+}> {
+  const nodes: ExplorerTreeNode[] = [];
+  const lines: string[] = [];
+  let count = 0;
+  async function append(directory: string, depth: number): Promise<void> {
+    if (depth > 8 || lines.length >= MAX_ENTRIES) return;
+    const entries = source.directory
+      ? await source.directory(directory)
+      : await readdir(directory, { withFileTypes: true });
+    count += entries.length;
+    const sorted = [...entries].sort(
+      (a, b) =>
+        Number(a.name.startsWith(".")) - Number(b.name.startsWith(".")) ||
+        Number(b.isDirectory()) - Number(a.isDirectory()) ||
+        a.name.localeCompare(b.name),
+    );
+    for (const entry of sorted) {
+      if (lines.length >= MAX_ENTRIES) break;
+      const isDir = entry.isDirectory();
+      const path = join(directory, entry.name);
+      const expanded = isDir && source.expandedPaths?.has(path) === true;
+      nodes.push({ path, directory: isDir, depth });
+      lines.push(
+        `${"  ".repeat(depth)}${isDir ? (expanded ? "▾" : "▸") : "·"} ${isDir ? "▣" : "◇"} ${plainText(entry.name)}`,
+      );
+      if (expanded && depth < 8) {
+        try {
+          await append(path, depth + 1);
+        } catch {
+          // A folder may be removed or become inaccessible between the click and the read.
+          nodes.push({ path, directory: false, depth: depth + 1 });
+          lines.push(`${"  ".repeat(depth + 1)}! No se pudo abrir`);
+        }
+      }
+    }
+  }
+  await append(cwd, 0);
+  return { nodes, lines, count };
 }
 
 export async function loadDockDetails(
@@ -54,47 +120,49 @@ export async function loadDockDetails(
   try {
     switch (id) {
       case "explorer": {
-        const directory = source.directory
-          ? await source.directory(cwd)
-          : await readdir(cwd, { withFileTypes: true });
-        const entries = [...directory]
-          .sort(
-            (left, right) =>
-              Number(left.name.startsWith(".")) - Number(right.name.startsWith(".")) ||
-              Number(right.isDirectory()) - Number(left.isDirectory()) ||
-              left.name.localeCompare(right.name),
-          )
-          .slice(0, MAX_ENTRIES)
-          .map((entry) => `${entry.isDirectory() ? "▸" : "·"} ${plainText(entry.name)}`);
-        return view(id, `Solo lectura · ${directory.length} elementos`, [
-          plainText(cwd),
-          ...entries,
-          ...(directory.length > MAX_ENTRIES
-            ? [`+ ${directory.length - MAX_ENTRIES} archivos más`]
-            : []),
-        ]);
-      }
-      case "git": {
-        const command =
-          source.git ??
-          (async (folder: string) => {
-            const result = await execFileAsync(
-              "git",
-              ["-C", folder, "status", "--short", "--branch"],
-              {
-                timeout: 5_000,
-                maxBuffer: 64 * 1024,
-                windowsHide: true,
-              },
-            );
-            return result.stdout;
-          });
-        const output = linesOf(await command(cwd));
+        const tree = await explorerTree(cwd, source);
         return view(
           id,
-          "Estado Git · solo lectura",
-          output.length ? output : ["Sin cambios locales"],
+          `Árbol · ${tree.count} entradas · clic para desplegar`,
+          [plainText(cwd), ...tree.lines],
+          tree.nodes,
         );
+      }
+      case "git": {
+        const execGit = async (folder: string, args: string[]): Promise<string> => {
+          const result = await execFileAsync("git", ["-C", folder, ...args], {
+            timeout: 5_000,
+            maxBuffer: 64 * 1024,
+            windowsHide: true,
+          });
+          return result.stdout;
+        };
+        const output = linesOf(
+          await (source.git ?? ((folder) => execGit(folder, ["status", "--short", "--branch"])))(
+            cwd,
+          ),
+        );
+        // Test overrides remain deterministic. In production the Git view shows history
+        // and a concise diff summary, using Git's own porcelain without a shell.
+        const history = linesOf(
+          await (
+            source.gitHistory ??
+            (source.git
+              ? async () => ""
+              : (folder) => execGit(folder, ["log", "-8", "--graph", "--oneline", "--decorate"]))
+          )(cwd),
+        );
+        const changes = linesOf(
+          await (
+            source.gitChanges ??
+            (source.git ? async () => "" : (folder) => execGit(folder, ["diff", "--stat"]))
+          )(cwd),
+        );
+        return view(id, "Git · árbol y cambios · solo lectura", [
+          ...(output.length ? output : ["Sin cambios locales"]),
+          ...(changes.length ? ["── CAMBIOS ──", ...changes] : []),
+          ...(history.length ? ["── HISTORIAL ──", ...history] : []),
+        ]);
       }
       case "memory": {
         const status = await (
