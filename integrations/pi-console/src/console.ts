@@ -6,7 +6,14 @@
 
 import { createChatLog } from "./chat-log.js";
 import { cliAvailable, NOT_LAUNCHED, runHaril, runHarilJson } from "./cli.js";
-import { type CommandHost, chooseMode, delegationHost, registerCommands } from "./commands.js";
+import { commandCatalog } from "./command-catalog.js";
+import {
+  type CommandHost,
+  chooseMode,
+  delegationHost,
+  harilCommandDescriptions,
+  registerCommands,
+} from "./commands.js";
 import {
   type DashboardArea,
   type DashboardFacts,
@@ -28,6 +35,7 @@ import { effectText, sourceText, valueText } from "./delegation-settings.js";
 import { loadDockDetails } from "./dock-details.js";
 import { createDockPicker, type DockPickerResult, dockSlotAt } from "./dock-navigation.js";
 import { stopAll } from "./emergency.js";
+import { explorerFolderChoices, resolveExplorerFolder } from "./explorer-navigation.js";
 import { DEFAULT_UI_LOCALE, readConsoleLocale, type UiLocale } from "./locale.js";
 import { installModes } from "./mode-controller.js";
 import { levelLabel } from "./model-levels.js";
@@ -88,6 +96,7 @@ const REFRESH_MS = 5_000;
 
 interface Session extends CommandHost {
   readonly ctx: ConsoleContext;
+  explorerPath: string;
   locale: UiLocale;
   project: BoundProject | undefined;
   pending: readonly PendingApproval[];
@@ -389,6 +398,7 @@ export default function harilConsole(pi: ConsolePi): void {
   function openSession(ctx: ConsoleContext): Session {
     const current: Session = {
       ctx,
+      explorerPath: ctx.cwd,
       locale: DEFAULT_UI_LOCALE,
       cwd: ctx.cwd,
       project: undefined,
@@ -782,7 +792,11 @@ export default function harilConsole(pi: ConsolePi): void {
         ];
       },
       select(id) {
-        void openDockSlot(current, id);
+        if (id === "explorer" && current.dock.selected === "explorer") {
+          void chooseExplorerFolder(current, current.ctx);
+        } else {
+          void openDockSlot(current, id);
+        }
       },
     });
     if (mounted.attached) current.nativePanes = mounted;
@@ -813,7 +827,13 @@ export default function harilConsole(pi: ConsolePi): void {
     current.dock.detail = undefined;
     redraw();
     const commands = safely(() => pi.getCommands().map((command) => command.name), []);
-    const details = await loadDockDetails(id, current.cwd, { piCommands: commands });
+    const details = await loadDockDetails(
+      id,
+      id === "explorer" ? current.explorerPath : current.cwd,
+      {
+        piCommands: commands,
+      },
+    );
     if (current.closed || session !== current || current.dockLoadSeq !== seq) return;
     current.dock.detail = details;
     current.nativePanes?.refresh();
@@ -828,6 +848,33 @@ export default function harilConsole(pi: ConsolePi): void {
     );
     if (result?.type !== "open" || current.closed || session !== current) return;
     await openDockSlot(current, result.id);
+  }
+
+  async function chooseExplorerFolder(current: Session, ctx: ConsoleContext): Promise<void> {
+    if (current.closed || !ctx.hasUI || ctx.mode !== "tui") return;
+    try {
+      const entries = await explorerFolderChoices(current.explorerPath);
+      const fixed = ["⌂ Raíz del proyecto", "↑ Carpeta superior"];
+      const chosen = await ctx.ui.select("Explorador · elige carpeta", [
+        ...fixed,
+        ...entries.map((item) => item.label),
+      ]);
+      if (!chosen || current.closed || current !== session) return;
+      const name =
+        chosen === fixed[0]
+          ? "/"
+          : chosen === fixed[1]
+            ? ".."
+            : entries.find((item) => item.label === chosen)?.name;
+      if (!name) return;
+      current.explorerPath = await resolveExplorerFolder(current.cwd, current.explorerPath, name);
+      await openDockSlot(current, "explorer");
+    } catch (error) {
+      ctx.ui.notify(
+        error instanceof Error ? error.message : "No se pudo abrir esa carpeta",
+        "warning",
+      );
+    }
   }
 
   function dashboardDetails(
@@ -1069,6 +1116,47 @@ export default function harilConsole(pi: ConsolePi): void {
   });
 
   registerCommands(pi, () => session);
+  async function showCommandCatalog(ctx: ConsoleContext): Promise<void> {
+    if (session === undefined || !ctx.hasUI || ctx.mode !== "tui") return;
+    const names = safely(() => pi.getCommands().map(({ name }) => name), []);
+    await showInlineDetails(
+      ctx,
+      "Comandos disponibles",
+      commandCatalog(names, harilCommandDescriptions()),
+    );
+  }
+  pi.registerCommand("haril-commands", {
+    description: "List the HARIL and third-party extension commands available in this Pi session",
+    handler: async (_args, ctx) => showCommandCatalog(ctx),
+  });
+  pi.registerCommand("haril-explore", {
+    description: "Navigate folders inside the current project without modifying files",
+    handler: async (args, ctx) => {
+      const current = session;
+      if (!current || !ctx.hasUI || ctx.mode !== "tui") return;
+      const requested = args.trim();
+      if (!requested) return chooseExplorerFolder(current, ctx);
+      try {
+        current.explorerPath = await resolveExplorerFolder(
+          current.cwd,
+          current.explorerPath,
+          requested,
+        );
+        await openDockSlot(current, "explorer");
+      } catch (error) {
+        ctx.ui.notify(
+          error instanceof Error ? error.message : "No se pudo abrir esa carpeta",
+          "warning",
+        );
+      }
+    },
+  });
+  pi.registerShortcut("alt+c", {
+    description: "Show available HARIL / extension commands",
+    handler: (ctx) => {
+      void showCommandCatalog(ctx);
+    },
+  });
   pi.registerCommand("haril-plugin", {
     description:
       "Open a HARIL dock view: /haril-plugin [explorer|git|youtube|memory|themes|1..5|details]",
@@ -1100,17 +1188,15 @@ export default function harilConsole(pi: ConsolePi): void {
       }
     },
   });
-  // In Pi 1.2.0 Alt+Z is the WSL undo shortcut. On native Windows it is free; leave WSL's editor binding alone.
-  if (process.platform === "win32") {
-    pi.registerShortcut("alt+z", {
-      description: "Open HARIL's plugin selector (then press 1..5, arrows, Enter or Esc)",
-      handler: (ctx) => {
-        const current = session;
-        if (current === undefined || !ctx.hasUI || ctx.mode !== "tui") return;
-        void pickDockSlot(current, ctx);
-      },
-    });
-  }
+  // Pi's default bindings leave Alt+L / Alt+I free. Alt+Z is Pi's undo shortcut on WSL.
+  pi.registerShortcut("alt+l", {
+    description: "Open HARIL's plugin list (then press 1..5, arrows, Enter or Esc)",
+    handler: (ctx) => {
+      const current = session;
+      if (current === undefined || !ctx.hasUI || ctx.mode !== "tui") return;
+      void pickDockSlot(current, ctx);
+    },
+  });
   pi.registerCommand("haril-plugins", {
     description:
       "Manage HARIL's visible plugin dock slots and their order (not installed Pi packages)",
@@ -1185,7 +1271,7 @@ export default function harilConsole(pi: ConsolePi): void {
         });
     },
   });
-  pi.registerShortcut("alt+r", {
+  pi.registerShortcut("alt+i", {
     description: "Show or hide the HARIL right rail (focus on narrow terminals)",
     handler: (ctx) => {
       const current = session;

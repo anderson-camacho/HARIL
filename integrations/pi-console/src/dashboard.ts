@@ -367,7 +367,7 @@ export function renderNativeRailContent(
     add(`#${event.seq} ${event.type}`, "teal");
   }
   add("", "muted");
-  add("Alt+H áreas · Alt+R panel", "muted");
+  add("Alt+H áreas · Alt+I panel · Alt+C comandos", "muted");
   return rows;
 }
 
@@ -390,7 +390,7 @@ function wideHeader(
     paddedCell(` ${renderBrandMark()}`, leftWidth, "yellow", "base"),
     ...renderBrandArt().map((part) => paddedCell(` ${part}`, leftWidth, "teal", "base")),
     paddedCell(" Many minds. One flow.", leftWidth, "yellow", "base"),
-    paddedCell(" Alt+H áreas · Alt+R mostrar/ocultar · /haril acciones", leftWidth, "text", "base"),
+    paddedCell(" Alt+H áreas · Alt+I panel · Alt+C comandos", leftWidth, "text", "base"),
   ];
   const right = rightRailContent(facts, selected, railWidth, expanded);
   const budget = Math.max(10, Math.min(24, height - 18));
@@ -479,7 +479,7 @@ export function renderHeaderLayout(
     border(width, "┌", "─", "┐"),
     `${frameGlyph("│")}${paddedCell(` ${renderBrandMark()} ${version ?? ""}`, width - 2, "yellow")}${frameGlyph("│")}`,
     ...brandRows,
-    `${frameGlyph("│")}${paddedCell(` ${facts.project} · ${facts.modelLevel} · ${facts.runtime} · Alt+R panel · /haril menú`, width - 2, "teal")}${frameGlyph("│")}`,
+    `${frameGlyph("│")}${paddedCell(` ${facts.project} · ${facts.modelLevel} · ${facts.runtime} · Alt+I panel · /haril menú`, width - 2, "teal")}${frameGlyph("│")}`,
     ...tabLayout.lines.map(
       (line) =>
         `${frameGlyph("│")}${paddedCell(line.trimEnd(), width - 2, "cyan")}${frameGlyph("│")}`,

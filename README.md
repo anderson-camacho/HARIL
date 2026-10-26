@@ -440,7 +440,7 @@ En HARIL 0.21.8 los **avisos**, los **estados de extensiones** y la **orquestaci
 
 En terminales de **120 columnas y 40 filas o más**, el encabezado HARIL muestra una **columna a la derecha del todo** con sesión, proyecto, modelo, estado de extensiones observadas, avisos de proveedor (como `HARIL provider cliproxy: unreachable`), errores de HARIL y, al seleccionar ORCHESTRATION, el workflow y su progreso. La zona principal no vuelve a mostrar el gran widget de herramientas encima del editor.
 
-- `Alt+R`: ocultar/mostrar la columna derecha. En una terminal pequeña, donde se oculta automáticamente, abre el detalle.
+- `Alt+I`: ocultar/mostrar la columna derecha. En una terminal pequeña, donde se oculta automáticamente, abre el detalle.
 - `/haril-focus`: abrir la vista enfocada de la sección activa (visor de orquestación si estás en ORCHESTRATION).
 - Clic en la columna: abrir el detalle en el visor; `Alt+H` o las pestañas seleccionan la sección.
 - `/haril`: menú de las acciones originales.
@@ -681,23 +681,31 @@ haril plugins list --json
 haril plugins reset
 ```
 
-Desde la interfaz Pi, `/haril-plugins` abre un menú para mostrar, ocultar, subir o bajar espacios y actualiza inmediatamente la columna izquierda. `/haril-dock left|right|both` alterna las columnas y `Alt+R` alterna el panel derecho. La columna derecha puede desplazarse con la rueda del ratón. Los cambios realizados **externamente** desde PowerShell se cargan al iniciar una nueva sesión de `haril` o al abrir `/haril-plugins`.
+Desde la interfaz Pi, `/haril-plugins` abre un menú para mostrar, ocultar, subir o bajar espacios y actualiza inmediatamente la columna izquierda. `/haril-dock left|right|both` alterna las columnas y `Alt+I` alterna el panel derecho. La columna derecha puede desplazarse con la rueda del ratón. Los cambios realizados **externamente** desde PowerShell se cargan al iniciar una nueva sesión de `haril` o al abrir `/haril-plugins`.
 
 Las preferencias quedan en `ui.plugins` de `haril.json`, sin borrar otras opciones. **Un espacio visible no significa que su extensión Pi exista o esté ejecutándose**: YouTube, Explorador, Git, Memoria y Temas son lugares reservados para la integración de extensiones reales en próximos PR. Este PR no instala ni desactiva paquetes Pi. La unión de paneles se realiza mediante un adaptador interno experimental, se revierte al cerrar la sesión y deberá validarse manualmente en Windows Terminal antes de considerarse estable.
 
 #### Navegación y vistas de plugins (0.22.4)
 
-En **Windows nativo**, `Alt+Z` abre un selector de plugins: presiona inmediatamente `1`–`5` según el orden de **espacios visibles**, o usa ↑/↓ y `Enter`; `Esc` cancela sin tocar el texto que estabas escribiendo a Pi. En **WSL**, Pi reserva `Alt+Z` para deshacer texto, así que HARIL no intercepta ese atajo: usa `/haril-plugin` como alternativa. La selección cambia la información visible dentro de la columna izquierda; la conversación central permanece intacta.
+`Alt+L` abre un selector de plugins: presiona inmediatamente `1`–`5` según el orden de **espacios visibles**, o usa ↑/↓ y `Enter`; `Esc` cancela sin tocar el texto que estabas escribiendo a Pi. Funciona también en WSL sin sustituir `Alt+Z`, reservado allí por Pi para deshacer texto. `Alt+I` muestra u oculta el panel derecho. Ambos se pueden sustituir por los comandos `/haril-plugin` y `/haril-dock` si otra aplicación ocupa esas teclas. La selección cambia la información visible dentro de la columna izquierda; la conversación central permanece intacta.
 
 | Acción dentro de Pi | Resultado |
 | --- | --- |
-| `Alt+Z`, después número (Windows nativo) | Abre directamente el espacio visible correspondiente; también ↑/↓ + Enter. |
+| `Alt+L`, después número | Abre directamente el espacio visible correspondiente; también ↑/↓ + Enter. |
+| `Alt+I` | Muestra u oculta la columna derecha. |
 | `/haril-plugin` | Abre el selector de espacios. |
 | `/haril-plugin git` o `/haril-plugin 2` | Selecciona el espacio y muestra sus detalles completos en una vista cerrable con `Esc`. |
 | `/haril-plugin details` | Abre el detalle del espacio actual. |
 | Clic en un espacio de la izquierda | Lo selecciona y actualiza su ficha sin sustituir el chat. |
 
 Las fichas disponibles son de **solo lectura**: Explorador muestra archivos/carpetas del directorio abierto (sin abrir sus contenidos); Git muestra `git status`; Memoria consulta `haril memory status`. YouTube informa si Pi expone el comando `/yt` y cómo acceder a [pi-youtube-player](https://github.com/CinloDev/pi-youtube-player); **no instala ni inicia el reproductor**. Temas explica los temas incluidos de Pi y el acceso a `/settings → Theme`; el cambio directo de tema desde el dock se deja para otra etapa.
+
+#### Catálogo de comandos y Explorador navegable (0.22.5)
+
+- `Alt+C` o `/haril-commands`: abre un visor desplazable con los **comandos que las extensiones realmente registraron** en la sesión Pi, diferenciando los de HARIL de los de otras extensiones (como `/yt` si está disponible). Incluye los atajos propios de HARIL. Esta API no enumera necesariamente todos los comandos nativos de Pi: usa `/hotkeys` para consultar los atajos reales de Pi y `haril help` en PowerShell para las opciones completas de CLI.
+- `/haril-explore`: permite elegir una subcarpeta con las flechas de Pi y `Enter`, volver a la carpeta superior o regresar a la raíz del proyecto. Hacer clic de nuevo en el espacio **Explorador** abre el mismo selector de carpetas.
+- `/haril-explore src`, `/haril-explore ..` y `/haril-explore /`: navegan dentro del proyecto, suben un nivel y vuelven a la raíz, respectivamente. Se verifica la ruta real; no se permite salir de la carpeta original ni abrir archivos como si fueran directorios. Es de **solo lectura**.
+- El Explorador coloca primero los nombres normales y después los ocultos (`.cache`, `.config`, etc.), conserva el desplazamiento con la rueda y reinicia el scroll al cambiar de ficha. Todavía no es un editor de archivos ni permite abrir documentos dentro del chat.
 
 ### M4: interfaz de terminal (`haril shell`)
 
@@ -918,7 +926,7 @@ Los dossiers de `docs/research/` se leen solo bajo demanda, cuando un documento 
 
 ## Versiones
 
-Versión actual: **0.22.4**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
+Versión actual: **0.22.5**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
 
 ## Licencia
 

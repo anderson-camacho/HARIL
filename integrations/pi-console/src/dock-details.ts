@@ -6,8 +6,8 @@ import { DOCK_LABELS, type DockId } from "./native-panes.js";
 import { plainText } from "./text.js";
 
 const execFileAsync = promisify(execFile);
-const MAX_ENTRIES = 32;
-const MAX_LINES = 36;
+const MAX_ENTRIES = 128;
+const MAX_LINES = 140;
 
 export interface DockDetails {
   readonly id: DockId;
@@ -60,12 +60,13 @@ export async function loadDockDetails(
         const entries = [...directory]
           .sort(
             (left, right) =>
+              Number(left.name.startsWith(".")) - Number(right.name.startsWith(".")) ||
               Number(right.isDirectory()) - Number(left.isDirectory()) ||
               left.name.localeCompare(right.name),
           )
           .slice(0, MAX_ENTRIES)
           .map((entry) => `${entry.isDirectory() ? "▸" : "·"} ${plainText(entry.name)}`);
-        return view(id, "Carpeta actual · solo lectura", [
+        return view(id, `Solo lectura · ${directory.length} elementos`, [
           plainText(cwd),
           ...entries,
           ...(directory.length > MAX_ENTRIES

@@ -495,6 +495,10 @@ This writes haril.json (haril config set).`,
   },
 ];
 
+export function harilCommandDescriptions(): readonly { name: string; description: string }[] {
+  return COMMANDS.map(({ name, description }) => ({ name, description }));
+}
+
 function approvalCompletions(host: CommandHost | undefined, prefix: string): AutocompleteItem[] {
   const wanted = prefix.trim().toLowerCase();
   return (host?.pending ?? [])

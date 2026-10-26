@@ -227,7 +227,7 @@ describe("the console's modules", () => {
     ] as const) {
       const layout = renderHeaderLayout("0.21.6", width, facts(), "tools", THEME, height, visible);
       expect(layout.railHits).toBeUndefined();
-      expect(layout.lines.map(stripAnsi).join("\n")).toContain("Alt+R panel");
+      expect(layout.lines.map(stripAnsi).join("\n")).toContain("Alt+I panel");
     }
   });
 
@@ -367,7 +367,8 @@ describe("the console's modules", () => {
     await fake.fire("session_start", { reason: "startup" }, ctx);
     expect([...fake.shortcuts.keys()].filter((key) => key.startsWith("ctrl+shift+"))).toEqual([]);
     expect(fake.shortcuts.has("alt+h")).toBe(true);
-    expect(fake.shortcuts.has("alt+r")).toBe(true);
+    expect(fake.shortcuts.has("alt+i")).toBe(true);
+    expect(fake.shortcuts.has("alt+r")).toBe(false);
     expect(fake.commands.has("language")).toBe(true);
     expect(fake.shortcuts.has("alt+f")).toBe(false);
     expect(fake.commands.has("haril-focus")).toBe(true);
