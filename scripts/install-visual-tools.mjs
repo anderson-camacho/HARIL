@@ -250,15 +250,15 @@ export async function installVisualTools(root, options = {}) {
   if (uvExists && !uvHealthy) output("HARIL: uv is damaged or outdated; repairing it...");
   if (tteExists && !tteHealthy) output("HARIL: Matrix is damaged or outdated; repairing it...");
 
-  const uv = uvHealthy
-    ? paths.uv
-    : await bootstrap(root, platform, arch, output, uvExists);
+  const uv = uvHealthy ? paths.uv : await bootstrap(root, platform, arch, output, uvExists);
   output(`HARIL: installing/repairing Matrix effect (${TOOL_SPEC}) in the HARIL runtime...`);
   await execute(uv, ["tool", "install", "--reinstall", "--python", "3.12", TOOL_SPEC], toolEnv);
   if (!exists(paths.tte))
     throw new Error(`Matrix setup completed but ${paths.tte} was not created`);
   if (!(await probe(paths.tte, TTE_VERSION, toolEnv)))
-    throw new Error(`Matrix executable is present but failed the ${TTE_VERSION} version/health check`);
+    throw new Error(
+      `Matrix executable is present but failed the ${TTE_VERSION} version/health check`,
+    );
   output(`HARIL: Matrix ${TTE_VERSION} verified and ready at ${paths.tte}`);
   return { status: tteExists ? "repaired" : "installed", binary: paths.tte };
 }
