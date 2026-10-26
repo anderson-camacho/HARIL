@@ -220,7 +220,7 @@ export async function loadDockDetails(
       case "themes":
         return view(
           id,
-          `${en ? "HARIL palette" : "Paleta HARIL"}: ${source.theme ?? "violet"}`,
+          `${en ? "HARIL palette" : "Paleta HARIL"}: ${source.theme ?? "matrix"}`,
           [
             en ? "Choose a palette by clicking:" : "Selecciona una paleta con clic:",
             ...HARIL_PALETTES.map(
