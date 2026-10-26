@@ -76,7 +76,7 @@ describe("full-terminal Matrix startup", () => {
     });
     const combined = output.join("");
     expect(combined).not.toContain("SISTEMA CARGADO");
-    expect(combined).toContain("HARIL");
+    // The word is drawn as block glyphs, not literal text bytes.
     expect(combined).toContain("█");
     expect(combined).toContain("\u001b[28;1H");
     expect(combined).toContain("\u001b[?1049h");
