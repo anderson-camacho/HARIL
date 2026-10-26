@@ -115,7 +115,7 @@ async function matrixBuiltIn(
         }
         colored += character;
       }
-      screen += "\u001b[" + (rowIndex + 1) + ";1H" + colored + "\u001b[0m";
+      screen += `\u001b[${rowIndex + 1};1H${colored}\u001b[0m`;
     }
     out.write(screen);
     await wait(resolving ? MORPH_INTERVAL_MS : INTERVAL_MS);
@@ -167,7 +167,7 @@ export function matrixMorphFrame(step: number, width = 80, height = 24): readonl
   return target.map((line, y) =>
     Array.from(line, (pixel, x) => {
       const threshold = ((x * 73 + y * 41) % 101) / 100;
-      return progress >= threshold ? pixel : rain[y]?.[x] ?? " ";
+      return progress >= threshold ? pixel : (rain[y]?.[x] ?? " ");
     }).join(""),
   );
 }
