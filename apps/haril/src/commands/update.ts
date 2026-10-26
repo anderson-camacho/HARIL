@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, posix, resolve, win32 } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { DatabaseSync } from "node:sqlite";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
@@ -362,12 +362,28 @@ export async function update(
       io.err("haril: the selected source is older; downgrades are not automatic");
       return EXIT_USAGE;
     }
-    if (comparison === 0) {
+    const ops = host.platform === "win32" ? win32 : posix;
+    const managedTte = ops.join(
+      root,
+      "tools",
+      "bin",
+      host.platform === "win32" ? "tte.exe" : "tte",
+    );
+    const needsVisualSetup =
+      host.env?.HARIL_AUTO_INSTALL_VISUALS !== "off" &&
+      host.env?.HARIL_STARTUP_ANIMATION !== "off" &&
+      services.exists(join(source, "scripts", "install-visual-tools.mjs")) &&
+      !services.exists(managedTte);
+    if (comparison === 0 && !needsVisualSetup) {
       io.out("HARIL is already at the selected source version.");
       return EXIT_OK;
     }
     if (check) {
-      io.out("An update is available; the installed files were not changed.");
+      io.out(
+        comparison > 0
+          ? "An update is available; the installed files were not changed."
+          : "HARIL is up to date, but the managed Matrix dependency needs repair; no files were changed.",
+      );
       return EXIT_OK;
     }
 
@@ -392,7 +408,9 @@ export async function update(
     }
 
     io.out(
-      `Updating HARIL to ${available} from ${useMain ? "GitHub main" : "local source"} through the installer...`,
+      comparison > 0
+        ? `Updating HARIL to ${available} from ${useMain ? "GitHub main" : "local source"} through the installer...`
+        : "Repairing the missing Matrix dependency through the HARIL installer...",
     );
     const result = await services.install(script, root, source);
     if (result !== 0) {
@@ -401,7 +419,11 @@ export async function update(
       );
       return 1;
     }
-    io.out(`HARIL update to ${available} completed; open a new terminal before continuing.`);
+    io.out(
+      comparison > 0
+        ? `HARIL update to ${available} completed; open a new terminal before continuing.`
+        : `HARIL ${available} dependency repair completed; open a new terminal before continuing.`,
+    );
     return EXIT_OK;
   } finally {
     checkout?.cleanup();

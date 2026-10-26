@@ -1,6 +1,6 @@
 // One-command installer (haril-installer). install.sh, install.ps1 and install.cmd only check that node exists
 // and run this file from the repository root. It installs the dependencies, builds, installs the Pi runtime and
-// the CLI under the runtime root, and checks the result with doctor through the installed launcher.
+// the CLI and managed visual tools under the runtime root, then checks the result with doctor.
 // It never edits PATH, the registry or a shell profile, never installs Node and never reads a key: it prints the
 // PATH line instead. Re-running it is an update.
 //
@@ -27,13 +27,14 @@ const USAGE = [
   "usage: install.sh | install.ps1 | install.cmd [--no-runtime] [--root <dir>] [--dry-run] [--help]",
   "       node scripts/install.mjs [the same flags]",
   "",
-  "Installs HARIL for this user from this repository, in six steps:",
+  "Installs HARIL for this user from this repository, in seven steps:",
   `  1. check Node (${NODE_REQUIREMENT}) and corepack`,
   "  2. corepack pnpm install --frozen-lockfile",
   "  3. corepack pnpm run build",
   "  4. install the Pi runtime (a pinned Node and Pi) under the root",
   "  5. install the HARIL CLI under <root>/app, with its launchers in <root>/bin",
-  "  6. run doctor through the installed launcher",
+  "  6. prepare Matrix visual tools (uv, managed Python and TerminalTextEffects)",
+  "  7. run doctor through the installed launcher",
   "",
   "  --no-runtime  skip step 4",
   "  --root <dir>  install under <dir>; else HARIL_RUNTIME_DIR, else %LOCALAPPDATA%\\HARIL on Windows,",
@@ -160,6 +161,10 @@ export function planSteps({ platform, env, repoRoot, nodeExe, root, runtime }) {
       ...rootArgs,
       "--from",
       repoRoot,
+    ]),
+    step("visuals", "Install Matrix visual tools", nodeExe, [
+      "scripts/install-visual-tools.mjs",
+      ...rootArgs,
     ]),
     step("doctor", "Check the install with doctor", launcherPath(platform, root), ["doctor"], {
       shell,
@@ -373,6 +378,12 @@ export async function runInstall(argv, deps) {
     }
     if (step.id === "runtime") {
       deps.err("install: to install the CLI without the Pi runtime for now, add --no-runtime.");
+    }
+    if (step.id === "visuals") {
+      deps.err("install: HARIL core is installed, but the original Matrix effect is not ready.");
+      deps.err(
+        "install: the built-in Matrix fallback still works; retry the installer when downloads are available.",
+      );
     }
     return EXIT_STEP_FAILED;
   }

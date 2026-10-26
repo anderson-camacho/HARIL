@@ -108,12 +108,12 @@ test("root: --root resolved against the cwd, then HARIL_RUNTIME_DIR, then the pl
   assert.equal(resolveRoot(WINDOWS), "C:\\Users\\Ana\\AppData\\Local\\HARIL");
 });
 
-test("plan on POSIX: six steps in order, the runtime before the CLI, one root for every child", () => {
+test("plan on POSIX: seven steps, the runtime before the CLI and visual tools after it", () => {
   const root = "/home/ana/.local/share/haril";
   const steps = planSteps({ ...LINUX, root, runtime: true });
   assert.deepEqual(
     steps.map((step) => step.id),
-    ["preflight", "deps", "build", "runtime", "app", "doctor"],
+    ["preflight", "deps", "build", "runtime", "app", "visuals", "doctor"],
   );
   const byId = Object.fromEntries(steps.map((step) => [step.id, step]));
   assert.deepEqual([byId.preflight.command, ...byId.preflight.args], ["corepack", "--version"]);
@@ -142,6 +142,10 @@ test("plan on POSIX: six steps in order, the runtime before the CLI, one root fo
     [byId.doctor.command, ...byId.doctor.args],
     ["/home/ana/.local/share/haril/bin/haril", "doctor"],
   );
+  assert.deepEqual(
+    [byId.visuals.command, ...byId.visuals.args],
+    ["/usr/bin/node", "scripts/install-visual-tools.mjs", "--root", root],
+  );
   assert.equal(byId.doctor.env.HARIL_RUNTIME_DIR, root);
   for (const step of steps) {
     assert.equal(step.shell, false, step.id);
@@ -155,7 +159,7 @@ test("plan on Windows: corepack and the haril.cmd launcher go through the shell"
   const byId = Object.fromEntries(steps.map((step) => [step.id, step]));
   assert.equal(byId.doctor.command, `${root}\\bin\\haril.cmd`);
   for (const id of ["preflight", "deps", "build", "doctor"]) assert.equal(byId[id].shell, true, id);
-  for (const id of ["runtime", "app"]) {
+  for (const id of ["runtime", "app", "visuals"]) {
     assert.equal(byId[id].shell, false, id);
     assert.equal(byId[id].command, WINDOWS.nodeExe, id);
   }
@@ -177,7 +181,7 @@ test("a full run executes every step once, in order, and prints the launcher and
   assert.equal(run.code, 0, run.err);
   assert.deepEqual(
     run.calls.map((step) => step.id),
-    ["preflight", "deps", "build", "runtime", "app", "doctor"],
+    ["preflight", "deps", "build", "runtime", "app", "visuals", "doctor"],
   );
   for (const [index, title] of [
     [1, "Check Node and corepack"],
@@ -185,9 +189,10 @@ test("a full run executes every step once, in order, and prints the launcher and
     [3, "Build"],
     [4, "Install the Pi runtime"],
     [5, "Install the HARIL CLI"],
-    [6, "Check the install with doctor"],
+    [6, "Install Matrix visual tools"],
+    [7, "Check the install with doctor"],
   ]) {
-    assert.match(run.out, new RegExp(`\\[${index}/6\\] ${title}`));
+    assert.match(run.out, new RegExp(`\\[${index}/7\\] ${title}`));
   }
   assert.match(run.out, /\/home\/ana\/\.local\/share\/haril\/bin\/haril/);
   assert.match(run.out, /export PATH="\$HOME\/\.local\/share\/haril\/bin:\$PATH"/);
@@ -227,10 +232,10 @@ test("--no-runtime skips install-runtime and still installs the CLI", async () =
   assert.equal(run.code, 0, run.err);
   assert.deepEqual(
     run.calls.map((step) => step.id),
-    ["preflight", "deps", "build", "app", "doctor"],
+    ["preflight", "deps", "build", "app", "visuals", "doctor"],
   );
   assert.ok(run.calls.every((step) => !step.args.includes("install-runtime")));
-  assert.match(run.out, /\[4\/6\] Install the Pi runtime.*skipped.*--no-runtime/);
+  assert.match(run.out, /\[4\/7\] Install the Pi runtime.*skipped.*--no-runtime/);
 });
 
 test("--root goes to both bootstrap commands, and doctor gets HARIL_RUNTIME_DIR for it", async () => {
@@ -282,7 +287,7 @@ test("Node 24.19 warns and keeps going", async () => {
   const run = await install([], { ...LINUX, nodeVersion: "24.19.0" });
   assert.equal(run.code, 0, run.err);
   assert.match(`${run.out}\n${run.err}`, /warning: .*24\.19\.0/);
-  assert.equal(run.calls.length, 6);
+  assert.equal(run.calls.length, 7);
 });
 
 test("a missing corepack exits 2 before anything is installed", async () => {
@@ -304,24 +309,24 @@ test("a failing step stops the run and names the step and its exit code", async 
     run.calls.map((step) => step.id),
     ["preflight", "deps", "build"],
   );
-  assert.match(run.err, /step 3\/6 "Build" failed with exit code 3/);
+  assert.match(run.err, /step 3\/7 "Build" failed with exit code 3/);
 });
 
 test("a failing runtime step suggests --no-runtime to get the CLI alone", async () => {
   const run = await install([], LINUX, { runtime: { code: 1, signal: null } });
   assert.equal(run.code, 1);
-  assert.match(run.err, /step 4\/6 .* failed with exit code 1/);
+  assert.match(run.err, /step 4\/7 .* failed with exit code 1/);
   assert.match(run.err, /--no-runtime/);
 });
 
 test("a step that cannot start or is stopped by a signal also stops the run", async () => {
   const notFound = await install([], LINUX, { deps: { code: null, signal: null, error: "boom" } });
   assert.equal(notFound.code, 1);
-  assert.match(notFound.err, /step 2\/6 "Install dependencies" could not start: boom/);
+  assert.match(notFound.err, /step 2\/7 "Install dependencies" could not start: boom/);
 
   const stopped = await install([], LINUX, { app: { code: null, signal: "SIGINT" } });
   assert.equal(stopped.code, 1);
-  assert.match(stopped.err, /step 5\/6 "Install the HARIL CLI" was stopped by SIGINT/);
+  assert.match(stopped.err, /step 5\/7 "Install the HARIL CLI" was stopped by SIGINT/);
 });
 
 test("doctor warnings still count as installed; doctor errors fail step 6", async () => {
@@ -331,14 +336,14 @@ test("doctor warnings still count as installed; doctor errors fail step 6", asyn
 
   const failed = await install([], LINUX, { doctor: { code: 2, signal: null } });
   assert.equal(failed.code, 1);
-  assert.match(failed.err, /step 6\/6 "Check the install with doctor" failed with exit code 2/);
+  assert.match(failed.err, /step 7\/7 "Check the install with doctor" failed with exit code 2/);
 });
 
 test("a missing launcher fails step 6 instead of reading as a doctor warning", async () => {
   const run = await install([], { ...WINDOWS, exists: () => false });
   assert.equal(run.code, 1);
   assert.ok(run.calls.every((step) => step.id !== "doctor"));
-  assert.match(run.err, /step 6\/6 .* found no launcher at .*haril\.cmd/);
+  assert.match(run.err, /step 7\/7 .* found no launcher at .*haril\.cmd/);
 });
 
 test("no PATH edit: the installer has no write path at all", () => {

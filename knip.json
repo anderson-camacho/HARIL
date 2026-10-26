@@ -26,8 +26,7 @@
       "entry": ["src/**/index.ts", "src/main.ts"]
     },
     "apps/haril": {
-      "entry": ["src/**/index.ts", "src/main.ts", "tests/crash/*.mjs"],
-      "ignoreBinaries": ["tte"]
+      "entry": ["src/**/index.ts", "src/main.ts", "tests/crash/*.mjs"]
     },
     "apps/shell": {
       "entry": ["src/main.ts"]

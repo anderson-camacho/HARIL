@@ -99,7 +99,7 @@ haril update
 haril update --yes
 ```
 
-`haril update` consulta `main` sin checkout local y solo instala una versión superior con confirmación. Cierra los procesos de HARIL antes de actualizar.
+`haril update` consulta `main` sin checkout local e instala una versión superior con confirmación. También prepara sus dependencias adicionales, como el Matrix original de TerminalTextEffects, dentro de la carpeta de HARIL. Si la versión ya es la última pero falta una de esas herramientas, permite repararla en la siguiente ejecución. Cierra los procesos de HARIL antes de actualizar.
 
 ### Recuperación: Gentle Shell tiene lanzador pero falta el módulo
 
@@ -173,7 +173,7 @@ haril update --check
 haril update
 ```
 
-`haril update` verifica una versión mayor en `main` y solicita confirmación en una consola interactiva; `haril update --yes` la instala sin preguntar; `haril update --check` solamente consulta. Sigue disponible `haril update --from <ruta-local>` para trabajo de desarrollo. Las actualizaciones se rechazan cuando HARIL detecta un runtime activo o no puede validar su estado, y nunca bajan la versión automáticamente.
+`haril update` verifica una versión mayor en `main` y solicita confirmación en una consola interactiva; `haril update --yes` la instala sin preguntar; `haril update --check` solamente consulta. El instalador también instala las dependencias visuales añadidas y puede repararlas si faltan aun con la misma versión. Sigue disponible `haril update --from <ruta-local>` para desarrollo. Las actualizaciones se rechazan cuando HARIL detecta un runtime activo o no puede validar su estado, y nunca bajan la versión automáticamente.
 
 Opciones del instalador: en Windows ejecuta el script descargado con `-NoGentleShell`, `-NoPath` o `-KeepSource` para omitir el acompañante, no agregar PATH de usuario o conservar la descarga temporal, respectivamente. En macOS/Linux usa `HARIL_NO_GENTLE_SHELL=1`, `HARIL_NO_PATH=1` o `HARIL_KEEP_SOURCE=1` como variables de entorno.
 
@@ -458,7 +458,7 @@ haril update
 haril update --yes
 ```
 
-El canal predeterminado es `main` (desarrollo, no release firmada). Usa un directorio temporal con `git fetch` sobre HTTP/1.1, reintentos y verificación de versión; la descarga no cambia tu repositorio local. Si falta conexión, se muestra el motivo y la versión instalada se conserva. Las versiones iguales no se reinstalan, ni se hacen downgrades. Para una copia local explícita, ejecuta `haril update --from D:\github\haril --yes`; el checkout debe tener el instalador de HARIL.
+El canal predeterminado es `main` (desarrollo, no release firmada). Usa un directorio temporal para descargar la actualización; la descarga no cambia tu repositorio local. Si falta conexión, se muestra el motivo y no se declara la actualización completa. No se hacen downgrades. Una versión igual no recompila todo salvo cuando falta una herramienta visual gestionada por HARIL, en cuyo caso el actualizador repara la instalación con confirmación. Para una copia local explícita, ejecuta `haril update --from D:\github\haril --yes`; el checkout debe tener el instalador de HARIL.
 
 ### Instalar HARIL en tu usuario
 
@@ -745,15 +745,15 @@ HARIL monta esas columnas solo si el Pi incluido ofrece el contrato interno de d
 
 #### Arranque Matrix, paletas y ojo IA (0.23.0)
 
-Desde **0.23.1**, al iniciar `haril` se ve lluvia Matrix en **toda la terminal** y luego el título grande **SISTEMA CARGADO · HARIL** durante **3 segundos**, antes de abrir Pi. HARIL prioriza automáticamente el efecto **real** `tte matrix` de [`terminaltexteffects`](https://github.com/ChrisBuilds/terminaltexteffects), con canvas que ocupa la ventana y un límite de ejecución de 2,5 segundos. Si falta `tte`, utiliza una alternativa integrada con katakana de medio ancho, tonos verdes y el mismo título grande. Nada se descarga automáticamente.
+Desde **0.23.1**, al iniciar `haril` se ve lluvia Matrix en **toda la terminal** y luego el título grande **SISTEMA CARGADO · HARIL** durante **3 segundos**, antes de abrir Pi. HARIL prioriza automáticamente el efecto **real** `tte matrix` de [`terminaltexteffects`](https://github.com/ChrisBuilds/terminaltexteffects), con canvas que ocupa la ventana y un límite de ejecución de 2,5 segundos. Si falta `tte`, utiliza una alternativa integrada con katakana de medio ancho, tonos verdes y el mismo título grande.
+
+**Las dependencias nuevas se gestionan automáticamente:** al instalar o ejecutar `haril update`, HARIL descarga una versión verificada de `uv`, prepara Python de forma aislada e instala una versión fija de TerminalTextEffects en `<raíz-HARIL>/tools`. No exige comandos de Python, cambios de `PATH` ni privilegios de administrador. Si se interrumpe la red, el instalador avisa del fallo; el efecto integrado sigue disponible y `haril update` puede reparar la dependencia en otra ejecución. `haril update --check` no instala nada. Para omitir expresamente estos complementos, configura `HARIL_AUTO_INSTALL_VISUALS=off`.
 
 ```powershell
-# Para obtener el efecto original de ChrisBuilds, instala TTE una sola vez con uv:
-uv tool install terminaltexteffects
-tte --version
-# Alternativa: pipx install terminaltexteffects
+# Actualiza HARIL: instala el Matrix original y otras dependencias gestionadas.
+haril update
 
-# Por defecto HARIL detecta tte y lo utiliza; también puedes forzarlo:
+# El efecto original se detecta automáticamente; también puedes forzarlo:
 $env:HARIL_STARTUP_MATRIX_ENGINE = 'tte'
 
 # O utilizar explícitamente la alternativa integrada, sin TTE:
@@ -993,7 +993,7 @@ Los dossiers de `docs/research/` se leen solo bajo demanda, cuando un documento 
 
 ## Versiones
 
-Versión actual: **0.23.1**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
+Versión actual: **0.23.2**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
 
 ## Licencia
 
