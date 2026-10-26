@@ -150,7 +150,10 @@ function themeFromDocument(label: string, document: unknown, source: "user" | "n
   const resolved = {} as Record<ThemeToken, Color>;
   // The required tokens come first in SHELL_THEME_TOKENS, so a fallback is always resolved before it is used.
   for (const token of SHELL_THEME_TOKENS) {
-    const value = colors[token];
+    // Pi themes call these status colors success/error; the standalone shell
+    // uses ok/danger. Accept either without adding non-Pi keys to JSON.
+    const value =
+      colors[token] ?? (token === "ok" ? colors.success : token === "danger" ? colors.error : undefined);
     const fallback = TOKEN_FALLBACK[token];
     if (value === undefined && fallback !== undefined) {
       resolved[token] = resolved[fallback];
