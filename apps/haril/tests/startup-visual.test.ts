@@ -143,7 +143,8 @@ describe("full-terminal Matrix startup", () => {
       runExternalMatrix: async () => false,
       wait: async () => undefined,
     });
-    expect(writes.join("")).toContain("HARIL");
+    // Colors inserted between glyphs make raw terminal output non-contiguous.
+    expect(matrixMorphFrame(14, 19, 8).join("")).toContain("HARIL");
     expect(writes.join("")).toContain("\u001b[8;1H");
   });
 });
