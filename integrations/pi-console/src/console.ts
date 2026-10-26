@@ -1230,7 +1230,7 @@ export default function harilConsole(pi: ConsolePi): void {
 
   async function changeTheme(current: Session, requested: string): Promise<void> {
     if (!HARIL_PALETTES.some((item) => item === requested)) {
-      current.ctx.ui.notify("Paleta desconocida. Usa violet, rose, amber u obsidian.", "warning");
+      current.ctx.ui.notify("Paleta desconocida. Usa matrix, violet, rose, amber u obsidian.", "warning");
       return;
     }
     if (!cliAvailable()) {
@@ -1253,7 +1253,7 @@ export default function harilConsole(pi: ConsolePi): void {
   }
 
   pi.registerCommand("haril-theme", {
-    description: "HARIL: cambiar paleta violeta, rosa, ámbar u obsidiana",
+    description: "HARIL: cambiar paleta Matrix, violeta, rosa, ámbar u obsidiana",
     getArgumentCompletions: (prefix: string) =>
       HARIL_PALETTES.filter((name) => name.startsWith(prefix.trim().toLowerCase())).map((name) => ({
         value: name,
