@@ -128,7 +128,7 @@ export function harilBannerLines(width: number, height: number): readonly string
   const original = largeText("HARIL");
   // Fill roughly four fifths of the available width while retaining all glyph
   // proportions. On small consoles the title still fits without scrolling.
-  const horizontal = Math.max(1, Math.min(6, Math.floor((width * 0.8) / original[0].length)));
+  const horizontal = Math.max(1, Math.min(6, Math.floor((width * 0.8) / (original[0]?.length ?? 29))));
   const vertical = Math.max(1, Math.min(3, Math.floor((height * 0.42) / original.length)));
   return original.flatMap((line) => {
     const expanded = Array.from(line, (ch) => ch.repeat(horizontal)).join("");
