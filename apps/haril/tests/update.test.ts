@@ -123,8 +123,9 @@ describe("haril update (local verified source only)", () => {
   it("checks executable health even if the installed HARIL version is current", async () => {
     manifest("0.21.0");
     writeFileSync(join(source, "scripts", "install-visual-tools.mjs"), "// fixture\n");
-    const uv = join(root, "tools", "uv", "uv");
-    const tte = join(root, "tools", "bin", "tte");
+    host = { ...host, platform: process.platform };
+    const uv = join(root, "tools", "uv", process.platform === "win32" ? "uv.exe" : "uv");
+    const tte = join(root, "tools", "bin", process.platform === "win32" ? "tte.exe" : "tte");
     mkdirSync(join(root, "tools", "uv"), { recursive: true });
     mkdirSync(join(root, "tools", "bin"), { recursive: true });
     writeFileSync(uv, "uv fixture");
@@ -144,7 +145,11 @@ describe("haril update (local verified source only)", () => {
   it("does not reinstall verified tools when the selected version is current", async () => {
     manifest("0.21.0");
     writeFileSync(join(source, "scripts", "install-visual-tools.mjs"), "// fixture\n");
-    for (const path of [join(root, "tools", "uv", "uv"), join(root, "tools", "bin", "tte")]) {
+    host = { ...host, platform: process.platform };
+    for (const path of [
+      join(root, "tools", "uv", process.platform === "win32" ? "uv.exe" : "uv"),
+      join(root, "tools", "bin", process.platform === "win32" ? "tte.exe" : "tte"),
+    ]) {
       mkdirSync(join(path, ".."), { recursive: true });
       writeFileSync(path, "version fixture");
     }
