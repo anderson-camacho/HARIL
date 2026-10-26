@@ -1,5 +1,6 @@
 import { paddedCell, visualText } from "./dashboard-theme.js";
 import { DOCK_LABELS, type DockId, type DockSlot } from "./native-panes.js";
+import { keyOf } from "./orchestration-state.js";
 
 export type DockPickerResult =
   | { readonly type: "open"; readonly id: DockId }
@@ -14,8 +15,7 @@ export function dockSlotAt(slots: readonly DockSlot[], oneBased: number): DockSl
   return visibleDockSlots(slots)[oneBased - 1];
 }
 
-// Alt+Z opens this Pi-native modal, then the next digit is captured by the modal rather than sent to the Pi editor.
-// It is deliberately a two-key sequence, not an unsupported compound hotkey named "alt+z+1".
+// Alt+L opens this Pi-native modal, then a digit or an arrow is captured by the modal.
 export function createDockPicker(
   slots: readonly DockSlot[],
   selectedId: DockId,
@@ -43,7 +43,7 @@ export function createDockPicker(
       return [
         visualText(`╭${"─".repeat(inner)}╮`, "teal", "panel"),
         line("HARIL ◉ · Seleccionar plugin", "yellow"),
-        line("Alt+Z → número · ↑↓ · Enter · Esc", "muted"),
+        line("Alt+L → número · ↑↓ · Enter · Esc", "muted"),
         ...visible.map((slot, index) => {
           const label = DOCK_LABELS.find((item) => item.id === slot.id)?.label ?? slot.id;
           return line(
@@ -58,21 +58,22 @@ export function createDockPicker(
     },
     handleInput(input: string): void {
       if (closed) return;
-      if (input === "\u001b" || input === "\u001b[27u" || input === "\u001b[27;1u") {
+      const key = keyOf(input);
+      if (key === "escape") {
         finish({ type: "cancel" });
         return;
       }
-      const digit = /^[1-9]$/.test(input) ? Number(input) : NaN;
+      const digit = key !== undefined && /^[1-9]$/.test(key) ? Number(key) : NaN;
       if (Number.isInteger(digit)) {
         const slot = visible[digit - 1];
         if (slot) finish({ type: "open", id: slot.id });
         return;
       }
-      if (input === "\u001b[B" || input === "\u001b[C") {
+      if (key === "down" || key === "right") {
         if (visible.length > 0) selected = (selected + 1) % visible.length;
-      } else if (input === "\u001b[A" || input === "\u001b[D") {
+      } else if (key === "up" || key === "left") {
         if (visible.length > 0) selected = (selected + visible.length - 1) % visible.length;
-      } else if (input === "\r" || input === "\n" || input === "\u001b[13u") {
+      } else if (key === "enter") {
         const slot = visible[selected];
         if (slot) finish({ type: "open", id: slot.id });
         return;

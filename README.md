@@ -707,6 +707,10 @@ Las fichas disponibles son de **solo lectura**: Explorador muestra archivos/carp
 - `/haril-explore src`, `/haril-explore ..` y `/haril-explore /`: navegan dentro del proyecto, suben un nivel y vuelven a la raíz, respectivamente. Se verifica la ruta real; no se permite salir de la carpeta original ni abrir archivos como si fueran directorios. Es de **solo lectura**.
 - El Explorador coloca primero los nombres normales y después los ocultos (`.cache`, `.config`, etc.), conserva el desplazamiento con la rueda y reinicia el scroll al cambiar de ficha. Todavía no es un editor de archivos ni permite abrir documentos dentro del chat.
 
+#### Navegación de menús en Windows Terminal (0.22.6)
+
+Los selectores de plugins (`Alt+L` o `/haril-plugin`) y de áreas (`Alt+H`) reconocen las secuencias de flechas clásicas, SS3 y Kitty usadas por Pi y Windows Terminal: `↑`/`↓` mueven el resaltado, `Enter` abre y `Esc` cancela. `←`/`→` siguen disponibles como alternativa. El visor de `/haril-commands` también se desplaza con flechas; si otra aplicación intercepta un atajo, usa el comando equivalente desde Pi. El selector ahora indica `Alt+L`, no el antiguo `Alt+Z`.
+
 ### M4: interfaz de terminal (`haril shell`)
 
 `haril shell` abre la interfaz de terminal propia de HARIL, la que abría `haril` hasta la 0.7.0; desde la 0.8.0, `haril` sin subcomando abre la [consola sobre Pi](#m4-consola-de-haril-sobre-pi-haril) y esta interfaz se abre con `haril shell`. Necesita una terminal real (Windows Terminal o PowerShell); sin ella `haril shell` sale con 2. La interfaz no escribe en la base: cada acción ejecuta un comando `haril` corto. No consulta la base en bucle: los datos se cargan al abrir, con `r`, después de cada acción y cuando el runtime en marcha avisa de un cambio.
@@ -926,7 +930,7 @@ Los dossiers de `docs/research/` se leen solo bajo demanda, cuando un documento 
 
 ## Versiones
 
-Versión actual: **0.22.5**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
+Versión actual: **0.22.6**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
 
 ## Licencia
 
