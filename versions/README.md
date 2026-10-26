@@ -2,7 +2,8 @@
 
 ## Estado actual
 
-- **Versión actual:** 0.23.3.
+- **Versión actual:** 0.23.4.
+- **Estado (0.23.4):** transición continua de lluvia digital a HARIL grande; TTE resuelve directamente al texto final y el motor integrado utiliza una disolución por celdas, sin parpadeo por limpieza. Tema Matrix verde/negro para panel HARIL, shell y Pi, preparado automáticamente al abrir la consola; se corrige la prueba de dependencias en Windows.
 - **Estado (0.23.3):** arranque Matrix real con lluvia que alcanza la parte inferior de la terminal, texto final únicamente HARIL grande durante 3 segundos. El actualizador comprueba versiones y ejecución real de `uv` y TTE, omite instalaciones sanas y repara binarios faltantes, dañados o desactualizados.
 - **Estado (0.23.2):** `haril update` prepara automáticamente `uv`, Python administrado y TerminalTextEffects para el arranque Matrix, todo dentro de la carpeta privada de HARIL y con descargas verificadas. Si falta el complemento, puede repararlo incluso con la misma versión instalada. Sin instalaciones manuales de Python, `uv` ni cambios en `PATH`.
 - **Estado (0.23.1):** arranque Matrix a pantalla completa; prioriza el comando real `tte matrix` cuando TerminalTextEffects está instalado, con lluvia verde japonesa integrada como respaldo. Presenta el título grande «SISTEMA CARGADO · HARIL» durante tres segundos y después devuelve el terminal a Pi.
