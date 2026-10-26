@@ -3,7 +3,7 @@ import { plainText, textWidth, truncate } from "./text.js";
 export type DashboardTone = "cyan" | "teal" | "yellow" | "text" | "muted" | "dim" | "error";
 
 const RESET = "\u001b[0m";
-export const HARIL_PALETTES = ["violet", "rose", "amber", "obsidian"] as const;
+export const HARIL_PALETTES = ["matrix", "violet", "rose", "amber", "obsidian"] as const;
 export type HarilPalette = (typeof HARIL_PALETTES)[number];
 type Color = readonly [number, number, number];
 type BackgroundTone = "base" | "panel" | "selected";
@@ -13,6 +13,18 @@ interface Palette {
 }
 
 const PALETTES: Record<HarilPalette, Palette> = {
+  matrix: {
+    foreground: {
+      cyan: [38, 238, 104],
+      teal: [119, 255, 165],
+      yellow: [231, 207, 117],
+      text: [198, 244, 210],
+      muted: [118, 151, 129],
+      dim: [75, 112, 88],
+      error: [255, 101, 118],
+    },
+    background: { base: [0, 0, 0], panel: [6, 20, 10], selected: [23, 65, 38] },
+  },
   violet: {
     foreground: {
       cyan: [191, 163, 240],
@@ -63,10 +75,10 @@ const PALETTES: Record<HarilPalette, Palette> = {
   },
 };
 
-let activePalette: HarilPalette = "violet";
+let activePalette: HarilPalette = "matrix";
 
 export function setHarilPalette(candidate: unknown): HarilPalette {
-  activePalette = HARIL_PALETTES.find((item) => item === candidate) ?? "violet";
+  activePalette = HARIL_PALETTES.find((item) => item === candidate) ?? "matrix";
   return activePalette;
 }
 

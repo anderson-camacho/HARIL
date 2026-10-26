@@ -3,6 +3,7 @@ import {
   harilBannerLines,
   matrixExecutable,
   matrixFrame,
+  matrixMorphFrame,
   playHarilStartup,
   startupSettings,
   TTE_MATRIX_ARGS,
@@ -30,6 +31,7 @@ describe("full-terminal Matrix startup", () => {
     expect(TTE_MATRIX_ARGS).toContain("matrix");
     expect(TTE_MATRIX_ARGS).toContain("--rain-time");
     expect(TTE_MATRIX_ARGS).toContain("--anchor-text");
+    expect(TTE_MATRIX_ARGS).toContain("--final-gradient-stops");
     expect(TTE_MATRIX_ARGS[TTE_MATRIX_ARGS.indexOf("--anchor-text") + 1]).toBe("c");
     expect(TTE_MATRIX_ARGS[TTE_MATRIX_ARGS.indexOf("--rain-time") + 1]).toBe("3");
     expect(TTE_MATRIX_ARGS.slice(0, 4)).toEqual(["--canvas-width", "0", "--canvas-height", "0"]);
@@ -82,7 +84,7 @@ describe("full-terminal Matrix startup", () => {
     expect(combined).toContain("\u001b[?1049h");
     expect(combined).toContain("\u001b[?1049l");
     expect(combined).toContain("\u001b[?25h");
-    expect(delays).toEqual([...Array(32).fill(55), 3_000]);
+    expect(delays).toEqual([...Array(32).fill(55), ...Array(14).fill(75), 3_000]);
   });
 
   it("uses TTE's own rain when present and still shows HARIL for three seconds", async () => {
@@ -103,7 +105,24 @@ describe("full-terminal Matrix startup", () => {
     });
     expect(delays).toEqual([3_000]);
     expect(output.join("")).not.toContain("SISTEMA CARGADO");
-    expect(output.join("")).toContain("█");
+    // The real TTE itself leaves the final large logo on-screen; there is no
+    // second clear + external replacement with a different logo size.
+    expect(output.join("").split("\u001b[2J")).toHaveLength(2);
+  });
+
+  it("fades characters into HARIL in fourteen stable full-screen frames", () => {
+    const first = matrixMorphFrame(0, 96, 28);
+    const middle = matrixMorphFrame(7, 96, 28);
+    const final = matrixMorphFrame(14, 96, 28);
+    expect(first).toHaveLength(28);
+    expect(middle).toHaveLength(28);
+    expect(final).toHaveLength(28);
+    expect(final.every((row) => row.length === 96)).toBe(true);
+    expect(first.join("")).toMatch(/[ｱ-ﾝ]/u);
+    expect(middle.join("")).toContain("█");
+    expect(middle.join("")).toMatch(/[ｱ-ﾝ]/u);
+    expect(final.join("")).toContain("█");
+    expect(final.join("")).not.toMatch(/[ｱ-ﾝ]/u);
   });
 
   it("can be fully disabled or fall back safely on narrow terminals", async () => {
@@ -124,7 +143,8 @@ describe("full-terminal Matrix startup", () => {
       runExternalMatrix: async () => false,
       wait: async () => undefined,
     });
-    expect(writes.join("")).toContain("HARIL");
+    // Colors inserted between glyphs make raw terminal output non-contiguous.
+    expect(matrixMorphFrame(14, 19, 8).join("")).toContain("HARIL");
     expect(writes.join("")).toContain("\u001b[8;1H");
   });
 });

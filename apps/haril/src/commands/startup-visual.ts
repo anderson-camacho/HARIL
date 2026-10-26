@@ -8,6 +8,8 @@ const MATRIX_GLYPHS = "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃ
 const FRAMES = 32;
 const INTERVAL_MS = 55;
 const LOADED_HOLD_MS = 3_000;
+const MORPH_FRAMES = 14;
+const MORPH_INTERVAL_MS = 75;
 
 const LARGE_FONT: Record<string, readonly string[]> = {
   A: [" ### ", "#   #", "#####", "#   #", "#   #"],
@@ -85,33 +87,38 @@ async function matrixBuiltIn(
   wait: (ms: number) => Promise<void>,
 ): Promise<void> {
   const { width, height } = terminalSize(out);
-  for (let frame = 0; frame < FRAMES; frame++) {
+  // Rain dissolves into the same large HARIL, without clearing the canvas.
+  for (let frame = 0; frame < FRAMES + MORPH_FRAMES; frame++) {
+    const resolving = frame >= FRAMES;
+    const lines = resolving
+      ? matrixMorphFrame(frame - FRAMES + 1, width, height)
+      : matrixFrame(frame, width, height);
     let screen = "";
-    for (const [rowIndex, row] of matrixFrame(frame, width, height).entries()) {
+    for (const [rowIndex, row] of lines.entries()) {
       let colored = "";
       let previousTone = "";
       for (const [columnIndex, character] of Array.from(row).entries()) {
-        if (character !== " ") {
-          const distance = (((rowIndex + columnIndex * 7 - frame * 2) % 16) + 16) % 16;
-          const tone =
-            distance === 0
+        const distance = (((rowIndex + columnIndex * 7 - frame * 2) % 16) + 16) % 16;
+        const tone =
+          character === "█"
+            ? "\u001b[1;92m"
+            : distance === 0
               ? "\u001b[97m"
               : distance < 3
                 ? "\u001b[92m"
                 : distance < 7
                   ? "\u001b[32m"
                   : "\u001b[38;5;22m";
-          if (tone !== previousTone) {
-            colored += tone;
-            previousTone = tone;
-          }
+        if (character !== " " && tone !== previousTone) {
+          colored += tone;
+          previousTone = tone;
         }
         colored += character;
       }
-      screen += `\u001b[${rowIndex + 1};1H${colored}`;
+      screen += `\u001b[${rowIndex + 1};1H${colored}\u001b[0m`;
     }
     out.write(screen);
-    await wait(INTERVAL_MS);
+    await wait(resolving ? MORPH_INTERVAL_MS : INTERVAL_MS);
   }
 }
 
@@ -139,15 +146,30 @@ export function harilBannerLines(width: number, height: number): readonly string
   });
 }
 
-function loadedBanner(out: StartupOutput): void {
-  const { width, height } = terminalSize(out);
-  out.write("\u001b[0m\u001b[2J\u001b[H");
-  const lines = width >= 29 && height >= 7 ? harilBannerLines(width, height) : ["HARIL"];
-  const top = Math.max(1, Math.floor((height - lines.length) / 2) + 1);
-  for (const [lineIndex, line] of lines.entries()) {
-    const x = Math.max(1, Math.floor((width - line.length) / 2) + 1);
-    out.write(`\u001b[${top + lineIndex};${x}H\u001b[1;92m${line}\u001b[0m`);
+// Final target exactly matches TTE's input silhouette and the built-in dissolve.
+function harilMask(width: number, height: number): readonly string[] {
+  const logo = width >= 29 && height >= 7 ? harilBannerLines(width, height) : ["HARIL"];
+  const top = Math.max(0, Math.floor((height - logo.length) / 2));
+  const rows = Array.from({ length: height }, () => " ".repeat(width));
+  for (const [i, line] of logo.entries()) {
+    if (top + i >= height) break;
+    const clipped = line.slice(0, width);
+    const left = Math.max(0, Math.floor((width - clipped.length) / 2));
+    rows[top + i] = " ".repeat(left) + clipped + " ".repeat(width - left - clipped.length);
   }
+  return rows;
+}
+
+export function matrixMorphFrame(step: number, width = 80, height = 24): readonly string[] {
+  const progress = Math.min(1, Math.max(0, step / MORPH_FRAMES));
+  const target = harilMask(width, height);
+  const rain = matrixFrame(FRAMES - 1 + step, width, height);
+  return target.map((line, y) =>
+    Array.from(line, (pixel, x) => {
+      const threshold = ((x * 73 + y * 41) % 101) / 100;
+      return progress >= threshold ? pixel : (rain[y]?.[x] ?? " ");
+    }).join(""),
+  );
 }
 
 // The actual Matrix implementation from ChrisBuilds/terminaltexteffects takes priority when
@@ -172,6 +194,11 @@ export const TTE_MATRIX_ARGS = [
   "1-2",
   "--resolve-delay",
   "1",
+  "--final-gradient-stops",
+  "77ffa5",
+  "26ee68",
+  "--final-gradient-frames",
+  "2",
 ] as const;
 
 const TTE_MAX_MS = 12_000;
@@ -192,7 +219,11 @@ export function matrixExecutable(
   return "tte";
 }
 
-async function matrixTte(env: NodeJS.ProcessEnv, platform: string): Promise<boolean> {
+async function matrixTte(
+  out: StartupOutput,
+  env: NodeJS.ProcessEnv,
+  platform: string,
+): Promise<boolean> {
   return new Promise<boolean>((done) => {
     let finished = false;
     const child = spawn(matrixExecutable(env, platform), TTE_MATRIX_ARGS, {
@@ -214,8 +245,10 @@ async function matrixTte(env: NodeJS.ProcessEnv, platform: string): Promise<bool
     child.once("error", () => finish(false));
     child.once("exit", (code) => finish(code === 0));
     child.stdin?.on("error", () => undefined);
-    // TTE resolves the rain into this word, centered in the full-screen canvas.
-    child.stdin?.end("HARIL\n");
+    // TTE resolves the rain to the final large logo directly. No tiny-text jump.
+    const { width, height } = terminalSize(out);
+    const logo = width >= 29 && height >= 7 ? harilBannerLines(width, height) : ["HARIL"];
+    child.stdin?.end(logo.join("\n") + "\n");
   });
 }
 
@@ -275,9 +308,11 @@ export async function playHarilStartup(options: {
     try {
       const playedExternal =
         settings.engine !== "built-in" &&
-        (await (options.runExternalMatrix ?? (() => matrixTte(options.env, options.platform)))());
+        (await (
+          options.runExternalMatrix ?? (() => matrixTte(options.out, options.env, options.platform))
+        )());
       if (!playedExternal) await matrixBuiltIn(options.out, wait);
-      loadedBanner(options.out);
+      // Both engines hold their last logo frame; no erase-and-redraw flash.
       await wait(LOADED_HOLD_MS);
     } finally {
       options.out.write("\u001b[0m\u001b[?25h\u001b[?1049l");
