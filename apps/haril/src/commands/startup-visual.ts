@@ -308,7 +308,9 @@ export async function playHarilStartup(options: {
     try {
       const playedExternal =
         settings.engine !== "built-in" &&
-        (await (options.runExternalMatrix ?? (() => matrixTte(options.out, options.env, options.platform)))());
+        (await (
+          options.runExternalMatrix ?? (() => matrixTte(options.out, options.env, options.platform))
+        )());
       if (!playedExternal) await matrixBuiltIn(options.out, wait);
       // Both engines hold their last logo frame; no erase-and-redraw flash.
       await wait(LOADED_HOLD_MS);
