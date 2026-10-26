@@ -3,8 +3,8 @@ import { createHash } from "node:crypto";
 import { test } from "node:test";
 import {
   installVisualTools,
-  toolVersionMatches,
   TTE_VERSION,
+  toolVersionMatches,
   UV_VERSION,
   verifyUvArchive,
   visualToolPaths,
@@ -145,7 +145,10 @@ test("up-to-date managed tools are verified without reinstalling or downloading"
     output: () => undefined,
   });
   assert.deepEqual(result, { status: "verified", binary: paths.tte });
-  assert.deepEqual(versions, [[paths.uv, UV_VERSION], [paths.tte, TTE_VERSION]]);
+  assert.deepEqual(versions, [
+    [paths.uv, UV_VERSION],
+    [paths.tte, TTE_VERSION],
+  ]);
 });
 
 test("a damaged Matrix executable is reinstalled, then checked again", async () => {
