@@ -3,8 +3,8 @@ import { join } from "node:path";
 import blossomTheme from "../themes/haril-blossom.json" with { type: "json" };
 import crimsonTheme from "../themes/haril-crimson.json" with { type: "json" };
 import darkTheme from "../themes/haril-dark.json" with { type: "json" };
-import matrixTheme from "../themes/haril-matrix.json" with { type: "json" };
 import lightTheme from "../themes/haril-light.json" with { type: "json" };
+import matrixTheme from "../themes/haril-matrix.json" with { type: "json" };
 
 // Theme loader (TUI-D2). It reads the Pi theme JSON format (name, appearance, vars, colors) with its own code, so the
 // shell never imports pi-coding-agent. Lookup: <runtime root>/config/themes/<name>.json, then the themes embedded here.
@@ -153,7 +153,8 @@ function themeFromDocument(label: string, document: unknown, source: "user" | "n
     // Pi themes call these status colors success/error; the standalone shell
     // uses ok/danger. Accept either without adding non-Pi keys to JSON.
     const value =
-      colors[token] ?? (token === "ok" ? colors.success : token === "danger" ? colors.error : undefined);
+      colors[token] ??
+      (token === "ok" ? colors.success : token === "danger" ? colors.error : undefined);
     const fallback = TOKEN_FALLBACK[token];
     if (value === undefined && fallback !== undefined) {
       resolved[token] = resolved[fallback];
