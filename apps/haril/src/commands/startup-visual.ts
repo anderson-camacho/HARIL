@@ -5,8 +5,8 @@ import { extname, isAbsolute, posix, resolve, win32 } from "node:path";
 // Half-width katakana retain one terminal cell on Windows Terminal, unlike full-width kana.
 // The mix of kana, digits and symbols follows the green rain seen in TTE's Matrix effect.
 const MATRIX_GLYPHS = "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ012345789+-*/:;";
-const FRAMES = 16;
-const INTERVAL_MS = 85;
+const FRAMES = 32;
+const INTERVAL_MS = 55;
 const LOADED_HOLD_MS = 3_000;
 
 const LARGE_FONT: Record<string, readonly string[]> = {
@@ -56,12 +56,13 @@ export function startupSettings(
 export function matrixFrame(index: number, width = 80, height = 24): readonly string[] {
   const lines: string[] = [];
   const glyphs = Array.from(MATRIX_GLYPHS);
+  // Wrap full-length vertical streams across the entire window from the very first
+  // frame. A short stream starting at y=0 leaves the lower half black on tall screens.
   for (let y = 0; y < height; y++) {
     let row = "";
     for (let x = 0; x < width; x++) {
-      const column = (x * 17 + index * 2 + 19) % (height + 8);
-      const trail = 7 + ((x * 11) % 8);
-      const lit = x % 17 !== 0 && y <= column && column - y < trail;
+      const distance = (((y + x * 7 - index * 2) % 16) + 16) % 16;
+      const lit = x % 29 !== 0 && distance < 12;
       row += lit ? glyphs[(x * 13 + y * 7 + index * 11) % glyphs.length] : " ";
     }
     lines.push(row);
@@ -91,8 +92,7 @@ async function matrixBuiltIn(
       let previousTone = "";
       for (const [columnIndex, character] of Array.from(row).entries()) {
         if (character !== " ") {
-          const head = (columnIndex * 17 + frame * 2 + 19) % (height + 8);
-          const distance = head - rowIndex;
+          const distance = (((rowIndex + columnIndex * 7 - frame * 2) % 16) + 16) % 16;
           const tone =
             distance === 0
               ? "\u001b[97m"
@@ -124,27 +124,30 @@ function largeText(word: string): readonly string[] {
   );
 }
 
+export function harilBannerLines(width: number, height: number): readonly string[] {
+  const original = largeText("HARIL");
+  // Fill roughly four fifths of the available width while retaining all glyph
+  // proportions. On small consoles the title still fits without scrolling.
+  const horizontal = Math.max(
+    1,
+    Math.min(6, Math.floor((width * 0.8) / (original[0]?.length ?? 29))),
+  );
+  const vertical = Math.max(1, Math.min(3, Math.floor((height * 0.42) / original.length)));
+  return original.flatMap((line) => {
+    const expanded = Array.from(line, (ch) => ch.repeat(horizontal)).join("");
+    return Array.from({ length: vertical }, () => expanded);
+  });
+}
+
 function loadedBanner(out: StartupOutput): void {
   const { width, height } = terminalSize(out);
   out.write("\u001b[0m\u001b[2J\u001b[H");
-  const sections = height >= 21 && width >= 43 ? ["SISTEMA", "CARGADO", "HARIL"] : ["HARIL"];
-  const bigHeight = sections.length * 5 + (sections.length - 1);
-  const top = Math.max(1, Math.floor((height - bigHeight - 2) / 2) + 1);
-  const fontFits = width >= 30 && height >= 9;
-  if (fontFits) {
-    for (const [sectionIndex, word] of sections.entries()) {
-      for (const [lineIndex, line] of largeText(word).entries()) {
-        const x = Math.max(1, Math.floor((width - line.length) / 2) + 1);
-        const y = top + sectionIndex * 6 + lineIndex;
-        out.write(`\u001b[${y};${x}H\u001b[1;92m${line}`);
-      }
-    }
+  const lines = width >= 29 && height >= 7 ? harilBannerLines(width, height) : ["HARIL"];
+  const top = Math.max(1, Math.floor((height - lines.length) / 2) + 1);
+  for (const [lineIndex, line] of lines.entries()) {
+    const x = Math.max(1, Math.floor((width - line.length) / 2) + 1);
+    out.write(`\u001b[${top + lineIndex};${x}H\u001b[1;92m${line}\u001b[0m`);
   }
-  const label = "SISTEMA CARGADO  ·  HARIL";
-  const caption = width >= label.length ? label : width >= 12 ? "HARIL LISTO" : "HARIL";
-  const x = Math.max(1, Math.floor((width - caption.length) / 2) + 1);
-  const labelY = fontFits ? Math.min(height, top + bigHeight + 1) : Math.ceil(height / 2);
-  out.write(`\u001b[${labelY};${x}H\u001b[1;32m${caption}\u001b[0m`);
 }
 
 // The actual Matrix implementation from ChrisBuilds/terminaltexteffects takes priority when
@@ -157,18 +160,21 @@ export const TTE_MATRIX_ARGS = [
   "0",
   "--anchor-canvas",
   "c",
+  "--anchor-text",
+  "c",
   "matrix",
+  // One second ends before the streams reach the bottom of a large terminal.
   "--rain-time",
-  "1",
+  "3",
   "--rain-column-delay-range",
-  "1-3",
+  "1-2",
   "--rain-fall-delay-range",
-  "1-4",
+  "1-2",
   "--resolve-delay",
   "1",
 ] as const;
 
-const TTE_MAX_MS = 2_500;
+const TTE_MAX_MS = 12_000;
 
 // The updater owns this binary under HARIL_RUNTIME_DIR: users don't need uv,
 // Python, or tte on PATH after installation. A separately installed tte is supported.
@@ -201,12 +207,15 @@ async function matrixTte(env: NodeJS.ProcessEnv, platform: string): Promise<bool
     };
     const timer = setTimeout(() => {
       child.kill();
-      finish(true);
+      // A timed-out effect did not finish resolving. Render our own complete
+      // fallback rather than claiming a partial Matrix finished successfully.
+      finish(false);
     }, TTE_MAX_MS);
     child.once("error", () => finish(false));
     child.once("exit", (code) => finish(code === 0));
     child.stdin?.on("error", () => undefined);
-    child.stdin?.end("SISTEMA CARGADO · HARIL\n");
+    // TTE resolves the rain into this word, centered in the full-screen canvas.
+    child.stdin?.end("HARIL\n");
   });
 }
 
@@ -260,12 +269,13 @@ export async function playHarilStartup(options: {
   playSound(settings.soundFile, options.cwd, options.platform, options.env, options.out);
   const wait = options.wait ?? delay;
   try {
-    const playedExternal =
-      settings.engine !== "built-in" &&
-      (await (options.runExternalMatrix ?? (() => matrixTte(options.env, options.platform)))());
-    // Alternative screen uses the complete window, protects scrollback and is restored for Pi.
+    // Enter the alternate full-screen buffer BEFORE starting TTE. Otherwise the
+    // external rain paints the main console while our logo uses another buffer.
     options.out.write("\u001b[?1049h\u001b[?25l\u001b[2J\u001b[H");
     try {
+      const playedExternal =
+        settings.engine !== "built-in" &&
+        (await (options.runExternalMatrix ?? (() => matrixTte(options.env, options.platform)))());
       if (!playedExternal) await matrixBuiltIn(options.out, wait);
       loadedBanner(options.out);
       await wait(LOADED_HOLD_MS);

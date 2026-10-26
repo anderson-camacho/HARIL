@@ -23,6 +23,7 @@ interface MainCheckout {
 export interface UpdateServices {
   readonly readText: (path: string) => string;
   readonly exists: (path: string) => boolean;
+  readonly verifyBinary: (path: string, requiredVersion: string) => Promise<boolean>;
   readonly activeRuntime: (dataDir: string) => {
     state: "none" | "active" | "unknown";
     detail?: string;
@@ -276,9 +277,43 @@ async function askConfirm(): Promise<boolean> {
   }
 }
 
+// A managed executable can exist yet fail to start because its Python environment
+// was removed or its version is incompatible. Treat that as a repairable install.
+function verifyManagedBinary(path: string, version: string): Promise<boolean> {
+  return new Promise<boolean>((done) => {
+    let output = "";
+    let finished = false;
+    const complete = (healthy: boolean) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      done(healthy);
+    };
+    const child = spawn(path, ["--version"], {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    const onData = (chunk: Buffer) => {
+      if (output.length < 4096) output += chunk.toString("utf8").slice(0, 4096);
+    };
+    child.stdout?.on("data", onData);
+    child.stderr?.on("data", onData);
+    const timer = setTimeout(() => {
+      child.kill();
+      complete(false);
+    }, 10_000);
+    child.once("error", () => complete(false));
+    child.once("close", (code) => {
+      const escaped = version.replaceAll(".", "\\.");
+      complete(code === 0 && new RegExp(`(^|[^0-9.])${escaped}($|[^0-9.])`).test(output));
+    });
+  });
+}
+
 const DEFAULT_SERVICES: UpdateServices = {
   readText: (path) => readFileSync(path, "utf8"),
   exists: existsSync,
+  verifyBinary: verifyManagedBinary,
   activeRuntime: runtimeState,
   install: installFrom,
   confirm: askConfirm,
@@ -363,17 +398,29 @@ export async function update(
       return EXIT_USAGE;
     }
     const ops = host.platform === "win32" ? win32 : posix;
-    const managedTte = ops.join(
-      root,
-      "tools",
-      "bin",
-      host.platform === "win32" ? "tte.exe" : "tte",
-    );
-    const needsVisualSetup =
+    const toolsDir = ops.join(root, "tools");
+    const executable = (name: string) => (host.platform === "win32" ? `${name}.exe` : name);
+    const requiredTools = [
+      { name: "uv", path: ops.join(toolsDir, "uv", executable("uv")), version: "0.13.5" },
+      { name: "Matrix", path: ops.join(toolsDir, "bin", executable("tte")), version: "0.15.0" },
+    ];
+    const visualsEnabled =
       host.env?.HARIL_AUTO_INSTALL_VISUALS !== "off" &&
       host.env?.HARIL_STARTUP_ANIMATION !== "off" &&
-      services.exists(join(source, "scripts", "install-visual-tools.mjs")) &&
-      !services.exists(managedTte);
+      services.exists(join(source, "scripts", "install-visual-tools.mjs"));
+    const unhealthyTools = visualsEnabled
+      ? (
+          await Promise.all(
+            requiredTools.map(async (tool) => ({
+              ...tool,
+              healthy:
+                services.exists(tool.path) &&
+                (await services.verifyBinary(tool.path, tool.version)),
+            })),
+          )
+        ).filter((tool) => !tool.healthy)
+      : [];
+    const needsVisualSetup = unhealthyTools.length > 0;
     if (comparison === 0 && !needsVisualSetup) {
       io.out("HARIL is already at the selected source version.");
       return EXIT_OK;
@@ -382,7 +429,7 @@ export async function update(
       io.out(
         comparison > 0
           ? "An update is available; the installed files were not changed."
-          : "HARIL is up to date, but the managed Matrix dependency needs repair; no files were changed.",
+          : `HARIL is up to date, but the managed Matrix dependency needs repair (${unhealthyTools.map((tool) => tool.name).join(", ")}); no files were changed.`,
       );
       return EXIT_OK;
     }

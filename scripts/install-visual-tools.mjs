@@ -122,11 +122,11 @@ function findBinary(directory, filename, depth = 2) {
   return undefined;
 }
 
-async function bootstrapUv(root, platform, arch, output = console.log) {
+async function bootstrapUv(root, platform, arch, output = console.log, force = false) {
   const archive = ARCHIVES[`${platform}:${arch}`];
   if (!archive) throw new Error(`uv is not packaged for ${platform}/${arch}`);
   const paths = visualToolPaths(root, platform);
-  if (existsSync(paths.uv)) return paths.uv;
+  if (existsSync(paths.uv) && !force) return paths.uv;
   output(`HARIL: preparing the managed uv ${UV_VERSION} toolchain (${platform}/${arch})...`);
   const temp = mkdtempSync(join(tmpdir(), "haril-uv-"));
   try {
@@ -152,11 +152,60 @@ async function bootstrapUv(root, platform, arch, output = console.log) {
     const staging = `${paths.uv}.installing`;
     copyFileSync(file, staging);
     if (platform !== "win32") chmodSync(staging, 0o755);
-    renameSync(staging, paths.uv);
+    if (force && existsSync(paths.uv)) {
+      // Preserve the previous executable until its verified replacement is ready.
+      const backup = `${paths.uv}.previous-${process.pid}`;
+      renameSync(paths.uv, backup);
+      try {
+        renameSync(staging, paths.uv);
+      } catch (error) {
+        renameSync(backup, paths.uv);
+        throw error;
+      }
+      rmSync(backup);
+    } else {
+      renameSync(staging, paths.uv);
+    }
     return paths.uv;
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }
+}
+
+// A file existing is not proof it works: it may be an old version, a truncated
+// executable or a broken managed Python environment. Probe the actual CLI.
+export function toolVersionMatches(output, version) {
+  const pattern = new RegExp(`(^|[^0-9.])${version.replaceAll(".", "\\.")}($|[^0-9.])`);
+  return pattern.test(output);
+}
+
+async function probeToolVersion(binary, version, env = process.env) {
+  return new Promise((done) => {
+    let output = "";
+    let finished = false;
+    const complete = (ok) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      done(ok);
+    };
+    const child = spawn(binary, ["--version"], {
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    const read = (chunk) => {
+      if (output.length < 4096) output += chunk.toString("utf8").slice(0, 4096);
+    };
+    child.stdout?.on("data", read);
+    child.stderr?.on("data", read);
+    const timer = setTimeout(() => {
+      child.kill();
+      complete(false);
+    }, 10_000);
+    child.once("error", () => complete(false));
+    child.once("close", (code) => complete(code === 0 && toolVersionMatches(output, version)));
+  });
 }
 
 // The core HARIL installer calls this on install AND update. Callers can inject
@@ -178,9 +227,8 @@ export async function installVisualTools(root, options = {}) {
     return { status: "skipped" };
   }
   const paths = visualToolPaths(root, platform);
-  const uv = exists(paths.uv) ? paths.uv : await bootstrap(root, platform, arch, output);
-  output(`HARIL: installing Matrix effect (${TOOL_SPEC}) in the HARIL runtime...`);
-  await execute(uv, ["tool", "install", "--python", "3.12", TOOL_SPEC], {
+  const probe = options.probe ?? probeToolVersion;
+  const toolEnv = {
     ...env,
     UV_TOOL_DIR: paths.toolDir,
     UV_TOOL_BIN_DIR: paths.binDir,
@@ -188,11 +236,31 @@ export async function installVisualTools(root, options = {}) {
     UV_CACHE_DIR: paths.cacheDir,
     UV_PYTHON_PREFERENCE: "only-managed",
     UV_NO_PROGRESS: "1",
-  });
+  };
+  const uvExists = exists(paths.uv);
+  const tteExists = exists(paths.tte);
+  const [uvHealthy, tteHealthy] = await Promise.all([
+    uvExists ? probe(paths.uv, UV_VERSION, toolEnv) : false,
+    tteExists ? probe(paths.tte, TTE_VERSION, toolEnv) : false,
+  ]);
+  if (uvHealthy && tteHealthy) {
+    output(`HARIL: Matrix ${TTE_VERSION} verified at ${paths.tte}; nothing to install.`);
+    return { status: "verified", binary: paths.tte };
+  }
+  if (uvExists && !uvHealthy) output("HARIL: uv is damaged or outdated; repairing it...");
+  if (tteExists && !tteHealthy) output("HARIL: Matrix is damaged or outdated; repairing it...");
+
+  const uv = uvHealthy ? paths.uv : await bootstrap(root, platform, arch, output, uvExists);
+  output(`HARIL: installing/repairing Matrix effect (${TOOL_SPEC}) in the HARIL runtime...`);
+  await execute(uv, ["tool", "install", "--reinstall", "--python", "3.12", TOOL_SPEC], toolEnv);
   if (!exists(paths.tte))
     throw new Error(`Matrix setup completed but ${paths.tte} was not created`);
-  output(`HARIL: Matrix ready at ${paths.tte}`);
-  return { status: "installed", binary: paths.tte };
+  if (!(await probe(paths.tte, TTE_VERSION, toolEnv)))
+    throw new Error(
+      `Matrix executable is present but failed the ${TTE_VERSION} version/health check`,
+    );
+  output(`HARIL: Matrix ${TTE_VERSION} verified and ready at ${paths.tte}`);
+  return { status: tteExists ? "repaired" : "installed", binary: paths.tte };
 }
 
 function parseArgs(args) {

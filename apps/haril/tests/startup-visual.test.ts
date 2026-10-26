@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  harilBannerLines,
   matrixExecutable,
   matrixFrame,
   playHarilStartup,
@@ -15,6 +16,11 @@ describe("full-terminal Matrix startup", () => {
       expect(frame.every((row) => Array.from(row).length === 95)).toBe(true);
     }
     expect(matrixFrame(4, 95, 27).join("")).toMatch(/[ｱ-ﾝ]/u);
+    // The bottom half must be populated from the first frame, not after
+    // rain has fallen halfway through a tall Windows Terminal.
+    for (const row of [0, 10, 26]) {
+      expect(matrixFrame(0, 95, 27)[row]?.trim().length).toBeGreaterThan(10);
+    }
   });
 
   it("selects the real TerminalTextEffects Matrix when available", () => {
@@ -23,6 +29,9 @@ describe("full-terminal Matrix startup", () => {
     expect(startupSettings({ HARIL_STARTUP_MATRIX_ENGINE: "built-in" }).engine).toBe("built-in");
     expect(TTE_MATRIX_ARGS).toContain("matrix");
     expect(TTE_MATRIX_ARGS).toContain("--rain-time");
+    expect(TTE_MATRIX_ARGS).toContain("--anchor-text");
+    expect(TTE_MATRIX_ARGS[TTE_MATRIX_ARGS.indexOf("--anchor-text") + 1]).toBe("c");
+    expect(TTE_MATRIX_ARGS[TTE_MATRIX_ARGS.indexOf("--rain-time") + 1]).toBe("3");
     expect(TTE_MATRIX_ARGS.slice(0, 4)).toEqual(["--canvas-width", "0", "--canvas-height", "0"]);
     expect(startupSettings({ HARIL_STARTUP_ANIMATION: "off" }).enabled).toBe(false);
     expect(startupSettings({ CI: "true" }).enabled).toBe(false);
@@ -44,7 +53,15 @@ describe("full-terminal Matrix startup", () => {
     );
   });
 
-  it("fills every terminal row and holds a large centered loaded banner for three seconds", async () => {
+  it("scales a HARIL-only logo to the terminal's full available width", () => {
+    const lines = harilBannerLines(190, 50);
+    expect(lines.length).toBeGreaterThan(5);
+    expect(lines[0]?.length).toBeGreaterThan(100);
+    expect(lines.every((line) => line.length === lines[0]?.length)).toBe(true);
+    expect(lines.join("")).not.toContain("SISTEMA");
+  });
+
+  it("fills every terminal row and holds a large centered HARIL for three seconds", async () => {
     const output: string[] = [];
     const delays: number[] = [];
     await playHarilStartup({
@@ -58,14 +75,14 @@ describe("full-terminal Matrix startup", () => {
       },
     });
     const combined = output.join("");
-    expect(combined).toContain("SISTEMA CARGADO");
-    expect(combined).toContain("HARIL");
+    expect(combined).not.toContain("SISTEMA CARGADO");
+    // The word is drawn as block glyphs, not literal text bytes.
     expect(combined).toContain("█");
     expect(combined).toContain("\u001b[28;1H");
     expect(combined).toContain("\u001b[?1049h");
     expect(combined).toContain("\u001b[?1049l");
     expect(combined).toContain("\u001b[?25h");
-    expect(delays).toEqual([...Array(16).fill(85), 3_000]);
+    expect(delays).toEqual([...Array(32).fill(55), 3_000]);
   });
 
   it("uses TTE's own rain when present and still shows HARIL for three seconds", async () => {
@@ -76,13 +93,17 @@ describe("full-terminal Matrix startup", () => {
       env: {},
       cwd: ".",
       platform: "win32",
-      runExternalMatrix: async () => true,
+      runExternalMatrix: async () => {
+        expect(output.join("")).toContain("\u001b[?1049h");
+        return true;
+      },
       wait: async (ms) => {
         delays.push(ms);
       },
     });
     expect(delays).toEqual([3_000]);
-    expect(output.join("")).toContain("SISTEMA CARGADO");
+    expect(output.join("")).not.toContain("SISTEMA CARGADO");
+    expect(output.join("")).toContain("█");
   });
 
   it("can be fully disabled or fall back safely on narrow terminals", async () => {
@@ -103,7 +124,7 @@ describe("full-terminal Matrix startup", () => {
       runExternalMatrix: async () => false,
       wait: async () => undefined,
     });
-    expect(writes.join("")).toContain("HARIL LISTO");
+    expect(writes.join("")).toContain("HARIL");
     expect(writes.join("")).toContain("\u001b[8;1H");
   });
 });

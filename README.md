@@ -745,9 +745,9 @@ HARIL monta esas columnas solo si el Pi incluido ofrece el contrato interno de d
 
 #### Arranque Matrix, paletas y ojo IA (0.23.0)
 
-Desde **0.23.1**, al iniciar `haril` se ve lluvia Matrix en **toda la terminal** y luego el título grande **SISTEMA CARGADO · HARIL** durante **3 segundos**, antes de abrir Pi. HARIL prioriza automáticamente el efecto **real** `tte matrix` de [`terminaltexteffects`](https://github.com/ChrisBuilds/terminaltexteffects), con canvas que ocupa la ventana y un límite de ejecución de 2,5 segundos. Si falta `tte`, utiliza una alternativa integrada con katakana de medio ancho, tonos verdes y el mismo título grande.
+Desde **0.23.3**, la lluvia del Matrix original (`tte matrix`) alcanza toda la altura y anchura de la ventana: mantiene los caracteres cayendo tres segundos con columnas más rápidas y densas y coloca el texto final en el centro. Al terminar, aparece **solo HARIL**, grande y centrado, durante **3 segundos** antes de abrir Pi. Si TTE no está disponible, la animación integrada utiliza katakana verde que llena la terminal desde el primer fotograma y también concluye únicamente con HARIL.
 
-**Las dependencias nuevas se gestionan automáticamente:** al instalar o ejecutar `haril update`, HARIL descarga una versión verificada de `uv`, prepara Python de forma aislada e instala una versión fija de TerminalTextEffects en `<raíz-HARIL>/tools`. No exige comandos de Python, cambios de `PATH` ni privilegios de administrador. Si se interrumpe la red, el instalador avisa del fallo; el efecto integrado sigue disponible y `haril update` puede reparar la dependencia en otra ejecución. `haril update --check` no instala nada. Para omitir expresamente estos complementos, configura `HARIL_AUTO_INSTALL_VISUALS=off`.
+**Las dependencias nuevas se gestionan automáticamente:** al instalar o ejecutar `haril update`, HARIL descarga una versión verificada de `uv`, prepara Python de forma aislada e instala una versión fija de TerminalTextEffects en `<raíz-HARIL>/tools`. No exige comandos de Python, cambios de `PATH` ni privilegios de administrador. Antes de dar la instalación por válida, HARIL ejecuta las herramientas gestionadas y comprueba sus versiones. Si existen pero están dañadas, desactualizadas o tienen un entorno Python roto, `haril update` ofrece repararlas incluso sin cambiar la versión de HARIL. Si falla la red, el instalador avisa y queda disponible el efecto integrado; `haril update --check` solo consulta, sin modificar nada. Para omitir expresamente estos complementos, configura `HARIL_AUTO_INSTALL_VISUALS=off`.
 
 ```powershell
 # Actualiza HARIL: instala el Matrix original y otras dependencias gestionadas.
@@ -993,7 +993,7 @@ Los dossiers de `docs/research/` se leen solo bajo demanda, cuando un documento 
 
 ## Versiones
 
-Versión actual: **0.23.2**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
+Versión actual: **0.23.3**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
 
 ## Licencia
 
