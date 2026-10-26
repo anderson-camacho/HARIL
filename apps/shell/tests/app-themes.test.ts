@@ -117,11 +117,11 @@ describe("choose a theme (TUI-D14)", () => {
     const mounted = mount();
     mounted.app.start();
     mounted.terminal.send("8");
-    // The four built-in themes come first, then the user's.
+    // The five built-in themes come first, then the user's.
     for (const _ of [1, 2, 3, 4]) mounted.terminal.send(DOWN);
     mounted.terminal.send(ENTER);
     expect(frame(mounted)).toContain("is not valid JSON");
-    expect(frame(mounted)).toContain("using haril-crimson");
+    expect(frame(mounted)).toContain("using haril-matrix");
     expect(frame(mounted)).not.toContain("saved");
     expect(existsSync(configPath)).toBe(false);
     mounted.terminal.send("q");
