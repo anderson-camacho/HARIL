@@ -71,6 +71,21 @@ describe("haril config get", () => {
     }
   });
 
+  it("shows the default HARIL palette and reads an explicit palette", async () => {
+    const path = writeConfig("{}");
+    expect(parseJson((await cli(["config", "get", "ui.theme", "--json"], path)).out)).toMatchObject(
+      {
+        value: "violet",
+        default: "violet",
+        source: "default",
+      },
+    );
+    writeFileSync(path, JSON.stringify({ ui: { theme: "amber" } }));
+    expect((await cli(["config", "get", "ui.theme"], path)).out).toEqual([
+      'ui.theme = "amber"  (haril.json)',
+    ]);
+  });
+
   it("rejects an invalid locale without requiring an unrelated delegation section to be valid", async () => {
     const path = writeConfig(JSON.stringify({ ui: { locale: "fr" } }));
     const invalid = await cli(["config", "get", "ui.locale"], path);
@@ -244,15 +259,18 @@ describe("haril config set", () => {
     expect(readFileSync(path, "utf8")).toBe(original);
   });
 
-  it("sets only delegation settings it knows", async () => {
+  it("can set a saved HARIL palette but still refuses unknown settings", async () => {
     const path = writeConfig(original);
-    const other = await cli(["config", "set", "ui.theme", "haril-light"], path);
-    expect(other.code).toBe(2);
-    expect(other.err.join("\n")).toContain("only delegation settings can be set");
+    const chosen = await cli(["config", "set", "ui.theme", "rose", "--json"], path);
+    expect(chosen.code).toBe(0);
+    expect(parseJson(chosen.out)).toMatchObject({ path: "ui.theme", value: "rose" });
+    expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({ ui: { theme: "rose" } });
     const unknown = await cli(["config", "set", "delegation.quota.managementKey", "x"], path);
     expect(unknown.code).toBe(2);
     expect(unknown.err.join("\n")).toContain("unknown setting delegation.quota.managementKey");
-    expect(readFileSync(path, "utf8")).toBe(original);
+    const reset = await cli(["config", "set", "ui.theme", "--reset"], path);
+    expect(reset.code).toBe(0);
+    expect((JSON.parse(readFileSync(path, "utf8")) as { ui?: unknown }).ui).toBeUndefined();
   });
 
   it("never writes a file that holds a key, even when the change itself is valid", async () => {

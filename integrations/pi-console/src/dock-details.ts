@@ -3,6 +3,8 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { runHaril } from "./cli.js";
+import { HARIL_PALETTES } from "./dashboard-theme.js";
+import type { UiLocale } from "./locale.js";
 import { DOCK_LABELS, type DockId } from "./native-panes.js";
 import { plainText } from "./text.js";
 
@@ -16,6 +18,7 @@ export interface DockDetails {
   readonly status: string;
   readonly lines: readonly string[];
   readonly treeNodes?: readonly ExplorerTreeNode[];
+  readonly actions?: readonly { line: number; action: string }[];
 }
 
 interface ExplorerTreeNode {
@@ -38,6 +41,8 @@ export interface DockSource {
   }>;
   readonly piCommands?: readonly string[];
   readonly expandedPaths?: ReadonlySet<string>;
+  readonly theme?: string;
+  readonly locale?: UiLocale;
 }
 
 function linesOf(input: string): string[] {
@@ -53,6 +58,7 @@ function view(
   status: string,
   lines: readonly string[],
   treeNodes?: readonly ExplorerTreeNode[],
+  actions?: readonly { line: number; action: string }[],
 ): DockDetails {
   return {
     id,
@@ -60,6 +66,7 @@ function view(
     status,
     lines: lines.slice(0, MAX_LINES),
     ...(treeNodes === undefined ? {} : { treeNodes }),
+    ...(actions === undefined ? {} : { actions }),
   };
 }
 
@@ -117,13 +124,16 @@ export async function loadDockDetails(
   cwd: string,
   source: DockSource = {},
 ): Promise<DockDetails> {
+  const en = source.locale === "en";
   try {
     switch (id) {
       case "explorer": {
         const tree = await explorerTree(cwd, source);
         return view(
           id,
-          `Árbol · ${tree.count} entradas · clic para desplegar`,
+          en
+            ? `Tree · ${tree.count} entries · click to expand`
+            : `Árbol · ${tree.count} entradas · clic para desplegar`,
           [plainText(cwd), ...tree.lines],
           tree.nodes,
         );
@@ -158,11 +168,15 @@ export async function loadDockDetails(
             (source.git ? async () => "" : (folder) => execGit(folder, ["diff", "--stat"]))
           )(cwd),
         );
-        return view(id, "Git · árbol y cambios · solo lectura", [
-          ...(output.length ? output : ["Sin cambios locales"]),
-          ...(changes.length ? ["── CAMBIOS ──", ...changes] : []),
-          ...(history.length ? ["── HISTORIAL ──", ...history] : []),
-        ]);
+        return view(
+          id,
+          en ? "Git · history & changes · read-only" : "Git · árbol y cambios · solo lectura",
+          [
+            ...(output.length ? output : [en ? "No local changes" : "Sin cambios locales"]),
+            ...(changes.length ? [en ? "── CHANGES ──" : "── CAMBIOS ──", ...changes] : []),
+            ...(history.length ? [en ? "── HISTORY ──" : "── HISTORIAL ──", ...history] : []),
+          ],
+        );
       }
       case "memory": {
         const status = await (
@@ -171,35 +185,53 @@ export async function loadDockDetails(
         if (!status.ok)
           return view(
             id,
-            "Memoria no disponible",
+            en ? "Memory unavailable" : "Memoria no disponible",
             linesOf(status.stderr || "HARIL memory status falló"),
           );
-        return view(id, "Estado de memoria HARIL", linesOf(status.stdout));
+        return view(
+          id,
+          en ? "HARIL memory status" : "Estado de memoria HARIL",
+          linesOf(status.stdout),
+        );
       }
       case "youtube": {
         const installed =
           source.piCommands?.some((name) => name === "yt" || name === "/yt") ?? false;
         return installed
-          ? view(id, "Extensión /yt detectada", [
-              "Usa /yt en Pi para abrir el reproductor",
+          ? view(id, en ? "/yt extension detected" : "Extensión /yt detectada", [
+              en ? "Use /yt in Pi to open the player" : "Usa /yt en Pi para abrir el reproductor",
               "/yt search <nombre>",
               "/yt pip",
               "La extensión administra YouTube por separado",
             ])
-          : view(id, "Extensión /yt no detectada", [
-              "Este es un espacio del dock, no un reproductor instalado.",
+          : view(id, en ? "/yt extension not detected" : "Extensión /yt no detectada", [
+              en
+                ? "This is an empty dock slot, not an installed player."
+                : "Este es un espacio del dock, no un reproductor instalado.",
               "Referencia: CinloDev/pi-youtube-player",
-              "Requiere instalar su extensión y componentes de navegador.",
-              "HARIL no instala ni ejecuta extensiones sin permiso.",
+              en
+                ? "Requires a separate Pi extension and browser components."
+                : "Requiere instalar su extensión y componentes de navegador.",
+              en
+                ? "HARIL never installs or runs extensions without permission."
+                : "HARIL no instala ni ejecuta extensiones sin permiso.",
             ]);
       }
       case "themes":
-        return view(id, "Temas de Pi", [
-          "/settings → Theme",
-          "Incluidos: system, dark y light",
-          "Los temas HARIL se integrarán en una fase posterior.",
-          "Seleccionar aquí no cambia los colores todavía.",
-        ]);
+        return view(
+          id,
+          `${en ? "HARIL palette" : "Paleta HARIL"}: ${source.theme ?? "violet"}`,
+          [
+            en ? "Choose a palette by clicking:" : "Selecciona una paleta con clic:",
+            ...HARIL_PALETTES.map(
+              (name, index) => `${source.theme === name ? "▸" : " "} ${index + 1}. ${name}`,
+            ),
+            "Pi: /settings → Theme",
+            "HARIL: /haril-theme",
+          ],
+          undefined,
+          HARIL_PALETTES.map((name, index) => ({ line: index + 1, action: name })),
+        );
     }
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);

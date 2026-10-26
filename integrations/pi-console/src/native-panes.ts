@@ -1,9 +1,10 @@
 // Experimental full-height HARIL dock inside Pi's *existing* TUI. Pi does not expose a public split-pane API:
 // install only when its layoutRoot implements the @earendil-works/pi-tui layout-node contract. Never replace Pi's
 // editor, scrollback or chat; reuse its original layout node as the centre of the three-column stack.
-import { paddedCell, visualText } from "./dashboard-theme.js";
+import { aiEyeTone, paddedCell, visualText } from "./dashboard-theme.js";
 import type { DockDetails } from "./dock-details.js";
 import { type DockId, type DockSlot, dockDefinition, readDockSlots } from "./dock-registry.js";
+import type { UiLocale } from "./locale.js";
 import type { ConsoleMouseEvent, ConsoleTui } from "./pi-types.js";
 import { plainText } from "./text.js";
 
@@ -68,6 +69,8 @@ export function renderLeftDock(
   state: PaneSettings,
   project: string,
   detailOffset = 0,
+  effortLevel?: string,
+  locale: UiLocale = "es",
 ): string[] {
   if (width < 3 || height < 1) return [];
   const inside = width - 1;
@@ -78,10 +81,12 @@ export function renderLeftDock(
     selected = false,
   ) =>
     `${paddedCell(value, inside, tone, selected ? "selected" : "panel")}${visualText("│", "cyan", "base")}`;
-  rows.push(line(" ◉ HARIL  ·  Many minds.", "yellow"));
+  rows.push(
+    `${paddedCell(" ", 1, "yellow", "panel")}${visualText("◉", aiEyeTone(effortLevel), "panel")}${paddedCell(" HARIL · Many minds.", inside - 2, "yellow", "panel")}${visualText("│", "cyan", "base")}`,
+  );
   rows.push(line(` 📁 ${plainText(project)}`, "teal"));
   rows.push(line(" ────────────────────", "muted"));
-  rows.push(line(" VISTAS · Alt+L", "cyan"));
+  rows.push(line(locale === "es" ? " VISTAS · Alt+L" : " VIEWS · Alt+L", "cyan"));
   for (const tab of dockTabs(state, Math.max(1, inside - 1))) {
     rows.push(
       line(
@@ -91,16 +96,28 @@ export function renderLeftDock(
     );
   }
   rows.push(line(" ────────────────────", "muted"));
-  const selection = dockDefinition(state.selected)?.label ?? state.selected;
+  const module = dockDefinition(state.selected);
+  const selection = (locale === "es" ? module?.label : module?.labelEn) ?? state.selected;
   rows.push(line(` ${selection.toUpperCase()}`, "cyan"));
-  rows.push(line(` ${state.detail?.status ?? "Cargando vista…"}`, "teal"));
+  rows.push(
+    line(
+      ` ${state.detail?.status ?? (locale === "es" ? "Cargando vista…" : "Loading view…")}`,
+      "teal",
+    ),
+  );
   const detail = state.detail?.id === state.selected ? state.detail.lines : [];
   const budget = Math.max(0, height - rows.length - 2);
   for (const item of detail.slice(detailOffset, detailOffset + budget)) rows.push(line(` ${item}`));
   rows.push(line(" ────────────────────", "muted"));
   rows.push(
     line(
-      detailOffset + budget < detail.length ? " ↕ Rueda · más elementos" : " Alt+C · comandos",
+      detailOffset + budget < detail.length
+        ? locale === "es"
+          ? " ↕ Rueda · más elementos"
+          : " ↕ Wheel · scroll"
+        : locale === "es"
+          ? " Alt+C · comandos"
+          : " Alt+C · commands",
       "muted",
     ),
   );
@@ -146,9 +163,12 @@ export function attachNativePanes(
   state: PaneSettings,
   options: {
     readonly project: () => string;
+    readonly effortLevel?: () => string | undefined;
+    readonly locale?: () => UiLocale;
     readonly right: (width: number) => readonly string[];
     readonly select: (id: DockId) => void;
     readonly toggleExplorer?: (path: string) => void;
+    readonly activate?: (id: DockId, action: string) => void;
   },
 ): NativePanes {
   const host = tui as PaneTui;
@@ -174,6 +194,8 @@ export function attachNativePanes(
         state,
         options.project(),
         detailOffset,
+        options.effortLevel?.(),
+        options.locale?.(),
       );
     },
     handleMouse(event: ConsoleMouseEvent) {
@@ -199,7 +221,13 @@ export function attachNativePanes(
         options.select(clicked.id);
         return { handled: true, render: true };
       }
-      const row = event.y - (7 + tabs.length) + detailOffset - 1;
+      const detailLine = event.y - (7 + tabs.length) + detailOffset;
+      const action = state.detail?.actions?.find((item) => item.line === detailLine);
+      if (action !== undefined && state.detail?.id === state.selected) {
+        options.activate?.(state.selected, action.action);
+        return { handled: true, render: true };
+      }
+      const row = detailLine - 1;
       const node = state.selected === "explorer" ? state.detail?.treeNodes?.[row] : undefined;
       if (!node?.directory) return undefined;
       options.toggleExplorer?.(node.path);

@@ -737,6 +737,35 @@ haril extensions remove "git:github.com/CinloDev/pi-youtube-player" --yes
 
 Los orígenes anteriores son ejemplos, **no recomendaciones de seguridad ni garantías de compatibilidad**: revisa sus dependencias, permisos y código antes de ejecutar un `install`. `--yes` es obligatorio y no se acepta instalar desde rutas locales, argumentos extra ni servidores Git arbitrarios en esta primera etapa. HARIL ejecuta `pi install|remove` mediante el Node y Pi registrados en **su propio runtime** con `PI_CODING_AGENT_DIR` apuntando al agente privado, sin usar el Pi de Gentle Shell ni el instalado globalmente. Reinicia HARIL tras los cambios. No se realiza instalación automática al abrir el dock; instalar una extensión no crea una ficha visual nueva. La actualización de paquetes, la auditoría de compatibilidad y los controles de integridad quedan pendientes.
 
+#### Dock compacto y Explorador expandible (0.22.9)
+
+En una terminal de al menos **132 columnas × 24 filas**, `haril` muestra un dock fijo por pestañas en el lado izquierdo: `TREE`, `GIT`, `YT`, `MEM`, `THEME`. Solo se ve la ficha elegida, sin la antigua lista gigante. **TREE** permite expandir y contraer carpetas con clic; **GIT** enseña estado, cambios y los últimos ocho commits. La pestaña `YT` es únicamente un espacio reservado: no instala YouTube. `Alt+L` elige una vista con flechas y `Enter`; `Alt+I` oculta o muestra el panel derecho; `Alt+C` enumera los comandos reales. El orden y la visibilidad se administran con `/haril-plugins` y se conservan entre sesiones.
+
+HARIL monta esas columnas solo si el Pi incluido ofrece el contrato interno de disposición compatible. En terminales pequeñas o con una versión diferente de Pi, deja intacto su chat y vuelve a la disposición original.
+
+#### Arranque Matrix, paletas y ojo IA (0.23.0)
+
+Al iniciar `haril` en una terminal interactiva se presenta una animación Matrix rápida, de tamaño constante, y la leyenda **SISTEMA CARGADO · HARIL** antes de entrar en Pi. Usa un efecto integrado sin dependencias ni descargas; si tienes instalado [`terminaltexteffects`](https://github.com/ChrisBuilds/terminaltexteffects) puedes optar por el efecto original `tte matrix` con un tiempo máximo de 900 ms. Si el comando `tte` no está en PATH, HARIL vuelve al efecto integrado. Nada de esto se ejecuta en CI, en una salida no interactiva o si está desactivado.
+
+```powershell
+# Efecto original de TTE (opcional: requiere tener tte instalado)
+$env:HARIL_STARTUP_MATRIX_ENGINE = 'tte'
+
+# Sonido: proporciona un WAV local tuyo. Sin archivo, HARIL emite la campana del terminal.
+$env:HARIL_STARTUP_SOUND_FILE = 'D:\sonidos\inicio-haril.wav'
+
+# Omitir por completo animación y sonido cuando necesites un inicio limpio.
+$env:HARIL_STARTUP_ANIMATION = 'off'
+
+# Recuperar la animación integrada:
+Remove-Item Env:\HARIL_STARTUP_ANIMATION
+Remove-Item Env:\HARIL_STARTUP_MATRIX_ENGINE
+```
+
+El video que inspiró el sonido no se descarga ni se reproduce automáticamente: para ese timbre concreto necesitas un archivo WAV local que tengas derecho a utilizar. En Windows se reproduce con el reproductor multimedia del sistema; en Linux se intenta `ffplay`, si está instalado.
+
+Puedes elegir **violet**, **rose**, **amber** u **obsidian** mediante clic en `THEME`, `/haril-theme` o `haril config set ui.theme violet`. Los colores se aplican a los paneles de HARIL y se guardan en `haril.json`; los temas nativos de Pi se ajustan por separado desde `/settings`. El indicador `◉` ocupa una celda y pasa a rojo en niveles de razonamiento `high`, `xhigh`, `max` o `ultra`. `/language es` y `/language en` siguen disponibles; el dock y su selector también muestran el idioma elegido. La cabecera muestra **Estoy en: <ruta>** sin invadir el chat.
+
 ### M4: interfaz de terminal (`haril shell`)
 
 `haril shell` abre la interfaz de terminal propia de HARIL, la que abría `haril` hasta la 0.7.0; desde la 0.8.0, `haril` sin subcomando abre la [consola sobre Pi](#m4-consola-de-haril-sobre-pi-haril) y esta interfaz se abre con `haril shell`. Necesita una terminal real (Windows Terminal o PowerShell); sin ella `haril shell` sale con 2. La interfaz no escribe en la base: cada acción ejecuta un comando `haril` corto. No consulta la base en bucle: los datos se cargan al abrir, con `r`, después de cada acción y cuando el runtime en marcha avisa de un cambio.
@@ -956,7 +985,7 @@ Los dossiers de `docs/research/` se leen solo bajo demanda, cuando un documento 
 
 ## Versiones
 
-Versión actual: **0.22.9**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
+Versión actual: **0.23.0**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
 
 ## Licencia
 
