@@ -4,6 +4,31 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.23.2
+
+- **Fecha:** 2026-10-26
+- **Estado:** `haril update` instala y repara las herramientas nuevas que necesita Matrix.
+
+### Añadido
+
+- Instalación administrada de `uv` 0.13.5 mediante descarga oficial y comprobación SHA-256, Python aislado y TerminalTextEffects 0.15.0 dentro del directorio privado de HARIL.
+- Paso de herramientas visuales en el instalador general, ejecutado también por `haril update`, sin necesitar comandos manuales de Python o modificar el `PATH` de usuario.
+
+### Cambiado
+
+- La consola detecta primero el `tte` administrado por HARIL y mantiene el respaldo integrado si el paquete no está disponible.
+- `haril update` puede reintentar una instalación incompleta de Matrix aun cuando HARIL ya tenga la versión más reciente.
+
+### Corregido
+
+- Los fallos de instalación de herramientas adicionales se informan expresamente y no se presentan como una actualización exitosa; la consola principal y la alternativa integrada se preservan.
+
+### Verificación
+
+- Biome, TypeScript, chequeos de dependencias, pruebas del instalador sin red y pruebas de actualización y arranque.
+
+---
+
 ## 0.23.1
 
 - **Fecha:** 2026-10-26

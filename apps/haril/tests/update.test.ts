@@ -102,6 +102,23 @@ describe("haril update (local verified source only)", () => {
     expect(install).not.toHaveBeenCalled();
   });
 
+  it("repairs a missing managed Matrix dependency even if the core version is current", async () => {
+    manifest("0.21.0");
+    writeFileSync(join(source, "scripts", "install-visual-tools.mjs"), "// fixture\n");
+    expect(await update(["--check"], io, host, services)).toBe(0);
+    expect(out.join(" ")).toContain("Matrix dependency needs repair");
+    expect(install).not.toHaveBeenCalled();
+
+    expect(await update(["--yes"], io, host, services)).toBe(0);
+    expect(install).toHaveBeenCalledOnce();
+    expect(out.join(" ")).toContain("dependency repair completed");
+
+    install.mockClear();
+    host = { ...host, env: { ...host.env, HARIL_AUTO_INSTALL_VISUALS: "off" } };
+    expect(await update(["--yes"], io, host, services)).toBe(0);
+    expect(install).not.toHaveBeenCalled();
+  });
+
   it("requires confirmation for interactive updates and --yes otherwise", async () => {
     expect(await update([], io, host, services)).toBe(2);
     expect(install).not.toHaveBeenCalled();

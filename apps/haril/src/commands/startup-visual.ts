@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
-import { statSync } from "node:fs";
-import { extname, isAbsolute, resolve } from "node:path";
+import { existsSync, statSync } from "node:fs";
+import { extname, isAbsolute, posix, resolve, win32 } from "node:path";
 
 // Half-width katakana retain one terminal cell on Windows Terminal, unlike full-width kana.
 // The mix of kana, digits and symbols follows the green rain seen in TTE's Matrix effect.
@@ -170,10 +170,26 @@ export const TTE_MATRIX_ARGS = [
 
 const TTE_MAX_MS = 2_500;
 
-async function matrixTte(): Promise<boolean> {
+// The updater owns this binary under HARIL_RUNTIME_DIR: users don't need uv,
+// Python, or tte on PATH after installation. A separately installed tte is supported.
+export function matrixExecutable(
+  env: Readonly<Record<string, string | undefined>>,
+  platform: string,
+  exists: (path: string) => boolean = existsSync,
+): string {
+  const root = env.HARIL_RUNTIME_DIR;
+  if (root) {
+    const ops = platform === "win32" ? win32 : posix;
+    const binary = ops.join(root, "tools", "bin", platform === "win32" ? "tte.exe" : "tte");
+    if (exists(binary)) return binary;
+  }
+  return "tte";
+}
+
+async function matrixTte(env: NodeJS.ProcessEnv, platform: string): Promise<boolean> {
   return new Promise<boolean>((done) => {
     let finished = false;
-    const child = spawn("tte", TTE_MATRIX_ARGS, {
+    const child = spawn(matrixExecutable(env, platform), TTE_MATRIX_ARGS, {
       stdio: ["pipe", "inherit", "ignore"],
       windowsHide: true,
     });
@@ -245,7 +261,8 @@ export async function playHarilStartup(options: {
   const wait = options.wait ?? delay;
   try {
     const playedExternal =
-      settings.engine !== "built-in" && (await (options.runExternalMatrix ?? matrixTte)());
+      settings.engine !== "built-in" &&
+      (await (options.runExternalMatrix ?? (() => matrixTte(options.env, options.platform)))());
     // Alternative screen uses the complete window, protects scrollback and is restored for Pi.
     options.out.write("\u001b[?1049h\u001b[?25l\u001b[2J\u001b[H");
     try {

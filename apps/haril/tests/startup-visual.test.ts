@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  matrixExecutable,
   matrixFrame,
   playHarilStartup,
   startupSettings,
@@ -25,6 +26,22 @@ describe("full-terminal Matrix startup", () => {
     expect(TTE_MATRIX_ARGS.slice(0, 4)).toEqual(["--canvas-width", "0", "--canvas-height", "0"]);
     expect(startupSettings({ HARIL_STARTUP_ANIMATION: "off" }).enabled).toBe(false);
     expect(startupSettings({ CI: "true" }).enabled).toBe(false);
+  });
+
+  it("prefers the TTE executable installed by haril update over the global PATH", () => {
+    expect(
+      matrixExecutable(
+        { HARIL_RUNTIME_DIR: "C:\\Users\\Anderson\\AppData\\Local\\HARIL" },
+        "win32",
+        () => true,
+      ),
+    ).toBe("C:\\Users\\Anderson\\AppData\\Local\\HARIL\\tools\\bin\\tte.exe");
+    expect(matrixExecutable({ HARIL_RUNTIME_DIR: "/local/haril" }, "linux", () => true)).toBe(
+      "/local/haril/tools/bin/tte",
+    );
+    expect(matrixExecutable({ HARIL_RUNTIME_DIR: "/local/haril" }, "linux", () => false)).toBe(
+      "tte",
+    );
   });
 
   it("fills every terminal row and holds a large centered loaded banner for three seconds", async () => {
