@@ -4,6 +4,27 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.23.5
+
+- **Fecha:** 2026-10-26
+- **Estado:** guía práctica y completa de uso del proyecto, los paneles laterales y sus indicadores.
+
+### Añadido
+
+- `docs/GUIA_DE_USO.md`: manual en español, flujo por fases desde instalación hasta aprobación y observabilidad, valores del dock izquierdo, panel derecho y barra inferior, cinco áreas, cuatro modos, navegación, comandos, ejemplos y solución de problemas.
+- Referencia visible desde la cabecera del README para usuarios que empiezan con HARIL.
+
+### Cambiado
+
+- Nota de documentación pública actualizada para diferenciar la nueva guía de diseño aún no publicado.
+- Versión de documentación y paquetes alineada a 0.23.5 según la política de versiones.
+
+### Verificación
+
+- Manual cotejado con `integrations/pi-console/src` y `apps/haril/src/cli.ts`; se especifican límites entre espacios visuales y extensiones Pi reales.
+
+---
+
 ## 0.23.4
 
 - **Fecha:** 2026-10-26
