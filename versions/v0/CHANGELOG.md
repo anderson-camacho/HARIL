@@ -20,6 +20,7 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ### Corregido
 
+- Se reemplazan los atajos `Alt+Z` y `Alt+R` de la 0.22.4 por `Alt+L` (plugins) y `Alt+I` (panel derecho), al detectar conflictos en la terminal del usuario. `Alt+C` muestra los comandos disponibles.
 - Se comprueba la ruta real para no navegar fuera de la carpeta del proyecto; cambiar el plugin reinicia el desplazamiento del dock y evita mostrar una ficha vacía por un offset anterior.
 
 ### Verificación
@@ -35,17 +36,17 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ### Añadido
 
-- `Alt+L`, después `1`–`5` o flechas y Enter, para seleccionar plugins visibles en Windows y WSL; `/haril-plugin [id|número|details]` para elegir y ver sus detalles.
+- `Alt+Z`, después `1`–`5` o flechas y Enter, para seleccionar plugins visibles en Windows; `/haril-plugin [id|número|details]` para elegir y ver sus detalles.
 - Vistas del Explorador (nombres de archivos y directorios), Git (`git status`), Memoria (`haril memory status`) y estado honesto de YouTube/Temas.
 - Pruebas del selector, lectura de datos y flujo completo del comando dentro de la extensión de Pi.
 
 ### Cambiado
 
-- La columna izquierda reutiliza espacio libre para mostrar la ficha del plugin seleccionado, con desplazamiento mediante rueda y sin reemplazar el chat de Pi. `Alt+I` alterna el panel derecho, reemplazando el anterior `Alt+R`.
+- La columna izquierda reutiliza espacio libre para mostrar la ficha del plugin seleccionado, con desplazamiento mediante rueda y sin reemplazar el chat de Pi.
 
 ### Corregido
 
-- Se dejan libres `Alt+Z` (deshacer en Pi/WSL) y `Alt+R` (conflicto reportado por el usuario); no se confunden ranuras visuales con extensiones realmente instaladas.
+- En WSL se preserva `Alt+Z` para deshacer texto de Pi, en lugar de robar su atajo; no se confunden ranuras visuales con extensiones realmente instaladas.
 
 ### Verificación
 
