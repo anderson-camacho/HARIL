@@ -19,7 +19,7 @@ export const MATRIX_PI_THEME = {
     panel: "#0b2412",
     selected: "#174126",
     errorRed: "#ff6576",
-    amber: "#e7cf75"
+    amber: "#e7cf75",
   },
   colors: {
     accent: "phosphor",
@@ -77,13 +77,13 @@ export const MATRIX_PI_THEME = {
     thinkingHigh: "neon",
     thinkingXhigh: "#c0ffcf",
     thinkingMax: "amber",
-    bashMode: "phosphor"
+    bashMode: "phosphor",
   },
   export: {
     pageBg: "#000000",
     cardBg: "deep",
-    infoBg: "selected"
-  }
+    infoBg: "selected",
+  },
 } as const;
 
 export function ensureMatrixPiTheme(agentDir: string): string {
