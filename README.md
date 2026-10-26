@@ -745,7 +745,7 @@ HARIL monta esas columnas solo si el Pi incluido ofrece el contrato interno de d
 
 #### Arranque Matrix, paletas y ojo IA (0.23.0)
 
-Desde **0.23.3**, la lluvia del Matrix original (`tte matrix`) alcanza toda la altura y anchura de la ventana: mantiene los caracteres cayendo tres segundos con columnas más rápidas y densas y coloca el texto final en el centro. Al terminar, aparece **solo HARIL**, grande y centrado, durante **3 segundos** antes de abrir Pi. Si TTE no está disponible, la animación integrada utiliza katakana verde que llena la terminal desde el primer fotograma y también concluye únicamente con HARIL.
+Desde **0.23.4**, la lluvia del Matrix original (`tte matrix`) cubre toda la terminal y **se transforma directamente** en el nombre HARIL a gran tamaño, sin borrar un texto pequeño para reemplazarlo de golpe. El logo permanece durante **3 segundos** antes de abrir Pi. Si TTE no está disponible, el efecto integrado apaga progresivamente los caracteres mientras aparece HARIL en la misma cuadrícula, sin cortes entre pantallas.
 
 **Las dependencias nuevas se gestionan automáticamente:** al instalar o ejecutar `haril update`, HARIL descarga una versión verificada de `uv`, prepara Python de forma aislada e instala una versión fija de TerminalTextEffects en `<raíz-HARIL>/tools`. No exige comandos de Python, cambios de `PATH` ni privilegios de administrador. Antes de dar la instalación por válida, HARIL ejecuta las herramientas gestionadas y comprueba sus versiones. Si existen pero están dañadas, desactualizadas o tienen un entorno Python roto, `haril update` ofrece repararlas incluso sin cambiar la versión de HARIL. Si falla la red, el instalador avisa y queda disponible el efecto integrado; `haril update --check` solo consulta, sin modificar nada. Para omitir expresamente estos complementos, configura `HARIL_AUTO_INSTALL_VISUALS=off`.
 
@@ -772,7 +772,7 @@ Remove-Item Env:\HARIL_STARTUP_MATRIX_ENGINE
 
 El video que inspiró el sonido no se descarga ni se reproduce automáticamente: para ese timbre concreto necesitas un archivo WAV local que tengas derecho a utilizar. En Windows se reproduce con el reproductor multimedia del sistema; en Linux se intenta `ffplay`, si está instalado.
 
-Puedes elegir **violet**, **rose**, **amber** u **obsidian** mediante clic en `THEME`, `/haril-theme` o `haril config set ui.theme violet`. Los colores se aplican a los paneles de HARIL y se guardan en `haril.json`; los temas nativos de Pi se ajustan por separado desde `/settings`. El indicador `◉` ocupa una celda y pasa a rojo en niveles de razonamiento `high`, `xhigh`, `max` o `ultra`. `/language es` y `/language en` siguen disponibles; el dock y su selector también muestran el idioma elegido. La cabecera muestra **Estoy en: <ruta>** sin invadir el chat.
+La paleta predeterminada es **matrix** (negro con verdes fosforescentes) en el dock, `haril shell` y la interfaz de Pi (editor, mensajes, herramientas y menús). El tema Pi se crea o repara al abrir `haril` dentro de su agente privado, sin tocar las extensiones ni el archivo `settings.json`. Las opciones anteriores **violet**, **rose**, **amber** y **obsidian** siguen disponibles en `THEME` o con `/haril-theme`. Si una instalación ya tenía otra paleta guardada en `haril.json`, puedes seleccionar Matrix una sola vez con `/haril-theme matrix` o `haril config set ui.theme matrix`. Los colores del dock se guardan en `haril.json`; Pi inicia con el tema Matrix administrado por HARIL. El indicador `◉` ocupa una celda y pasa a rojo en niveles de razonamiento `high`, `xhigh`, `max` o `ultra`. `/language es` y `/language en` siguen disponibles; el dock y su selector también muestran el idioma elegido. La cabecera muestra **Estoy en: <ruta>** sin invadir el chat.
 
 ### M4: interfaz de terminal (`haril shell`)
 
@@ -993,7 +993,7 @@ Los dossiers de `docs/research/` se leen solo bajo demanda, cuando un documento 
 
 ## Versiones
 
-Versión actual: **0.23.3**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
+Versión actual: **0.23.4**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
 
 ## Licencia
 
