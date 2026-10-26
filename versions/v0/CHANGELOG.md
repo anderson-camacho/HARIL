@@ -4,6 +4,30 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.22.6
+
+- **Fecha:** 2026-10-26
+- **Estado:** navegación vertical de menús compatible con secuencias de teclado de Windows Terminal y Pi.
+
+### Añadido
+
+- Pruebas de flechas ANSI, SS3 y Kitty en los selectores de plugins y de áreas, con Enter y Esc.
+
+### Cambiado
+
+- Los tres menús interactivos reutilizan la interpretación de teclado existente en HARIL en lugar de comparar solo secuencias antiguas.
+
+### Corregido
+
+- Las flechas arriba/abajo no respondían cuando el terminal enviaba flechas SS3 o Kitty; el visor de comandos también ignoraba esas variantes.
+- El selector de plugins mostraba `Alt+Z` aunque el atajo vigente es `Alt+L`.
+
+### Verificación
+
+- Pruebas de navegación y regresión del selector, validación estática, suite de Pi y CI en Windows y Linux.
+
+---
+
 ## 0.22.5
 
 - **Fecha:** 2026-10-25

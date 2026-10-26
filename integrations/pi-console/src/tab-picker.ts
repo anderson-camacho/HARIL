@@ -1,5 +1,6 @@
 import { DASHBOARD_AREAS, type DashboardArea } from "./dashboard.js";
 import { paddedCell, visualText } from "./dashboard-theme.js";
+import { keyOf } from "./orchestration-state.js";
 import type { ConsoleTheme } from "./pi-types.js";
 
 export type TabPickerResult =
@@ -63,18 +64,18 @@ export function createTabPicker(
     },
     handleInput(input: string): void {
       if (closed) return;
+      const key = keyOf(input);
       // This picker is a vertical list: ↑/↓ are primary. ←/→ remain supported.
-      if (input === "\u001b[B" || input === "\u001b[C")
-        selected = (selected + 1) % DASHBOARD_AREAS.length;
-      else if (input === "\u001b[A" || input === "\u001b[D")
+      if (key === "down" || key === "right") selected = (selected + 1) % DASHBOARD_AREAS.length;
+      else if (key === "up" || key === "left")
         selected = (selected + DASHBOARD_AREAS.length - 1) % DASHBOARD_AREAS.length;
-      else if (input === "\r" || input === "\n") {
+      else if (key === "enter") {
         const area = DASHBOARD_AREAS[selected];
         if (area === undefined) return;
         closed = true;
         done({ type: "open", area });
         return;
-      } else if (input === "\u001b" || input === "\u001b[27u" || input === "\u001b[27;1u") {
+      } else if (key === "escape") {
         closed = true;
         done({ type: "cancel" });
         return;

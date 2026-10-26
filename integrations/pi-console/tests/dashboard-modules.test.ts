@@ -429,6 +429,20 @@ describe("the console's modules", () => {
     expect(cancelled).toEqual([{ type: "cancel" }]);
   });
 
+  it.each([
+    ["SS3", "\u001bOA", "\u001bOB"],
+    ["Kitty CSI", "\u001b[1;1A", "\u001b[1;1B"],
+  ])("moves between areas with %s arrow keys", (_name, up, down) => {
+    const results: unknown[] = [];
+    const picker = createTabPicker("tools", (result) => results.push(result));
+    picker.handleInput(down);
+    expect(picker.render(80).join("\n")).toContain("▶ EVERYWHERE");
+    picker.handleInput(up);
+    expect(picker.render(80).join("\n")).toContain("▶ TOOLS");
+    picker.handleInput("\u001b[13u");
+    expect(results).toEqual([{ type: "open", area: "tools" }]);
+  });
+
   it("are the areas the /haril menu offers", async () => {
     const offered: string[][] = [];
     const ctx = fakeContext();

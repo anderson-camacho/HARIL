@@ -144,9 +144,10 @@ export async function showInlineDetails(
           ];
         },
         handleInput(input) {
-          if (keyOf(input) === "escape" || input === "q") done(undefined);
-          else if (input === "\u001b[A" || input === "k") offset = Math.max(0, offset - 1);
-          else if (input === "\u001b[B" || input === "j") offset += 1;
+          const key = keyOf(input);
+          if (key === "escape" || input === "q") done(undefined);
+          else if (key === "up" || input === "k") offset = Math.max(0, offset - 1);
+          else if (key === "down" || input === "j") offset += 1;
           else if (input === "\u001b[5~") offset = Math.max(0, offset - 14);
           else if (input === "\u001b[6~") offset += 14;
           else if (input === "\u001b[H" || input === "g") offset = 0;
