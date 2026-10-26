@@ -4,6 +4,31 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.23.3
+
+- **Fecha:** 2026-10-26
+- **Estado:** Matrix a pantalla completa con cierre exclusivo «HARIL» y reparación de herramientas verificadas.
+
+### Añadido
+
+- Pruebas de ejecución y versión de las herramientas administradas (uv y TerminalTextEffects), también con `haril update --check`.
+
+### Cambiado
+
+- Efecto TTE Matrix: lluvia densa durante tres segundos, columnas más rápidas, título centrado y ventana alternativa activada antes de dibujar.
+- El cartel final muestra únicamente **HARIL** a gran escala, centrado, durante tres segundos.
+
+### Corregido
+
+- Lluvia interrumpida antes de llegar al fondo, contenido dibujado fuera de la pantalla alternativa y dependencias que existían pero no funcionaban.
+- El instalador omite herramientas sanas y reinstala automáticamente las dañadas o de versión incorrecta, validando la ejecución después de repararlas.
+
+### Verificación
+
+- Pruebas unitarias para pantalla completa, título único, comprobaciones de versión y reparaciones sin modificar instalaciones sanas.
+
+---
+
 ## 0.23.2
 
 - **Fecha:** 2026-10-26
