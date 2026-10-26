@@ -30,6 +30,7 @@ describe("native dock integration with the HARIL Pi extension", () => {
       await fake.fire("session_start", { reason: "startup" }, ctx);
       expect(anchor).toBeDefined();
       expect(fake.commands.has("haril-plugins")).toBe(true);
+      expect(fake.commands.has("haril-extensions")).toBe(true);
       expect(fake.commands.has("haril-dock")).toBe(true);
       expect(fake.commands.has("haril-plugin")).toBe(true);
       expect(fake.commands.has("haril-commands")).toBe(true);

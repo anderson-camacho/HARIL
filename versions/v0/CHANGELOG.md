@@ -4,6 +4,54 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.22.8
+
+- **Fecha:** 2026-10-26
+- **Estado:** primer instalador y desinstalador de extensiones Pi desde el perfil aislado de HARIL.
+
+### Añadido
+
+- `haril extensions install|remove <source> --yes` ejecuta la operación con el runtime Pi interno de HARIL y `PI_CODING_AGENT_DIR` aislado.
+- `/haril-extensions` permite instalar desde npm o GitHub y desinstalar un paquete declarado tras confirmación y advertencia de ejecución de código de terceros.
+
+### Cambiado
+
+- El gestor ofrece «Instalar» incluso sin paquetes configurados; el dock visual continúa siendo independiente de las extensiones Pi.
+
+### Corregido
+
+- Se rechazan orígenes arbitrarios, rutas locales, opciones inesperadas, duplicados y desinstalaciones ambiguas; ni Gentle Shell ni la configuración Pi global son modificados por estos comandos.
+
+### Verificación
+
+- Pruebas herméticas con Pi simulado del argumento, runtime y directorio agente; validación estática, tests Pi y compilación sin descargar paquetes externos.
+
+---
+
+## 0.22.7
+
+- **Fecha:** 2026-10-26
+- **Estado:** primera gestión explícita de paquetes de extensiones Pi dentro del perfil aislado de HARIL.
+
+### Añadido
+
+- `haril extensions list [--json]` lee los paquetes declarados en el agente Pi privado de HARIL; `enable|disable <source> --yes` cambia solo la selección de extensiones del paquete indicado para el próximo arranque.
+- `/haril-extensions` y entrada desde `/haril-plugins` para consultar y cambiar esas preferencias con confirmación.
+
+### Cambiado
+
+- Se diferencia de forma explícita el gestor de paquetes Pi (configuración de carga) del dock visual de HARIL (orden y visibilidad).
+
+### Corregido
+
+- Nunca se afirma que un paquete declarado esté instalado o cargado en la sesión; se rechaza cambiar entradas ambiguas, repetidas o con filtros personalizados, y se conserva el resto del archivo de configuración.
+
+### Verificación
+
+- Pruebas de lectura y cambio de configuración aislada, preservación del formato, filtros y rechazo de configuraciones inválidas; validaciones de TypeScript y CI.
+
+---
+
 ## 0.22.6
 
 - **Fecha:** 2026-10-26

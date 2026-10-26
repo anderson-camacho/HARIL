@@ -1,6 +1,6 @@
 {
   "name": "@haril/shell",
-  "version": "0.22.6",
+  "version": "0.22.8",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",

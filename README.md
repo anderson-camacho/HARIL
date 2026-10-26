@@ -711,6 +711,32 @@ Las fichas disponibles son de **solo lectura**: Explorador muestra archivos/carp
 
 Los selectores de plugins (`Alt+L` o `/haril-plugin`) y de áreas (`Alt+H`) reconocen las secuencias de flechas clásicas, SS3 y Kitty usadas por Pi y Windows Terminal: `↑`/`↓` mueven el resaltado, `Enter` abre y `Esc` cancela. `←`/`→` siguen disponibles como alternativa. El visor de `/haril-commands` también se desplaza con flechas; si otra aplicación intercepta un atajo, usa el comando equivalente desde Pi. El selector ahora indica `Alt+L`, no el antiguo `Alt+Z`.
 
+#### Paquetes y extensiones reales de Pi (0.22.7, gestión inicial)
+
+`/haril-extensions` abre una lista **real de paquetes declarados** en la configuración personal y privada de Pi dentro de HARIL. Permite consultar su estado y **habilitar o deshabilitar sus extensiones** tras una confirmación; para entrar también puedes escoger «Paquetes Pi» al final del menú `/haril-plugins`. Los cambios se aplican **al reiniciar `haril`**; no se instala ni se elimina ningún paquete de forma silenciosa ni se alteran las extensiones ya cargadas en la sesión actual.
+
+```powershell
+haril extensions list
+haril extensions list --json
+haril extensions disable "git:github.com/CinloDev/pi-youtube-player" --yes
+haril extensions enable "git:github.com/CinloDev/pi-youtube-player" --yes
+```
+
+**Importante:** estos comandos solo modifican los paquetes declarados en `agent/settings.json` dentro de la raíz del runtime HARIL (normalmente `%LOCALAPPDATA%\HARIL\agent` en Windows), sin tocar `~/.pi`, Gentle Shell ni los paquetes locales del proyecto. «Habilitado» significa *seleccionado para que Pi lo cargue en el próximo arranque*, no confirma que se haya instalado, que haya arrancado sin error ni que esté activo ahora mismo. Un paquete con filtros particulares se administra con `pi config` para no perder esa configuración; el dock de HARIL continúa gestionando **su propia visibilidad y orden** por separado.
+
+#### Instalar y quitar paquetes Pi desde HARIL (0.22.8)
+
+Desde `/haril-extensions`, selecciona **+ Instalar paquete Pi**, escribe el origen y revisa la confirmación. Puedes desinstalar un paquete declarado entrando en su ficha y eligiendo **Desinstalar paquete**. También es posible desde PowerShell:
+
+```powershell
+haril extensions install "git:github.com/CinloDev/pi-youtube-player" --yes
+haril extensions install "git:github.com/CinloDev/pi-cinlodev-cute" --yes
+haril extensions list --json
+haril extensions remove "git:github.com/CinloDev/pi-youtube-player" --yes
+```
+
+Los orígenes anteriores son ejemplos, **no recomendaciones de seguridad ni garantías de compatibilidad**: revisa sus dependencias, permisos y código antes de ejecutar un `install`. `--yes` es obligatorio y no se acepta instalar desde rutas locales, argumentos extra ni servidores Git arbitrarios en esta primera etapa. HARIL ejecuta `pi install|remove` mediante el Node y Pi registrados en **su propio runtime** con `PI_CODING_AGENT_DIR` apuntando al agente privado, sin usar el Pi de Gentle Shell ni el instalado globalmente. Reinicia HARIL tras los cambios. No se realiza instalación automática al abrir el dock; instalar una extensión no crea una ficha visual nueva. La actualización de paquetes, la auditoría de compatibilidad y los controles de integridad quedan pendientes.
+
 ### M4: interfaz de terminal (`haril shell`)
 
 `haril shell` abre la interfaz de terminal propia de HARIL, la que abría `haril` hasta la 0.7.0; desde la 0.8.0, `haril` sin subcomando abre la [consola sobre Pi](#m4-consola-de-haril-sobre-pi-haril) y esta interfaz se abre con `haril shell`. Necesita una terminal real (Windows Terminal o PowerShell); sin ella `haril shell` sale con 2. La interfaz no escribe en la base: cada acción ejecuta un comando `haril` corto. No consulta la base en bucle: los datos se cargan al abrir, con `r`, después de cada acción y cuando el runtime en marcha avisa de un cambio.
@@ -930,7 +956,7 @@ Los dossiers de `docs/research/` se leen solo bajo demanda, cuando un documento 
 
 ## Versiones
 
-Versión actual: **0.22.6**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
+Versión actual: **0.22.8**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
 
 ## Licencia
 
