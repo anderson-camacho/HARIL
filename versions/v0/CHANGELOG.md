@@ -4,6 +4,30 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.22.7
+
+- **Fecha:** 2026-10-26
+- **Estado:** primera gestión explícita de paquetes de extensiones Pi dentro del perfil aislado de HARIL.
+
+### Añadido
+
+- `haril extensions list [--json]` lee los paquetes declarados en el agente Pi privado de HARIL; `enable|disable <source> --yes` cambia solo la selección de extensiones del paquete indicado para el próximo arranque.
+- `/haril-extensions` y entrada desde `/haril-plugins` para consultar y cambiar esas preferencias con confirmación.
+
+### Cambiado
+
+- Se diferencia de forma explícita el gestor de paquetes Pi (configuración de carga) del dock visual de HARIL (orden y visibilidad).
+
+### Corregido
+
+- Nunca se afirma que un paquete declarado esté instalado o cargado en la sesión; se rechaza cambiar entradas ambiguas, repetidas o con filtros personalizados, y se conserva el resto del archivo de configuración.
+
+### Verificación
+
+- Pruebas de lectura y cambio de configuración aislada, preservación del formato, filtros y rechazo de configuraciones inválidas; validaciones de TypeScript y CI.
+
+---
+
 ## 0.22.6
 
 - **Fecha:** 2026-10-26

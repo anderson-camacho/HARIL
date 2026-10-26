@@ -7,6 +7,7 @@ import { consoleCommand } from "./commands/console.js";
 import { difficulty } from "./commands/difficulty.js";
 import { doctor } from "./commands/doctor.js";
 import { events } from "./commands/events.js";
+import { extensions } from "./commands/extensions.js";
 import { memory } from "./commands/memory.js";
 import { methodology } from "./commands/methodology.js";
 import { metrics } from "./commands/metrics.js";
@@ -66,6 +67,8 @@ const HELP_LINES = [
   "  haril config set <path> <value> | --reset [--json]   change one delegation setting (checked, other keys kept)",
   "  haril models [--json] [--provider <id>]   list the models of every provider as <provider>/<model> (haril.json)",
   "  haril plugins list|show|hide|move|reset   save plugin dock visibility and order (Pi extensions unchanged)",
+  "  haril extensions list [--json]    list Pi packages declared in HARIL's own agent settings",
+  "  haril extensions enable|disable <exact-source> --yes   change whether a Pi package loads extensions on restart",
   "  haril quota [--json] [--provider <id>]   5-hour and weekly quota of each account (CLIProxyAPI management API,",
   "    key in CLIPROXYAPI_MANAGEMENT_KEY or delegation.quota.managementKeyEnv) and the model cooldowns; sin dato if unknown",
   "  haril difficulty show [--json]   the difficulty table: per class its recommended models and cost levels, and the",
@@ -184,6 +187,8 @@ function dispatch(argv: readonly string[], io: CliIo, host: HostInfo): number | 
       return models(rest, io, host);
     case "plugins":
       return plugins(rest, io, host);
+    case "extensions":
+      return extensions(rest, io, host);
     case "states":
       return states(rest, io);
     case "plan":

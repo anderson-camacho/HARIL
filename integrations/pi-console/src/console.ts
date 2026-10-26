@@ -68,6 +68,7 @@ import {
   selectedNode,
 } from "./orchestration-state.js";
 import { EMPTY_MESSAGE } from "./orchestration-view.js";
+import { decodePiExtensionPackages, extensionStatusText } from "./pi-extensions.js";
 import type {
   AgentMessage,
   ConsoleContext,
@@ -850,6 +851,84 @@ export default function harilConsole(pi: ConsolePi): void {
     await openDockSlot(current, result.id);
   }
 
+  async function managePiExtensions(current: Session, ctx: ConsoleContext): Promise<void> {
+    if (current.closed || !cliAvailable()) {
+      ctx.ui.notify(NOT_LAUNCHED, "warning");
+      return;
+    }
+    const result = await runHaril(["extensions", "list", "--json"], { cwd: current.cwd });
+    if (current.closed || session !== current) return;
+    if (!result.ok) {
+      ctx.ui.notify(result.stderr || "No se pudieron consultar los paquetes Pi", "error");
+      return;
+    }
+    let entries: ReturnType<typeof decodePiExtensionPackages>;
+    try {
+      entries = decodePiExtensionPackages(JSON.parse(result.stdout) as unknown);
+    } catch {
+      entries = undefined;
+    }
+    if (entries === undefined) {
+      ctx.ui.notify("HARIL recibió una lista de extensiones no válida", "error");
+      return;
+    }
+    if (entries.length === 0) {
+      ctx.ui.notify(
+        "No hay paquetes Pi declarados en HARIL. Para instalar, usa la CLI Pi del runtime; el dock visual es independiente.",
+        "info",
+      );
+      return;
+    }
+    const choices = entries.map(
+      (entry, index) =>
+        `${index + 1}. ${plainText(entry.source)} · ${entry.extensions === "enabled" ? "habilitada" : entry.extensions === "disabled" ? "deshabilitada" : "filtrada"}`,
+    );
+    const selected = await ctx.ui.select("Paquetes declarados en el Pi privado de HARIL", choices);
+    if (!selected || session !== current || current.closed) return;
+    const chosen = entries[choices.indexOf(selected)];
+    if (!chosen) return;
+    const actions = ["Ver información", "Habilitar extensiones", "Deshabilitar extensiones"];
+    const action = await ctx.ui.select(plainText(chosen.source), actions);
+    if (!action || session !== current || current.closed) return;
+    if (action === "Ver información") {
+      await showInlineDetails(ctx, plainText(chosen.source), [
+        extensionStatusText(chosen.extensions),
+        "Estado real de instalación o carga: desconocido en esta sesión.",
+        "La visibilidad del dock se administra por separado con /haril-plugins.",
+        "Los cambios requieren reiniciar HARIL para que Pi los cargue.",
+      ]);
+      return;
+    }
+    if (chosen.extensions === "filtered") {
+      ctx.ui.notify(
+        "Ese paquete tiene filtros propios; usa pi config para conservarlos.",
+        "warning",
+      );
+      return;
+    }
+    const enable = action === "Habilitar extensiones";
+    if (
+      !(await ctx.ui.confirm(
+        "Confirmar cambio Pi",
+        `${enable ? "Habilitar" : "Deshabilitar"} extensiones de ${plainText(chosen.source)} para el próximo arranque de HARIL?`,
+      ))
+    ) {
+      return;
+    }
+    if (session !== current || current.closed) return;
+    const updated = await runHaril(
+      ["extensions", enable ? "enable" : "disable", chosen.source, "--yes"],
+      { cwd: current.cwd },
+    );
+    if (session !== current || current.closed) return;
+    ctx.ui.notify(
+      updated.ok
+        ? "Preferencia Pi guardada. Reinicia HARIL para aplicar el cambio; el dock visible es independiente."
+        : updated.stderr || "No se pudo guardar la preferencia Pi",
+      updated.ok ? "info" : "error",
+    );
+  }
+
   async function chooseExplorerFolder(current: Session, ctx: ConsoleContext): Promise<void> {
     if (current.closed || !ctx.hasUI || ctx.mode !== "tui") return;
     try {
@@ -1188,6 +1267,14 @@ export default function harilConsole(pi: ConsolePi): void {
       }
     },
   });
+  pi.registerCommand("haril-extensions", {
+    description: "Inspect and toggle configured Pi package extensions for the NEXT HARIL session",
+    handler: async (_args, ctx) => {
+      const current = session;
+      if (!current || !ctx.hasUI || ctx.mode !== "tui") return;
+      await managePiExtensions(current, ctx);
+    },
+  });
   // Pi's default bindings leave Alt+L / Alt+I free. Alt+Z is Pi's undo shortcut on WSL.
   pi.registerShortcut("alt+l", {
     description: "Open HARIL's plugin list (then press 1..5, arrows, Enter or Esc)",
@@ -1212,8 +1299,14 @@ export default function harilConsole(pi: ConsolePi): void {
         const label = DOCK_LABELS.find((item) => item.id === slot.id)?.label ?? slot.id;
         return `${index + 1}. ${label} · ${slot.visible ? "visible" : "oculto"}`;
       });
+      const piManagement = "Paquetes Pi · gestionar extensiones reales";
+      choices.push(piManagement);
       const picked = await ctx.ui.select("Administrar dock izquierdo", choices);
       if (!picked || session !== current || current.closed) return;
+      if (picked === piManagement) {
+        await managePiExtensions(current, ctx);
+        return;
+      }
       const selected = current.dock.slots[choices.indexOf(picked)];
       if (!selected) return;
       const operations = ["Mostrar", "Ocultar", "Subir", "Bajar"];
