@@ -7,6 +7,7 @@ import { type CliIo, EXIT_USAGE, type HostInfo } from "../context.js";
 import { findPayloadFile, readRuntime, runtimeRootFor } from "../runtime.js";
 import { VERSION } from "../version.js";
 import { dataDirFor } from "./common.js";
+import { playHarilStartup } from "./startup-visual.js";
 
 // `haril console` (PS-T3), and a bare `haril` in a terminal: opens Pi, the Node and the Pi that HARIL installed
 // (runtime/manifest.json), in the current folder with the HARIL extension (integrations/pi-console), the way Gentle
@@ -31,6 +32,11 @@ export interface ConsolePorts {
   readonly harilEntry: string;
   // The Node running this CLI; the extension runs the CLI on it.
   readonly nodePath: string;
+  readonly playStartup?: (options: {
+    cwd: string;
+    platform: string;
+    env: NodeJS.ProcessEnv;
+  }) => Promise<void>;
 }
 
 function defaultConsolePorts(): ConsolePorts {
@@ -40,6 +46,7 @@ function defaultConsolePorts(): ConsolePorts {
     bundleDir: dirname(fileURLToPath(import.meta.url)),
     harilEntry: fileURLToPath(import.meta.url),
     nodePath: process.execPath,
+    playStartup: (options) => playHarilStartup({ ...options, out: process.stdout }),
   };
 }
 
@@ -105,6 +112,7 @@ export async function consoleCommand(
       : { HARIL_HOME: resolve(cwd, dataDirFor(host, dataDir)) }),
     ...(config === undefined ? {} : { HARIL_CONFIG: resolve(cwd, config) }),
   };
+  await ports.playStartup?.({ cwd, platform: host.platform, env });
   // Pi 1.2.0 captures normalized mouse input in fullscreen mode; passing the mode explicitly overrides a saved
   // per-user setting for this HARIL process only and does not edit that setting.
   return runPi(

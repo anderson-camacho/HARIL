@@ -14,10 +14,10 @@ import { readConfigDocument, serializeConfig, writeConfigAtomically } from "./co
 
 // `haril config get [<path>]` and `haril config set <path> <value> | --reset` (docs/modos-y-delegacion.md 6, 7.7;
 // phase F7). get shows one value or a whole group, each value with its source: haril.json, or the default. Other keys of
-// the file are shown as they are. set changes one delegation setting or ui.locale: the value is read for its field
+// the file are shown as they are. set changes delegation settings, ui.locale or ui.theme: the value is read for its field
 // (a number, a list, a level...), the whole resulting file is checked by the rules every reader applies, then written,
 // keeping every other key and the file's formatting, through a temporary file renamed over it. --reset removes the
-// value so the default applies again. Only delegation settings and ui.locale can be set: provider key variables are
+// value so the default applies again. Only delegation settings and safe UI preferences can be set: provider key variables are
 // edited by hand, and no key is ever written (a file that holds one is refused). The console's Delegation section edits
 // through this command.
 
@@ -26,7 +26,7 @@ const USAGE = [
   "       haril config set <path> <value> [--json]",
   "       haril config set <path> --reset [--json]",
   "  get shows a value, or every value of a group (default: delegation), with its source (haril.json or the default).",
-  "  set changes one delegation setting or ui.locale after checking the whole file; --reset restores its default.",
+  "  set changes delegation settings, ui.locale or ui.theme after checking the file; --reset restores defaults.",
 ].join("\n");
 
 const SOURCE_FILE = "haril.json";
@@ -76,6 +76,16 @@ function uiLocaleField(document: Record<string, unknown>): {
     : { value: configured, source: "file" };
 }
 
+function uiThemeField(document: Record<string, unknown>): {
+  value: unknown;
+  source: "default" | "file";
+} {
+  const configured = valueAt(document, ["ui", "theme"]);
+  return configured === undefined
+    ? { value: "violet", source: "default" }
+    : { value: configured, source: "file" };
+}
+
 export async function config(args: readonly string[], io: CliIo, host: HostInfo): Promise<number> {
   const [verb, ...rest] = args;
   if (verb === "get") return configGet(rest, io, host);
@@ -96,19 +106,20 @@ function configGet(args: readonly string[], io: CliIo, host: HostInfo): number {
   if (!read.ok) return fail(io, `${configPath}: ${read.error}`);
   const document = read.document;
 
-  if (path === "ui.locale") {
+  if (path === "ui.locale" || path === "ui.theme") {
     const errors = configDocumentErrors(document).filter((error) => error.startsWith("/ui"));
     if (errors.length > 0) {
       io.err(`haril: ${configPath} has problems; fix them first (haril doctor lists them):`);
       for (const error of errors) io.err(`  ${error}`);
       return EXIT_USAGE;
     }
-    const locale = uiLocaleField(document);
+    const preference = path === "ui.locale" ? uiLocaleField(document) : uiThemeField(document);
+    const fallback = path === "ui.locale" ? DEFAULT_UI_LOCALE : "violet";
     if (json) {
-      io.out(JSON.stringify({ path, ...locale, default: DEFAULT_UI_LOCALE, configPath }));
+      io.out(JSON.stringify({ path, ...preference, default: fallback, configPath }));
     } else {
       io.out(
-        `${path} = ${shown(locale.value)}  (${locale.source === "file" ? SOURCE_FILE : "default"})`,
+        `${path} = ${shown(preference.value)}  (${preference.source === "file" ? SOURCE_FILE : "default"})`,
       );
     }
     return EXIT_OK;
@@ -252,28 +263,30 @@ function configSet(args: readonly string[], io: CliIo, host: HostInfo): number {
   if (path === undefined || extra.length > 0 || (reset ? text !== undefined : text === undefined)) {
     return fail(io, USAGE);
   }
-  const localePath = path === "ui.locale";
-  if (!localePath && !path.startsWith(`${SECTION}.`)) {
+  const uiPath = path === "ui.locale" || path === "ui.theme";
+  if (!uiPath && !path.startsWith(`${SECTION}.`)) {
     return fail(
       io,
-      `only delegation settings can be set, except ui.locale; ${path} is not one (edit the rest of haril.json by hand)`,
+      `only delegation settings, ui.locale and ui.theme can be set; ${path} is not one (edit the rest of haril.json by hand)`,
     );
   }
-  const field = localePath ? undefined : delegationField(path.slice(SECTION.length + 1));
-  if (!localePath && field === undefined) {
+  const field = uiPath ? undefined : delegationField(path.slice(SECTION.length + 1));
+  if (!uiPath && field === undefined) {
     return fail(io, `unknown setting ${path} (haril config get ${SECTION} lists them)`);
   }
   const configPath = harilConfigPath(host).path;
   const read = readConfigDocument(configPath);
   if (!read.ok) return fail(io, `${configPath}: ${read.error}`);
 
-  const before = localePath
-    ? uiLocaleField(read.document)
+  const before = uiPath
+    ? path === "ui.locale"
+      ? uiLocaleField(read.document)
+      : uiThemeField(read.document)
     : delegationFieldsOf(read.document).find((item) => item.path === path);
   const next = JSON.parse(JSON.stringify(read.document)) as Record<string, unknown>;
   const value = reset
     ? undefined
-    : localePath
+    : uiPath
       ? text
       : settingValue(field as DelegationField, text as string);
   const placed = putValue(next, path.split("."), value);
@@ -295,8 +308,10 @@ function configSet(args: readonly string[], io: CliIo, host: HostInfo): number {
       );
     }
   }
-  const after = localePath
-    ? uiLocaleField(next)
+  const after = uiPath
+    ? path === "ui.locale"
+      ? uiLocaleField(next)
+      : uiThemeField(next)
     : (delegationFieldsOf(next).find((item) => item.path === path) as DelegationFieldValue);
   const previous = before ?? after;
   if (json) {

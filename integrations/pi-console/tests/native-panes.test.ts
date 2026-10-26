@@ -125,6 +125,11 @@ describe("Pi's native split-pane adapter", () => {
     expect(oldSettings[1]).toEqual({ id: "explorer", visible: true });
     expect(oldSettings).toHaveLength(5);
     expect(renderRightDock(20, 4, [" ".repeat(19)]).map(stripAnsi)).toHaveLength(4);
+    const english = renderLeftDock(23, 25, state, "code", 0, "high", "en")
+      .map(stripAnsi)
+      .join("\n");
+    expect(english).toContain("VIEWS · Alt+L");
+    expect(english).toContain("Alt+C · commands");
   });
 
   it("keeps the dock fixed through resize and does not consume Pi layout when terminal is narrow", () => {
@@ -153,11 +158,13 @@ describe("Pi's native split-pane adapter", () => {
     const state = initialPaneSettings();
     const select = vi.fn();
     const toggleExplorer = vi.fn();
+    const activate = vi.fn();
     const panel = attachNativePanes(tui, state, {
       project: () => "repo",
       right: () => [],
       select,
       toggleExplorer,
+      activate,
     });
     const layout = (root[LAYOUT_NODE] as () => NativeLayout)();
     const left = layout.entries[0]?.component;
@@ -178,6 +185,18 @@ describe("Pi's native split-pane adapter", () => {
     expect(folderRow).toBeGreaterThan(4);
     left?.handleMouse?.({ type: "click", button: "left", y: folderRow, x: 4 });
     expect(toggleExplorer).toHaveBeenCalledWith("/repo/src");
+    state.selected = "themes";
+    state.detail = {
+      id: "themes",
+      title: "Temas",
+      status: "Paleta",
+      lines: ["Selecciona:", "1. violet"],
+      actions: [{ line: 1, action: "violet" }],
+    };
+    left?.render(23);
+    // The first action is the second detail line, below the compact tabs.
+    left?.handleMouse?.({ type: "click", button: "left", y: 11, x: 4 });
+    expect(activate).toHaveBeenCalledWith("themes", "violet");
     panel.close();
   });
 });

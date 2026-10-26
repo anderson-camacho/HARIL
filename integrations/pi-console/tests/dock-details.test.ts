@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadDockDetails } from "../src/dock-details.js";
 
@@ -36,9 +37,10 @@ describe("plugin views backed by read-only sources", () => {
 
   it("expands only requested tree branches and never descends into unrelated directories", async () => {
     const scanned: string[] = [];
+    const srcPath = join("repo", "src");
     const directory = async (folder: string) => {
       scanned.push(folder);
-      return folder === "repo/src"
+      return folder === srcPath
         ? [{ name: "main.ts", isDirectory: () => false }]
         : [
             { name: "src", isDirectory: () => true },
@@ -50,11 +52,13 @@ describe("plugin views backed by read-only sources", () => {
     expect(closed.treeNodes).toHaveLength(2);
     const expanded = await loadDockDetails("explorer", "repo", {
       directory,
-      expandedPaths: new Set(["repo/src"]),
+      expandedPaths: new Set([srcPath]),
     });
-    expect(scanned).toEqual(["repo", "repo", "repo/src"]);
+    expect(scanned).toEqual(["repo", "repo", srcPath]);
     expect(expanded.lines).toContain("▾ ▣ src");
     expect(expanded.lines).toContain("  · ◇ main.ts");
+    const english = await loadDockDetails("explorer", "repo", { directory, locale: "en" });
+    expect(english.status).toContain("click to expand");
   });
 
   it("shows real Git and HARIL memory diagnostics", async () => {
@@ -79,14 +83,20 @@ describe("plugin views backed by read-only sources", () => {
     expect(memory.lines).toContain("Ready");
   });
 
-  it("never presents missing YouTube extensions as installed or silently enables themes", async () => {
+  it("never presents missing YouTube extensions as installed and exposes selectable HARIL palettes", async () => {
     const absent = await loadDockDetails("youtube", ".", { piCommands: [] });
     expect(absent.status).toContain("no detectada");
     expect(absent.lines.join(" ")).toContain("no instala");
     const present = await loadDockDetails("youtube", ".", { piCommands: ["yt"] });
     expect(present.status).toContain("detectada");
-    const themes = await loadDockDetails("themes", ".");
-    expect(themes.lines).toContain("/settings → Theme");
-    expect(themes.lines.join(" ")).toContain("no cambia");
+    const themes = await loadDockDetails("themes", ".", { theme: "rose" });
+    expect(themes.lines).toContain("Pi: /settings → Theme");
+    expect(themes.status).toContain("rose");
+    expect(themes.actions).toEqual([
+      { line: 1, action: "violet" },
+      { line: 2, action: "rose" },
+      { line: 3, action: "amber" },
+      { line: 4, action: "obsidian" },
+    ]);
   });
 });

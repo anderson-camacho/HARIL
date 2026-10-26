@@ -4,6 +4,29 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.23.0
+
+- **Fecha:** 2026-10-26
+- **Estado:** segundo y último PR de la renovación de interfaz de HARIL sobre Pi.
+
+### Añadido
+
+- Inicio Matrix rápido con efecto integrado de posiciones y anchos constantes; opción de usar `tte matrix` de TerminalTextEffects si está instalado y elegido por el usuario, con límite de tiempo y fallback integrado.
+- Mensaje «SISTEMA CARGADO · HARIL» y alerta de sonido; WAV local configurable por variable de entorno, sin descargar contenido del enlace de referencia.
+- Cuatro paletas suaves (**violet**, **rose**, **amber**, **obsidian**), elegibles con clic en THEME o con `/haril-theme`, persistidas mediante `haril config set ui.theme`.
+- Ojo IA de una celda, rojo para razonamiento alto; cabecera «Estoy en: <ruta>» y textos del dock en español/inglés.
+
+### Corregido
+
+- Pi se inicia aunque el sonido o efecto opcionales no estén disponibles; la introducción se omite en CI y puede desactivarse para cualquier sesión.
+- La pestaña Temas deja de ser un indicador sin acción: permite seleccionar y aplicar una paleta real de HARIL.
+
+### Verificación
+
+- Pruebas herméticas de fotogramas y cursor, configuración de temas, cambio de idioma, clic en paletas y ojo IA; TypeScript, Biome, suite de consola y build.
+
+---
+
 ## 0.22.9
 
 - **Fecha:** 2026-10-26

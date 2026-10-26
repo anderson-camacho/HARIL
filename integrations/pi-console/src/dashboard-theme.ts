@@ -3,20 +3,85 @@ import { plainText, textWidth, truncate } from "./text.js";
 export type DashboardTone = "cyan" | "teal" | "yellow" | "text" | "muted" | "dim" | "error";
 
 const RESET = "\u001b[0m";
-const FOREGROUND: Record<DashboardTone, readonly [number, number, number]> = {
-  cyan: [67, 230, 230],
-  teal: [30, 190, 169],
-  yellow: [247, 209, 76],
-  text: [190, 216, 216],
-  muted: [111, 153, 157],
-  dim: [55, 97, 103],
-  error: [255, 111, 105],
+export const HARIL_PALETTES = ["violet", "rose", "amber", "obsidian"] as const;
+export type HarilPalette = (typeof HARIL_PALETTES)[number];
+type Color = readonly [number, number, number];
+type BackgroundTone = "base" | "panel" | "selected";
+interface Palette {
+  readonly foreground: Record<DashboardTone, Color>;
+  readonly background: Record<BackgroundTone, Color>;
+}
+
+const PALETTES: Record<HarilPalette, Palette> = {
+  violet: {
+    foreground: {
+      cyan: [191, 163, 240],
+      teal: [231, 171, 216],
+      yellow: [241, 197, 153],
+      text: [224, 213, 237],
+      muted: [159, 142, 172],
+      dim: [105, 88, 126],
+      error: [255, 96, 116],
+    },
+    background: { base: [12, 9, 19], panel: [23, 17, 33], selected: [64, 39, 77] },
+  },
+  rose: {
+    foreground: {
+      cyan: [236, 164, 202],
+      teal: [204, 173, 239],
+      yellow: [243, 196, 157],
+      text: [238, 218, 229],
+      muted: [171, 142, 161],
+      dim: [115, 81, 106],
+      error: [255, 94, 114],
+    },
+    background: { base: [19, 10, 17], panel: [32, 19, 29], selected: [76, 39, 59] },
+  },
+  amber: {
+    foreground: {
+      cyan: [233, 178, 126],
+      teal: [224, 177, 164],
+      yellow: [243, 208, 145],
+      text: [237, 220, 206],
+      muted: [174, 145, 125],
+      dim: [117, 93, 75],
+      error: [253, 104, 111],
+    },
+    background: { base: [18, 12, 9], panel: [32, 22, 16], selected: [75, 49, 25] },
+  },
+  obsidian: {
+    foreground: {
+      cyan: [173, 177, 233],
+      teal: [187, 164, 219],
+      yellow: [227, 192, 139],
+      text: [217, 215, 224],
+      muted: [147, 146, 164],
+      dim: [98, 99, 119],
+      error: [255, 93, 106],
+    },
+    background: { base: [5, 6, 9], panel: [12, 13, 19], selected: [40, 33, 53] },
+  },
 };
-const BACKGROUND: Record<"base" | "panel" | "selected", readonly [number, number, number]> = {
-  base: [5, 14, 20],
-  panel: [9, 25, 31],
-  selected: [78, 66, 24],
-};
+
+let activePalette: HarilPalette = "violet";
+
+export function setHarilPalette(candidate: unknown): HarilPalette {
+  activePalette = HARIL_PALETTES.find((item) => item === candidate) ?? "violet";
+  return activePalette;
+}
+
+export function getHarilPalette(): HarilPalette {
+  return activePalette;
+}
+
+// A one-cell AI eye. Higher reasoning levels are signaled red without resizing the header.
+export function aiEyeTone(level: string | undefined): DashboardTone {
+  return level !== undefined && ["high", "xhigh", "max", "ultra"].includes(level)
+    ? "error"
+    : level === undefined || level === "off"
+      ? "muted"
+      : "teal";
+}
 
 function colorMode(): { readonly enabled: boolean; readonly trueColor: boolean } {
   const env = process.env;
@@ -47,8 +112,10 @@ export function visualText(
   const safe = plainText(text);
   const mode = colorMode();
   if (!mode.enabled) return safe;
-  const fg = sequence(FOREGROUND[tone], false, mode.trueColor);
-  const bg = background === undefined ? "" : sequence(BACKGROUND[background], true, mode.trueColor);
+  const palette = PALETTES[activePalette];
+  const fg = sequence(palette.foreground[tone], false, mode.trueColor);
+  const bg =
+    background === undefined ? "" : sequence(palette.background[background], true, mode.trueColor);
   return `${bg}${fg}${safe}${RESET}`;
 }
 
@@ -56,7 +123,7 @@ export function paddedCell(
   text: string,
   width: number,
   tone: DashboardTone = "text",
-  background: "base" | "panel" | "selected" = "base",
+  background: BackgroundTone = "base",
 ): string {
   if (width <= 0) return "";
   const safe = plainText(text);
