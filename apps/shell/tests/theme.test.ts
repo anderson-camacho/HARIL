@@ -47,16 +47,17 @@ const VALID = {
 };
 
 describe("resolveTheme", () => {
-  it("loads the default native theme, haril-crimson, when nothing is configured (LD-T6b-1)", () => {
-    expect(DEFAULT_THEME_NAME).toBe("haril-crimson");
+  it("loads the default native Matrix theme when nothing is configured", () => {
+    expect(DEFAULT_THEME_NAME).toBe("haril-matrix");
     const { theme, warning } = resolveTheme({ name: DEFAULT_THEME_NAME, runtimeRoot: root });
-    expect(theme.name).toBe("haril-crimson");
+    expect(theme.name).toBe("haril-matrix");
     expect(theme.source).toBe("native");
     expect(warning).toBeUndefined();
   });
 
-  it("embeds four themes, each with every shell token in a color of its own (LD-T6b-1)", () => {
+  it("embeds five themes, each with every shell token in a color of its own", () => {
     expect(NATIVE_THEME_NAMES).toEqual([
+      "haril-matrix",
       "haril-dark",
       "haril-light",
       "haril-crimson",
@@ -121,7 +122,7 @@ describe("resolveTheme", () => {
   it("falls back to the default with a warning when the user file is not valid JSON", () => {
     writeFileSync(join(themesDir, "broken.json"), "{ not json", "utf8");
     const { theme, warning } = resolveTheme({ name: "broken", runtimeRoot: root });
-    expect(theme.name).toBe("haril-crimson");
+    expect(theme.name).toBe("haril-matrix");
     expect(warning).toMatch(/broken\.json/);
   });
 
@@ -131,19 +132,19 @@ describe("resolveTheme", () => {
       colors: { accent: "#010101", text: "#020202", muted: "#030303" },
     });
     const { theme, warning } = resolveTheme({ name: "partial", runtimeRoot: root });
-    expect(theme.name).toBe("haril-crimson");
+    expect(theme.name).toBe("haril-matrix");
     expect(warning).toMatch(/warning/);
   });
 
   it("falls back with a warning when the theme name is unknown", () => {
     const { theme, warning } = resolveTheme({ name: "does-not-exist", runtimeRoot: root });
-    expect(theme.name).toBe("haril-crimson");
+    expect(theme.name).toBe("haril-matrix");
     expect(warning).toMatch(/does-not-exist/);
   });
 
   it("rejects a theme name that would leave the themes directory", () => {
     const { theme, warning } = resolveTheme({ name: "../haril", runtimeRoot: root });
-    expect(theme.name).toBe("haril-crimson");
+    expect(theme.name).toBe("haril-matrix");
     expect(warning).toMatch(/\.\./);
   });
 
@@ -158,7 +159,7 @@ describe("resolveTheme", () => {
       },
     });
     const { theme, warning } = resolveTheme({ name: "oklch", runtimeRoot: root });
-    expect(theme.name).toBe("haril-crimson");
+    expect(theme.name).toBe("haril-matrix");
     expect(warning).toMatch(/accent.*hex|accent.*supported/);
   });
 
@@ -182,7 +183,7 @@ describe("resolveTheme", () => {
       colors: { accent: "a", text: "#ffffff", muted: "#808080", warning: "#ffff00" },
     });
     const { theme, warning } = resolveTheme({ name: "cycle", runtimeRoot: root });
-    expect(theme.name).toBe("haril-crimson");
+    expect(theme.name).toBe("haril-matrix");
     expect(warning).toMatch(/cycle|reference/);
   });
 });
