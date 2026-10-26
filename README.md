@@ -745,11 +745,19 @@ HARIL monta esas columnas solo si el Pi incluido ofrece el contrato interno de d
 
 #### Arranque Matrix, paletas y ojo IA (0.23.0)
 
-Al iniciar `haril` en una terminal interactiva se presenta una animación Matrix rápida, de tamaño constante, y la leyenda **SISTEMA CARGADO · HARIL** antes de entrar en Pi. Usa un efecto integrado sin dependencias ni descargas; si tienes instalado [`terminaltexteffects`](https://github.com/ChrisBuilds/terminaltexteffects) puedes optar por el efecto original `tte matrix` con un tiempo máximo de 900 ms. Si el comando `tte` no está en PATH, HARIL vuelve al efecto integrado. Nada de esto se ejecuta en CI, en una salida no interactiva o si está desactivado.
+Desde **0.23.1**, al iniciar `haril` se ve lluvia Matrix en **toda la terminal** y luego el título grande **SISTEMA CARGADO · HARIL** durante **3 segundos**, antes de abrir Pi. HARIL prioriza automáticamente el efecto **real** `tte matrix` de [`terminaltexteffects`](https://github.com/ChrisBuilds/terminaltexteffects), con canvas que ocupa la ventana y un límite de ejecución de 2,5 segundos. Si falta `tte`, utiliza una alternativa integrada con katakana de medio ancho, tonos verdes y el mismo título grande. Nada se descarga automáticamente.
 
 ```powershell
-# Efecto original de TTE (opcional: requiere tener tte instalado)
+# Para obtener el efecto original de ChrisBuilds, instala TTE una sola vez con uv:
+uv tool install terminaltexteffects
+tte --version
+# Alternativa: pipx install terminaltexteffects
+
+# Por defecto HARIL detecta tte y lo utiliza; también puedes forzarlo:
 $env:HARIL_STARTUP_MATRIX_ENGINE = 'tte'
+
+# O utilizar explícitamente la alternativa integrada, sin TTE:
+$env:HARIL_STARTUP_MATRIX_ENGINE = 'built-in'
 
 # Sonido: proporciona un WAV local tuyo. Sin archivo, HARIL emite la campana del terminal.
 $env:HARIL_STARTUP_SOUND_FILE = 'D:\sonidos\inicio-haril.wav'
@@ -757,7 +765,7 @@ $env:HARIL_STARTUP_SOUND_FILE = 'D:\sonidos\inicio-haril.wav'
 # Omitir por completo animación y sonido cuando necesites un inicio limpio.
 $env:HARIL_STARTUP_ANIMATION = 'off'
 
-# Recuperar la animación integrada:
+# Recuperar la detección automática:
 Remove-Item Env:\HARIL_STARTUP_ANIMATION
 Remove-Item Env:\HARIL_STARTUP_MATRIX_ENGINE
 ```
@@ -985,7 +993,7 @@ Los dossiers de `docs/research/` se leen solo bajo demanda, cuando un documento 
 
 ## Versiones
 
-Versión actual: **0.23.0**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
+Versión actual: **0.23.1**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
 
 ## Licencia
 
