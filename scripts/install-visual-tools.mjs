@@ -179,7 +179,7 @@ export function toolVersionMatches(output, version) {
   return pattern.test(output);
 }
 
-export async function probeToolVersion(binary, version, env = process.env) {
+async function probeToolVersion(binary, version, env = process.env) {
   return new Promise((done) => {
     let output = "";
     let finished = false;
