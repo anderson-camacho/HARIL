@@ -118,6 +118,7 @@ export function renderLeftDock(
   rows.push(line(" /haril-explore", "teal"));
   rows.push(line(" /haril-plugin", "teal"));
   rows.push(line(" /haril-plugins", "teal"));
+  rows.push(line(" /haril-extensions", "teal"));
   rows.push(line(" /haril-dock", "teal"));
   rows.push(line(" Alt+L  Plugins", "muted"));
   rows.push(line(" Alt+C  Comandos", "muted"));

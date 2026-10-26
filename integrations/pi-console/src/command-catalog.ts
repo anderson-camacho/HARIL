@@ -9,6 +9,7 @@ const CONSOLE_COMMANDS: readonly CommandDescription[] = [
   { name: "language", description: "Idioma de la interfaz" },
   { name: "haril-plugin", description: "Abrir o cambiar el espacio del dock izquierdo" },
   { name: "haril-plugins", description: "Mostrar, ocultar y ordenar espacios del dock" },
+  { name: "haril-extensions", description: "Gestionar paquetes Pi declarados en HARIL" },
   { name: "haril-dock", description: "Mostrar u ocultar columnas" },
   { name: "haril-focus", description: "Abrir detalles de la sección actual" },
   { name: "haril-commands", description: "Consultar los comandos registrados ahora" },
