@@ -93,10 +93,11 @@ describe("plugin views backed by read-only sources", () => {
     expect(themes.lines).toContain("Pi: /settings → Theme");
     expect(themes.status).toContain("rose");
     expect(themes.actions).toEqual([
-      { line: 1, action: "violet" },
-      { line: 2, action: "rose" },
-      { line: 3, action: "amber" },
-      { line: 4, action: "obsidian" },
+      { line: 1, action: "matrix" },
+      { line: 2, action: "violet" },
+      { line: 3, action: "rose" },
+      { line: 4, action: "amber" },
+      { line: 5, action: "obsidian" },
     ]);
   });
 });
