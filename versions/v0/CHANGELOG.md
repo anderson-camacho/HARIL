@@ -4,6 +4,27 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.23.4
+
+- **Fecha:** 2026-10-26
+- **Estado:** transición Matrix continua y tema visual negro/verde en toda la interfaz.
+
+### Añadido
+
+- Paleta `haril-matrix` para la consola Pi completa, el dock y el shell independiente. El tema Pi se prepara y repara en el directorio privado del agente sin alterar otras preferencias.
+- Efecto de resolución integrado de 14 fotogramas: los símbolos Matrix se apagan gradualmente mientras el logo grande queda fijo en sus posiciones.
+
+### Cambiado
+
+- TTE recibe el logo a gran escala como texto de destino y finaliza en ese mismo logo; no se borra la pantalla para dibujar otra después. Conserva HARIL durante tres segundos.
+- La configuración y el selector de temas ofrecen `matrix` por defecto y conservan las paletas anteriores como alternativas.
+
+### Corregido
+
+- Prueba de actualización sensible a rutas y ejecutables de Windows (`uv.exe` y `tte.exe`) que impedía pasar el CI.
+
+---
+
 ## 0.23.3
 
 - **Fecha:** 2026-10-26
