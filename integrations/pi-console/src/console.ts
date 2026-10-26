@@ -1230,7 +1230,10 @@ export default function harilConsole(pi: ConsolePi): void {
 
   async function changeTheme(current: Session, requested: string): Promise<void> {
     if (!HARIL_PALETTES.some((item) => item === requested)) {
-      current.ctx.ui.notify("Paleta desconocida. Usa matrix, violet, rose, amber u obsidian.", "warning");
+      current.ctx.ui.notify(
+        "Paleta desconocida. Usa matrix, violet, rose, amber u obsidian.",
+        "warning",
+      );
       return;
     }
     if (!cliAvailable()) {
