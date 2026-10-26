@@ -201,7 +201,7 @@ test("present-but-broken Matrix after installation is not treated as success", a
   await assert.rejects(
     installVisualTools("/haril/runtime", {
       platform: "linux",
-    env: {},
+      env: {},
       exists: (path) => path === paths.uv || path === paths.tte,
       probe: async (path) => path === paths.uv,
       execute: async () => undefined,
