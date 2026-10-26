@@ -722,7 +722,20 @@ haril extensions disable "git:github.com/CinloDev/pi-youtube-player" --yes
 haril extensions enable "git:github.com/CinloDev/pi-youtube-player" --yes
 ```
 
-**Importante:** estos comandos solo modifican los paquetes declarados en `agent/settings.json` dentro de la raíz del runtime HARIL (normalmente `%LOCALAPPDATA%\HARIL\agent` en Windows), sin tocar `~/.pi`, Gentle Shell ni los paquetes locales del proyecto. «Habilitado» significa *seleccionado para que Pi lo cargue en el próximo arranque*, no confirma que se haya instalado, que haya arrancado sin error ni que esté activo ahora mismo. Un paquete con filtros particulares se administra con `pi config` para no perder esa configuración. La instalación y las actualizaciones de paquetes con revisión de código fuente quedan para otro PR; el dock de HARIL continúa gestionando **su propia visibilidad y orden** por separado.
+**Importante:** estos comandos solo modifican los paquetes declarados en `agent/settings.json` dentro de la raíz del runtime HARIL (normalmente `%LOCALAPPDATA%\HARIL\agent` en Windows), sin tocar `~/.pi`, Gentle Shell ni los paquetes locales del proyecto. «Habilitado» significa *seleccionado para que Pi lo cargue en el próximo arranque*, no confirma que se haya instalado, que haya arrancado sin error ni que esté activo ahora mismo. Un paquete con filtros particulares se administra con `pi config` para no perder esa configuración; el dock de HARIL continúa gestionando **su propia visibilidad y orden** por separado.
+
+#### Instalar y quitar paquetes Pi desde HARIL (0.22.8)
+
+Desde `/haril-extensions`, selecciona **+ Instalar paquete Pi**, escribe el origen y revisa la confirmación. Puedes desinstalar un paquete declarado entrando en su ficha y eligiendo **Desinstalar paquete**. También es posible desde PowerShell:
+
+```powershell
+haril extensions install "git:github.com/CinloDev/pi-youtube-player" --yes
+haril extensions install "git:github.com/CinloDev/pi-cinlodev-cute" --yes
+haril extensions list --json
+haril extensions remove "git:github.com/CinloDev/pi-youtube-player" --yes
+```
+
+Los orígenes anteriores son ejemplos, **no recomendaciones de seguridad ni garantías de compatibilidad**: revisa sus dependencias, permisos y código antes de ejecutar un `install`. `--yes` es obligatorio y no se acepta instalar desde rutas locales, argumentos extra ni servidores Git arbitrarios en esta primera etapa. HARIL ejecuta `pi install|remove` mediante el Node y Pi registrados en **su propio runtime** con `PI_CODING_AGENT_DIR` apuntando al agente privado, sin usar el Pi de Gentle Shell ni el instalado globalmente. Reinicia HARIL tras los cambios. No se realiza instalación automática al abrir el dock; instalar una extensión no crea una ficha visual nueva. La actualización de paquetes, la auditoría de compatibilidad y los controles de integridad quedan pendientes.
 
 ### M4: interfaz de terminal (`haril shell`)
 
@@ -943,7 +956,7 @@ Los dossiers de `docs/research/` se leen solo bajo demanda, cuando un documento 
 
 ## Versiones
 
-Versión actual: **0.22.7**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
+Versión actual: **0.22.8**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
 
 ## Licencia
 

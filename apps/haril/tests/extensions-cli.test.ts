@@ -3,6 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type HostInfo, run } from "../src/cli.js";
+import {
+  extensions,
+  type PiPackageProcess,
+  validPiPackageSource,
+} from "../src/commands/extensions.js";
 import { harness, parseJson } from "./helpers.js";
 
 let root: string;
@@ -31,6 +36,21 @@ function setSettings(text: string): void {
   writeFileSync(privateSettings, text);
 }
 
+function fakeRuntime(): void {
+  const dir = join(root, "runtime", "runtime");
+  mkdirSync(dir, { recursive: true });
+  const cli = join(dir, "pi-cli.mjs");
+  writeFileSync(cli, "// no network or package code is executed in tests\n");
+  writeFileSync(
+    join(dir, "manifest.json"),
+    JSON.stringify({
+      schemaVersion: 1,
+      node: { version: process.version, path: process.execPath },
+      pi: { version: "test", cliPath: cli },
+    }),
+  );
+}
+
 async function cli(...args: string[]) {
   const h = harness();
   const code = await run(["extensions", ...args], h.io, host());
@@ -38,6 +58,83 @@ async function cli(...args: string[]) {
 }
 
 describe("HARIL's private Pi package extension configuration", () => {
+  it("accepts only strict npm/GitHub package sources", () => {
+    expect(validPiPackageSource("npm:@scope/hello@1.0.0")).toBe(true);
+    expect(validPiPackageSource("git:github.com/CinloDev/pi-cinlodev-cute")).toBe(true);
+    for (const source of [
+      "https://malware.example/test",
+      "./local-script",
+      "git:evil.example/payload",
+      "git:github.com/owner/repo --local",
+      "--local",
+      "npm:some-package;whoami",
+    ]) {
+      expect(validPiPackageSource(source)).toBe(false);
+    }
+  });
+
+  it("delegates explicitly confirmed installs to HARIL's own Pi runtime and private agent", async () => {
+    fakeRuntime();
+    const seen: PiPackageProcess[] = [];
+    const h = harness();
+    const source = "git:github.com/CinloDev/pi-youtube-player";
+    const command = (args: string[]) =>
+      extensions(args, h.io, host(), async (input) => {
+        seen.push(input);
+        return { code: 0, stdout: "Installed", stderr: "" };
+      });
+    expect(await command(["install", source])).toBe(2);
+    expect(await command(["install", "./evil", "--yes"])).toBe(2);
+    expect(seen).toHaveLength(0);
+    expect(await command(["install", source, "--yes", "--json"])).toBe(0);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({
+      cwd: join(root, "runtime"),
+      args: ["install", source],
+      env: { PI_CODING_AGENT_DIR: join(root, "runtime", "agent") },
+    });
+    expect(seen[0]?.node).toBe(process.execPath);
+    expect(JSON.parse(h.out.at(-1) ?? "{}")).toMatchObject({
+      operation: "install",
+      source,
+      completed: true,
+    });
+    expect(existsSync(join(root, ".pi", "settings.json"))).toBe(false);
+  });
+
+  it("allows removal only of one exactly configured source and rejects failed commands", async () => {
+    fakeRuntime();
+    const source = "npm:@scope/installed";
+    setSettings(JSON.stringify({ theme: "dark", packages: [source] }));
+    const before = readFileSync(privateSettings, "utf8");
+    const h = harness();
+    let called = 0;
+    const runRemove = (args: string[]) =>
+      extensions(args, h.io, host(), async () => {
+        called += 1;
+        return { code: 1, stderr: "offline", stdout: "" };
+      });
+    expect(await runRemove(["remove", source])).toBe(2);
+    expect(await runRemove(["remove", "npm:unlisted", "--yes"])).toBe(2);
+    expect(await runRemove(["install", source, "--yes"])).toBe(2);
+    expect(called).toBe(0);
+    expect(await runRemove(["remove", source, "--yes"])).toBe(2);
+    expect(called).toBe(1);
+    expect(h.err.join("\n")).toContain("offline");
+    expect(readFileSync(privateSettings, "utf8")).toBe(before);
+  });
+
+  it("refuses package installation when the bundled Pi runtime is absent", async () => {
+    const h = harness();
+    let called = 0;
+    const code = await extensions(["install", "npm:good", "--yes"], h.io, host(), async () => {
+      called += 1;
+      return { code: 0, stdout: "", stderr: "" };
+    });
+    expect(code).toBe(2);
+    expect(called).toBe(0);
+    expect(h.err.join("\n")).toContain("runtime unavailable");
+  });
   it("reports no configured packages without creating settings or claiming installation", async () => {
     const result = await cli("list", "--json");
     expect(result.code).toBe(0);

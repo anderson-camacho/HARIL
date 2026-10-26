@@ -69,6 +69,8 @@ const HELP_LINES = [
   "  haril plugins list|show|hide|move|reset   save plugin dock visibility and order (Pi extensions unchanged)",
   "  haril extensions list [--json]    list Pi packages declared in HARIL's own agent settings",
   "  haril extensions enable|disable <exact-source> --yes   change whether a Pi package loads extensions on restart",
+  "  haril extensions install <npm:package|git:github.com/owner/repo> --yes   install into HARIL's private Pi",
+  "  haril extensions remove <exact-source> --yes   remove a declared package from HARIL's private Pi",
   "  haril quota [--json] [--provider <id>]   5-hour and weekly quota of each account (CLIProxyAPI management API,",
   "    key in CLIPROXYAPI_MANAGEMENT_KEY or delegation.quota.managementKeyEnv) and the model cooldowns; sin dato if unknown",
   "  haril difficulty show [--json]   the difficulty table: per class its recommended models and cost levels, and the",

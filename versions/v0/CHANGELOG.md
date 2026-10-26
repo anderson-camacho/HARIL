@@ -4,6 +4,30 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.22.8
+
+- **Fecha:** 2026-10-26
+- **Estado:** primer instalador y desinstalador de extensiones Pi desde el perfil aislado de HARIL.
+
+### Añadido
+
+- `haril extensions install|remove <source> --yes` ejecuta la operación con el runtime Pi interno de HARIL y `PI_CODING_AGENT_DIR` aislado.
+- `/haril-extensions` permite instalar desde npm o GitHub y desinstalar un paquete declarado tras confirmación y advertencia de ejecución de código de terceros.
+
+### Cambiado
+
+- El gestor ofrece «Instalar» incluso sin paquetes configurados; el dock visual continúa siendo independiente de las extensiones Pi.
+
+### Corregido
+
+- Se rechazan orígenes arbitrarios, rutas locales, opciones inesperadas, duplicados y desinstalaciones ambiguas; ni Gentle Shell ni la configuración Pi global son modificados por estos comandos.
+
+### Verificación
+
+- Pruebas herméticas con Pi simulado del argumento, runtime y directorio agente; validación estática, tests Pi y compilación sin descargar paquetes externos.
+
+---
+
 ## 0.22.7
 
 - **Fecha:** 2026-10-26

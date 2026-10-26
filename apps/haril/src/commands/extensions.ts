@@ -1,7 +1,9 @@
+import { execFile } from "node:child_process";
+import { mkdirSync } from "node:fs";
 import { posix, win32 } from "node:path";
 import { argsProblem, parseArgs } from "../args.js";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
-import { runtimeRootFor } from "../runtime.js";
+import { readRuntime, runtimeRootFor } from "../runtime.js";
 import { readConfigDocument, serializeConfig, writeConfigAtomically } from "./config-file.js";
 
 // Pi is launched with PI_CODING_AGENT_DIR=<HARIL runtime>/agent. Manage ONLY that private
@@ -10,9 +12,65 @@ import { readConfigDocument, serializeConfig, writeConfigAtomically } from "./co
 const USAGE = [
   "usage: haril extensions list [--json]",
   "       haril extensions enable|disable <exact-package-source> --yes [--json]",
+  "       haril extensions install <npm:package|git:github.com/owner/repo> --yes [--json]",
+  "       haril extensions remove <exact-package-source> --yes [--json]",
   "Only HARIL's private Pi package declarations are changed; restart haril to reload.",
-  "For installing or reviewing packages and local project overrides, use Pi's official package tools.",
+  "Installation runs third-party package code using HARIL's private Pi runtime; review its source before --yes.",
 ].join("\n");
+
+const PACKAGE_TIMEOUT_MS = 120_000;
+const MAX_PACKAGE_OUTPUT = 2 * 1024 * 1024;
+
+export interface PiPackageProcess {
+  readonly node: string;
+  readonly cli: string;
+  readonly args: readonly string[];
+  readonly cwd: string;
+  readonly env: NodeJS.ProcessEnv;
+}
+
+interface PiPackageProcessResult {
+  readonly code: number;
+  readonly stdout: string;
+  readonly stderr: string;
+}
+
+export type PiPackageRunner = (process: PiPackageProcess) => Promise<PiPackageProcessResult>;
+
+// Never shell out through cmd.exe/PowerShell or run the user's independent `pi` from PATH.
+const runBundledPi: PiPackageRunner = (input) =>
+  new Promise((resolve) => {
+    execFile(
+      input.node,
+      [input.cli, ...input.args],
+      {
+        cwd: input.cwd,
+        env: input.env,
+        windowsHide: true,
+        timeout: PACKAGE_TIMEOUT_MS,
+        maxBuffer: MAX_PACKAGE_OUTPUT,
+        encoding: "utf8",
+      },
+      (error, stdout, stderr) => {
+        resolve({
+          code: error === null ? 0 : typeof error.code === "number" ? error.code : 1,
+          stdout,
+          stderr: stderr || (error === null ? "" : error.message),
+        });
+      },
+    );
+  });
+
+// This first installation surface intentionally accepts only published npm packages and
+// GitHub-hosted git packages, never local paths, URL schemes, flags, or shell metacharacters.
+export function validPiPackageSource(source: string): boolean {
+  return (
+    /^npm:(?:@[a-z\d][a-z\d._-]*\/)?[a-z\d][a-z\d._-]*(?:@[a-z\d][a-z\d._+-]*)?$/i.test(source) ||
+    /^git:github\.com\/[a-z\d][a-z\d._-]*\/[a-z\d][a-z\d._-]*(?:@[a-z\d][a-z\d._/-]*)?$/i.test(
+      source,
+    )
+  );
+}
 
 type PackageExtensionState = "enabled" | "disabled" | "filtered";
 
@@ -80,7 +138,12 @@ function output(
   io.out("enable/disable requiere --yes y reiniciar HARIL. Para instalar usa Pi (pi install).");
 }
 
-export function extensions(args: readonly string[], io: CliIo, host: HostInfo): number {
+export function extensions(
+  args: readonly string[],
+  io: CliIo,
+  host: HostInfo,
+  runner: PiPackageRunner = runBundledPi,
+): number | Promise<number> {
   const parsed = parseArgs(args, { values: [], flags: ["--yes", "--json"] });
   const problem = argsProblem(parsed, io);
   if (problem !== null) return problem;
@@ -90,7 +153,7 @@ export function extensions(args: readonly string[], io: CliIo, host: HostInfo): 
     extra.length > 0 ||
     (verb === "list"
       ? source !== undefined
-      : !["enable", "disable"].includes(verb) || source === undefined)
+      : !["enable", "disable", "install", "remove"].includes(verb) || source === undefined)
   ) {
     return failure(io, USAGE);
   }
@@ -110,6 +173,80 @@ export function extensions(args: readonly string[], io: CliIo, host: HostInfo): 
   if (verb === "list") {
     output(io, settingsPath, declarations, json);
     return EXIT_OK;
+  }
+  if (verb === "install" || verb === "remove") {
+    if (source === undefined || !validPiPackageSource(source)) {
+      return failure(io, "package source must be npm:<package> or git:github.com/<owner>/<repo>");
+    }
+    if (verb === "install" && declarations.some((entry) => entry.source === source)) {
+      return failure(io, `${source}: already declared; use enable/disable or Pi's update command`);
+    }
+    if (verb === "remove" && declarations.filter((entry) => entry.source === source).length !== 1) {
+      return failure(io, `${source}: package must be declared exactly once before removal`);
+    }
+    if (!parsed.flags.has("--yes")) {
+      return failure(
+        io,
+        verb === "install"
+          ? `review the untrusted source ${source}, then explicitly pass --yes to install it`
+          : `pass --yes to remove the HARIL-private Pi package ${source}`,
+      );
+    }
+
+    const runtime = readRuntime(root, host.platform);
+    if (runtime.status !== "ok" || !runtime.node || !runtime.pi) {
+      return failure(io, `HARIL Pi runtime unavailable: ${runtime.detail}`);
+    }
+    const agentDir = ops.join(root, "agent");
+    try {
+      mkdirSync(agentDir, { recursive: true });
+    } catch (error) {
+      return failure(io, `could not prepare HARIL's private Pi agent: ${String(error)}`);
+    }
+    const run: PiPackageProcess = {
+      node: runtime.node.path,
+      cli: runtime.pi.cliPath,
+      args: [verb, source],
+      // Launching from the runtime root keeps project-local .pi declarations outside the operation.
+      cwd: root,
+      env: {
+        ...process.env,
+        ...host.env,
+        PI_CODING_AGENT_DIR: agentDir,
+      },
+    };
+    return runner(run)
+      .then((result) => {
+        if (result.code !== 0) {
+          return failure(
+            io,
+            `Pi ${verb} failed: ${(result.stderr || result.stdout).trim() || `exit ${result.code}`}`,
+          );
+        }
+        if (json) {
+          io.out(
+            JSON.stringify({
+              scope: "haril-private-pi-agent",
+              operation: verb,
+              source,
+              completed: true,
+              reloadRequired: true,
+            }),
+          );
+        } else {
+          io.out(`HARIL · Pi ${verb} completado: ${source}`);
+          io.out(
+            "Reinicia HARIL para cargar los recursos del paquete; la columna de plugins se gestiona por separado.",
+          );
+        }
+        return EXIT_OK;
+      })
+      .catch((error: unknown) =>
+        failure(
+          io,
+          `could not start HARIL's Pi package command: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
   }
   const matching = declarations
     .map((item, index) => ({ item, index }))

@@ -872,22 +872,55 @@ export default function harilConsole(pi: ConsolePi): void {
       ctx.ui.notify("HARIL recibió una lista de extensiones no válida", "error");
       return;
     }
-    if (entries.length === 0) {
+    const installChoice = "+ Instalar paquete Pi (npm/GitHub)";
+    const choices = [
+      installChoice,
+      ...entries.map(
+        (entry, index) =>
+          `${index + 1}. ${plainText(entry.source)} · ${entry.extensions === "enabled" ? "habilitada" : entry.extensions === "disabled" ? "deshabilitada" : "filtrada"}`,
+      ),
+    ];
+    const selected = await ctx.ui.select("Paquetes declarados en el Pi privado de HARIL", choices);
+    if (!selected || session !== current || current.closed) return;
+    if (selected === installChoice) {
+      const source = (
+        await ctx.ui.input(
+          "Origen Pi (npm:paquete o git:github.com/usuario/repositorio)",
+          "git:github.com/CinloDev/pi-youtube-player",
+        )
+      )?.trim();
+      if (!source || session !== current || current.closed) return;
+      if (
+        !(await ctx.ui.confirm(
+          "Instalar código de terceros",
+          `Pi descargará e instalará ${plainText(source)} en el agente privado de HARIL. Sus extensiones pueden ejecutar código con los permisos de tu usuario. ¿Has revisado el repositorio y quieres continuar?`,
+        ))
+      ) {
+        return;
+      }
+      if (session !== current || current.closed) return;
+      ctx.ui.notify("Instalando paquete Pi; puede tardar hasta dos minutos…", "info");
+      const installed = await runHaril(["extensions", "install", source, "--yes"], {
+        cwd: current.cwd,
+        timeoutMs: 130_000,
+      });
+      if (session !== current || current.closed) return;
       ctx.ui.notify(
-        "No hay paquetes Pi declarados en HARIL. Para instalar, usa la CLI Pi del runtime; el dock visual es independiente.",
-        "info",
+        installed.ok
+          ? "Paquete instalado en el Pi privado de HARIL. Reinicia HARIL para cargarlo."
+          : installed.stderr || "Pi no pudo instalar el paquete",
+        installed.ok ? "info" : "error",
       );
       return;
     }
-    const choices = entries.map(
-      (entry, index) =>
-        `${index + 1}. ${plainText(entry.source)} · ${entry.extensions === "enabled" ? "habilitada" : entry.extensions === "disabled" ? "deshabilitada" : "filtrada"}`,
-    );
-    const selected = await ctx.ui.select("Paquetes declarados en el Pi privado de HARIL", choices);
-    if (!selected || session !== current || current.closed) return;
-    const chosen = entries[choices.indexOf(selected)];
+    const chosen = entries[choices.indexOf(selected) - 1];
     if (!chosen) return;
-    const actions = ["Ver información", "Habilitar extensiones", "Deshabilitar extensiones"];
+    const actions = [
+      "Ver información",
+      "Habilitar extensiones",
+      "Deshabilitar extensiones",
+      "Desinstalar paquete",
+    ];
     const action = await ctx.ui.select(plainText(chosen.source), actions);
     if (!action || session !== current || current.closed) return;
     if (action === "Ver información") {
@@ -897,6 +930,29 @@ export default function harilConsole(pi: ConsolePi): void {
         "La visibilidad del dock se administra por separado con /haril-plugins.",
         "Los cambios requieren reiniciar HARIL para que Pi los cargue.",
       ]);
+      return;
+    }
+    if (action === "Desinstalar paquete") {
+      if (
+        !(await ctx.ui.confirm(
+          "Eliminar paquete Pi",
+          `¿Eliminar ${plainText(chosen.source)} del agente privado de HARIL? Esta operación quita su paquete y recursos; reinicia HARIL después.`,
+        ))
+      ) {
+        return;
+      }
+      if (session !== current || current.closed) return;
+      const removed = await runHaril(["extensions", "remove", chosen.source, "--yes"], {
+        cwd: current.cwd,
+        timeoutMs: 130_000,
+      });
+      if (session !== current || current.closed) return;
+      ctx.ui.notify(
+        removed.ok
+          ? "Paquete retirado. Reinicia HARIL para aplicar los cambios."
+          : removed.stderr || "Pi no pudo retirar el paquete",
+        removed.ok ? "info" : "error",
+      );
       return;
     }
     if (chosen.extensions === "filtered") {
