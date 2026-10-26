@@ -1,30 +1,41 @@
 import { describe, expect, it } from "vitest";
-import { matrixFrame, playHarilStartup, startupSettings } from "../src/commands/startup-visual.js";
+import {
+  matrixFrame,
+  playHarilStartup,
+  startupSettings,
+  TTE_MATRIX_ARGS,
+} from "../src/commands/startup-visual.js";
 
-describe("optional fast Matrix startup", () => {
-  it("draws stable frames at a fixed position with no changing row length", () => {
-    for (let n = 0; n < 6; n++) {
-      const frame = matrixFrame(n, 42);
-      expect(frame).toHaveLength(9);
-      expect(frame.every((row) => Array.from(row).length === 42)).toBe(true);
+describe("full-terminal Matrix startup", () => {
+  it("uses full-width, half-width katakana rain with stable row dimensions", () => {
+    for (let n = 0; n < 16; n++) {
+      const frame = matrixFrame(n, 95, 27);
+      expect(frame).toHaveLength(27);
+      expect(frame.every((row) => Array.from(row).length === 95)).toBe(true);
     }
+    expect(matrixFrame(4, 95, 27).join("")).toMatch(/[ｱ-ﾝ]/u);
   });
 
-  it("provides a quick integrated default and an opt-in external TTE engine", () => {
-    expect(startupSettings({})).toEqual({ enabled: true, engine: "built-in" });
+  it("selects the real TerminalTextEffects Matrix when available", () => {
+    expect(startupSettings({})).toEqual({ enabled: true, engine: "auto" });
     expect(startupSettings({ HARIL_STARTUP_MATRIX_ENGINE: "tte" }).engine).toBe("tte");
+    expect(startupSettings({ HARIL_STARTUP_MATRIX_ENGINE: "built-in" }).engine).toBe("built-in");
+    expect(TTE_MATRIX_ARGS).toContain("matrix");
+    expect(TTE_MATRIX_ARGS).toContain("--rain-time");
+    expect(TTE_MATRIX_ARGS.slice(0, 4)).toEqual(["--canvas-width", "0", "--canvas-height", "0"]);
     expect(startupSettings({ HARIL_STARTUP_ANIMATION: "off" }).enabled).toBe(false);
     expect(startupSettings({ CI: "true" }).enabled).toBe(false);
   });
 
-  it("shows the loaded banner and restores the cursor while allowing Pi to continue", async () => {
+  it("fills every terminal row and holds a large centered loaded banner for three seconds", async () => {
     const output: string[] = [];
     const delays: number[] = [];
     await playHarilStartup({
-      out: { columns: 78, write: (piece) => output.push(piece) },
+      out: { columns: 96, rows: 28, write: (piece) => output.push(piece) },
       env: {},
       cwd: ".",
       platform: "linux",
+      runExternalMatrix: async () => false,
       wait: async (ms) => {
         delays.push(ms);
       },
@@ -32,13 +43,34 @@ describe("optional fast Matrix startup", () => {
     const combined = output.join("");
     expect(combined).toContain("SISTEMA CARGADO");
     expect(combined).toContain("HARIL");
+    expect(combined).toContain("█");
+    expect(combined).toContain("\u001b[28;1H");
+    expect(combined).toContain("\u001b[?1049h");
+    expect(combined).toContain("\u001b[?1049l");
     expect(combined).toContain("\u001b[?25h");
-    expect(delays).toEqual([65, 65, 65, 65, 65, 65, 130]);
+    expect(delays).toEqual([...Array(16).fill(85), 3_000]);
+  });
+
+  it("uses TTE's own rain when present and still shows HARIL for three seconds", async () => {
+    const output: string[] = [];
+    const delays: number[] = [];
+    await playHarilStartup({
+      out: { columns: 98, rows: 30, write: (piece) => output.push(piece) },
+      env: {},
+      cwd: ".",
+      platform: "win32",
+      runExternalMatrix: async () => true,
+      wait: async (ms) => {
+        delays.push(ms);
+      },
+    });
+    expect(delays).toEqual([3_000]);
+    expect(output.join("")).toContain("SISTEMA CARGADO");
   });
 
   it("can be fully disabled or fall back safely on narrow terminals", async () => {
     const writes: string[] = [];
-    const out = { columns: 20, write: (piece: string) => writes.push(piece) };
+    const out = { columns: 20, rows: 8, write: (piece: string) => writes.push(piece) };
     await playHarilStartup({
       out,
       env: { HARIL_STARTUP_ANIMATION: "off" },
@@ -51,9 +83,10 @@ describe("optional fast Matrix startup", () => {
       env: {},
       cwd: ".",
       platform: "linux",
+      runExternalMatrix: async () => false,
       wait: async () => undefined,
     });
-    expect(writes.join("")).toContain("SISTEMA CARGADO");
-    expect(writes.join("")).not.toContain("\u001b[9A");
+    expect(writes.join("")).toContain("HARIL LISTO");
+    expect(writes.join("")).toContain("\u001b[8;1H");
   });
 });

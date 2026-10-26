@@ -2,7 +2,8 @@
 
 ## Estado actual
 
-- **Versión actual:** 0.23.0.
+- **Versión actual:** 0.23.1.
+- **Estado (0.23.1):** arranque Matrix a pantalla completa; prioriza el comando real `tte matrix` cuando TerminalTextEffects está instalado, con lluvia verde japonesa integrada como respaldo. Presenta el título grande «SISTEMA CARGADO · HARIL» durante tres segundos y después devuelve el terminal a Pi.
 - **Estado (0.23.0):** segundo PR visual sobre 0.22.9: arranque Matrix breve con fallback integrado o TTE opcional, aviso de sistema cargado, sonido WAV local configurable, paletas violeta/rosa/ámbar/obsidiana seleccionables desde el dock, ojo IA compacto, cabecera con ruta e idioma en los paneles.
 - **Estado (0.22.7):** `/haril-extensions` y `haril extensions list|enable|disable` gestionan las declaraciones de paquetes de Pi dentro del directorio aislado de HARIL, con confirmación, sin ejecutar ni instalar paquetes por sorpresa; el estado real cargado y la configuración de paquetes de proyecto siguen siendo responsabilidad de Pi.
 - **Estado (0.22.6):** los selectores de plugins y áreas aceptan flechas ↑/↓ en los protocolos ANSI, SS3 y Kitty de Windows Terminal/Pi, además de Enter/Esc. El visor de comandos desplaza su lista con esas mismas flechas; el selector corrige la ayuda obsoleta `Alt+Z` por `Alt+L`.
@@ -68,4 +69,4 @@ Las versiones 0.x son preliminares: pueden cambiar sin compatibilidad hacia atr�
 
 Más reciente primero. Cada carpeta contiene el archivo de cambios de su versión mayor, con las versiones menores y de parche, la más nueva arriba.
 
-- [v0](v0/CHANGELOG.md): versiones 0.1.0 a 0.23.0.
+- [v0](v0/CHANGELOG.md): versiones 0.1.0 a 0.23.1.

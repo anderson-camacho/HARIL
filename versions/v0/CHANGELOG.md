@@ -4,6 +4,31 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.23.1
+
+- **Fecha:** 2026-10-26
+- **Estado:** corrección de la presentación Matrix: efecto original de TTE preferido, pantalla completa y anuncio grande durante tres segundos.
+
+### Añadido
+
+- Integración automática con `tte matrix` de ChrisBuilds/terminaltexteffects cuando `tte` existe en `PATH`; canvas a tamaño de la terminal y parámetros de lluvia rápida. No instala dependencias silenciosamente.
+- Tipografía de bloques centrada para «SISTEMA CARGADO» y «HARIL»; se mantiene visible durante 3000 ms antes de abrir Pi.
+
+### Cambiado
+
+- El efecto integrado de respaldo ocupa las filas y columnas de la ventana y utiliza caracteres katakana de medio ancho y tonos verdes, en vez de un rectángulo de 54×9.
+- `HARIL_STARTUP_MATRIX_ENGINE` ahora acepta `auto` (predeterminado), `tte` y `built-in`.
+
+### Corregido
+
+- Se restaura la pantalla y la visibilidad del cursor después de la animación, sin dejar cuadros pequeños en el historial de PowerShell ni invadir la interfaz de Pi.
+
+### Verificación
+
+- Pruebas del canvas completo, estabilidad de fotogramas, selección del motor original, fallback y permanencia exacta del anuncio; verificaciones de código y compilación.
+
+---
+
 ## 0.23.0
 
 - **Fecha:** 2026-10-26

@@ -2,21 +2,38 @@ import { spawn } from "node:child_process";
 import { statSync } from "node:fs";
 import { extname, isAbsolute, resolve } from "node:path";
 
-// Single-column glyphs prevent the multi-byte/wide-character drift seen in some Windows fonts.
-const MATRIX_GLYPHS = "010101abcdef0123456789";
-const MATRIX_WIDTH = 54;
-const MATRIX_HEIGHT = 9;
-const FRAMES = 6;
-const INTERVAL_MS = 65;
+// Half-width katakana retain one terminal cell on Windows Terminal, unlike full-width kana.
+// The mix of kana, digits and symbols follows the green rain seen in TTE's Matrix effect.
+const MATRIX_GLYPHS = "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ012345789+-*/:;";
+const FRAMES = 16;
+const INTERVAL_MS = 85;
+const LOADED_HOLD_MS = 3_000;
+
+const LARGE_FONT: Record<string, readonly string[]> = {
+  A: [" ### ", "#   #", "#####", "#   #", "#   #"],
+  C: [" ####", "#    ", "#    ", "#    ", " ####"],
+  D: ["#### ", "#   #", "#   #", "#   #", "#### "],
+  E: ["#####", "#    ", "#### ", "#    ", "#####"],
+  G: [" ####", "#    ", "# ###", "#   #", " ####"],
+  H: ["#   #", "#   #", "#####", "#   #", "#   #"],
+  I: ["#####", "  #  ", "  #  ", "  #  ", "#####"],
+  L: ["#    ", "#    ", "#    ", "#    ", "#####"],
+  M: ["#   #", "## ##", "# # #", "#   #", "#   #"],
+  O: [" ### ", "#   #", "#   #", "#   #", " ### "],
+  R: ["#### ", "#   #", "#### ", "#  # ", "#   #"],
+  S: [" ####", "#    ", " ### ", "    #", "#### "],
+  T: ["#####", "  #  ", "  #  ", "  #  ", "  #  "],
+};
 
 export interface StartupOutput {
   readonly columns?: number;
+  readonly rows?: number;
   write(text: string): void;
 }
 
 export interface StartupSettings {
   readonly enabled: boolean;
-  readonly engine: "built-in" | "tte";
+  readonly engine: "auto" | "built-in" | "tte";
   readonly soundFile?: string;
 }
 
@@ -25,21 +42,26 @@ export function startupSettings(
 ): StartupSettings {
   return {
     enabled: env.HARIL_STARTUP_ANIMATION !== "off" && env.CI !== "true",
-    engine: env.HARIL_STARTUP_MATRIX_ENGINE === "tte" ? "tte" : "built-in",
+    engine:
+      env.HARIL_STARTUP_MATRIX_ENGINE === "built-in"
+        ? "built-in"
+        : env.HARIL_STARTUP_MATRIX_ENGINE === "tte"
+          ? "tte"
+          : "auto",
     ...(env.HARIL_STARTUP_SOUND_FILE ? { soundFile: env.HARIL_STARTUP_SOUND_FILE } : {}),
   };
 }
 
-// Constant dimensions and positions: every frame occupies the same cell grid. No extra lines
-// are appended mid-animation, avoiding cursor drift and scrollback flicker.
-export function matrixFrame(index: number, width = MATRIX_WIDTH): readonly string[] {
+// Each frame covers the terminal's current grid, with constant row sizes and coordinates.
+export function matrixFrame(index: number, width = 80, height = 24): readonly string[] {
   const lines: string[] = [];
   const glyphs = Array.from(MATRIX_GLYPHS);
-  for (let y = 0; y < MATRIX_HEIGHT; y++) {
+  for (let y = 0; y < height; y++) {
     let row = "";
     for (let x = 0; x < width; x++) {
-      const column = (x * 17 + 19) % (MATRIX_HEIGHT + 3);
-      const lit = (y + index * 2 + column) % (MATRIX_HEIGHT + 3) < 4;
+      const column = (x * 17 + index * 2 + 19) % (height + 8);
+      const trail = 7 + ((x * 11) % 8);
+      const lit = x % 17 !== 0 && y <= column && column - y < trail;
       row += lit ? glyphs[(x * 13 + y * 7 + index * 11) % glyphs.length] : " ";
     }
     lines.push(row);
@@ -49,36 +71,109 @@ export function matrixFrame(index: number, width = MATRIX_WIDTH): readonly strin
 
 const delay = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
 
+function terminalSize(out: StartupOutput): { width: number; height: number } {
+  return {
+    // Keep the last cell empty: printing in the bottom-right cell scrolls some terminals.
+    width: Math.max(1, Math.floor(out.columns ?? 80) - 1),
+    height: Math.max(1, Math.floor(out.rows ?? 24)),
+  };
+}
+
 async function matrixBuiltIn(
   out: StartupOutput,
   wait: (ms: number) => Promise<void>,
 ): Promise<void> {
-  const width = Math.min(MATRIX_WIDTH, Math.max(0, (out.columns ?? 80) - 4));
-  if (width < 36) return;
-  out.write("\u001b[?25l\n".repeat(1));
-  out.write("\n".repeat(MATRIX_HEIGHT));
-  try {
-    for (let frame = 0; frame < FRAMES; frame++) {
-      out.write(`\u001b[${MATRIX_HEIGHT}A`);
-      for (const row of matrixFrame(frame, width)) {
-        out.write(`\r\u001b[2K\u001b[38;5;${frame % 2 ? 46 : 34}m${row}\u001b[0m\n`);
+  const { width, height } = terminalSize(out);
+  for (let frame = 0; frame < FRAMES; frame++) {
+    let screen = "";
+    for (const [rowIndex, row] of matrixFrame(frame, width, height).entries()) {
+      let colored = "";
+      let previousTone = "";
+      for (const [columnIndex, character] of Array.from(row).entries()) {
+        if (character !== " ") {
+          const head = (columnIndex * 17 + frame * 2 + 19) % (height + 8);
+          const distance = head - rowIndex;
+          const tone =
+            distance === 0
+              ? "\u001b[97m"
+              : distance < 3
+                ? "\u001b[92m"
+                : distance < 7
+                  ? "\u001b[32m"
+                  : "\u001b[38;5;22m";
+          if (tone !== previousTone) {
+            colored += tone;
+            previousTone = tone;
+          }
+        }
+        colored += character;
       }
-      await wait(INTERVAL_MS);
+      screen += `\u001b[${rowIndex + 1};1H${colored}`;
     }
-    out.write(`\u001b[${MATRIX_HEIGHT}A`);
-    for (let line = 0; line < MATRIX_HEIGHT; line++) out.write("\r\u001b[2K\n");
-    out.write(`\u001b[${MATRIX_HEIGHT}A`);
-  } finally {
-    out.write("\u001b[0m\u001b[?25h");
+    out.write(screen);
+    await wait(INTERVAL_MS);
   }
 }
 
-// Optional use of ChrisBuilds/terminaltexteffects. It is never downloaded or run unless the
-// user explicitly selects it, and cannot delay Pi startup for more than 900 ms.
+function largeText(word: string): readonly string[] {
+  return Array.from({ length: 5 }, (_, row) =>
+    Array.from(word)
+      .map((letter) => LARGE_FONT[letter]?.[row] ?? "     ")
+      .join(" ")
+      .replaceAll("#", "█"),
+  );
+}
+
+function loadedBanner(out: StartupOutput): void {
+  const { width, height } = terminalSize(out);
+  out.write("\u001b[0m\u001b[2J\u001b[H");
+  const sections = height >= 21 && width >= 43 ? ["SISTEMA", "CARGADO", "HARIL"] : ["HARIL"];
+  const bigHeight = sections.length * 5 + (sections.length - 1);
+  const top = Math.max(1, Math.floor((height - bigHeight - 2) / 2) + 1);
+  const fontFits = width >= 30 && height >= 9;
+  if (fontFits) {
+    for (const [sectionIndex, word] of sections.entries()) {
+      for (const [lineIndex, line] of largeText(word).entries()) {
+        const x = Math.max(1, Math.floor((width - line.length) / 2) + 1);
+        const y = top + sectionIndex * 6 + lineIndex;
+        out.write(`\u001b[${y};${x}H\u001b[1;92m${line}`);
+      }
+    }
+  }
+  const label = "SISTEMA CARGADO  ·  HARIL";
+  const caption = width >= label.length ? label : width >= 12 ? "HARIL LISTO" : "HARIL";
+  const x = Math.max(1, Math.floor((width - caption.length) / 2) + 1);
+  const labelY = fontFits ? Math.min(height, top + bigHeight + 1) : Math.ceil(height / 2);
+  out.write(`\u001b[${labelY};${x}H\u001b[1;32m${caption}\u001b[0m`);
+}
+
+// The actual Matrix implementation from ChrisBuilds/terminaltexteffects takes priority when
+// `tte` is installed. Full-terminal canvas dimensions are critical: TTE otherwise defaults
+// to the tiny bounds of its input text. Never download or install third-party code on boot.
+export const TTE_MATRIX_ARGS = [
+  "--canvas-width",
+  "0",
+  "--canvas-height",
+  "0",
+  "--anchor-canvas",
+  "c",
+  "matrix",
+  "--rain-time",
+  "1",
+  "--rain-column-delay-range",
+  "1-3",
+  "--rain-fall-delay-range",
+  "1-4",
+  "--resolve-delay",
+  "1",
+] as const;
+
+const TTE_MAX_MS = 2_500;
+
 async function matrixTte(): Promise<boolean> {
   return new Promise<boolean>((done) => {
     let finished = false;
-    const child = spawn("tte", ["matrix"], {
+    const child = spawn("tte", TTE_MATRIX_ARGS, {
       stdio: ["pipe", "inherit", "ignore"],
       windowsHide: true,
     });
@@ -91,9 +186,9 @@ async function matrixTte(): Promise<boolean> {
     const timer = setTimeout(() => {
       child.kill();
       finish(true);
-    }, 900);
+    }, TTE_MAX_MS);
     child.once("error", () => finish(false));
-    child.once("exit", () => finish(true));
+    child.once("exit", (code) => finish(code === 0));
     child.stdin?.on("error", () => undefined);
     child.stdin?.end("SISTEMA CARGADO · HARIL\n");
   });
@@ -142,20 +237,25 @@ export async function playHarilStartup(options: {
   readonly cwd: string;
   readonly platform: string;
   readonly wait?: (ms: number) => Promise<void>;
+  readonly runExternalMatrix?: () => Promise<boolean>;
 }): Promise<void> {
   const settings = startupSettings(options.env);
   if (!settings.enabled) return;
   playSound(settings.soundFile, options.cwd, options.platform, options.env, options.out);
+  const wait = options.wait ?? delay;
   try {
-    if (settings.engine !== "tte" || !(await matrixTte())) {
-      await matrixBuiltIn(options.out, options.wait ?? delay);
+    const playedExternal =
+      settings.engine !== "built-in" && (await (options.runExternalMatrix ?? matrixTte)());
+    // Alternative screen uses the complete window, protects scrollback and is restored for Pi.
+    options.out.write("\u001b[?1049h\u001b[?25l\u001b[2J\u001b[H");
+    try {
+      if (!playedExternal) await matrixBuiltIn(options.out, wait);
+      loadedBanner(options.out);
+      await wait(LOADED_HOLD_MS);
+    } finally {
+      options.out.write("\u001b[0m\u001b[?25h\u001b[?1049l");
     }
   } catch {
     // A decorative startup is not allowed to block the core shell.
   }
-  options.out.write("\u001b[0m\u001b[?25h");
-  options.out.write("\u001b[1;32m  ╔══════════════════════════════════════╗\n");
-  options.out.write("  ║    SISTEMA CARGADO  ·  HARIL        ║\n");
-  options.out.write("  ╚══════════════════════════════════════╝\u001b[0m\n");
-  await (options.wait ?? delay)(130);
 }
