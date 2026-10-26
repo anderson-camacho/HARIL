@@ -34,6 +34,7 @@ describe("native dock integration with the HARIL Pi extension", () => {
       expect(fake.commands.has("haril-dock")).toBe(true);
       expect(fake.commands.has("haril-plugin")).toBe(true);
       expect(fake.commands.has("haril-commands")).toBe(true);
+      expect(fake.commands.has("haril-theme")).toBe(true);
       expect(fake.commands.has("haril-explore")).toBe(true);
       expect(fake.shortcuts.has("alt+c")).toBe(true);
       expect(fake.shortcuts.has("alt+l")).toBe(true);

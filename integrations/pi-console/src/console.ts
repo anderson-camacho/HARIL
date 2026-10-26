@@ -29,7 +29,14 @@ import {
 } from "./dashboard-actions.js";
 import type { DashboardAction } from "./dashboard-controls.js";
 import { type DashboardData, emptyDashboardData, loadDashboardData } from "./dashboard-data.js";
-import { paddedCell } from "./dashboard-theme.js";
+import {
+  aiEyeTone,
+  getHarilPalette,
+  HARIL_PALETTES,
+  paddedCell,
+  setHarilPalette,
+  visualText,
+} from "./dashboard-theme.js";
 import { delegateFromChat } from "./delegation.js";
 import { effectText, sourceText, valueText } from "./delegation-settings.js";
 import { loadDockDetails } from "./dock-details.js";
@@ -81,7 +88,7 @@ import type {
 import { type BoundProject, findProject, folderName } from "./project.js";
 import { type PendingApproval, readStatus } from "./status.js";
 import { createTabPicker, type TabPickerResult } from "./tab-picker.js";
-import { clipText, plainText } from "./text.js";
+import { clipText, plainText, truncate } from "./text.js";
 import {
   type BarFacts,
   type BarLayout,
@@ -601,13 +608,21 @@ export default function harilConsole(pi: ConsolePi): void {
         redraw();
       },
       async rebind() {
-        const [project, configuredLocale] = await Promise.all([
+        const [project, configuredLocale, configuredTheme] = await Promise.all([
           findProject(current.cwd),
           runHarilJson(["config", "get", "ui.locale", "--json"], { timeoutMs: 10_000 }),
+          runHarilJson(["config", "get", "ui.theme", "--json"], { timeoutMs: 10_000 }),
         ]);
         if (current.closed) return;
         current.project = project;
         current.locale = readConsoleLocale(configuredLocale);
+        setHarilPalette(
+          typeof configuredTheme === "object" &&
+            configuredTheme !== null &&
+            "value" in configuredTheme
+            ? configuredTheme.value
+            : undefined,
+        );
         current.runtimeStatusAvailable = false;
         current.dashboardData = emptyDashboardData(current.project?.slug);
         if (current.area !== undefined) {
@@ -665,10 +680,13 @@ export default function harilConsole(pi: ConsolePi): void {
         ) {
           headerLayout = { lines: [], tabHits: [] };
           return [
-            theme.fg(
+            `${visualText(" ◉", aiEyeTone(modelLevelOf(current).level))}${theme.fg(
               "warning",
-              ` ◉ HARIL ${version ?? ""}  ·  ${current.project?.slug ?? folderName(current.cwd)}  ·  Alt+H áreas  ·  /haril`,
-            ),
+              truncate(
+                ` HARIL ${version ?? ""}  ·  Estoy en: ${plainText(current.cwd)}  ·  Alt+H áreas  ·  /haril`,
+                Math.max(1, width - 2),
+              ),
+            )}`,
           ];
         }
         headerLayout = renderHeaderLayout(
@@ -779,7 +797,9 @@ export default function harilConsole(pi: ConsolePi): void {
   function mountNativePanes(current: Session, tui: ConsoleTui): void {
     if (current.closed || current.nativePanes?.attached) return;
     const mounted = attachNativePanes(tui, current.dock, {
-      project: () => current.project?.slug ?? folderName(current.cwd),
+      project: () => current.cwd,
+      effortLevel: () => modelLevelOf(current).level,
+      locale: () => current.locale,
       right: (width) => {
         const selection = DOCK_LABELS.find((item) => item.id === current.dock.selected);
         const label = selection?.label ?? current.dock.selected;
@@ -816,6 +836,9 @@ export default function harilConsole(pi: ConsolePi): void {
           }
         })();
       },
+      activate(id, action) {
+        if (id === "themes") void changeTheme(current, action);
+      },
     });
     if (mounted.attached) current.nativePanes = mounted;
   }
@@ -851,6 +874,8 @@ export default function harilConsole(pi: ConsolePi): void {
       {
         piCommands: commands,
         expandedPaths: current.explorerExpanded,
+        theme: getHarilPalette(),
+        locale: current.locale,
       },
     );
     if (current.closed || session !== current || current.dockLoadSeq !== seq) return;
@@ -862,7 +887,7 @@ export default function harilConsole(pi: ConsolePi): void {
     if (!ctx.hasUI || ctx.mode !== "tui") return;
     const result = await ctx.ui.custom<DockPickerResult | undefined>(
       (tui, _theme, _keys, done) =>
-        createDockPicker(current.dock.slots, current.dock.selected, done, tui),
+        createDockPicker(current.dock.slots, current.dock.selected, done, tui, current.locale),
       { overlay: true },
     );
     if (result?.type !== "open" || current.closed || session !== current) return;
@@ -1203,6 +1228,46 @@ export default function harilConsole(pi: ConsolePi): void {
     else openDashboardAction(current, "details");
   }
 
+  async function changeTheme(current: Session, requested: string): Promise<void> {
+    if (!HARIL_PALETTES.some((item) => item === requested)) {
+      current.ctx.ui.notify("Paleta desconocida. Usa violet, rose, amber u obsidian.", "warning");
+      return;
+    }
+    if (!cliAvailable()) {
+      current.ctx.ui.notify("HARIL CLI no disponible para guardar el tema.", "warning");
+      return;
+    }
+    const saved = await runHaril(["config", "set", "ui.theme", requested, "--json"], {
+      cwd: current.cwd,
+      timeoutMs: 10_000,
+    });
+    if (current.closed || session !== current) return;
+    if (!saved.ok) {
+      current.ctx.ui.notify(saved.stderr || "No se pudo guardar la paleta.", "error");
+      return;
+    }
+    setHarilPalette(requested);
+    current.ctx.ui.notify(`Tema HARIL: ${requested}`, "info");
+    if (current.dock.selected === "themes") await openDockSlot(current, "themes");
+    redraw();
+  }
+
+  pi.registerCommand("haril-theme", {
+    description: "HARIL: cambiar paleta violeta, rosa, ámbar u obsidiana",
+    getArgumentCompletions: (prefix: string) =>
+      HARIL_PALETTES.filter((name) => name.startsWith(prefix.trim().toLowerCase())).map((name) => ({
+        value: name,
+        label: name,
+      })),
+    async handler(args, ctx) {
+      const current = session;
+      if (current === undefined) return;
+      const input = args.trim().toLowerCase();
+      const choice = input || (await ctx.ui.select("Paleta HARIL", [...HARIL_PALETTES]));
+      if (choice !== undefined) await changeTheme(current, choice);
+    },
+  });
+
   // HARIL-only language switch. Pi's own diagnostics and model text retain their original language.
   pi.registerCommand("language", {
     description: "HARIL: cambiar idioma / change UI language (es, en)",
@@ -1259,6 +1324,7 @@ export default function harilConsole(pi: ConsolePi): void {
         return;
       }
       current.locale = choice;
+      if (current.dock.detail !== undefined) void openDockSlot(current, current.dock.selected);
       redraw();
       ctx.ui.notify(
         choice === "es" ? "Idioma de HARIL: Español" : "HARIL language: English",

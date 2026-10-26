@@ -23,7 +23,7 @@ afterEach(() => rmSync(root, { recursive: true, force: true }));
 function host(): HostInfo {
   return {
     nodeVersion: "v24.21.0",
-    platform: "linux",
+    platform: process.platform,
     arch: "x64",
     homeDir: root,
     cwd: root,
