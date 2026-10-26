@@ -7,6 +7,7 @@ import { type CliIo, EXIT_USAGE, type HostInfo } from "../context.js";
 import { findPayloadFile, readRuntime, runtimeRootFor } from "../runtime.js";
 import { VERSION } from "../version.js";
 import { dataDirFor } from "./common.js";
+import { ensureMatrixPiTheme } from "./matrix-pi-theme.js";
 import { playHarilStartup } from "./startup-visual.js";
 
 // `haril console` (PS-T3), and a bare `haril` in a terminal: opens Pi, the Node and the Pi that HARIL installed
@@ -93,6 +94,16 @@ export async function consoleCommand(
     io.err(`haril: could not create Pi's agent directory ${agentDir}: ${reason}`);
     return EXIT_USAGE;
   }
+  // Pi is started with the same black/green Matrix theme as the HARIL dock.
+  // Only our own agent/themes/haril-matrix.json is repaired; user themes and
+  // settings.json are not replaced.
+  let piTheme: string | undefined;
+  try {
+    piTheme = ensureMatrixPiTheme(agentDir);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    io.err(`haril: Matrix theme could not be prepared (${detail}); using Pi default`);
+  }
   const dataDir = lastValue(parsed, "--data-dir");
   const harilHome = nonEmpty(host.env?.HARIL_HOME);
   const config = nonEmpty(host.env?.HARIL_CONFIG);
@@ -117,7 +128,14 @@ export async function consoleCommand(
   // per-user setting for this HARIL process only and does not edit that setting.
   return runPi(
     runtime.node.path,
-    [runtime.pi.cliPath, "--tui-mode", "fullscreen", "-e", extension],
+    [
+      runtime.pi.cliPath,
+      "--tui-mode",
+      "fullscreen",
+      ...(piTheme === undefined ? [] : ["--theme", piTheme, "--use-theme", "haril-matrix"]),
+      "-e",
+      extension,
+    ],
     {
       cwd,
       env,
