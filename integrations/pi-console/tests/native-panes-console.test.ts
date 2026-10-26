@@ -32,7 +32,13 @@ describe("native dock integration with the HARIL Pi extension", () => {
       expect(fake.commands.has("haril-plugins")).toBe(true);
       expect(fake.commands.has("haril-dock")).toBe(true);
       expect(fake.commands.has("haril-plugin")).toBe(true);
-      expect(fake.shortcuts.has("alt+z")).toBe(process.platform === "win32");
+      expect(fake.commands.has("haril-commands")).toBe(true);
+      expect(fake.commands.has("haril-explore")).toBe(true);
+      expect(fake.shortcuts.has("alt+c")).toBe(true);
+      expect(fake.shortcuts.has("alt+l")).toBe(true);
+      expect(fake.shortcuts.has("alt+i")).toBe(true);
+      expect(fake.shortcuts.has("alt+z")).toBe(false);
+      expect(fake.shortcuts.has("alt+r")).toBe(false);
 
       const original = () => ({ type: "vstack", gap: 0, align: "stretch", entries: [] });
       const root = {

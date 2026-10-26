@@ -114,12 +114,15 @@ export function renderLeftDock(
   if (detailOffset + budget < detail.length) rows.push(line(" ↕ rueda para más", "muted"));
   rows.push(line("", "muted"));
   rows.push(line(" ─ ACCESOS ─", "cyan"));
+  rows.push(line(" /haril-commands", "teal"));
+  rows.push(line(" /haril-explore", "teal"));
   rows.push(line(" /haril-plugin", "teal"));
   rows.push(line(" /haril-plugins", "teal"));
   rows.push(line(" /haril-dock", "teal"));
-  if (process.platform === "win32") rows.push(line(" Alt+Z  Plugins", "muted"));
+  rows.push(line(" Alt+L  Plugins", "muted"));
+  rows.push(line(" Alt+C  Comandos", "muted"));
   rows.push(line(" Alt+H  Áreas", "muted"));
-  rows.push(line(" Alt+R  Panel der.", "muted"));
+  rows.push(line(" Alt+I  Panel der.", "muted"));
   rows.push(line("", "muted"));
   rows.push(line(" Espacios visuales", "muted"));
   rows.push(line(" ≠ extensiones Pi", "muted"));
@@ -177,8 +180,15 @@ export function attachNativePanes(
   const original = root[LAYOUT_NODE] as LayoutFn;
   let alive = true;
   let detailOffset = 0;
+  let displayedDetail = state.detail;
+  let displayedSlot = state.selected;
   const left = {
     render(width: number) {
+      if (state.detail !== displayedDetail || state.selected !== displayedSlot) {
+        detailOffset = 0;
+        displayedDetail = state.detail;
+        displayedSlot = state.selected;
+      }
       return renderLeftDock(
         width,
         Math.max(1, tui.terminal.rows),

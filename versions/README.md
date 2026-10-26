@@ -2,8 +2,9 @@
 
 ## Estado actual
 
-- **Versión actual:** 0.22.4.
-- **Estado (0.22.4):** selector `Alt+Z` → número/flechas (solo Windows nativo, respetando el undo de Pi en WSL), comando `/haril-plugin`, vistas de solo lectura para Explorador/Git/Memoria y detección/documentación honesta de YouTube y Temas, mostradas dentro de la columna izquierda.
+- **Versión actual:** 0.22.5.
+- **Estado (0.22.5):** `Alt+C` y `/haril-commands` muestran los comandos expuestos por Pi en la sesión y los atajos HARIL; `/haril-explore` permite navegar dentro de carpetas del proyecto sin editar archivos, con listado del Explorador que prioriza carpetas visibles sobre directorios ocultos y scroll que se reinicia al cambiar la vista.
+- **Estado (0.22.4):** selector `Alt+L` → número/flechas (Windows y WSL, sin interferir con `Alt+Z` ni con la función anterior de `Alt+R`), `Alt+I` para el panel derecho, comando `/haril-plugin`, vistas de solo lectura para Explorador/Git/Memoria y detección/documentación honesta de YouTube y Temas, mostradas dentro de la columna izquierda.
 - **Estado (0.22.3):** dock visual experimental de tres columnas dentro de Pi (plugins configurables a la izquierda, chat nativo al centro, actividad y herramientas a la derecha); comandos `/haril-plugins` y `/haril-dock`, encabezado compacto y fallback automático si el layout de Pi no es compatible. No instala extensiones reales ni sustituye el host Pi.
 - **Estado (0.22.2):** preferencias persistentes del futuro dock de plugins izquierdo (`haril plugins list|show|hide|move|reset`), sin instalar ni descargar extensiones Pi todavía. Se mantiene sin cambios el aspecto de la consola Pi actual.
 - **Estado (0.22.1):** prueba técnica de tres columnas de altura completa en el compositor del shell y decisión de arquitectura documentada. La consola Pi de `haril` no cambia; la compatibilidad RPC/SDK y los paneles definitivos quedan expresamente pendientes de validación.
@@ -64,4 +65,4 @@ Las versiones 0.x son preliminares: pueden cambiar sin compatibilidad hacia atr�
 
 Más reciente primero. Cada carpeta contiene el archivo de cambios de su versión mayor, con las versiones menores y de parche, la más nueva arriba.
 
-- [v0](v0/CHANGELOG.md): versiones 0.1.0 a 0.22.4.
+- [v0](v0/CHANGELOG.md): versiones 0.1.0 a 0.22.5.

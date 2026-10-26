@@ -10,9 +10,28 @@ describe("plugin views backed by read-only sources", () => {
         { name: "README.md", isDirectory: () => false },
       ],
     });
-    expect(result.status).toContain("solo lectura");
+    expect(result.status).toContain("3 elementos");
     expect(result.lines[1]).toContain("src");
     expect(result.lines).toContain("· main.ts");
+  });
+
+  it("puts ordinary items before hidden folders so the dock does not start with a wall of dotfiles", async () => {
+    const result = await loadDockDetails("explorer", ".", {
+      directory: async () => [
+        { name: ".cache", isDirectory: () => true },
+        { name: "README.md", isDirectory: () => false },
+        { name: "projects", isDirectory: () => true },
+        { name: ".config", isDirectory: () => true },
+        { name: "Documents", isDirectory: () => true },
+      ],
+    });
+    expect(result.lines.slice(1)).toEqual([
+      "▸ Documents",
+      "▸ projects",
+      "· README.md",
+      "▸ .cache",
+      "▸ .config",
+    ]);
   });
 
   it("shows real Git and HARIL memory diagnostics", async () => {

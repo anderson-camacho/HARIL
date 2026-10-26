@@ -4,6 +4,30 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.22.5
+
+- **Fecha:** 2026-10-25
+- **Estado:** acceso visible a los comandos de HARIL y las extensiones registradas; Explorador navegable, sin operaciones sobre archivos.
+
+### Añadido
+
+- Comando `/haril-commands` y atajo `Alt+C` para listar de forma desplazable las órdenes registradas en la sesión de Pi, incluyendo un recordatorio de los atajos HARIL.
+- Comando `/haril-explore` y selección de carpetas desde el espacio Explorador, con regreso a la raíz y navegación dentro del proyecto.
+
+### Cambiado
+
+- El listado del Explorador muestra antes los archivos y carpetas normales que los ocultos, dispone de hasta 128 entradas y conserva un indicador de elementos restantes.
+
+### Corregido
+
+- Se comprueba la ruta real para no navegar fuera de la carpeta del proyecto; cambiar el plugin reinicia el desplazamiento del dock y evita mostrar una ficha vacía por un offset anterior.
+
+### Verificación
+
+- Pruebas de catálogo y navegación sin lectura de contenido ni escrituras; revisión completa de TypeScript, Biome, tests de Pi y build de la extensión antes de publicar.
+
+---
+
 ## 0.22.4
 
 - **Fecha:** 2026-10-24
@@ -11,17 +35,17 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ### Añadido
 
-- `Alt+Z`, después `1`–`5` o flechas y Enter, para seleccionar plugins visibles en Windows; `/haril-plugin [id|número|details]` para elegir y ver sus detalles.
+- `Alt+L`, después `1`–`5` o flechas y Enter, para seleccionar plugins visibles en Windows y WSL; `/haril-plugin [id|número|details]` para elegir y ver sus detalles.
 - Vistas del Explorador (nombres de archivos y directorios), Git (`git status`), Memoria (`haril memory status`) y estado honesto de YouTube/Temas.
 - Pruebas del selector, lectura de datos y flujo completo del comando dentro de la extensión de Pi.
 
 ### Cambiado
 
-- La columna izquierda reutiliza espacio libre para mostrar la ficha del plugin seleccionado, con desplazamiento mediante rueda y sin reemplazar el chat de Pi.
+- La columna izquierda reutiliza espacio libre para mostrar la ficha del plugin seleccionado, con desplazamiento mediante rueda y sin reemplazar el chat de Pi. `Alt+I` alterna el panel derecho, reemplazando el anterior `Alt+R`.
 
 ### Corregido
 
-- En WSL se preserva `Alt+Z` para deshacer texto de Pi, en lugar de robar su atajo; no se confunden ranuras visuales con extensiones realmente instaladas.
+- Se dejan libres `Alt+Z` (deshacer en Pi/WSL) y `Alt+R` (conflicto reportado por el usuario); no se confunden ranuras visuales con extensiones realmente instaladas.
 
 ### Verificación
 
