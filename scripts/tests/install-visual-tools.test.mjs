@@ -58,7 +58,7 @@ test("Matrix dependency is installed in a private HARIL directory with pinned ve
   assert.equal(calls[0][2].UV_TOOL_DIR, paths.toolDir);
   assert.equal(calls[0][2].UV_TOOL_BIN_DIR, paths.binDir);
   assert.equal(calls[0][2].UV_PYTHON_INSTALL_DIR, paths.pythonDir);
-  assert.match(lines.join(" "), /Matrix ready/);
+  assert.match(lines.join(" "), /Matrix .*verified and ready/);
 });
 
 test("a missing uv is automatically prepared before installing TTE", async () => {
@@ -131,6 +131,7 @@ test("up-to-date managed tools are verified without reinstalling or downloading"
   const versions = [];
   const result = await installVisualTools("/haril/runtime", {
     platform: "linux",
+    env: {},
     exists: (path) => path === paths.uv || path === paths.tte,
     probe: async (path, version) => {
       versions.push([path, version]);
@@ -157,6 +158,7 @@ test("a damaged Matrix executable is reinstalled, then checked again", async () 
   const calls = [];
   const result = await installVisualTools("/haril/runtime", {
     platform: "linux",
+    env: {},
     exists: (path) => path === paths.uv || path === paths.tte,
     probe: async (path) => path === paths.uv || healthy,
     bootstrap: () => {
@@ -178,6 +180,7 @@ test("a broken managed uv is re-bootstrapped from a verified release", async () 
   const calls = [];
   const result = await installVisualTools("/haril/runtime", {
     platform: "linux",
+    env: {},
     exists: (path) => path === paths.uv || path === paths.tte,
     probe: async (path) => path !== paths.uv || uvHealthy,
     bootstrap: async (...args) => {
@@ -198,6 +201,7 @@ test("present-but-broken Matrix after installation is not treated as success", a
   await assert.rejects(
     installVisualTools("/haril/runtime", {
       platform: "linux",
+    env: {},
       exists: (path) => path === paths.uv || path === paths.tte,
       probe: async (path) => path === paths.uv,
       execute: async () => undefined,
