@@ -107,7 +107,7 @@ describe("full-terminal Matrix startup", () => {
     expect(output.join("")).not.toContain("SISTEMA CARGADO");
     // The real TTE itself leaves the final large logo on-screen; there is no
     // second clear + external replacement with a different logo size.
-    expect(output.join("").match(/\u001b\[2J/g)).toHaveLength(1);
+    expect(output.join("").split("\u001b[2J")).toHaveLength(2);
   });
 
   it("fades characters into HARIL in fourteen stable full-screen frames", () => {
