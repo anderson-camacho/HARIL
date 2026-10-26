@@ -60,6 +60,7 @@ beforeEach(() => {
       }
     },
     activeRuntime: () => runtime,
+    verifyBinary: vi.fn(async () => true),
     install,
     confirm,
     checkoutMain,
@@ -116,6 +117,39 @@ describe("haril update (local verified source only)", () => {
     install.mockClear();
     host = { ...host, env: { ...host.env, HARIL_AUTO_INSTALL_VISUALS: "off" } };
     expect(await update(["--yes"], io, host, services)).toBe(0);
+    expect(install).not.toHaveBeenCalled();
+  });
+
+  it("checks executable health even if the installed HARIL version is current", async () => {
+    manifest("0.21.0");
+    writeFileSync(join(source, "scripts", "install-visual-tools.mjs"), "// fixture\n");
+    const uv = join(root, "tools", "uv", "uv");
+    const tte = join(root, "tools", "bin", "tte");
+    mkdirSync(join(root, "tools", "uv"), { recursive: true });
+    mkdirSync(join(root, "tools", "bin"), { recursive: true });
+    writeFileSync(uv, "uv fixture");
+    writeFileSync(tte, "tte fixture");
+    services = {
+      ...services,
+      verifyBinary: vi.fn(async (path) => path !== tte),
+    };
+
+    expect(await update(["--check"], io, host, services)).toBe(0);
+    expect(out.join(" ")).toContain("Matrix dependency needs repair (Matrix)");
+    expect(install).not.toHaveBeenCalled();
+    expect(await update(["--yes"], io, host, services)).toBe(0);
+    expect(install).toHaveBeenCalledOnce();
+  });
+
+  it("does not reinstall verified tools when the selected version is current", async () => {
+    manifest("0.21.0");
+    writeFileSync(join(source, "scripts", "install-visual-tools.mjs"), "// fixture\n");
+    for (const path of [join(root, "tools", "uv", "uv"), join(root, "tools", "bin", "tte")]) {
+      mkdirSync(join(path, ".."), { recursive: true });
+      writeFileSync(path, "version fixture");
+    }
+    expect(await update(["--yes"], io, host, services)).toBe(0);
+    expect(out.join(" ")).toContain("already at");
     expect(install).not.toHaveBeenCalled();
   });
 
