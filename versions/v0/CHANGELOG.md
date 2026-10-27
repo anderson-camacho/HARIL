@@ -4,6 +4,30 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.23.7
+
+- **Fecha:** 2026-10-27
+- **Estado:** la tarjeta `/delegate` se dibuja con márgenes y con etiquetas distinguibles de sus valores.
+
+### Añadido
+
+- Prueba de que la tarjeta conserva un margen a ambos lados y de que las zonas de clic siguen ese margen.
+
+### Cambiado
+
+- La tarjeta `/delegate` se abre a ancho completo, con 3 columnas de margen, una línea en blanco arriba y abajo y reglas que separan el título y los botones.
+- Las etiquetas (`Goal`, `Model`, `Autonomy`...) van en negrita y color de acento; los valores, en texto normal.
+
+### Corregido
+
+- La tarjeta se superponía con el texto del panel de fondo en el borde izquierdo y etiquetas y valores se confundían.
+
+### Verificación
+
+- `vitest run integrations/pi-console` (338 pruebas), `biome ci`, `tsc --noEmit -p integrations/pi-console` y `knip` en verde. No se comprobó en una terminal real.
+
+---
+
 ## 0.23.6
 
 - **Fecha:** 2026-10-26
