@@ -29,6 +29,7 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 - El plan escrito en PLAN solo vivía en la sesión de Pi y la delegación no lo encontraba entre los planes existentes.
 - Un workflow con agentes reales que no podían arrancar (por ejemplo, sin la clave del proveedor) quedaba encolado para siempre: sus turnos quedaban en `ready` y solo se avisaba en el log del runtime. Ahora la verificación previa lo rechaza con el motivo y no se encola nada.
+- Con un proveedor de extensión como `claude-bridge`, el modelo no recibía la instrucción del modo (CONSULT, PLAN, DELEGATION): HARIL la devolvía como `systemPrompt` en `before_agent_start`, que el bridge descarta, así que en PLAN el modelo no sabía que debía guardar el plan. Ahora va como la sección `haril-mode` de `systemPromptOptions.sections`, que Pi 1.2.0 envía a todos los proveedores y el bridge reenvía; sin secciones se mantiene la vía anterior.
 
 ### Verificación
 

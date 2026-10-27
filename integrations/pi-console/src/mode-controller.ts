@@ -29,7 +29,8 @@ import {
 // 1. setActiveTools narrows the tools to the mode's list (bash, powershell, edit and write are gone);
 // 2. a tool_call guard blocks every tool off that list, deny by default, whoever registered it and even if it was
 //    turned back on; Pi blocks the call if the guard itself fails;
-// 3. before_agent_start tells the model the mode;
+// 3. before_agent_start tells the model the mode, as a prompt section that extension providers such as claude-bridge
+//    also forward;
 // 4. a `!` shell command the user types is refused too;
 // 5. haril_save_research, the one write, refuses outside CONSULT and PLAN.
 // The mode is kept in the session (appendEntry "haril-mode") and comes back on resume or reload. In CONSULT each run
@@ -40,6 +41,7 @@ import {
 const MODE_ENTRY = "haril-mode";
 const TRACE_ENTRY = "haril-trace";
 const PLAN_ENTRY = "haril-plan";
+const MODE_SECTION = "haril-mode";
 // How many saved plan titles DELEGATION names on entry.
 const SHOWN_PLANS = 3;
 
@@ -200,10 +202,18 @@ export function installModes(pi: ConsolePi, host: ModeHost): ModeController {
     return verdict;
   });
 
-  // 3. The mode reaches the model with each run, for that run only.
+  // 3. The mode reaches the model with each run, for that run only, as the prompt section "haril-mode": every provider
+  // gets it, and claude-bridge, which drops a replaced system prompt, forwards it. A Pi without sections gets the
+  // instruction appended to the system prompt instead.
   pi.on("before_agent_start", (event) => {
     if (state.mode === "consult") trace = createTrace(host.now());
     const instruction = modeInstruction(state.mode);
+    const sections = event.systemPromptOptions?.sections;
+    if (sections !== undefined) {
+      if (instruction === undefined) delete sections[MODE_SECTION];
+      else sections[MODE_SECTION] = instruction;
+      return undefined;
+    }
     if (instruction === undefined) return undefined;
     return { systemPrompt: `${event.systemPrompt}\n\n${instruction}` };
   });

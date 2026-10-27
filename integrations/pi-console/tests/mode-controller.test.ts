@@ -96,6 +96,28 @@ describe("CONSULT mode in Pi", () => {
     );
   });
 
+  it("tells the mode as a prompt section when Pi has sections, so claude-bridge forwards it", async () => {
+    const run = async (): Promise<{ result: unknown; sections: Record<string, string> }> => {
+      const event = {
+        systemPrompt: "BASE",
+        messageType: "user",
+        systemPromptOptions: { sections: { other: "kept" } as Record<string, string> },
+      };
+      const [result] = await fake.fire("before_agent_start", event, ctx);
+      return { result, sections: event.systemPromptOptions.sections };
+    };
+    modes.switchTo("plan", ctx);
+    const plan = await run();
+    expect(plan.result).toBeUndefined();
+    expect(plan.sections.other).toBe("kept");
+    expect(plan.sections["haril-mode"]).toMatch(/^\[HARIL PLAN mode\]/);
+    expect(plan.sections["haril-mode"]).toContain("haril_save_plan");
+    modes.switchTo("action", ctx);
+    const action = await run();
+    expect(action.result).toBeUndefined();
+    expect(action.sections).toEqual({ other: "kept" });
+  });
+
   it("gives back the tools that were active before, and keeps the mode in the session", () => {
     fake.active = ["read", "bash", "edit", "write", "mcp__docs__search"];
     modes.switchTo("consult", ctx);
