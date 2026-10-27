@@ -536,6 +536,7 @@ export default function harilConsole(pi: ConsolePi): void {
         modes.switchTo(mode, modeCtx);
       },
       lastPlan: () => modes.lastPlan(),
+      savePlan: (title, content) => modes.savePlan(title, content),
       recordOrder(text) {
         if (cliAvailable()) chatLog.order(text, modes.mode());
       },

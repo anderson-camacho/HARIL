@@ -4,6 +4,39 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.23.8
+
+- **Fecha:** 2026-10-27
+- **Estado:** los planes se guardan en `docs/planes` y DELEGATION los ofrece primero; la delegación arranca sin paradas por defecto y nunca queda encolada esperando agentes que no pueden correr.
+
+### Añadido
+
+- Planes guardados (`integrations/pi-console/src/plans.ts`): un archivo Markdown por plan en `docs/planes` del proyecto, con las reglas de los archivos de investigación (título, nunca una ruta; nunca sobrescribe; máximo 200 KB; nada fuera del proyecto).
+- `/save-plan [título] [--chat]` (y `/guardar-plan`): guarda la última respuesta del chat como plan o, con `--chat`, toda la conversación. No usa el modelo ni el CLI.
+- Herramienta `haril_save_plan`: activa en ACTION y permitida en PLAN y DELEGATION (rechazada en CONSULT), para que el modelo guarde el plan cuando se le pide «guárdalo» o «toma el contexto del chat».
+- Al entrar en DELEGATION, la consola nombra los planes guardados o explica cómo guardar uno.
+- Metodología «Follow the selected plan», con instrucciones escritas, para no tener que teclearlas en cada delegación.
+- `haril workflow start --preflight --agent orchestrator` comprueba que los agentes reales pueden correr (runtime de Pi, bridge y la clave del proveedor del modelo).
+
+### Cambiado
+
+- El selector de plan de la delegación muestra primero los planes guardados, del más reciente al más antiguo.
+- La tarjeta `/delegate` arranca sin paradas cuando el mensaje no pide ninguna: el workflow empieza a trabajar en cuanto se confirma. Las paradas habituales siguen en la tarjeta, sin marcar.
+- La consola repite la verificación previa si se cambió el modelo en la tarjeta, antes de encolar.
+- Un plan guardado pasa a ser el plan actual de la sesión, el que usa «Use an explicit current conversation or console plan».
+
+### Corregido
+
+- El plan escrito en PLAN solo vivía en la sesión de Pi y la delegación no lo encontraba entre los planes existentes.
+- Un workflow con agentes reales que no podían arrancar (por ejemplo, sin la clave del proveedor) quedaba encolado para siempre: sus turnos quedaban en `ready` y solo se avisaba en el log del runtime. Ahora la verificación previa lo rechaza con el motivo y no se encola nada.
+- Con un proveedor de extensión como `claude-bridge`, el modelo no recibía la instrucción del modo (CONSULT, PLAN, DELEGATION): HARIL la devolvía como `systemPrompt` en `before_agent_start`, que el bridge descarta, así que en PLAN el modelo no sabía que debía guardar el plan. Ahora va como la sección `haril-mode` de `systemPromptOptions.sections`, que Pi 1.2.0 envía a todos los proveedores y el bridge reenvía; sin secciones se mantiene la vía anterior.
+
+### Verificación
+
+- `vitest run integrations/pi-console` y las pruebas de workflow del CLI (`workflow-writes-cli`, `workflow-cli`, `workflow-real-agents`) en verde, con pruebas nuevas para guardar, listar y elegir planes, la verificación previa repetida y el rechazo de agentes que no pueden correr; `pnpm run check` completo. No se comprobó en una terminal real con un proveedor configurado.
+
+---
+
 ## 0.23.7
 
 - **Fecha:** 2026-10-27

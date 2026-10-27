@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { installModes, type ModeController } from "../src/mode-controller.js";
+import { PLANS_DIR } from "../src/plans.js";
 import { RESEARCH_DIR } from "../src/research.js";
 import { type FakeContext, type FakePi, fakeContext, fakePi } from "./fake-pi.js";
 
@@ -95,6 +96,28 @@ describe("CONSULT mode in Pi", () => {
     );
   });
 
+  it("tells the mode as a prompt section when Pi has sections, so claude-bridge forwards it", async () => {
+    const run = async (): Promise<{ result: unknown; sections: Record<string, string> }> => {
+      const event = {
+        systemPrompt: "BASE",
+        messageType: "user",
+        systemPromptOptions: { sections: { other: "kept" } as Record<string, string> },
+      };
+      const [result] = await fake.fire("before_agent_start", event, ctx);
+      return { result, sections: event.systemPromptOptions.sections };
+    };
+    modes.switchTo("plan", ctx);
+    const plan = await run();
+    expect(plan.result).toBeUndefined();
+    expect(plan.sections.other).toBe("kept");
+    expect(plan.sections["haril-mode"]).toMatch(/^\[HARIL PLAN mode\]/);
+    expect(plan.sections["haril-mode"]).toContain("haril_save_plan");
+    modes.switchTo("action", ctx);
+    const action = await run();
+    expect(action.result).toBeUndefined();
+    expect(action.sections).toEqual({ other: "kept" });
+  });
+
   it("gives back the tools that were active before, and keeps the mode in the session", () => {
     fake.active = ["read", "bash", "edit", "write", "mcp__docs__search"];
     modes.switchTo("consult", ctx);
@@ -114,9 +137,9 @@ describe("CONSULT mode in Pi", () => {
     expect(modes.cycle(ctx)).toBe("consult");
     expect(modes.cycle(ctx)).toBe("plan");
     expect(modes.cycle(ctx)).toBe("delegation");
-    expect(fake.active).toEqual(["read", "grep", "find", "ls"]);
+    expect(fake.active).toEqual(["read", "grep", "find", "ls", "haril_save_plan"]);
     expect(modes.cycle(ctx)).toBe("action");
-    expect(fake.active).toEqual(["read", "bash", "edit", "write"]);
+    expect(fake.active).toEqual(["read", "bash", "edit", "write", "haril_save_plan"]);
   });
 
   it("comes back in CONSULT on resume, from the session's last mode entry", () => {
@@ -141,7 +164,7 @@ describe("CONSULT mode in Pi", () => {
     ctx.branch = [];
     modes.restore(ctx);
     expect(modes.mode()).toBe("action");
-    expect(fake.active).toEqual(["read", "bash", "edit", "write"]);
+    expect(fake.active).toEqual(["read", "bash", "edit", "write", "haril_save_plan"]);
   });
 });
 
@@ -289,6 +312,52 @@ describe("PLAN mode", () => {
     expect(fake.entries.find((entry) => entry.customType === "haril-plan")?.data).toMatchObject({
       text: "Plan:\n1. Read\n2. Change",
     });
-    expect(ctx.notes.at(-1)?.[0]).toMatch(/\/goal sends it to the HARIL planner/);
+    expect(ctx.notes.at(-1)?.[0]).toMatch(/\/save-plan saves it for DELEGATION/);
+  });
+});
+
+describe("haril_save_plan", () => {
+  const plan = "# Fix the login\n\n1. Read the form\n2. Fix the check\n3. Run the tests";
+
+  it("is active in ACTION, allowed in PLAN and DELEGATION, and refused in CONSULT", async () => {
+    expect(fake.tools.get("haril_save_plan")?.defaultActive).toBe(true);
+    expect(fake.active).toContain("haril_save_plan");
+    for (const mode of ["plan", "delegation", "action"] as const) {
+      modes.switchTo(mode, ctx);
+      expect(await toolCall("haril_save_plan"), mode).toBeUndefined();
+    }
+    modes.switchTo("consult", ctx);
+    expect((await toolCall("haril_save_plan"))?.block).toBe(true);
+    await expect(
+      fake.tools
+        .get("haril_save_plan")
+        ?.execute("1", { title: "t", content: plan }, undefined, undefined, ctx),
+    ).rejects.toThrow(/does not work in CONSULT/);
+    expect(existsSync(join(root, PLANS_DIR))).toBe(false);
+  });
+
+  it("saves the plan in docs/planes and keeps it as the session's plan", async () => {
+    modes.switchTo("plan", ctx);
+    now = new Date(2026, 9, 27, 12).getTime();
+    const result = (await fake.tools
+      .get("haril_save_plan")
+      ?.execute("1", { title: "Fix the login", content: plan }, undefined, undefined, ctx)) as {
+      details: { path: string };
+    };
+    expect(result.details.path).toBe(join(PLANS_DIR, "2026-10-27-fix-the-login.md"));
+    expect(readdirSync(join(root, PLANS_DIR))).toEqual(["2026-10-27-fix-the-login.md"]);
+    expect(modes.lastPlan()).toBe(plan);
+    expect(fake.entries.find((entry) => entry.customType === "haril-plan")?.data).toMatchObject({
+      text: plan,
+    });
+  });
+
+  it("names the saved plans when DELEGATION starts, or how to save one", () => {
+    modes.switchTo("delegation", ctx);
+    expect(ctx.notes.at(-1)?.[0]).toMatch(/No saved plan yet/);
+    modes.switchTo("action", ctx);
+    modes.savePlan("Fix the login", plan);
+    modes.switchTo("delegation", ctx);
+    expect(ctx.notes.at(-1)?.[0]).toMatch(/^1 saved plan \(Fix the login\): type the goal/);
   });
 });

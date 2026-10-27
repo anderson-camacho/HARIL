@@ -8,11 +8,13 @@ import {
   modeInstruction,
   modeLabel,
   nextMode,
+  PLAN_TOOL,
   RESEARCH_TOOL,
   switchMode,
 } from "./modes.js";
 import type { AgentMessage, ConsoleContext, ConsolePi, SessionEntry } from "./pi-types.js";
-import { saveResearch } from "./research.js";
+import { listPlans, savePlan } from "./plans.js";
+import { type SavedResearch, saveResearch } from "./research.js";
 import {
   createTrace,
   renderTrace,
@@ -27,16 +29,21 @@ import {
 // 1. setActiveTools narrows the tools to the mode's list (bash, powershell, edit and write are gone);
 // 2. a tool_call guard blocks every tool off that list, deny by default, whoever registered it and even if it was
 //    turned back on; Pi blocks the call if the guard itself fails;
-// 3. before_agent_start tells the model the mode;
+// 3. before_agent_start tells the model the mode, as a prompt section that extension providers such as claude-bridge
+//    also forward;
 // 4. a `!` shell command the user types is refused too;
 // 5. haril_save_research, the one write, refuses outside CONSULT and PLAN.
 // The mode is kept in the session (appendEntry "haril-mode") and comes back on resume or reload. In CONSULT each run
 // leaves its trace in the chat (appendEntry "haril-trace", drawn by an entry renderer, never sent to the model); in
-// PLAN the plan the model wrote is kept as a session entry ("haril-plan") for /goal.
+// PLAN the plan the model wrote is kept as a session entry ("haril-plan") for /goal. A plan saved to docs/planes
+// (haril_save_plan, /save-plan) becomes that plan too, so DELEGATION's "current plan" is the one just saved.
 
 const MODE_ENTRY = "haril-mode";
 const TRACE_ENTRY = "haril-trace";
 const PLAN_ENTRY = "haril-plan";
+const MODE_SECTION = "haril-mode";
+// How many saved plan titles DELEGATION names on entry.
+const SHOWN_PLANS = 3;
 
 export interface ModeHost {
   // The folder research files go under: the bound project's root, else the folder Pi opened in.
@@ -56,6 +63,9 @@ export interface ModeController {
   restore(ctx: ConsoleContext): void;
   // The last plan PLAN mode produced in this session, for /goal.
   lastPlan(): string | undefined;
+  // Saves `content` as a plan in docs/planes and keeps it as the session's plan; throws an Error that says why it
+  // refused.
+  savePlan(title: unknown, content: unknown): SavedResearch;
 }
 
 function safely<T>(read: () => T, fallback: T): T {
@@ -92,6 +102,17 @@ function storedMode(entries: readonly SessionEntry[]): ModeState | undefined {
   return undefined;
 }
 
+// What DELEGATION says on entry: the saved plans it will offer, newest first, or how to save one.
+function savedPlansNote(root: string): string {
+  const plans = listPlans(root);
+  if (plans.length === 0) {
+    return "No saved plan yet: ask the model to save the plan, or /save-plan (--chat keeps the whole conversation)";
+  }
+  const shown = plans.slice(0, SHOWN_PLANS).map((plan) => plan.title);
+  const more = plans.length > SHOWN_PLANS ? ` and ${plans.length - SHOWN_PLANS} more` : "";
+  return `${plans.length} saved ${plans.length === 1 ? "plan" : "plans"} (${shown.join(" · ")}${more}): type the goal and pick one to start`;
+}
+
 function storedPlan(entries: readonly SessionEntry[]): string | undefined {
   for (let index = entries.length - 1; index >= 0; index--) {
     const entry = entries[index];
@@ -108,6 +129,11 @@ export function installModes(pi: ConsolePi, host: ModeHost): ModeController {
   let plan: string | undefined;
 
   const registered = (): string[] => safely(() => pi.getAllTools().map((tool) => tool.name), []);
+
+  function keepPlan(text: string): void {
+    plan = text;
+    safely(() => pi.appendEntry(PLAN_ENTRY, { text, at: host.now() }), undefined);
+  }
 
   function apply(next: ModeState, tools: string[] | undefined): void {
     state = next;
@@ -131,6 +157,7 @@ export function installModes(pi: ConsolePi, host: ModeHost): ModeController {
       );
       if (ctx?.hasUI === true) {
         ctx.ui.notify(`MODE: ${modeLabel(state.mode)} · ${modeDescription(state.mode)}`, "info");
+        if (state.mode === "delegation") ctx.ui.notify(savedPlansNote(host.researchRoot()), "info");
       }
       host.redraw();
       return state.mode;
@@ -157,6 +184,12 @@ export function installModes(pi: ConsolePi, host: ModeHost): ModeController {
       host.redraw();
     },
     lastPlan: () => plan,
+    savePlan(title, content) {
+      const saved = savePlan(host.researchRoot(), { title, content }, new Date(host.now()));
+      // savePlan refused anything but non-empty text.
+      keepPlan(String(content));
+      return saved;
+    },
   };
 
   // 2. Deny by default: the verdict comes first, the trace after it, so a trace failure can never unblock a call.
@@ -169,10 +202,18 @@ export function installModes(pi: ConsolePi, host: ModeHost): ModeController {
     return verdict;
   });
 
-  // 3. The mode reaches the model with each run, for that run only.
+  // 3. The mode reaches the model with each run, for that run only, as the prompt section "haril-mode": every provider
+  // gets it, and claude-bridge, which drops a replaced system prompt, forwards it. A Pi without sections gets the
+  // instruction appended to the system prompt instead.
   pi.on("before_agent_start", (event) => {
     if (state.mode === "consult") trace = createTrace(host.now());
     const instruction = modeInstruction(state.mode);
+    const sections = event.systemPromptOptions?.sections;
+    if (sections !== undefined) {
+      if (instruction === undefined) delete sections[MODE_SECTION];
+      else sections[MODE_SECTION] = instruction;
+      return undefined;
+    }
     if (instruction === undefined) return undefined;
     return { systemPrompt: `${event.systemPrompt}\n\n${instruction}` };
   });
@@ -238,11 +279,10 @@ export function installModes(pi: ConsolePi, host: ModeHost): ModeController {
       .find((message) => message.role === "assistant");
     const text = assistantText(last).trim();
     if (text === "") return;
-    plan = text;
-    safely(() => pi.appendEntry(PLAN_ENTRY, { text, at: host.now() }), undefined);
+    keepPlan(text);
     if (ctx.hasUI) {
       ctx.ui.notify(
-        "Plan kept in this session: /goal sends it to the HARIL planner for approval; /mode action carries it out here.",
+        "Plan kept in this session: /save-plan saves it for DELEGATION; /goal sends it to the HARIL planner for approval.",
         "info",
       );
     }
@@ -309,6 +349,41 @@ export function installModes(pi: ConsolePi, host: ModeHost): ModeController {
       if (trace !== undefined) trace = traceResearch(trace, saved.relative);
       return {
         content: [{ type: "text", text: `saved ${saved.relative} (${saved.bytes} bytes)` }],
+        details: { path: saved.relative, bytes: saved.bytes },
+      };
+    },
+  });
+
+  // The plan write: active in ACTION, allowed in PLAN and DELEGATION, refused in CONSULT (which only saves research).
+  pi.registerTool({
+    name: PLAN_TOOL,
+    label: "Save plan",
+    description:
+      "Save a plan as a Markdown file in the project's docs/planes folder, where DELEGATION offers it to start a workflow. Use it when the user asks to save the plan or to take the current conversation as the plan. Give a short title and the full plan in Markdown (goal, numbered steps, files, tests, risks); the file name is chosen for you and an existing file is never overwritten.",
+    promptSnippet: `${PLAN_TOOL}: save the plan the user asked to keep, for DELEGATION`,
+    parameters: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "A short title, not a path" },
+        content: { type: "string", description: "The full plan in Markdown" },
+      },
+      required: ["title", "content"],
+      additionalProperties: false,
+    },
+    defaultActive: true,
+    executionMode: "sequential",
+    async execute(_toolCallId, params) {
+      if (state.mode === "consult") {
+        throw new Error(`refused: ${PLAN_TOOL} does not work in CONSULT mode`);
+      }
+      const saved = controller.savePlan(params.title, params.content);
+      return {
+        content: [
+          {
+            type: "text",
+            text: `saved ${saved.relative} (${saved.bytes} bytes); DELEGATION offers it as a saved plan`,
+          },
+        ],
         details: { path: saved.relative, bytes: saved.bytes },
       };
     },

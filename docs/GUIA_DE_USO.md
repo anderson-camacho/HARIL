@@ -185,8 +185,8 @@ Las secciones con `▶` están contraídas y con `▼` expandidas. Su contenido 
 | --- | --- | --- |
 | **ACTION** | Desarrollo y uso normal del chat | Herramientas Pi permitidas por la sesión; revisa cambios |
 | **CONSULT** | Investigar sin modificar código | Solo lectura; puede guardar **un informe Markdown** si lo pides expresamente |
-| **PLAN** | Preparar pasos, archivos, pruebas y riesgos | No modifica código; `/goal` envía la planificación al mecanismo de tareas |
-| **DELEGATION** | Proponer trabajo a varios agentes | El mensaje abre una tarjeta de delegación; chat restringido |
+| **PLAN** | Preparar pasos, archivos, pruebas y riesgos | No modifica código; pide «guárdalo» o usa `/save-plan` para guardarlo en `docs/planes`; `/goal` envía la planificación al mecanismo de tareas |
+| **DELEGATION** | Proponer trabajo a varios agentes | El mensaje abre una tarjeta de delegación que ofrece primero los planes guardados; sin paradas salvo que las pidas; chat restringido |
 
 Cambiar:
 
@@ -234,6 +234,7 @@ Las flechas `←/→` también pueden mover la selección en los diálogos, pero
 | `/plans` / `/plan <id>` | Revisar planes |
 | `/approve <id>` / `/deny <id>` | Decidir sobre un plan revisado |
 | `/tasks` / `/task <id>` / `/events` | Consultar tareas y eventos |
+| `/save-plan [título] [--chat]` / `/guardar-plan` | Guardar la última respuesta (o toda la conversación con `--chat`) como plan en `docs/planes` |
 | `/delegate <objetivo>` | Tarjeta de workflow con agentes |
 | `/continue` | Continuar workflow retirando paradas indicadas |
 | `/orchestration view` / `pick` / `demo` | Vista completa, selector o simulación |

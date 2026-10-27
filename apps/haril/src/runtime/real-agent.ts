@@ -29,6 +29,8 @@ import {
   bareModelOf,
   loadProviderConfig,
   MODELS_TIMEOUT_MS,
+  type ModelProblem,
+  modelProblemOf,
   type ProviderEntry,
   resolveModelRef,
 } from "../providers.js";
@@ -368,6 +370,16 @@ function missingSpecParts(spec: AgentSpec): string[] {
 function listed(parts: readonly string[]): string {
   if (parts.length <= 1) return parts.join("");
   return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+}
+
+// What keeps a real workflow from running on `model` now, the check `haril workflow start --preflight` makes: the
+// runtime's own readiness and, for a namespaced model, its provider key. Undefined when nothing does; an empty model is
+// not checked (the card picks it after the preflight and checks again). A runtime would leave such a workflow's turns
+// ready and skipped, so it would wait queued for a setup nobody is told about.
+export function realAgentProblem(host: HostInfo, model: string): ModelProblem | undefined {
+  const ready = readinessOf(host);
+  if (!ready.ok) return { what: ready.what, fix: ready.fix };
+  return model === "" ? undefined : modelProblemOf(model, ready.providers);
 }
 
 // What a real run needs before a task is claimed (M2-T6): the isolated runtime, the bridge and a valid provider file.

@@ -2,7 +2,9 @@ import { cliAvailable, NOT_LAUNCHED, runHaril, type StartedRuntime, startRuntime
 import { DASHBOARD_AREAS, type DashboardArea } from "./dashboard.js";
 import {
   continueWorkflow,
+  conversationText,
   type DelegationHost,
+  lastAssistantText,
   lastUserText,
   startDelegation,
 } from "./delegation.js";
@@ -17,7 +19,9 @@ import {
 } from "./modes.js";
 import { demoNotice } from "./orchestration-state.js";
 import type { AutocompleteItem, ConsoleContext, ConsolePi, SessionEntry } from "./pi-types.js";
+import { planTitle } from "./plans.js";
 import { type BoundProject, folderName } from "./project.js";
+import type { SavedResearch } from "./research.js";
 import { type PendingApproval, readPending, readRuntimeAlive } from "./status.js";
 import { plainText } from "./text.js";
 
@@ -66,6 +70,8 @@ export interface CommandHost {
   switchMode(mode: ConsoleMode, ctx: ConsoleContext): void;
   // The last plan PLAN mode wrote in this session, which /goal sends when it gets no text.
   lastPlan(): string | undefined;
+  // Saves a plan in docs/planes, where DELEGATION offers it, and keeps it as the session's plan (/save-plan).
+  savePlan?(title: unknown, content: unknown): SavedResearch;
   // Logs a typed HARIL command as an order (4.5): Pi runs extension commands before its input event.
   recordOrder?(text: string): void;
 }
@@ -228,6 +234,47 @@ function plannerArgs(host: CommandHost): { readonly args: string[]; readonly not
   };
 }
 
+// /save-plan [title] [--chat]: keeps the model's last reply (the plan just written, in any mode) or, with --chat, the
+// whole conversation as a plan in docs/planes, where DELEGATION offers it first. No model and no CLI: a file write.
+async function savePlanFromChat(
+  args: string,
+  host: CommandHost,
+  ctx: ConsoleContext,
+): Promise<void> {
+  const words = plainText(args).trim();
+  const chat = /(?:^|\s)--chat(?=\s|$)/.test(words);
+  const title = words.replace(/(?:^|\s)--chat(?=\s|$)/g, " ").trim();
+  let branch: readonly SessionEntry[] = [];
+  try {
+    branch = ctx.sessionManager.getBranch();
+  } catch {
+    branch = [];
+  }
+  const content = chat
+    ? conversationText(branch)
+    : (lastAssistantText(branch) ?? host.lastPlan()?.trim());
+  if (content === undefined || content === "") {
+    ctx.ui.notify(
+      "nothing to save yet: ask for the plan first (PLAN mode writes one), or /save-plan --chat keeps the conversation",
+      "warning",
+    );
+    return;
+  }
+  if (host.savePlan === undefined) {
+    ctx.ui.notify("plans cannot be saved in this console", "error");
+    return;
+  }
+  try {
+    const saved = host.savePlan(title === "" ? planTitle(content) : title, content);
+    ctx.ui.notify(
+      `plan saved: ${saved.relative} · /mode delegation offers it to start a workflow`,
+      "info",
+    );
+  } catch (error) {
+    ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+  }
+}
+
 // Asks for a mode with a select, each mode with what it does (the bar's MODE click and /mode without a name).
 export async function chooseMode(host: CommandHost, ctx: ConsoleContext): Promise<void> {
   const current = host.mode();
@@ -388,6 +435,26 @@ This writes haril.json (haril config set).`,
       const runtime = await ensureRuntime(host);
       const parts = [firstLine(result.stdout) || "goal queued", planner.note, runtime];
       ctx.ui.notify(parts.filter((part) => part !== undefined).join(" · "), "info");
+    },
+  },
+  {
+    name: "save-plan",
+    usage: "/save-plan [title] [--chat]",
+    description:
+      "Save the last reply (or, with --chat, the whole conversation) as a plan in docs/planes; DELEGATION offers it first",
+    local: true,
+    async run(args, host, ctx) {
+      await savePlanFromChat(args, host, ctx);
+    },
+  },
+  {
+    name: "guardar-plan",
+    usage: "/guardar-plan [título] [--chat]",
+    description:
+      "Guarda la última respuesta (o, con --chat, toda la conversación) como plan en docs/planes; DELEGATION lo ofrece primero",
+    local: true,
+    async run(args, host, ctx) {
+      await savePlanFromChat(args, host, ctx);
     },
   },
   {

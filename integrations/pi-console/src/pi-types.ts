@@ -229,6 +229,9 @@ interface BeforeAgentStartEvent {
   readonly systemPrompt: string;
   readonly messageType: "user" | "custom";
   readonly prompt?: string;
+  // Pi 1.2.0's mutable prompt sections for this run, each sent as a <name> block. Extension providers that rebuild the
+  // prompt themselves (claude-bridge) forward these and drop a returned systemPrompt.
+  readonly systemPromptOptions?: { sections: Record<string, string> };
 }
 
 interface BeforeAgentStartResult {

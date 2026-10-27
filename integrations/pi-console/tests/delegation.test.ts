@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type CommandHost, registerCommands } from "../src/commands.js";
 import harilConsole from "../src/console.js";
 import type { ConsoleTheme } from "../src/pi-types.js";
+import { savePlan } from "../src/plans.js";
 import { stripAnsi } from "../src/text.js";
 import { type FakeCli, installFakeCli } from "./fake-cli.js";
 import { type FakeContext, type FakePi, fakeContext, fakePi } from "./fake-pi.js";
@@ -26,6 +29,7 @@ let pick: (options: string[]) => string | undefined;
 let currentPlan: string | undefined;
 let pending: CommandHost["pending"];
 let switched: string[];
+let projectRoot: string;
 
 // Each ctx.ui.custom call draws the card once and then feeds it the next batch of keys.
 function scriptOverlay(): void {
@@ -68,7 +72,7 @@ function scriptOverlay(): void {
 function host(): CommandHost {
   return {
     cwd: tmpdir(),
-    project: { slug: "fake-proj", name: "Fake", rootPath: tmpdir() },
+    project: { slug: "fake-proj", name: "Fake", rootPath: projectRoot },
     pending,
     area: undefined,
     started: undefined,
@@ -138,11 +142,13 @@ beforeEach(() => {
   currentPlan = "1. Change the requested behavior.\n2. Verify it with tests.";
   pending = [];
   switched = [];
+  projectRoot = mkdtempSync(join(tmpdir(), "haril-delegation-"));
   scriptOverlay();
 });
 
 afterEach(() => {
   cli.restore();
+  rmSync(projectRoot, { recursive: true, force: true });
 });
 
 describe("/delegate", () => {
@@ -315,6 +321,51 @@ describe("/delegate", () => {
     expect(startCalls()).toHaveLength(1);
     expect(ctx.notes.at(-1)?.[0]).toMatch(/response.*verified/i);
     expect(opened).toEqual([]);
+  });
+
+  it("offers the saved plans first and starts at once from the one picked, without typing a method", async () => {
+    const text = "# Fix the login\n1. Read the form\n2. Fix the check\n";
+    const saved = savePlan(projectRoot, { title: "Fix the login", content: text });
+    pick = (options) =>
+      options.find((option) => option.startsWith("Saved plan") || option.startsWith("Follow"));
+    keys = [["\r"]];
+    await fake.commands.get("delegate")?.handler("Fix the login form", ctx);
+    const sources = selects.find((entry) => entry.title.includes("exact plan source"));
+    expect(sources?.options[0]).toBe(`Saved plan · Fix the login · ${saved.relative}`);
+    const [args] = startCalls();
+    expect(args).toContain("--autonomous");
+    expect(args).not.toContain("--stop-at");
+    const start = cli
+      .calls()
+      .find((call) => call.args[1] === "start" && !call.args.includes("--preflight"));
+    expect(JSON.parse(start?.stdin ?? "{}")).toMatchObject({
+      projectRoot,
+      plan: { sourceId: `file:docs/planes/${saved.relative.split(/[\\/]/).at(-1)}`, text },
+      methodology: { id: "plan" },
+    });
+    expect(opened).toEqual(["orchestration"]);
+  });
+
+  it("checks the card's model again before queueing, and queues nothing when its agents cannot run", async () => {
+    keys = [["m"], ["\r"]];
+    pick = (options) => options.find((option) => option === "fake-gw/fake-high-model");
+    await fake.commands.get("delegate")?.handler("Write the tests", ctx);
+    const checked = cli.calls().filter((call) => call.args.includes("--preflight"));
+    expect(checked.map((call) => call.args[call.args.indexOf("--model") + 1])).toEqual([
+      "fake-gw/fake-model",
+      "fake-gw/fake-high-model",
+    ]);
+    expect(startCalls()).toHaveLength(1);
+
+    cli.answer("workflow start --preflight", {
+      stderr:
+        "haril: the real agents cannot run yet: HARIL_CLIPROXYAPI_KEY is not set (set it to the key of provider cliproxy); nothing was queued\n",
+      code: 2,
+    });
+    keys = [["\r"]];
+    await fake.commands.get("delegate")?.handler("Write the tests", ctx);
+    expect(startCalls()).toHaveLength(1);
+    expect(ctx.notes.at(-1)?.[0]).toMatch(/real agents cannot run yet: HARIL_CLIPROXYAPI_KEY/);
   });
 });
 

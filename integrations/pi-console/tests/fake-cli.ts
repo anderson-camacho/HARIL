@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // A fake `haril` CLI for the console's tests: a small Node script the console runs through HARIL_NODE and HARIL_CLI,
-// exactly as it runs the real one. It records every call (its arguments, and stdin when --stdin is passed) and answers
+// exactly as it runs the real one. It records every call (its arguments, and stdin when --stdin or --intake-stdin is
+// passed) and answers
 // from a table keyed by the first words of the command ("stop --now", "workflow start", "usage record"…). No HARIL
 // store or runtime is involved.
 
@@ -32,7 +33,7 @@ const SCRIPT = String.raw`
 import { appendFileSync, readFileSync } from "node:fs";
 const [log, table] = [process.env.FAKE_HARIL_LOG, process.env.FAKE_HARIL_TABLE];
 const args = process.argv.slice(2);
-const stdin = args.includes("--stdin") ? readFileSync(0, "utf8") : null;
+const stdin = args.includes("--stdin") || args.includes("--intake-stdin") ? readFileSync(0, "utf8") : null;
 appendFileSync(log, JSON.stringify({ args, stdin, pid: process.pid }) + "\n");
 const answers = JSON.parse(readFileSync(table, "utf8"));
 const key = Object.keys(answers)

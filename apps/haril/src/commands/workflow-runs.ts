@@ -16,6 +16,7 @@ import { loadDelegationSettings } from "../delegation-config.js";
 import { delegationLimitsOf } from "../delegation-section.js";
 import { clockFor, storeAccess } from "../host.js";
 import { resolveProgram } from "../runtime/host-commands.js";
+import { realAgentProblem } from "../runtime/real-agent.js";
 import { dataDirFor, openExisting, queueCommand, withProject } from "./common.js";
 import { piContextUsed } from "./pi-context.js";
 import { storeQuota } from "./snapshot-quota.js";
@@ -50,7 +51,8 @@ const START_USAGE = [
   "  In a git project the executors write, each in its own worktree from main (or --base, or delegation.git.baseBranch),",
   "  and the delegators merge their work into the branch haril/<workflow>/integration for you to review; nothing is",
   "  merged into main or pushed. Implementation requires a writing base, Git worktrees and an allowed test command.",
-  "  --read-only explicitly requests consultation. --preflight checks without queueing or running tests.",
+  "  --read-only explicitly requests consultation. --preflight checks without queueing or running tests; with",
+  "  --agent orchestrator it also refuses when the real agents cannot run (runtime, bridge, the model's provider key).",
   "  Intake JSON: {projectRoot, plan:{sourceId,revision,text}, methodology:{id,instructions}}.",
   "  Plan and methodology instructions are required and snapshotted exactly; SHA-256 hashes are computed at start.",
 ].join("\n");
@@ -429,6 +431,14 @@ export async function workflowStart(
   const mode = readOnly ? "read-only" : "implementation";
   const capabilities = startCapabilities(base, worktreeList, testCommand);
   if (parsed.flags.has("--preflight")) {
+    // Real agents that cannot run would leave the workflow queued with nothing said; the preflight says why now.
+    const agents = agent === REAL_ORCHESTRATOR ? realAgentProblem(host, model) : undefined;
+    if (agents !== undefined) {
+      return fail(
+        io,
+        `the real agents cannot run yet: ${agents.what} (${agents.fix}); nothing was queued`,
+      );
+    }
     if (json) io.out(JSON.stringify({ mode, capabilities, status: "ready" }));
     else io.out(visibleText(`${mode} preflight ready; worktree creation and tests have not run`));
     return EXIT_OK;

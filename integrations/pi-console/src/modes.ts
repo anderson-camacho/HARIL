@@ -4,9 +4,10 @@
 //   the project's research folder). Every other tool is blocked, deny by default, whoever registered it (Pi, another
 //   extension, an MCP server), even if something turns it back on; the HARIL commands and console actions that change
 //   state are refused. bash and powershell are out entirely: a read-only shell cannot be guaranteed.
-// - PLAN: the same read-only tools, and the model builds a plan from the conversation; /goal hands it to the planner.
+// - PLAN: the same read-only tools, and the model builds a plan from the conversation; /goal hands it to the planner,
+//   haril_save_plan (or /save-plan) keeps it in docs/planes for DELEGATION.
 // - DELEGATION: what the user types opens the /delegate card for a three-layer workflow; the chat is read-only and has
-//   no research tool.
+//   no research tool, only haril_save_plan.
 // The console keeps the tools that were active before a read-only mode and gives them back when it leaves.
 
 export type ConsoleMode = "action" | "consult" | "plan" | "delegation";
@@ -16,6 +17,8 @@ type OrderMode = "accion" | "consulta" | "plan" | "delegacion";
 
 export const CONSOLE_MODES: readonly ConsoleMode[] = ["action", "consult", "plan", "delegation"];
 export const RESEARCH_TOOL = "haril_save_research";
+// The plan write (plans.ts): a Markdown plan in docs/planes that DELEGATION offers. Active in ACTION as well.
+export const PLAN_TOOL = "haril_save_plan";
 const READ_ONLY_TOOLS = ["read", "grep", "find", "ls"] as const;
 // Pi 1.2.0's default active tools (docs/cli.md), used when a read-only mode is left with nothing saved to restore.
 const PI_DEFAULT_TOOLS = ["read", "bash", "edit", "write"] as const;
@@ -62,8 +65,8 @@ const ALIASES: Readonly<Record<string, ConsoleMode>> = {
 const PERMITTED: Readonly<Record<ConsoleMode, readonly string[] | undefined>> = {
   action: undefined,
   consult: [...READ_ONLY_TOOLS, RESEARCH_TOOL],
-  plan: [...READ_ONLY_TOOLS, RESEARCH_TOOL],
-  delegation: [...READ_ONLY_TOOLS],
+  plan: [...READ_ONLY_TOOLS, RESEARCH_TOOL, PLAN_TOOL],
+  delegation: [...READ_ONLY_TOOLS, PLAN_TOOL],
 };
 
 // The HARIL commands that change state, refused in CONSULT; /tasks, /task, /events, /plans and /plan stay.
@@ -190,12 +193,13 @@ export function modeInstruction(mode: ConsoleMode): string | undefined {
       return [
         "[HARIL PLAN mode] This session is read-only: read, grep, find and ls only.",
         "Build a plan from the conversation: the goal, numbered steps, the files involved, the tests, the risks and the open questions. Do not change anything.",
-        `To carry it out, the user switches with /mode action and asks for it, or sends it to the HARIL planner with /goal. ${RESEARCH_TOOL} saves the plan as a Markdown file when the user asks.`,
+        `When the user asks to save the plan, or to take the current conversation as the plan, call ${PLAN_TOOL} at once with a short title and the full plan in Markdown: DELEGATION offers it to start a workflow.`,
+        `To carry it out, the user switches with /mode delegation (or /mode action), or sends it to the HARIL planner with /goal.`,
       ].join("\n");
     case "delegation":
       return [
         "[HARIL DELEGATION mode] What the user types opens the /delegate card that starts a three-layer workflow; this chat is read-only (read, grep, find, ls).",
-        "Help shape the goal and the stops; do not change anything yourself.",
+        `Help shape the goal and the stops; do not change anything yourself. ${PLAN_TOOL} saves a plan the user asks to keep.`,
       ].join("\n");
   }
 }

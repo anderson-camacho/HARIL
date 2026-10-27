@@ -13,6 +13,7 @@ import {
   workflowStartArgs,
 } from "./delegate-card.js";
 import type { ConsoleContext, ConsoleMouseEvent, SessionEntry } from "./pi-types.js";
+import { listPlans, planTitle, readPlan } from "./plans.js";
 import type { BoundProject } from "./project.js";
 import type { PendingApproval } from "./status.js";
 import { plainText } from "./text.js";
@@ -22,9 +23,18 @@ import { plainText } from "./text.js";
 // ORCHESTRATION module opens. In DELEGATION mode what the user types opens the same card (the text is the goal); while
 // a workflow of the project runs or waits at a stop, typed text is refused with a hint instead (P5), so no instruction
 // arrives in the middle of a run. /continue lifts the stop a workflow waits at.
+// The plan comes first: the plans saved in docs/planes (plans.ts) are offered at the top, newest first. The preflight
+// also checks that the real agents can run (the runtime, the bridge and the model's provider key), so a workflow is
+// never queued to wait for a setup that is missing; it runs again when the card's model changed.
 
 const DEFAULT_MODEL_ENV = "HARIL_DEFAULT_MODEL";
 const MODEL_TITLE = "Orchestrator model · pick a high model";
+const FOLLOW_PLAN = "Follow the selected plan · no extra instructions to type";
+const FOLLOW_PLAN_INSTRUCTIONS = [
+  "Carry out the selected plan step by step, in its order, without adding scope.",
+  "Before each change, read the files it touches; after it, run the project's test command and fix what fails.",
+  "Report each step as done with the evidence (files changed, test output), or say exactly why it could not be done.",
+].join("\n");
 
 export interface DelegationHost {
   readonly cwd: string;
@@ -65,24 +75,66 @@ function projectArgs(host: { readonly project: BoundProject | undefined }): stri
   return host.project === undefined ? [] : ["--project", host.project.slug];
 }
 
-// The text of the user's last chat message in the session's branch: /delegate without a goal takes it.
-export function lastUserText(entries: readonly SessionEntry[]): string | undefined {
-  for (let index = entries.length - 1; index >= 0; index--) {
-    const message = entries[index]?.message;
-    if (entries[index]?.type !== "message" || message?.role !== "user") continue;
-    const content = message.content;
-    const text =
-      typeof content === "string"
+function messageText(entry: SessionEntry | undefined, role: "user" | "assistant"): string {
+  const message = entry?.message;
+  if (entry?.type !== "message" || message?.role !== role) return "";
+  const content = message.content;
+  const text =
+    typeof content === "string"
+      ? content
+      : Array.isArray(content)
         ? content
-        : Array.isArray(content)
-          ? content
-              .filter((part) => part.type === "text" && typeof part.text === "string")
-              .map((part) => part.text ?? "")
-              .join("\n")
-          : "";
-    if (text.trim() !== "") return text.trim();
+            .filter((part) => part.type === "text" && typeof part.text === "string")
+            .map((part) => part.text ?? "")
+            .join("\n")
+        : "";
+  return text.trim();
+}
+
+function lastText(
+  entries: readonly SessionEntry[],
+  role: "user" | "assistant",
+): string | undefined {
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const text = messageText(entries[index], role);
+    if (text !== "") return text;
   }
   return undefined;
+}
+
+// The text of the user's last chat message in the session's branch: /delegate without a goal takes it.
+export function lastUserText(entries: readonly SessionEntry[]): string | undefined {
+  return lastText(entries, "user");
+}
+
+// The model's last reply in the session's branch: what /save-plan keeps when no plan was written in PLAN mode.
+export function lastAssistantText(entries: readonly SessionEntry[]): string | undefined {
+  return lastText(entries, "assistant");
+}
+
+// Below the 200 KB a saved plan holds, with room for the heading.
+const CONVERSATION_MAX_CHARS = 180_000;
+
+// The conversation of the session's branch as Markdown, for /save-plan --chat: each user and assistant message in
+// order; when it is too long the oldest messages are left out. Undefined when the branch has no text.
+export function conversationText(entries: readonly SessionEntry[]): string | undefined {
+  const parts: string[] = [];
+  let size = 0;
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const user = messageText(entries[index], "user");
+    const reply = messageText(entries[index], "assistant");
+    const part =
+      user !== "" ? `### User\n\n${user}` : reply !== "" ? `### Assistant\n\n${reply}` : "";
+    if (part === "") continue;
+    if (size + part.length > CONVERSATION_MAX_CHARS) break;
+    parts.unshift(part);
+    size += part.length + 2;
+  }
+  if (parts.length === 0) return undefined;
+  const first = entries.map((entry) => messageText(entry, "user")).find((text) => text !== "");
+  return [`# ${planTitle(first ?? "Conversation")}`, "", ...parts.flatMap((part) => [part, ""])]
+    .join("\n")
+    .trimEnd();
 }
 
 // The workflows of the project, newest last; undefined when the CLI cannot answer.
@@ -124,13 +176,32 @@ async function selectPlan(
     ctx.ui.notify("Select a registered project first: /init registers this folder", "warning");
     return undefined;
   }
+  const saved = listPlans(project.rootPath);
+  const savedOptions = saved.map((plan) => `Saved plan · ${plan.title} · ${plan.relative}`);
   const options = [
     "Create a plan in PLAN mode",
     "Select an existing or prior plan",
     "Use an explicit current conversation or console plan",
     "Continue read-only consultation",
   ];
-  const choice = await ctx.ui.select("Select an exact plan source before starting", options);
+  const choice = await ctx.ui.select("Select an exact plan source before starting", [
+    ...savedOptions,
+    ...options,
+  ]);
+  const savedIndex = savedOptions.indexOf(choice ?? "");
+  const savedPlan = saved[savedIndex];
+  if (savedPlan !== undefined) {
+    const text = readPlan(project.rootPath, savedPlan.relative);
+    if (text === undefined) {
+      ctx.ui.notify(`${savedPlan.relative} could not be read; no workflow was started`, "error");
+      return undefined;
+    }
+    return {
+      sourceId: `file:${savedPlan.relative.split(/[\\/]/).join("/")}`,
+      revision: null,
+      text,
+    };
+  }
   if (choice === options[0]) {
     host.createPlan(ctx);
     ctx.ui.notify("Write an explicit plan in PLAN mode, then use /delegate again", "info");
@@ -238,12 +309,14 @@ async function selectMethodology(ctx: ConsoleContext): Promise<
     }
   | undefined
 > {
-  const names = ["ODD", "SDD", "Gentle AI", "Custom / user-supplied"];
+  const names = [FOLLOW_PLAN, "ODD", "SDD", "Gentle AI", "Custom / user-supplied"];
   const choice = await ctx.ui.select(
     "Choose a methodology and supply its exact instructions",
     names,
   );
   if (choice === undefined || !names.includes(choice)) return undefined;
+  // The one choice that needs no typing: its instructions are written out here, never a bare label.
+  if (choice === FOLLOW_PLAN) return { id: "plan", instructions: FOLLOW_PLAN_INSTRUCTIONS };
   const instructions = await ctx.ui.input(
     `Exact ${choice} instructions for this workflow`,
     "A framework label alone is not executable instructions",
@@ -252,7 +325,7 @@ async function selectMethodology(ctx: ConsoleContext): Promise<
     ctx.ui.notify("Methodology instructions are required; no workflow was started", "warning");
     return undefined;
   }
-  return { id: choice === names[3] ? "custom" : choice, instructions };
+  return { id: choice === names[4] ? "custom" : choice, instructions };
 }
 
 // The card over the terminal until the human starts or cancels it; M asks for the model and comes back to the card.
@@ -361,13 +434,13 @@ export async function startDelegation(
     host.harilModelRef() ?? (fallback === "" ? undefined : fallback),
   );
   const input = JSON.stringify({ projectRoot: project.rootPath, plan, methodology });
-  const preflightArgs = [
+  const preflightArgs = (card: DelegateCard): string[] => [
     "workflow",
     "start",
     "--preflight",
-    ...workflowStartArgs(initial, project.slug).slice(2),
+    ...workflowStartArgs(card, project.slug).slice(2),
   ];
-  const checked = await runHaril(preflightArgs, { cwd: host.cwd, input });
+  const checked = await runHaril(preflightArgs(initial), { cwd: host.cwd, input });
   if (!checked.ok) {
     ctx.ui.notify(firstLine(checked.stderr) || "haril workflow preflight failed", "error");
     return;
@@ -410,6 +483,14 @@ export async function startDelegation(
   if (confirmed === undefined) {
     ctx.ui.notify("Delegation cancelled: no workflow was started", "info");
     return;
+  }
+  // The card's model may not be the one the preflight checked: its provider key is checked before anything is queued.
+  if (confirmed.model !== initial.model) {
+    const again = await runHaril(preflightArgs(confirmed), { cwd: host.cwd, input });
+    if (!again.ok) {
+      ctx.ui.notify(firstLine(again.stderr) || "haril workflow preflight failed", "error");
+      return;
+    }
   }
   const result = await runHaril(workflowStartArgs(confirmed, project.slug), {
     cwd: host.cwd,

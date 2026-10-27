@@ -7,8 +7,9 @@ import { plainText, textWidth, truncate, wrap } from "./text.js";
 // decided for this run. The autonomy is read from the user's own words with a closed vocabulary, never by a model:
 // the stop names themselves (after_plan, at_end, on_audit_failure, on_budget_pct:<n>, after_node:<id>, before_merge)
 // and a few plain phrases in English and Spanish ("don't stop", "stop at the end", "si falla una auditoría"…). A message
-// that says nothing stops after the first plan (P1). The human toggles the stops and confirms; nothing starts without
-// that. The card builds the exact `haril workflow start` arguments, always with real agents (--agent orchestrator).
+// that says nothing runs without stops: the card itself is the human's confirmation, so the workflow starts working at
+// once instead of waiting after its first plan; the usual stops stay listed, unchecked, for the human to turn on. The
+// human toggles the stops and confirms; nothing starts without that. The card builds the exact `haril workflow start` arguments, always with real agents (--agent orchestrator).
 // Agents may add stops later; only the human removes them (/continue, haril workflow continue --remove-stop).
 
 const GOAL_LINES = 3;
@@ -111,9 +112,9 @@ function folded(text: string): string {
   return text.toLowerCase().replace(/[‘’]/g, "'").normalize("NFD").replace(/\p{M}/gu, "");
 }
 
-// What the message says about stops: `said` is false when it says nothing, and then the stop is after_plan (P1). A
-// named stop wins over a no-stop phrase ("don't stop, except at the end" stops at the end). Stops come in the order
-// the message names them.
+// What the message says about stops: `said` is false when it says nothing, and then there is no stop (the workflow runs
+// at once). A named stop wins over a no-stop phrase ("don't stop, except at the end" stops at the end). Stops come in
+// the order the message names them.
 export function readAutonomy(text: string): { readonly said: boolean; readonly stops: string[] } {
   const found: { stop: string; at: number }[] = [];
   for (const match of text.matchAll(STOP_TOKEN)) {
@@ -138,7 +139,7 @@ export function readAutonomy(text: string): { readonly said: boolean; readonly s
   const stops = [...new Set(found.sort((a, b) => a.at - b.at).map((item) => item.stop))];
   if (stops.length > 0) return { said: true, stops };
   if (NO_STOP_PHRASES.some((pattern) => pattern.test(plain))) return { said: true, stops: [] };
-  return { said: false, stops: ["after_plan"] };
+  return { said: false, stops: [] };
 }
 
 export function createCard(
