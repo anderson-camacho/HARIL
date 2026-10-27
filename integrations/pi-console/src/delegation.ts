@@ -298,7 +298,7 @@ async function confirmInOverlay(
           invalidate() {},
         };
       },
-      { overlay: true, overlayOptions: { width: "90%", maxHeight: "90%" } },
+      { overlay: true, overlayOptions: { width: "100%", maxHeight: "100%" } },
     );
     current = result.card;
     if (result.effect !== "choose-model") return result.effect === "start" ? current : undefined;

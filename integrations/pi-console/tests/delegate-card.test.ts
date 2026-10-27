@@ -182,4 +182,18 @@ describe("the card", () => {
     expect(cardClick(card, { kind: "model" }).effect).toBe("choose-model");
     expect(cardClick(card, { kind: "cancel" }).effect).toBe("cancel");
   });
+
+  it("keeps a margin on both sides and makes the hit boxes follow it", () => {
+    const card = createCard("Goal", MODEL);
+    const { lines, hits } = renderCard(card, 80, THEME);
+    for (const line of lines) {
+      const plain = stripAnsi(line);
+      expect(plain.startsWith("   ")).toBe(true);
+      expect(textWidth(plain)).toBeLessThanOrEqual(77);
+    }
+    const start = hits.find((hit) => hit.target.kind === "start");
+    expect(start?.start).toBeGreaterThanOrEqual(3);
+    const row = stripAnsi(lines[start?.row ?? 0] ?? "");
+    expect(row.slice(start?.start, start?.end)).toBe("[Enter Start]");
+  });
 });
