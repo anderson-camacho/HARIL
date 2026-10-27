@@ -139,7 +139,7 @@ export function renderRightDock(
   });
 }
 
-export interface RightRailStructure {
+interface RightRailStructure {
   readonly lines: readonly string[];
   readonly tabRows: readonly DockTabRow[];
   readonly tabStart: number;
@@ -149,7 +149,7 @@ export interface RightRailStructure {
 
 // In single-rail mode, the right rail hosts the active space (tabs, status and details)
 // directly under the "Espacio" section, freeing the left side entirely for the Pi chat.
-export function renderRightRailContent(
+function renderRightRailContent(
   width: number,
   state: PaneSettings,
   dashboardLines: readonly string[],
