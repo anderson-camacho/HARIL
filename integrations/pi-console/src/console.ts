@@ -33,7 +33,6 @@ import {
   aiEyeTone,
   getHarilPalette,
   HARIL_PALETTES,
-  paddedCell,
   setHarilPalette,
   visualText,
 } from "./dashboard-theme.js";
@@ -801,18 +800,12 @@ export default function harilConsole(pi: ConsolePi): void {
       effortLevel: () => modelLevelOf(current).level,
       locale: () => current.locale,
       right: (width) => {
-        const selection = DOCK_LABELS.find((item) => item.id === current.dock.selected);
-        const label = selection?.label ?? current.dock.selected;
-        return [
-          // The selected item is a UI slot, not a claim about the installation state of a Pi extension.
-          paddedCell(` ▣ Espacio: ${label}`, width, "yellow", "panel"),
-          ...renderNativeRailContent(
-            dashboardFacts(current),
-            current.area,
-            width,
-            current.railExpanded,
-          ),
-        ];
+        return renderNativeRailContent(
+          dashboardFacts(current),
+          current.area,
+          width,
+          current.railExpanded,
+        );
       },
       select(id) {
         void openDockSlot(current, id);

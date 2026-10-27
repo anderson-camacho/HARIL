@@ -61,10 +61,10 @@ describe("native dock integration with the HARIL Pi extension", () => {
         }
       )();
       expect(newLayout.type).toBe("hstack");
-      const middle = newLayout.entries[1];
-      const rightPane = newLayout.entries[2];
-      const leftPane = newLayout.entries[0];
-      if (!leftPane || !middle || !rightPane) throw new Error("Expected three Pi panes");
+      expect(newLayout.entries).toHaveLength(2);
+      const middle = newLayout.entries[0];
+      const rightPane = newLayout.entries[1];
+      if (!middle || !rightPane) throw new Error("Expected Pi panes");
       expect(middle.component.render(60)).toEqual(["Pi chat"]);
 
       const newHeader = header?.(tui, THEME).render(96).map(stripAnsi).join("\n");
@@ -73,11 +73,12 @@ describe("native dock integration with the HARIL Pi extension", () => {
       expect(newHeader?.split("\n")).toHaveLength(1);
       const right = rightPane.component.render(40).map(stripAnsi).join("\n");
       expect(right).toContain("ACTIVIDAD");
+      expect(right).toContain("Espacio: Explorador");
 
       await fake.commands.get("haril-plugin")?.handler("youtube", ctx);
-      const left = leftPane.component.render(23).map(stripAnsi).join("\n");
-      expect(left).toContain("YOUTUBE");
-      expect(left).toContain("Extensión /yt");
+      const rightUpdated = rightPane.component.render(40).map(stripAnsi).join("\n");
+      expect(rightUpdated).toContain("YouTube");
+      expect(rightUpdated).toContain("Extensión /yt");
 
       await fake.fire("session_shutdown", {}, ctx);
       expect(root[LAYOUT_NODE]).toBe(original);

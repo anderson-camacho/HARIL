@@ -51,6 +51,7 @@ export interface PaneSettings {
   detail: DockDetails | undefined;
   leftVisible: boolean;
   rightVisible: boolean;
+  dockExpanded?: boolean;
 }
 
 export function initialPaneSettings(): PaneSettings {
@@ -58,8 +59,9 @@ export function initialPaneSettings(): PaneSettings {
     slots: readDockSlots(undefined),
     selected: "explorer",
     detail: undefined,
-    leftVisible: true,
+    leftVisible: false,
     rightVisible: true,
+    dockExpanded: true,
   };
 }
 
@@ -135,6 +137,77 @@ export function renderRightDock(
     const row = content[index] ?? paddedCell("", width - 1, "text", "panel");
     return `${separator}${row}`;
   });
+}
+
+export interface RightRailStructure {
+  readonly lines: readonly string[];
+  readonly tabRows: readonly DockTabRow[];
+  readonly tabStart: number;
+  readonly detailStart: number;
+  readonly detailCount: number;
+}
+
+// In single-rail mode, the right rail hosts the active space (tabs, status and details)
+// directly under the "Espacio" section, freeing the left side entirely for the Pi chat.
+export function renderRightRailContent(
+  width: number,
+  state: PaneSettings,
+  dashboardLines: readonly string[],
+  locale: UiLocale = "es",
+): RightRailStructure {
+  const inside = Math.max(1, width - 1);
+  const rows: string[] = [];
+  const module = dockDefinition(state.selected);
+  const selection = (locale === "es" ? module?.label : module?.labelEn) ?? state.selected;
+
+  if (state.leftVisible) {
+    rows.push(paddedCell(` ▣ Espacio: ${selection}`, inside, "yellow", "panel"));
+    for (const line of dashboardLines) rows.push(line);
+    return { lines: rows, tabRows: [], tabStart: -1, detailStart: -1, detailCount: 0 };
+  }
+
+  const expanded = state.dockExpanded ?? true;
+  const icon = expanded ? "▼" : "▶";
+  rows.push(paddedCell(` ${icon} Espacio: ${selection} · Alt+L`, inside, "yellow", "panel"));
+
+  if (!expanded) {
+    for (const line of dashboardLines) rows.push(line);
+    return { lines: rows, tabRows: [], tabStart: -1, detailStart: -1, detailCount: 0 };
+  }
+
+  const tabRows = dockTabs(state, Math.max(1, inside - 1));
+  const tabStart = rows.length;
+  for (const tab of tabRows) {
+    rows.push(
+      paddedCell(
+        ` ${tab.text}`,
+        inside,
+        tab.cells.some((cell) => cell.id === state.selected) ? "yellow" : "text",
+        "panel",
+      ),
+    );
+  }
+
+  rows.push(
+    paddedCell(
+      ` ${state.detail?.status ?? (locale === "es" ? "Cargando vista…" : "Loading view…")}`,
+      inside,
+      "teal",
+      "panel",
+    ),
+  );
+
+  const detail = state.detail?.id === state.selected ? state.detail.lines : [];
+  const detailStart = rows.length;
+  for (const item of detail) {
+    rows.push(paddedCell(` ${item}`, inside, "text", "panel"));
+  }
+  const detailCount = detail.length;
+
+  rows.push(paddedCell(" ────────────────────────────────────────", inside, "muted", "panel"));
+  for (const line of dashboardLines) rows.push(line);
+
+  return { lines: rows, tabRows, tabStart, detailStart, detailCount };
 }
 
 interface LayoutRoot {
@@ -236,19 +309,82 @@ export function attachNativePanes(
     invalidate() {},
   };
   let scrollTop = 0;
+  let rightDisplayedDetail = state.detail;
+  let rightDisplayedSlot = state.selected;
   const right = {
     render(width: number) {
+      if (state.detail !== rightDisplayedDetail || state.selected !== rightDisplayedSlot) {
+        rightDisplayedDetail = state.detail;
+        rightDisplayedSlot = state.selected;
+        scrollTop = 0;
+      }
       const height = Math.max(1, tui.terminal.rows);
-      const content = options.right(width - 1);
-      scrollTop = Math.min(scrollTop, Math.max(0, content.length - height));
-      return renderRightDock(width, height, content.slice(scrollTop));
+      const dashboard = options.right(width - 1);
+      const structure = renderRightRailContent(width, state, dashboard, options.locale?.() ?? "es");
+      scrollTop = Math.min(scrollTop, Math.max(0, structure.lines.length - height));
+      return renderRightDock(width, height, structure.lines.slice(scrollTop));
     },
     handleMouse(event: ConsoleMouseEvent) {
-      if (event.type !== "wheel") return undefined;
-      const max = Math.max(0, options.right(39).length - tui.terminal.rows);
-      scrollTop = Math.max(0, Math.min(max, scrollTop + (event.wheelDelta ?? 0)));
-      tui.requestRender();
-      return { handled: true, render: true };
+      const dashboard = options.right(39);
+      const structure = renderRightRailContent(40, state, dashboard, options.locale?.() ?? "es");
+      if (event.type === "wheel") {
+        const height = Math.max(1, tui.terminal.rows);
+        const max = Math.max(0, structure.lines.length - height);
+        scrollTop = Math.max(0, Math.min(max, scrollTop + (event.wheelDelta ?? 0)));
+        tui.requestRender();
+        return { handled: true, render: true };
+      }
+      if (event.type !== "click" || event.button !== "left") return undefined;
+      const clickedRow = event.y + scrollTop;
+      if (!state.leftVisible) {
+        if (clickedRow === 0) {
+          state.dockExpanded = !(state.dockExpanded ?? true);
+          tui.requestRender();
+          return { handled: true, render: true };
+        }
+        if (state.dockExpanded ?? true) {
+          if (
+            structure.tabStart >= 0 &&
+            clickedRow >= structure.tabStart &&
+            clickedRow < structure.tabStart + structure.tabRows.length
+          ) {
+            const tab = structure.tabRows[clickedRow - structure.tabStart];
+            if (tab) {
+              const clicked = tab.cells.find(
+                (cell) => event.x >= cell.start + 1 && event.x < cell.end + 1,
+              );
+              if (clicked) {
+                scrollTop = 0;
+                options.select(clicked.id);
+                return { handled: true, render: true };
+              }
+            }
+          }
+          if (
+            structure.detailStart >= 0 &&
+            clickedRow >= structure.detailStart &&
+            clickedRow < structure.detailStart + structure.detailCount
+          ) {
+            const detailLine = clickedRow - structure.detailStart;
+            if (state.selected === "themes") {
+              const action = state.detail?.actions?.find((item) => item.line === detailLine);
+              if (action !== undefined && state.detail?.id === state.selected) {
+                options.activate?.(state.selected, action.action);
+                return { handled: true, render: true };
+              }
+            }
+            if (state.selected === "explorer") {
+              const row = detailLine - 1;
+              const node = state.detail?.treeNodes?.[row];
+              if (node?.directory) {
+                options.toggleExplorer?.(node.path);
+                return { handled: true, render: true };
+              }
+            }
+          }
+        }
+      }
+      return undefined;
     },
     invalidate() {},
   };
