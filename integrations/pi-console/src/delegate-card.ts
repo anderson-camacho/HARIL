@@ -13,6 +13,8 @@ import { plainText, textWidth, truncate, wrap } from "./text.js";
 
 const GOAL_LINES = 3;
 const LABEL_WIDTH = 10;
+// Blank columns left and right of the card, so it never touches the terminal edge or the panels behind it.
+const MARGIN = 3;
 // The stops every card lists; a stop the message names joins them.
 const USUAL_STOPS = ["after_plan", "at_end", "on_audit_failure"] as const;
 
@@ -251,6 +253,7 @@ export function cardKey(card: DelegateCard, data: string): CardStep {
 interface Segment {
   readonly text: string;
   readonly tone: ThemeColor;
+  readonly bold?: boolean;
   readonly target?: CardTarget;
 }
 
@@ -262,27 +265,48 @@ export function renderCard(
 ): { readonly lines: string[]; readonly hits: CardHit[] } {
   const lines: string[] = [];
   const hits: CardHit[] = [];
-  const room = Math.max(1, width);
+  const room = Math.max(1, width - 2 * MARGIN);
   const push = (segments: readonly Segment[]): void => {
     let column = 0;
-    let line = "";
+    let line = " ".repeat(MARGIN);
     for (const segment of segments) {
       const left = room - column;
       if (left <= 0) break;
       const text = truncate(segment.text, left);
       const size = textWidth(text);
       if (segment.target !== undefined && size > 0) {
-        hits.push({ row: lines.length, start: column, end: column + size, target: segment.target });
+        hits.push({
+          row: lines.length,
+          start: MARGIN + column,
+          end: MARGIN + column + size,
+          target: segment.target,
+        });
       }
-      line += theme.fg(segment.tone, text);
+      line += theme.fg(segment.tone, segment.bold === true ? theme.bold(text) : text);
       column += size;
     }
     lines.push(line);
   };
-  const label = (text: string): Segment => ({ text: text.padEnd(LABEL_WIDTH), tone: "muted" });
+  // Labels are bold accent, values plain text: the two read apart at a glance.
+  const label = (text: string): Segment => ({
+    text: text.padEnd(LABEL_WIDTH),
+    tone: "accent",
+    bold: true,
+  });
+  const blank = (): void => push([{ text: "", tone: "dim" }]);
+  const rule = (): void => push([{ text: "─".repeat(room), tone: "dim" }]);
   const valueWidth = Math.max(1, room - LABEL_WIDTH);
 
-  push([{ text: "◆ DELEGATE · start a three-layer workflow with real agents", tone: "warning" }]);
+  blank();
+  push([
+    {
+      text: "◆ DELEGATE · start a three-layer workflow with real agents",
+      tone: "warning",
+      bold: true,
+    },
+  ]);
+  rule();
+  blank();
   const goal = wrap(plainText(card.goal).replace(/\s+/g, " "), valueWidth);
   const shownGoal = goal.slice(0, GOAL_LINES);
   if (goal.length > GOAL_LINES && shownGoal.length > 0) {
@@ -318,6 +342,7 @@ export function renderCard(
       },
     ]);
   });
+  blank();
   push([label("Agents"), { text: "real agents (--agent orchestrator)", tone: "text" }]);
   if (card.preflight !== undefined) {
     push([label("Mode"), { text: "Implementation · Git worktree listing checked", tone: "text" }]);
@@ -333,11 +358,13 @@ export function renderCard(
     { text: "HARIL's defaults, frozen at start (haril workflow show)", tone: "text" },
   ]);
   push([label("Quota"), { text: "not available yet", tone: "muted" }]);
+  blank();
   push([
     { text: "Agents may add stops; only you remove them. /continue lifts a stop.", tone: "muted" },
   ]);
   const problem = cardProblem(card);
   if (problem !== undefined) push([{ text: `! ${problem}`, tone: "error" }]);
+  rule();
   push([
     {
       text: "[Enter Start]",
@@ -353,5 +380,6 @@ export function renderCard(
     { text: "  ", tone: "dim" },
     { text: "[Esc Cancel]", tone: "error", target: { kind: "cancel" } },
   ]);
+  blank();
   return { lines, hits };
 }
