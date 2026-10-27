@@ -13,18 +13,18 @@ import type { ConsoleTheme } from "../src/pi-types.js";
 import { stripAnsi, textWidth } from "../src/text.js";
 
 // The /delegate card (3.13, 7.5): the one human confirmation of a workflow. It shows the goal, the orchestrator's model
-// and the autonomy decided for this run: what the message said about stops, read with a closed vocabulary, or
-// after_plan when it said nothing (P1). The human toggles stops and confirms; the card builds the exact
-// `haril workflow start` arguments, always with real agents (--agent orchestrator).
+// and the autonomy decided for this run: what the message said about stops, read with a closed vocabulary, or no stop
+// when it said nothing, so the workflow starts working at once. The human toggles stops and confirms; the card builds
+// the exact `haril workflow start` arguments, always with real agents (--agent orchestrator).
 
 const THEME: ConsoleTheme = { fg: (_color, text) => text, bold: (text) => text };
 const MODEL = "fake-gw/fake-high-model";
 
 describe("reading the autonomy from the message", () => {
-  it("stops after the first plan when the message says nothing (P1)", () => {
+  it("runs without stops when the message says nothing, so the workflow does not wait", () => {
     expect(readAutonomy("Change the button color and test it")).toEqual({
       said: false,
-      stops: ["after_plan"],
+      stops: [],
     });
   });
 
@@ -64,7 +64,7 @@ describe("reading the autonomy from the message", () => {
   it("ignores an out-of-range budget", () => {
     expect(readAutonomy("stop at 150% of the budget")).toEqual({
       said: false,
-      stops: ["after_plan"],
+      stops: [],
     });
   });
 });
@@ -82,12 +82,12 @@ describe("the card", () => {
   });
 
   it("builds haril workflow start with real agents, the model and the stops", () => {
-    const card = createCard("Change the primary button color", MODEL);
+    const card = createCard("Change the primary button color; stop after the plan", MODEL);
     expect(workflowStartArgs(card, "fake-proj")).toEqual([
       "workflow",
       "start",
       "--goal",
-      "Change the primary button color",
+      "Change the primary button color; stop after the plan",
       "--model",
       MODEL,
       "--agent",
@@ -101,12 +101,13 @@ describe("the card", () => {
     ]);
   });
 
-  it("passes --autonomous when no stop is checked", () => {
-    const card = createCard("Refactor, don't stop", MODEL);
-    const args = workflowStartArgs(card, "fake-proj");
-    expect(args).toContain("--autonomous");
-    expect(args).not.toContain("--stop-at");
-    expect(args).toContain("--project");
+  it("passes --autonomous when no stop is checked, also when the message says nothing", () => {
+    for (const goal of ["Refactor, don't stop", "Refactor the parser"]) {
+      const args = workflowStartArgs(createCard(goal, MODEL), "fake-proj");
+      expect(args, goal).toContain("--autonomous");
+      expect(args, goal).not.toContain("--stop-at");
+      expect(args, goal).toContain("--project");
+    }
   });
 
   it("toggles stops with the keyboard and starts on Enter", () => {
@@ -115,7 +116,7 @@ describe("the card", () => {
     card = step.card;
     step = cardKey(card, " ");
     card = step.card;
-    expect(selectedStops(card)).toEqual(["after_plan", "at_end"]);
+    expect(selectedStops(card)).toEqual(["at_end"]);
     step = cardKey(card, "a");
     expect(selectedStops(step.card)).toEqual([]);
     step = cardKey(step.card, "a");
@@ -142,8 +143,9 @@ describe("the card", () => {
       expect(text).toContain("Change the primary button");
       expect(text).toContain(MODEL);
       expect(text).toContain("real agents");
-      expect(text).toMatch(/\[x\] after_plan/);
+      expect(text).toMatch(/\[ \] after_plan/);
       expect(text).toMatch(/\[ \] at_end/);
+      expect(text).toMatch(/autonomous/);
       expect(text).toContain("only you remove them");
       expect(text).toContain("Quota");
       expect(text).toMatch(/Enter.*Start/);
@@ -173,7 +175,7 @@ describe("the card", () => {
     const atEnd = hits.find((hit) => hit.target.kind === "stop" && hit.target.index === 1);
     expect(atEnd).toBeDefined();
     const toggled = cardClick(card, atEnd?.target ?? { kind: "cancel" });
-    expect(selectedStops(toggled.card)).toEqual(["after_plan", "at_end"]);
+    expect(selectedStops(toggled.card)).toEqual(["at_end"]);
     for (const kind of ["start", "cancel", "model"] as const) {
       const hit = hits.find((item) => item.target.kind === kind);
       expect(hit, kind).toBeDefined();

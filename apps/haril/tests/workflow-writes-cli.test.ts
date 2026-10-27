@@ -216,6 +216,27 @@ describe.skipIf(!HAS_GIT)("haril workflow start on a git project", () => {
     expect(parseJson<unknown[]>(h.out)).toEqual([]);
   });
 
+  it("refuses the preflight of real agents that cannot run, so nothing waits queued", async () => {
+    initRepo();
+    await init();
+    expect(
+      await invoke([
+        "workflow",
+        "start",
+        "Write",
+        "--model",
+        "fake/m",
+        "--agent",
+        "orchestrator",
+        "--preflight",
+        "--json",
+      ]),
+    ).toBe(2);
+    expect(h.err.join("\n")).toMatch(/the real agents cannot run yet: .+; nothing was queued/);
+    expect(await invoke(["status", "--json"])).toBe(0);
+    expect(parseJson<{ queuedCommands?: unknown[] }>(h.out).queuedCommands ?? []).toEqual([]);
+  });
+
   it("runs the writing workflow with the fake agents and shows its integration branch", async () => {
     initRepo();
     await init();
