@@ -2,7 +2,8 @@
 
 ## Estado actual
 
-- **Versión actual:** 0.23.5.
+- **Versión actual:** 0.23.6.
+- **Estado (0.23.6):** eliminación de la doble columna; el dock de espacios (pestañas y explorador/fichas) se integra en la barra lateral derecha bajo Espacio, dejando la conversación de Pi sin columna a la izquierda.
 - **Estado (0.23.5):** manual de uso publicado: plan de incorporación, paneles izquierdo y derecho, explicación de contadores, menús, áreas, modos, atajos y ejercicios seguros.
 - **Estado (0.23.4):** transición continua de lluvia digital a HARIL grande; TTE resuelve directamente al texto final y el motor integrado utiliza una disolución por celdas, sin parpadeo por limpieza. Tema Matrix verde/negro para panel HARIL, shell y Pi, preparado automáticamente al abrir la consola; se corrige la prueba de dependencias en Windows.
 - **Estado (0.23.3):** arranque Matrix real con lluvia que alcanza la parte inferior de la terminal, texto final únicamente HARIL grande durante 3 segundos. El actualizador comprueba versiones y ejecución real de `uv` y TTE, omite instalaciones sanas y repara binarios faltantes, dañados o desactualizados.
@@ -73,4 +74,4 @@ Las versiones 0.x son preliminares: pueden cambiar sin compatibilidad hacia atr�
 
 Más reciente primero. Cada carpeta contiene el archivo de cambios de su versión mayor, con las versiones menores y de parche, la más nueva arriba.
 
-- [v0](v0/CHANGELOG.md): versiones 0.1.0 a 0.23.5.
+- [v0](v0/CHANGELOG.md): versiones 0.1.0 a 0.23.6.

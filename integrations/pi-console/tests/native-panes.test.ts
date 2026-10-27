@@ -52,23 +52,24 @@ describe("Pi's native split-pane adapter", () => {
     expect(attachNativePanes(tui, state, options).attached).toBe(false);
     const layout = (root[LAYOUT_NODE] as () => NativeLayout)();
     expect(layout.type).toBe("hstack");
-    expect(layout.entries).toHaveLength(3);
-    expect(layout.entries.map((entry) => entry.basis)).toEqual([23, 0, 40]);
-    const [left, centre, right] = layout.entries;
-    if (!left || !centre || !right) throw new Error("Expected all three Pi panes");
+    expect(layout.entries).toHaveLength(2);
+    expect(layout.entries.map((entry) => entry.basis)).toEqual([0, 40]);
+    const [centre, right] = layout.entries;
+    if (!centre || !right) throw new Error("Expected Pi panes");
     expect((centre.component[LAYOUT_NODE] as () => unknown)()).toEqual(
       original.mock.results.at(-1)?.value,
     );
     expect(centre.component.render(40)).toEqual(["Pi chat and editor"]);
-    const dock = left.component.render(23).map(stripAnsi).join("\n");
-    expect(dock).toContain("VISTAS");
+    const dock = right.component.render(40).map(stripAnsi).join("\n");
+    expect(dock).toContain("Espacio: Explorador");
     expect(dock).toContain("[1:TREE]");
+    expect(dock).toContain("STATUS");
     expect(right.component.render(40)).toHaveLength(tui.terminal.rows);
 
-    left.component.handleMouse?.({ type: "click", button: "left", y: 4, x: 3 });
+    right.component.handleMouse?.({ type: "click", button: "left", y: 1, x: 3 });
     expect(select).toHaveBeenCalledWith("explorer");
     state.rightVisible = false;
-    expect((root[LAYOUT_NODE] as () => NativeLayout)().entries).toHaveLength(2);
+    expect((root[LAYOUT_NODE] as () => unknown)()).toEqual(original());
     panel.close();
     expect(root[LAYOUT_NODE]).toBe(original);
     expect(original()).toEqual((root[LAYOUT_NODE] as () => unknown)());
@@ -134,7 +135,7 @@ describe("Pi's native split-pane adapter", () => {
 
   it("keeps the dock fixed through resize and does not consume Pi layout when terminal is narrow", () => {
     const { tui, root, original } = fakeTui();
-    const state = initialPaneSettings();
+    const state = { ...initialPaneSettings(), leftVisible: true };
     const pane = attachNativePanes(tui, state, {
       project: () => "repo",
       right: () => [],
@@ -167,10 +168,10 @@ describe("Pi's native split-pane adapter", () => {
       activate,
     });
     const layout = (root[LAYOUT_NODE] as () => NativeLayout)();
-    const left = layout.entries[0]?.component;
-    const tabRows = left?.render(23).map(stripAnsi);
-    expect(tabRows?.[4]).toContain("1:TREE");
-    left?.handleMouse?.({ type: "click", button: "left", y: 4, x: 11 });
+    const right = layout.entries[1]?.component;
+    const tabRows = right?.render(40).map(stripAnsi);
+    expect(tabRows?.[1]).toContain("1:TREE");
+    right?.handleMouse?.({ type: "click", button: "left", y: 1, x: 11 });
     expect(select).toHaveBeenCalledWith("git");
 
     state.detail = {
@@ -180,10 +181,10 @@ describe("Pi's native split-pane adapter", () => {
       lines: ["repo", "▸ ▣ src"],
       treeNodes: [{ path: "/repo/src", directory: true, depth: 0 }],
     };
-    const treeRows = left?.render(23).map(stripAnsi) ?? [];
+    const treeRows = right?.render(40).map(stripAnsi) ?? [];
     const folderRow = treeRows.findIndex((row) => row.includes("src"));
-    expect(folderRow).toBeGreaterThan(4);
-    left?.handleMouse?.({ type: "click", button: "left", y: folderRow, x: 4 });
+    expect(folderRow).toBeGreaterThan(1);
+    right?.handleMouse?.({ type: "click", button: "left", y: folderRow, x: 4 });
     expect(toggleExplorer).toHaveBeenCalledWith("/repo/src");
     state.selected = "themes";
     state.detail = {
@@ -193,9 +194,10 @@ describe("Pi's native split-pane adapter", () => {
       lines: ["Selecciona:", "1. violet"],
       actions: [{ line: 1, action: "violet" }],
     };
-    left?.render(23);
-    // The first action is the second detail line, below the compact tabs.
-    left?.handleMouse?.({ type: "click", button: "left", y: 11, x: 4 });
+    right?.render(40);
+    const themeRows = right?.render(40).map(stripAnsi) ?? [];
+    const violetRow = themeRows.findIndex((row) => row.includes("violet"));
+    right?.handleMouse?.({ type: "click", button: "left", y: violetRow, x: 4 });
     expect(activate).toHaveBeenCalledWith("themes", "violet");
     panel.close();
   });

@@ -4,6 +4,34 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.23.6
+
+- **Fecha:** 2026-10-26
+- **Estado:** columna izquierda retirada del layout nativo; espacios y navegación integrados directamente en el panel derecho bajo la sección Espacio.
+
+### Añadido
+
+- Sección integrada de espacios en la columna derecha (`renderRightRailContent`): aloja las pestañas compactas (`dockTabs`), estado y fichas del plugin seleccionado (árbol de archivos en Explorador, estado Git, etc.) bajo el encabezado `▼ Espacio: <nombre> · Alt+L`.
+- Clics interactivos en el panel derecho para alternar pestañas del dock, expandir/contraer carpetas del árbol de archivos y seleccionar acciones/temas.
+- Plegado y desplegado de la sección `Espacio` con clic en su cabecera.
+
+### Cambiado
+
+- `initialPaneSettings()` establece `leftVisible: false` por defecto, eliminando la columna lateral izquierda fija para que la conversación central de Pi ocupe todo el ancho izquierdo.
+- El layout nativo de terminales amplias pasa de tres columnas (`[left, centre, right]`) a dos columnas (`[centre, right]`), con el chat y editor ocupando la izquierda y el centro, y el panel unificado a la derecha.
+- `options.right` en la extensión de la consola se integra directamente sin duplicar el encabezado de espacio.
+
+### Corregido
+
+- Disposición visual que comprimía la conversación entre dos barras laterales; la interfaz ahora cuenta con una única barra lateral a la derecha con todos los datos y navegación.
+
+### Verificación
+
+- Pruebas unitarias en `integrations/pi-console/tests/native-panes.test.ts` y `native-panes-console.test.ts` verificando el layout de 2 columnas, la integración de pestañas y árbol en el panel derecho, y los eventos de clic y rueda.
+- Comprobación de tipos (`npm run check:types`) y compilación (`npm run build`).
+
+---
+
 ## 0.23.5
 
 - **Fecha:** 2026-10-26

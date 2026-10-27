@@ -248,7 +248,7 @@ async function matrixTte(
     // TTE resolves the rain to the final large logo directly. No tiny-text jump.
     const { width, height } = terminalSize(out);
     const logo = width >= 29 && height >= 7 ? harilBannerLines(width, height) : ["HARIL"];
-    child.stdin?.end(logo.join("\n") + "\n");
+    child.stdin?.end(`${logo.join("\n")}\n`);
   });
 }
 
