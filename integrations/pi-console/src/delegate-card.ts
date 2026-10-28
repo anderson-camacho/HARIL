@@ -18,6 +18,15 @@ const LABEL_WIDTH = 10;
 const MARGIN = 3;
 // The stops every card lists; a stop the message names joins them.
 const USUAL_STOPS = ["after_plan", "at_end", "on_audit_failure"] as const;
+// A claude-bridge/<id> model (the pi-claude-bridge extension's, from /model) runs the agents through Claude Code's Agent
+// SDK on the login Claude Code has; the card repeats the notice the extension's README gives about its billing.
+const CLAUDE_BRIDGE_PREFIX = "claude-bridge/";
+export const CLAUDE_BRIDGE_NOTICE =
+  "claude-bridge: the agents run Claude Code through the Agent SDK on your Claude Code login. Anthropic announced and then withdrew a billing change for such tools; today they use your plan's quota.";
+
+export function isClaudeBridgeModel(model: string | undefined): boolean {
+  return model?.startsWith(CLAUDE_BRIDGE_PREFIX) === true;
+}
 
 interface CardStop {
   readonly stop: string;
@@ -323,6 +332,11 @@ export function renderCard(
       : { text: `${plainText(card.model)} `, tone: "text" },
     { text: "[M Model]", tone: "accent", target: { kind: "model" } },
   ]);
+  if (isClaudeBridgeModel(card.model)) {
+    for (const line of wrap(CLAUDE_BRIDGE_NOTICE, valueWidth)) {
+      push([label(""), { text: line, tone: "warning" }]);
+    }
+  }
   const stops = selectedStops(card);
   push([
     label("Autonomy"),

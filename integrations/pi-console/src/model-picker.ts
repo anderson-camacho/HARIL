@@ -42,10 +42,13 @@ export function delegationModelCatalog(
   }
 
   const reasonFor = (model: PiModel): string => {
+    if (model.provider === "claude-bridge") {
+      return "Pi lists this claude-bridge model but cannot use it now: check that pi-claude-bridge loads and that Claude Code is logged in.";
+    }
     if (harilRefOf(model) !== undefined) {
       return "Pi lists this HARIL model, but its provider has no working credentials.";
     }
-    return `Pi provider ${model.provider} is not a HARIL delegation provider. Presence in Pi does not make it executable by agent-pi; configure a HARIL provider in haril.json or use a runtime that supports Pi-native model references.`;
+    return `Pi provider ${model.provider} is not a HARIL delegation provider. Presence in Pi does not make it executable by agent-pi; configure a HARIL provider in haril.json, or install pi-claude-bridge for claude-bridge models.`;
   };
   const groups = groupModels(compatible);
   const unavailableGroups = groupModels(unavailable).map((group) => ({

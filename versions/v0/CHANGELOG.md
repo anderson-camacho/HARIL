@@ -4,6 +4,36 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.23.9
+
+- **Fecha:** 2026-10-27
+- **Estado:** los agentes de delegación corren con los modelos `claude-bridge/<id>` que `/model` ofrece cuando `pi-claude-bridge` está instalado, sobre el login de Claude Code que ya existe y sin Broker.
+
+### Añadido
+
+- Carril claude-bridge de los agentes reales (`apps/haril/src/runtime/claude-bridge.ts`, `integrations/agent-pi`): un modelo `claude-bridge/<id>` lanza Pi con el bridge de HARIL y el archivo de `pi-claude-bridge` (`-e` de cada uno) y `--provider claude-bridge --model <id>`. La extensión se busca donde la deja `haril extensions install npm:pi-claude-bridge --yes` (`<raíz del runtime>/agent/npm/node_modules`). HARIL no añade ningún login: Claude Code usa el suyo.
+- Cada ejecución recibe su propio `claude-bridge.json`: AskClaude apagado, `strictMcpConfig` activo, sin auto-memoria de Claude Code, y `plan`, `longContextExtraUsage`, `forceTwoHundredK` y `pathToClaudeCodeExecutable` copiados del de la consola.
+- Medición sin Broker: el adaptador lee el `usage` de cada mensaje del asistente (entrada = input + cacheRead + cacheWrite, salida = output) y el runtime lo carga en los presupuestos de la tarea y del proyecto; `usage_log`, `haril usage verify` y `haril metrics` lo reflejan como con el Broker. Cuando el presupuesto se agota y el modelo pide una herramienta, la ejecución termina como `insufficient_quota`.
+- `haril workflow start --preflight` acepta un modelo claude-bridge si la extensión está instalada y el id es de Claude, lo rechaza con el motivo y cómo arreglarlo en otro caso, y añade en `notices` el aviso de facturación de Anthropic sobre el Agent SDK.
+- La tarjeta `/delegate` y su diálogo RPC muestran ese aviso cuando el modelo es de claude-bridge.
+
+### Cambiado
+
+- La tarjeta `/delegate` toma como modelo por defecto el modelo claude-bridge del chat y ofrece los modelos claude-bridge disponibles en Pi junto a los de los proveedores de HARIL; el panel de delegación también los ofrece para `delegation.models.layers.*.model`.
+- Los refs claude-bridge que nombra un workflow (el orquestador, las capas fijadas y las listas `allow` de haril.json) entran al catálogo vivo, así que un padre puede proponerlos.
+- El entorno del agente en este carril añade solo `USERPROFILE`/`HOME` (y `CLAUDE_CONFIG_DIR` si existe) para que Claude Code encuentre su login; no pasa URL del Broker, clave virtual ni variables `ANTHROPIC_*`. El bridge de HARIL no registra el proveedor `haril` (`HARIL_LANE=claude-bridge`).
+- `claude-bridge` queda reservado: haril.json no puede declarar un proveedor con ese id.
+
+### Corregido
+
+- Un workflow con modelo `claude-bridge/...` fallaba al arrancar cada turno (`model_ambiguous: served by no usable provider`) y la verificación previa no lo detectaba.
+
+### Verificación
+
+- Prueba hermética de punta a punta (`apps/haril/tests/workflow-claude-bridge.test.ts`): un workflow `--agent orchestrator` sobre `claude-bridge/claude-fable-5-1` completa sus 9 turnos con un Pi falso y un `pi-claude-bridge` falso, sin Broker ni proveedor que responda, con el uso de cada turno cargado y `usage verify` correcto; también el corte por presupuesto y la verificación previa (aceptada, sin la extensión, id inválido). Pruebas nuevas del adaptador, del bridge de HARIL y de la consola. Con el Pi real y la extensión real se comprobó, sin enviar ningún prompt, que `-e` con `--no-extensions --offline` carga el proveedor y que `get_state` informa `claude-bridge`. No se ejecutó un turno real con Claude Code.
+
+---
+
 ## 0.23.8
 
 - **Fecha:** 2026-10-27

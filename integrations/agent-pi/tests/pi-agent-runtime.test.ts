@@ -268,6 +268,147 @@ describe("createPiAgentRuntime launch", () => {
   });
 });
 
+describe("createPiAgentRuntime on the claude-bridge lane", () => {
+  const CLAUDE_MODEL = "claude-fable-5-1";
+  const lane = (): Partial<PiAgentRuntimeOptions> => ({
+    model: CLAUDE_MODEL,
+    brokerUrl: undefined,
+    virtualKey: undefined,
+    claudeBridge: {
+      entryPath: join(tmp, "pi-claude-bridge", "src", "index.ts"),
+      config: { askClaude: { enabled: false }, provider: { plan: "max" } },
+    },
+  });
+
+  it("loads the extension after HARIL's bridge and runs the model on the claude-bridge provider", async () => {
+    const h = harness();
+    const handle = await startHandle(h.runtime("ok", { ...lane(), thinkingLevel: "high" }));
+    await handle.hello;
+    const args = h.spawnCalls[0]?.args ?? [];
+    const runDir = join(h.runsDir, "run-1");
+    expect(args).toEqual([
+      FAKE_PI,
+      "--mode",
+      "rpc",
+      "--no-builtin-tools",
+      "--no-extensions",
+      "-e",
+      join(tmp, "bridge-not-loaded.mjs"),
+      "-e",
+      join(tmp, "pi-claude-bridge", "src", "index.ts"),
+      "--no-context-files",
+      "--no-approve",
+      "--offline",
+      "--no-mcp",
+      "--no-skills",
+      "--no-prompt-templates",
+      "--session-dir",
+      join(runDir, "pi"),
+      "--provider",
+      "claude-bridge",
+      "--model",
+      CLAUDE_MODEL,
+      "--thinking",
+      "high",
+    ]);
+    expect(handle.diagnostics.launch).toEqual({
+      contextWindow: null,
+      maxTokens: null,
+      compactionReserveTokens: null,
+      thinkingLevel: "high",
+    });
+    expect(await handle.prompt("do the work")).toEqual({ ok: true, value: undefined });
+    expect(await handle.settled).toMatchObject({ status: "succeeded" });
+  });
+
+  it("gives Pi no Broker, key or model limits, only the home that holds Claude Code's login", async () => {
+    const h = harness();
+    process.env.ANTHROPIC_API_KEY = "inherited-anthropic-key";
+    try {
+      const handle = await startHandle(h.runtime("ok", lane()));
+      await handle.hello;
+      const env = h.spawnCalls[0]?.options.env as Record<string, string>;
+      for (const name of ["HARIL_BROKER_URL", "HARIL_VKEY", "HARIL_MODEL", "HARIL_MODEL_CONTEXT"]) {
+        expect(env[name], name).toBeUndefined();
+      }
+      expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+      expect(env.HARIL_LANE).toBe("claude-bridge");
+      const home = process.platform === "win32" ? "USERPROFILE" : "HOME";
+      expect(env[home]).toBe(process.env[home]);
+      const allowed = new Set([
+        ...ALLOWED_ENV,
+        "HARIL_LANE",
+        "USERPROFILE",
+        "HOME",
+        "CLAUDE_CONFIG_DIR",
+      ]);
+      for (const key of Object.keys(env)) expect(allowed.has(key), key).toBe(true);
+    } finally {
+      delete process.env.ANTHROPIC_API_KEY;
+    }
+  });
+
+  it("writes the extension's claude-bridge.json into the run's agent directory, and no compaction reserve", async () => {
+    const h = harness();
+    const handle = await startHandle(h.runtime("ok", { ...lane(), compactAtTokens: 300_000 }));
+    await handle.hello;
+    const agentDir = join(h.runsDir, "run-1", "agent");
+    expect(JSON.parse(readFileSync(join(agentDir, "claude-bridge.json"), "utf8"))).toEqual({
+      askClaude: { enabled: false },
+      provider: { plan: "max" },
+    });
+    expect(existsSync(join(agentDir, "settings.json"))).toBe(false);
+  });
+
+  it("meters each assistant message through the host: the prompt with its cache, and the output", async () => {
+    const h = harness();
+    const usage: unknown[] = [];
+    const handle = await startHandle(
+      h.runtime("metered", {
+        ...lane(),
+        onModelUsage: (seen) => {
+          usage.push(seen);
+          return "ok";
+        },
+      }),
+    );
+    expect(await handle.prompt("do the work")).toEqual({ ok: true, value: undefined });
+    expect(await handle.settled).toMatchObject({ status: "succeeded", summary: "metered done" });
+    expect(usage).toEqual([
+      { inputTokens: 1150, outputTokens: 20 },
+      { inputTokens: 1210, outputTokens: 5 },
+    ]);
+  });
+
+  it("ends the run as insufficient_quota when the budget is spent and the model asked for a tool", async () => {
+    const h = harness();
+    const usage: unknown[] = [];
+    const handle = await startHandle(
+      h.runtime("metered", {
+        ...lane(),
+        onModelUsage: (seen) => {
+          usage.push(seen);
+          return "exhausted";
+        },
+      }),
+    );
+    await handle.prompt("do the work");
+    expect(await handle.settled).toMatchObject({ status: "failed", code: "insufficient_quota" });
+    expect(usage).toHaveLength(1);
+  });
+
+  it("refuses a relative extension path, and a Broker run without its key, before spawning anything", async () => {
+    const h = harness();
+    const relative = await h
+      .runtime("ok", { ...lane(), claudeBridge: { entryPath: "index.ts", config: {} } })
+      .start(spec());
+    expect(relative).toMatchObject({ ok: false, error: { code: "agent.invalid_spec" } });
+    const keyless = await h.runtime("ok", { virtualKey: undefined }).start(spec("run-2"));
+    expect(keyless).toMatchObject({ ok: false, error: { code: "agent.invalid_spec" } });
+    expect(h.spawnCalls).toHaveLength(0);
+  });
+});
+
 describe("createPiAgentRuntime lifecycle", () => {
   it("succeeds with the final assistant text, after agent_settled, ignoring unknown events", async () => {
     const h = harness();

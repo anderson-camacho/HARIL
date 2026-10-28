@@ -4,6 +4,10 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 
+// The Pi provider of the pi-claude-bridge extension: Claude Code through the Agent SDK, on the login Claude Code already
+// has. A run on it (the claude-bridge lane) loads the extension next to HARIL's bridge and talks to no Broker.
+export const CLAUDE_BRIDGE_PROVIDER = "claude-bridge";
+
 export interface PiArgvInput {
   readonly piCliPath: string;
   readonly bridgePath: string;
@@ -12,10 +16,14 @@ export interface PiArgvInput {
   // The reasoning level of the agent's layer (docs/modos-y-delegacion.md 7.10 item 6), passed as --thinking. Absent: no
   // flag, and the gateway's default level applies.
   readonly thinking?: string;
+  // The claude-bridge lane: the pi-claude-bridge extension's entry file, loaded after HARIL's bridge, whose provider
+  // serves the model instead of the Broker's haril provider. HARIL's bridge still serves every tool.
+  readonly claudeBridgePath?: string;
 }
 
 export function buildPiArgv(input: PiArgvInput): string[] {
   const thinking = input.thinking === undefined ? [] : ["--thinking", input.thinking];
+  const claudeBridge = input.claudeBridgePath === undefined ? [] : ["-e", input.claudeBridgePath];
   return [
     input.piCliPath,
     "--mode",
@@ -24,6 +32,7 @@ export function buildPiArgv(input: PiArgvInput): string[] {
     "--no-extensions",
     "-e",
     input.bridgePath,
+    ...claudeBridge,
     "--no-context-files",
     "--no-approve",
     "--offline",
@@ -33,7 +42,7 @@ export function buildPiArgv(input: PiArgvInput): string[] {
     "--session-dir",
     input.sessionDir,
     "--provider",
-    "haril",
+    input.claudeBridgePath === undefined ? "haril" : CLAUDE_BRIDGE_PROVIDER,
     "--model",
     input.model,
     ...thinking,
@@ -106,6 +115,51 @@ export interface PiEnvInput {
 
 export function buildPiEnv(input: PiEnvInput): Record<string, string> {
   const env: Record<string, string> = {
+    ...baseEnv(input),
+    HARIL_BROKER_URL: input.brokerUrl,
+    HARIL_MODEL: input.model,
+    HARIL_MODEL_CONTEXT: String(input.modelContextWindow),
+    HARIL_MODEL_MAX_TOKENS: String(input.modelMaxTokens),
+    HARIL_VKEY: input.virtualKey,
+  };
+  if (input.modelLevels !== undefined && input.modelLevels.length > 0) {
+    env.HARIL_MODEL_LEVELS = input.modelLevels.join(",");
+  }
+  return withOsEnv(env, input.osEnv, ["SystemRoot", "TEMP", "TMP"]);
+}
+
+export interface ClaudeBridgeEnvInput {
+  readonly nodePath: string;
+  readonly agentDir: string;
+  readonly runId: string;
+  readonly bridge: string;
+  readonly tools: readonly string[];
+  readonly osEnv: NodeJS.ProcessEnv;
+  readonly platform?: NodeJS.Platform;
+}
+
+// The child env of the claude-bridge lane: no Broker URL, virtual key or model limits (the extension registers its own
+// models), HARIL_LANE so HARIL's bridge registers no haril provider, and the home variables Claude Code needs to find its
+// login (USERPROFILE or HOME, and CLAUDE_CONFIG_DIR when the user moved it). An exported ANTHROPIC_* variable would
+// redirect Claude Code away from that login (pi-claude-bridge issue #107), so none is passed.
+// UNVERIFIED on macOS: Claude Code reads its login from the keychain there; /usr/bin is on PATH for the security tool.
+export function buildClaudeBridgeEnv(input: ClaudeBridgeEnvInput): Record<string, string> {
+  const env: Record<string, string> = { ...baseEnv(input), HARIL_LANE: CLAUDE_BRIDGE_PROVIDER };
+  if ((input.platform ?? process.platform) === "darwin") env.PATH = `${env.PATH}:/usr/bin`;
+  return withOsEnv(env, input.osEnv, [
+    "SystemRoot",
+    "TEMP",
+    "TMP",
+    "USERPROFILE",
+    "HOME",
+    "CLAUDE_CONFIG_DIR",
+  ]);
+}
+
+function baseEnv(
+  input: Pick<PiEnvInput, "nodePath" | "agentDir" | "runId" | "bridge" | "tools">,
+): Record<string, string> {
+  return {
     PI_CODING_AGENT_DIR: input.agentDir,
     PI_TELEMETRY: "0",
     PI_SKIP_VERSION_CHECK: "1",
@@ -113,19 +167,18 @@ export function buildPiEnv(input: PiEnvInput): Record<string, string> {
     HARIL_RUN_ID: input.runId,
     HARIL_BRIDGE: input.bridge,
     HARIL_TOOLS: input.tools.join(","),
-    HARIL_BROKER_URL: input.brokerUrl,
-    HARIL_MODEL: input.model,
-    HARIL_MODEL_CONTEXT: String(input.modelContextWindow),
-    HARIL_MODEL_MAX_TOKENS: String(input.modelMaxTokens),
-    HARIL_VKEY: input.virtualKey,
     PATH: dirname(input.nodePath),
   };
-  if (input.modelLevels !== undefined && input.modelLevels.length > 0) {
-    env.HARIL_MODEL_LEVELS = input.modelLevels.join(",");
-  }
-  // Windows needs these to start a process; anything else from the parent stays out (ADR-0004 l.58).
-  for (const name of ["SystemRoot", "TEMP", "TMP"] as const) {
-    const value = input.osEnv[name];
+}
+
+// Windows needs SystemRoot, TEMP and TMP to start a process; anything the list does not name stays out (ADR-0004 l.58).
+function withOsEnv(
+  env: Record<string, string>,
+  osEnv: NodeJS.ProcessEnv,
+  names: readonly string[],
+): Record<string, string> {
+  for (const name of names) {
+    const value = osEnv[name];
     if (value !== undefined && value !== "") env[name] = value;
   }
   return env;

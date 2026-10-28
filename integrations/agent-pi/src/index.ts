@@ -1,6 +1,6 @@
 // Public surface of @haril/agent-pi: the AgentRuntime adapter for Pi 1.2.0 (ADR-0004), M2.
 
-export type { SpawnFn } from "./launch.js";
+export { CLAUDE_BRIDGE_PROVIDER, type SpawnFn } from "./launch.js";
 export {
   createPathGuard,
   type GuardFs,
@@ -11,7 +11,9 @@ export {
 export {
   type BridgeOperationEvent,
   type BridgeOperationOutcome,
+  type ClaudeBridgeLaunch,
   createPiAgentRuntime,
+  type ModelUsage,
   type PiAgentHandle,
   type PiAgentRuntimeOptions,
   type PiDiagnostics,

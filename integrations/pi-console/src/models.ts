@@ -314,11 +314,16 @@ function firstHarilModel(
   }
 }
 
-// The HARIL reference (<provider>/<model>) of a Pi model a HARIL provider serves.
+// The pi-claude-bridge extension's Pi provider: HARIL's real agents run its models on the claude-bridge lane.
+const CLAUDE_BRIDGE_PROVIDER = "claude-bridge";
+
+// The HARIL reference (<provider>/<model>) of a Pi model a HARIL provider serves, or claude-bridge/<model> for a model of
+// the pi-claude-bridge extension.
 export function harilRef(
   model: PiModel | undefined,
   registration: ModelRegistration | undefined,
 ): string | undefined {
+  if (model?.provider === CLAUDE_BRIDGE_PROVIDER) return `${CLAUDE_BRIDGE_PROVIDER}/${model.id}`;
   if (model === undefined || registration === undefined) return undefined;
   const harilId = registration.harilIdOf.get(model.provider);
   return harilId === undefined ? undefined : `${harilId}/${model.id}`;

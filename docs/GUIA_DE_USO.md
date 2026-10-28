@@ -199,6 +199,15 @@ Cambiar:
 
 `Alt+M` recorre los modos. En CONSULT/PLAN/DELEGATION HARIL bloquea herramientas de escritura no permitidas, incluso si otra extensión intenta habilitarlas.
 
+### Delegar con modelos de Claude (claude-bridge)
+
+Si solo tienes Claude Code, instala la extensión una vez con `haril extensions install npm:pi-claude-bridge --yes` y elige un modelo `claude-bridge/...` con `/model`. La tarjeta `/delegate` lo toma como modelo del orquestador y el selector `M` lista los demás modelos de claude-bridge. Los agentes usan el mismo login de Claude Code que el chat: no hay que configurar ninguna clave ni Broker.
+
+- Cada capa usa el modelo del orquestador, salvo que fijes otro en `delegation.models.layers.<capa>.model` (también desde el panel de delegación).
+- El uso de cada llamada se carga al presupuesto de la tarea y del proyecto y aparece en `haril usage`; si el presupuesto se agota, el agente se detiene antes de la siguiente llamada.
+- La tarjeta repite el aviso de facturación del Agent SDK que da el README de la extensión: hoy consume la cuota de tu plan como Claude Code.
+- `haril workflow start --preflight --agent orchestrator --model claude-bridge/<id>` dice si la extensión falta o el id no es de Claude.
+
 ## 8. Atajos y comandos
 
 ### Atajos registrados en HARIL

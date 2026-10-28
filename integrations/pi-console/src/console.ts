@@ -542,11 +542,9 @@ export default function harilConsole(pi: ConsolePi): void {
       },
       harilModelRef: () => harilRef(current.model, current.registration),
       harilModels: () => {
-        const registration = current.registration;
-        if (registration === undefined) return [];
         const refs = safely(() => ctx.modelRegistry.getAvailable(), []).flatMap((model) => {
-          const harilId = registration.harilIdOf.get(model.provider);
-          return harilId === undefined ? [] : [`${harilId}/${model.id}`];
+          const ref = harilRef(model, current.registration);
+          return ref === undefined ? [] : [ref];
         });
         return [...new Set(refs)].sort();
       },
