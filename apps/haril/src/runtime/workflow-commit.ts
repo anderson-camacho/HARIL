@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { AssignInput, DelegateInput, RequestAuditInput, VerdictInput } from "@haril/contracts";
 import {
   type AutonomySettings,
+  auditorBudgetTokens,
   canonicalJson,
   checkDelegation,
   chooseModel,
@@ -427,7 +428,7 @@ function assignTurns(
       difficulty: assignment.difficulty,
       difficultyReason: assignment.difficultyReason,
       priority: 5,
-      budgetTokens: Math.ceil(assignment.budget.maxTokens / 3),
+      budgetTokens: auditorBudgetTokens(assignment.budget.maxTokens, settings.limits),
       timeoutMs: settings.limits.attemptTimeoutMs,
       surfaceWrite: [],
       surfaceRead: assignment.files.read,
@@ -469,10 +470,18 @@ function relaunch(context: TurnContext, executor: Task, auditor: Task): () => vo
   };
 }
 
-function reworkEvent(context: TurnContext, executor: Task, event: ReworkEvent) {
+// `relaunchable` false settles the event without a relaunch, as the agent cap does; the replay reads a failure that no
+// relaunch followed the same way.
+function reworkEvent(
+  context: TurnContext,
+  executor: Task,
+  event: ReworkEvent,
+  relaunchable = true,
+) {
   const { view, settings } = context;
   const state = view.rework(executor.threadId, settings.limits);
-  const canRelaunch = view.workflow.agentsCreated + 2 <= settings.limits.maxAgentsPerWorkflow;
+  const canRelaunch =
+    relaunchable && view.workflow.agentsCreated + 2 <= settings.limits.maxAgentsPerWorkflow;
   return decideRework(state, event, settings.limits, canRelaunch);
 }
 
@@ -786,7 +795,11 @@ function taskAuditPlan(
     accepted === null
       ? { type: "attempt_failed" }
       : { type: "verdict", approved: accepted.approved };
-  const step = reworkEvent(context, executor, event);
+  // An auditor that spent its token budget before its verdict judged nothing: relaunching the executor would redo work
+  // no one found wanting and meet the same budget again, so the step settles without a relaunch.
+  const budgetSpent =
+    accepted === null && outcome.status === "failed" && outcome.code === "insufficient_quota";
+  const step = reworkEvent(context, executor, event, !budgetSpent);
   const before: (() => void)[] = [];
   if (accepted !== null) {
     before.push(() => {

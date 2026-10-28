@@ -322,6 +322,23 @@ export const DELEGATION_FIELDS: readonly DelegationField[] = Object.freeze([
     default: 3_600_000,
     effect: "new workflows",
   },
+  {
+    path: "limits.minAuditorTokens",
+    group: "limits",
+    label: "Auditor token budget, at least",
+    kind: int(1_000, 10_000_000, "tokens"),
+    default: 60_000,
+    effect: "new workflows",
+  },
+  {
+    // M2-D5: every model call of a real agent of the project is charged to it, over the project's whole life.
+    path: "limits.projectTokens",
+    group: "limits",
+    label: "Project token budget",
+    kind: int(10_000, 10_000_000_000, "tokens"),
+    default: 50_000_000,
+    effect: "next agent launch",
+  },
   ...modelFields(),
   {
     path: "quota.source",
@@ -741,6 +758,9 @@ export interface DelegationSettings {
     readonly maxWorkflowWallMs: number;
     readonly largeTaskTokens: number;
     readonly attemptTimeoutMs: number;
+    readonly minAuditorTokens: number;
+    // The project's budget, not a workflow's: real agents read it at each launch.
+    readonly projectTokens: number;
   };
   readonly context: {
     readonly compactAtTokens: number;

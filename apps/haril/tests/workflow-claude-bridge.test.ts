@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   canonicalJson,
@@ -99,10 +99,19 @@ const call = async (tool, payload) => {
   const reply = await request({ op: "delegation.call", tool, input: payload });
   return reply.ok ? tool + " accepted" : tool + " refused: " + reply.error;
 };
+// The cache read of an auditor's call when the test writes audit-usage.json next to this script (an auditor whose
+// context outgrows its budget), else the usual 90.
+const auditCacheRead = (() => {
+  try {
+    return JSON.parse(readFileSync(new URL("./audit-usage.json", import.meta.url), "utf8")).cacheRead;
+  } catch {
+    return 90;
+  }
+})();
 // The model call that asks for the role's tool, with its usage as Pi reports it.
 const toolCall = () => emit({ type: "message_end", message: {
   role: "assistant", content: [{ type: "text", text: "calling" }], stopReason: "toolUse",
-  usage: { input: 10, output: 4, cacheRead: 90, cacheWrite: 0, totalTokens: 104 },
+  usage: { input: 10, output: 4, cacheRead: tools.includes("haril_verdict") ? auditCacheRead : 90, cacheWrite: 0, totalTokens: 104 },
 } });
 const budget = (maxTokens) => ({ maxTokens });
 async function turn(prompt) {
@@ -210,10 +219,21 @@ function installFakeBridge(): void {
 }
 
 function bridgeHost() {
+  const config = join(sb.root, "haril.json");
   return {
     ...sb.host,
-    env: { ...sb.host.env, HARIL_RUNTIME_DIR: runtimeDir, HARIL_PI_CLI_OVERRIDE: fakePi },
+    env: {
+      ...sb.host.env,
+      HARIL_RUNTIME_DIR: runtimeDir,
+      HARIL_PI_CLI_OVERRIDE: fakePi,
+      ...(existsSync(config) ? { HARIL_CONFIG: config } : {}),
+    },
   };
+}
+
+// haril.json with these delegation limits.
+function writeLimits(limits: Record<string, number>): void {
+  writeFileSync(join(sb.root, "haril.json"), JSON.stringify({ delegation: { limits } }));
 }
 
 async function cli(args: string[], host = bridgeHost()) {
@@ -237,6 +257,14 @@ const START = [
 ];
 
 function inspect<T>(read: (view: WorkflowView, store: ReturnType<typeof openStore>) => T): T {
+  return withStore((store) => {
+    const [workflow] = store.workflows.list();
+    if (workflow === undefined) throw new Error("no workflow");
+    return read(WorkflowView.load(store, workflow.workflowId) as WorkflowView, store);
+  });
+}
+
+function withStore<T>(work: (store: ReturnType<typeof openStore>) => T): T {
   const store = openStore({
     dataDir: sb.dataDir,
     clock: { now: () => Date.now(), schedule: () => () => undefined },
@@ -250,9 +278,7 @@ function inspect<T>(read: (view: WorkflowView, store: ReturnType<typeof openStor
     },
   });
   try {
-    const [workflow] = store.workflows.list();
-    if (workflow === undefined) throw new Error("no workflow");
-    return read(WorkflowView.load(store, workflow.workflowId) as WorkflowView, store);
+    return work(store);
   } finally {
     store.close();
   }
@@ -285,6 +311,10 @@ describe("a workflow of real agents on claude-bridge models", () => {
           .sort(),
         usage: store.usageLog.usage({ workflowId: view.workflow.workflowId }),
         verify: store.usageLog.verify().ok,
+        auditorBudgets: view.tasks
+          .filter((task) => task.role === "auditor" && task.goal.startsWith("Audit read-"))
+          .map((task) => task.budgetTokens),
+        projectLimit: store.budgets.find("project", view.workflow.projectId)?.hardLimit,
         started: store.events
           .list({ limit: 10_000 })
           .filter((event) => event.type === "run.started")
@@ -310,6 +340,10 @@ describe("a workflow of real agents on claude-bridge models", () => {
         });
       }
       expect(tree.verify).toBe(true);
+      // Each step's executor holds 45000: its auditor gets the floor, not a third (15000) that a few calls spend.
+      expect(tree.auditorBudgets).toEqual([60_000, 60_000]);
+      // delegation.limits.projectTokens' default.
+      expect(tree.projectLimit).toBe(50_000_000);
       expect(tree.started).toHaveLength(9);
       for (const payload of tree.started) {
         expect(payload).toMatchObject({
@@ -338,6 +372,67 @@ describe("a workflow of real agents on claude-bridge models", () => {
       // The orchestrator's first call (100 prompt tokens and 4 out) was charged in full; nothing ran after it.
       expect(usage).toHaveLength(1);
       expect(usage[0]).toMatchObject({ tokensIn: 100, tokensOut: 4, role: "orchestrator" });
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "settles a step whose auditor spent its budget before its verdict without relaunching the executor",
+    async () => {
+      installFakeBridge();
+      // Every auditor call carries more context than the auditor's 60000 tokens.
+      writeFileSync(join(sb.root, "audit-usage.json"), JSON.stringify({ cacheRead: 100_000 }));
+      const started = await cli(START);
+      expect(started.code, started.err.join("\n")).toBe(0);
+
+      const ran = await cli(["run", "--project", "demo"]);
+      expect(ran.code).toBe(1);
+      const tree = inspect((view, store) => ({
+        executors: view.tasks.filter((task) => task.role === "executor").length,
+        audits: view.tasks
+          .filter((task) => task.role === "auditor" && task.goal.startsWith("Audit read-"))
+          .map((task) => ({
+            state: task.state,
+            code: store.events
+              .list({ taskId: task.taskId, limit: 100 })
+              .find((event) => event.type === "task.failed")?.payload.code,
+          })),
+      }));
+      // One executor turn per step: a relaunch would have redone work no auditor judged.
+      expect(tree.executors).toBe(2);
+      expect(tree.audits).toEqual([
+        { state: "failed", code: "insufficient_quota" },
+        { state: "failed", code: "insufficient_quota" },
+      ]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "sets the project's budget to delegation.limits.projectTokens, also one an earlier launch created",
+    async () => {
+      installFakeBridge();
+      writeLimits({ projectTokens: 7_000_000 });
+      // The budget an earlier HARIL created with its fixed 1000000 tokens.
+      withStore((store) => {
+        const project = store.projects.getBySlug("demo");
+        if (project === undefined) throw new Error("no project");
+        store.budgets.ensure({
+          scopeType: "project",
+          scopeId: project.projectId,
+          projectId: project.projectId,
+          hardLimit: 1_000_000,
+        });
+      });
+      const started = await cli(START);
+      expect(started.code, started.err.join("\n")).toBe(0);
+      const ran = await cli(["run", "--project", "demo"]);
+      expect(ran.code, ran.err.join("\n")).toBe(0);
+      const budget = inspect((view, store) =>
+        store.budgets.find("project", view.workflow.projectId),
+      );
+      expect(budget).toMatchObject({ hardLimit: 7_000_000 });
+      expect(budget?.spent).toBeGreaterThan(0);
     },
     TEST_TIMEOUT_MS,
   );
@@ -380,5 +475,20 @@ describe("the preflight of a claude-bridge workflow", () => {
     const checked = await cli([...PREFLIGHT, "--model", "claude-bridge/gpt-5"]);
     expect(checked.code).toBe(2);
     expect(checked.err.join("\n")).toContain("claude-bridge/gpt-5 is not a claude-bridge model");
+  });
+
+  it("refuses it while the project's token budget cannot cover the orchestrator's turn, and queues nothing", async () => {
+    installFakeBridge();
+    writeLimits({ projectTokens: 150_000 });
+    const checked = await cli([...PREFLIGHT, "--model", MODEL]);
+    expect(checked.code).toBe(2);
+    expect(checked.err.join("\n")).toContain(
+      "the real agents cannot run yet: the project's token budget has 150000 of 150000 tokens left and the orchestrator's turn takes 200000 (raise it with haril config set delegation.limits.projectTokens <tokens>); nothing was queued",
+    );
+    expect(withStore((store) => store.commands.listQueued())).toHaveLength(0);
+
+    writeLimits({ projectTokens: 250_000 });
+    const raised = await cli([...PREFLIGHT, "--model", MODEL]);
+    expect(raised.code, raised.err.join("\n")).toBe(0);
   });
 });

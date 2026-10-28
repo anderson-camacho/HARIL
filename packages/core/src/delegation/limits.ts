@@ -31,6 +31,9 @@ export interface DelegationLimits {
   // A task with at least this budget counts as large for the quota rule (3.11).
   readonly largeTaskTokens: number;
   readonly attemptTimeoutMs: number;
+  // The least an auditor's turn may hold. An auditor gets a third of its executor's budget, but every model call
+  // carries the whole context again, so a small third ends the audit before its verdict.
+  readonly minAuditorTokens: number;
 }
 
 export const DEFAULT_DELEGATION_LIMITS: DelegationLimits = Object.freeze({
@@ -46,4 +49,13 @@ export const DEFAULT_DELEGATION_LIMITS: DelegationLimits = Object.freeze({
   maxWorkflowWallMs: 7_200_000,
   largeTaskTokens: 50_000,
   attemptTimeoutMs: 3_600_000,
+  minAuditorTokens: 60_000,
 });
+
+// The token budget of the auditor of an executor with `executorTokens`: a third of it, never below minAuditorTokens.
+export function auditorBudgetTokens(
+  executorTokens: number,
+  limits: Pick<DelegationLimits, "minAuditorTokens">,
+): number {
+  return Math.max(Math.ceil(executorTokens / 3), limits.minAuditorTokens);
+}

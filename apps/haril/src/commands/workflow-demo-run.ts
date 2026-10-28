@@ -10,6 +10,7 @@ import {
 } from "@haril/contracts";
 import {
   type AutonomySettings,
+  auditorBudgetTokens,
   type ClaimCandidate,
   canonicalJson,
   checkDelegation,
@@ -583,7 +584,7 @@ export function runDemoWorkflow(
         difficulty: assignment.difficulty,
         difficultyReason: assignment.difficultyReason,
         priority: 5,
-        budgetTokens: Math.ceil(assignment.budget.maxTokens / 3),
+        budgetTokens: auditorBudgetTokens(assignment.budget.maxTokens, limits),
         timeoutMs: limits.attemptTimeoutMs,
         surfaceWrite: [],
         surfaceRead: assignment.files.read,

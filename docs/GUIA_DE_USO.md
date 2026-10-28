@@ -205,6 +205,8 @@ Si solo tienes Claude Code, instala la extensión una vez con `haril extensions 
 
 - Cada capa usa el modelo del orquestador, salvo que fijes otro en `delegation.models.layers.<capa>.model` (también desde el panel de delegación).
 - El uso de cada llamada se carga al presupuesto de la tarea y del proyecto y aparece en `haril usage`; si el presupuesto se agota, el agente se detiene antes de la siguiente llamada.
+- Cada llamada vuelve a enviar todo el contexto (con claude-bridge, unos 10 000 tokens o más), así que un auditor recibe como mínimo `delegation.limits.minAuditorTokens` (60 000 por defecto) aunque el tercio del presupuesto de su ejecutor sea menor. Si un auditor agota su presupuesto antes del veredicto, HARIL no relanza al ejecutor: el paso queda fallido y su rama `step` conserva el trabajo.
+- El proyecto tiene un presupuesto de tokens para toda su vida, `delegation.limits.projectTokens` (50 000 000 por defecto), que se aplica en cada arranque de agente. Si ya no alcanza para el turno del orquestador, la verificación previa lo rechaza sin encolar nada; súbelo con `haril config set delegation.limits.projectTokens <tokens>`.
 - La tarjeta repite el aviso de facturación del Agent SDK que da el README de la extensión: hoy consume la cuota de tu plan como Claude Code.
 - `haril workflow start --preflight --agent orchestrator --model claude-bridge/<id>` dice si la extensión falta o el id no es de Claude.
 

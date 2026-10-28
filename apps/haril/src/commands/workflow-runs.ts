@@ -17,7 +17,7 @@ import { delegationLimitsOf } from "../delegation-section.js";
 import { clockFor, storeAccess } from "../host.js";
 import { CLAUDE_BRIDGE_BILLING_NOTICE, isClaudeBridgeRef } from "../runtime/claude-bridge.js";
 import { resolveProgram } from "../runtime/host-commands.js";
-import { realAgentProblem } from "../runtime/real-agent.js";
+import { projectBudgetProblem, realAgentProblem } from "../runtime/real-agent.js";
 import { dataDirFor, openExisting, queueCommand, withProject } from "./common.js";
 import { piContextUsed } from "./pi-context.js";
 import { storeQuota } from "./snapshot-quota.js";
@@ -54,7 +54,8 @@ const START_USAGE = [
   "  merged into main or pushed. Implementation requires a writing base, Git worktrees and an allowed test command.",
   "  --read-only explicitly requests consultation. --preflight checks without queueing or running tests; with",
   "  --agent orchestrator it also refuses when the real agents cannot run (runtime, bridge, the model's provider key,",
-  "  or for a claude-bridge/<id> model the pi-claude-bridge extension) and notes the Agent SDK billing notice.",
+  "  or for a claude-bridge/<id> model the pi-claude-bridge extension, or a project token budget that cannot cover",
+  "  the orchestrator's turn, delegation.limits.projectTokens) and notes the Agent SDK billing notice.",
   "  Intake JSON: {projectRoot, plan:{sourceId,revision,text}, methodology:{id,instructions}}.",
   "  Plan and methodology instructions are required and snapshotted exactly; SHA-256 hashes are computed at start.",
 ].join("\n");
@@ -440,6 +441,24 @@ export async function workflowStart(
         io,
         `the real agents cannot run yet: ${agents.what} (${agents.fix}); nothing was queued`,
       );
+    }
+    // A spent project budget fails every real agent at its first tool call; the preflight says so instead.
+    if (agent === REAL_ORCHESTRATOR) {
+      const budget = withProject(io, host, dataDir, slug, (store, project) => {
+        const problem = projectBudgetProblem(
+          store,
+          project.projectId,
+          settings.limits.projectTokens,
+          budgetTokens,
+        );
+        return problem === undefined
+          ? EXIT_OK
+          : fail(
+              io,
+              `the real agents cannot run yet: ${problem.what} (${problem.fix}); nothing was queued`,
+            );
+      });
+      if (budget !== EXIT_OK) return budget;
     }
     // A workflow whose agents run on claude-bridge (its orchestrator, or a layer haril.json pins) carries the billing
     // notice; it does not stop the start.

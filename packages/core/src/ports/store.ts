@@ -617,7 +617,12 @@ export interface UsageBreakdownRow {
 }
 
 export interface BudgetsPort {
+  // The budget of a scope, created with hardLimit the first time; an existing one keeps its own limit.
   ensure(input: EnsureBudgetInput): BudgetRecord;
+  // The budget of a scope, or undefined when none was created yet. Reads only.
+  find(scopeType: BudgetScopeType, scopeId: string): BudgetRecord | undefined;
+  // Sets a budget's hard limit (a setting that changed); what it spent, reserved and overran stays.
+  setHardLimit(budgetId: string, hardLimit: number): BudgetRecord;
   usageBreakdown(projectId?: string): readonly UsageBreakdownRow[];
   get(budgetId: string): BudgetRecord | undefined;
   reserve(input: ReserveInput): ReserveResult;

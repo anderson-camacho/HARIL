@@ -87,6 +87,7 @@ function limitsOf(snapshot: JsonObject, base: DelegationLimits): DelegationLimit
     maxWorkflowWallMs: positive(record.maxWorkflowWallMs, base.maxWorkflowWallMs),
     largeTaskTokens: positive(record.largeTaskTokens, base.largeTaskTokens),
     attemptTimeoutMs: positive(record.attemptTimeoutMs, base.attemptTimeoutMs),
+    minAuditorTokens: positive(record.minAuditorTokens, base.minAuditorTokens),
   };
 }
 

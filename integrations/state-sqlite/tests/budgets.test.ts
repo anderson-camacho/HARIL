@@ -117,6 +117,46 @@ describe("budgets.ensure", () => {
   });
 });
 
+describe("budgets.find", () => {
+  it("returns the budget of a scope and creates none when there is none", () => {
+    expect(store.budgets.find("project", projectId)).toBeUndefined();
+    const created = store.budgets.ensure({
+      scopeType: "project",
+      scopeId: projectId,
+      projectId,
+      hardLimit: 1000,
+    });
+    expect(store.budgets.find("project", projectId)).toEqual(created);
+    expect(store.budgets.find("task", projectId)).toBeUndefined();
+  });
+});
+
+describe("budgets.setHardLimit", () => {
+  it("raises and lowers the limit and keeps what was spent and reserved", () => {
+    const s = scope(1000, 1000);
+    expect(reserve(s, 300, "req-limit").ok).toBe(true);
+    expect(store.budgets.setHardLimit(s.projectBudget, 5000)).toMatchObject({
+      hardLimit: 5000,
+      reserved: 300,
+      spent: 0,
+    });
+    expect(store.budgets.setHardLimit(s.projectBudget, 400)).toMatchObject({
+      hardLimit: 400,
+      reserved: 300,
+    });
+  });
+
+  it("stops a lower limit at what the budget spent and holds reserved: no room is left", () => {
+    const s = scope(1000, 1000);
+    expect(reserve(s, 300, "req-floor").ok).toBe(true);
+    expect(store.budgets.setHardLimit(s.projectBudget, 100)).toMatchObject({
+      hardLimit: 300,
+      reserved: 300,
+    });
+    expect(reserve(s, 1, "req-none").ok).toBe(false);
+  });
+});
+
 describe("budgets.reserve", () => {
   it("reserves the amount on every budget it names", () => {
     const s = scope(1000, 100);
