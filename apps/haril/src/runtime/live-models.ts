@@ -1,3 +1,4 @@
+import { CLAUDE_BRIDGE_PROVIDER } from "@haril/agent-pi";
 import { DELEGATION_LAYERS } from "@haril/contracts";
 import type { QuotaPolicy } from "@haril/core";
 import type { Clock, Store, WorkflowRecord } from "@haril/core/ports";
@@ -9,6 +10,7 @@ import { type CatalogEntry, readModelCatalog } from "../model-catalog.js";
 import { loadProviderConfig, MODELS_TIMEOUT_MS, type ProviderEntry } from "../providers.js";
 import { type ProviderQuota, readProviderQuota } from "../quota-source.js";
 import { quotaKeyOf } from "../quota-view.js";
+import { isClaudeBridgeRef } from "./claude-bridge.js";
 import { type DelegationModels, type DelegationOptions, defaultModels } from "./workflow-view.js";
 
 // The models of real workflows while a runtime runs (docs/modos-y-delegacion.md 3.11; phase F6): the live catalog of
@@ -160,6 +162,22 @@ export function createLiveModels(deps: LiveModelsDeps): LiveModels {
     auditorDistinctFromExecutor: value.models.auditorDistinctFromExecutor,
   });
 
+  // The claude-bridge models a real workflow names (its orchestrator's, and haril.json's pinned and allowed refs): no
+  // provider's catalog lists them, so they join it as served, all under the claude-bridge quota key (claude-bridge.ts).
+  const bridgedOf = (value: DelegationSettings, workflow: WorkflowRecord) => {
+    const named = [
+      workflow.orchestratorModel,
+      ...DELEGATION_LAYERS.map((layer) => value.models.layers[layer].model),
+      ...Object.values(value.models.allow).flat(),
+    ].filter((ref) => isClaudeBridgeRef(ref));
+    return [...new Set(named)].map((ref) => ({
+      ref,
+      quotaKey: CLAUDE_BRIDGE_PROVIDER,
+      hasKey: true,
+      coolingUntil: null,
+    }));
+  };
+
   const models = (now: number, workflow: WorkflowRecord): DelegationModels => {
     const current = settingsNow(now);
     const policy = policyOf(current);
@@ -168,8 +186,11 @@ export function createLiveModels(deps: LiveModelsDeps): LiveModels {
     refreshQuota(now);
     const entries = catalog?.value ?? [];
     const choices = choicesOf(current);
+    const bridged = bridgedOf(current, workflow);
     if (entries.length === 0) {
-      return { ...defaultModels(workflow.orchestratorModel), ...choices, policy };
+      const defaults = defaultModels(workflow.orchestratorModel);
+      const extra = bridged.filter((entry) => entry.ref !== workflow.orchestratorModel);
+      return { ...defaults, catalog: [...defaults.catalog, ...extra], ...choices, policy };
     }
     const keyed = new Map(
       providersNow(now).map((entry) => [
@@ -180,12 +201,15 @@ export function createLiveModels(deps: LiveModelsDeps): LiveModels {
     const refs = entries.map((entry) => entry.ref);
     const table = difficultyNow(now);
     return {
-      catalog: entries.map((entry) => ({
-        ref: entry.ref,
-        quotaKey: quotaKeyOf(entry.ref),
-        hasKey: keyed.get(entry.providerId) ?? false,
-        coolingUntil: null,
-      })),
+      catalog: [
+        ...entries.map((entry) => ({
+          ref: entry.ref,
+          quotaKey: quotaKeyOf(entry.ref),
+          hasKey: keyed.get(entry.providerId) ?? false,
+          coolingUntil: null,
+        })),
+        ...bridged.filter((entry) => !refs.includes(entry.ref)),
+      ],
       ...choices,
       quota: {},
       table: tableFor(table, refs),

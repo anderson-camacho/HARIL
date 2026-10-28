@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { type DashboardActionHost, runDashboardAction } from "../src/dashboard-actions.js";
 import { controlsFor } from "../src/dashboard-controls.js";
 import { emptyDashboardData } from "../src/dashboard-data.js";
+import { harilRefOf } from "../src/delegation-settings.js";
 import {
   chooseLevel,
   chooseModel,
@@ -141,11 +142,20 @@ describe("delegationModelCatalog", () => {
     expect(
       catalog.unavailable.find((group) => group.label === "haril-gw · Gemini2")?.reason,
     ).toContain("no working credentials");
-    for (const provider of ["openai-api", "claude-bridge"]) {
-      expect(catalog.unavailable.find((group) => group.label === provider)?.reason).toContain(
-        "configure a HARIL provider in haril.json",
-      );
-    }
+    expect(catalog.unavailable.find((group) => group.label === "openai-api")?.reason).toContain(
+      "configure a HARIL provider in haril.json",
+    );
+    expect(catalog.unavailable.find((group) => group.label === "claude-bridge")?.reason).toContain(
+      "Claude Code is logged in",
+    );
+  });
+
+  it("offers the claude-bridge models Pi can use to the layers, as claude-bridge/<id>", () => {
+    const opus: PiModel = { provider: "claude-bridge", id: "claude-opus-5-5" };
+    const catalog = delegationModelCatalog([FLASH, opus], [FLASH, opus]);
+    expect(catalog.compatible.flatMap((group) => group.models)).toEqual([opus, FLASH]);
+    expect(catalog.unavailable).toEqual([]);
+    expect(harilRefOf(opus)).toBe("claude-bridge/claude-opus-5-5");
   });
 });
 

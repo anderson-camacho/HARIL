@@ -441,6 +441,7 @@ describe("the model of an approved plan's tasks (LD-T7a)", () => {
         ok: true,
         paths: { nodePath: "", piCliPath: "", bridgePath: "" },
         providers: [],
+        claudeBridge: { ok: false, what: "pi-claude-bridge is not installed", fix: "" },
       }),
       runtime: {
         start: (spec) => {
@@ -564,6 +565,7 @@ describe("the results of a plan task's dependencies (MC-T1)", () => {
         ok: true,
         paths: { nodePath: "", piCliPath: "", bridgePath: "" },
         providers: [],
+        claudeBridge: { ok: false, what: "pi-claude-bridge is not installed", fix: "" },
       }),
       runtime: {
         start: (spec) => {
@@ -629,6 +631,7 @@ describe("a retry after a verification failure (MC-T2)", () => {
         ok: true,
         paths: { nodePath: "", piCliPath: "", bridgePath: "" },
         providers: [],
+        claudeBridge: { ok: false, what: "pi-claude-bridge is not installed", fix: "" },
       }),
       runtime: {
         start: (spec) => {

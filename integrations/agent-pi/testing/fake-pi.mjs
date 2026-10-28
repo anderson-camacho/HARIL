@@ -21,6 +21,9 @@
 // hang_with_tool: on the prompt it starts fake-tool-command.mjs through the shell, as Pi's bash tool runs a command,
 // then hangs as hang does. On Windows the command's process escapes the job object that kills a Node child with its
 // parent, so only a tree kill that walks from the live Pi reaches it.
+// metered (the claude-bridge lane): an assistant message that asks for a tool, then a final one, each with its usage as
+// Pi reports it; the final one comes 300 ms later, so a run the host stops on the first never sees it.
+// get_state names the provider the run was launched with (--provider).
 // Test-only: the real Pi is never replaced outside HARIL_PI_CLI_OVERRIDE.
 
 import { spawn } from "node:child_process";
@@ -33,6 +36,7 @@ const runId = process.env.HARIL_RUN_ID ?? "";
 const allowedTools = (process.env.HARIL_TOOLS ?? "").split(",").filter((name) => name !== "");
 const [pipePath = "", token = ""] = splitBridge(process.env.HARIL_BRIDGE ?? "");
 const expectedModel = argValue("--model");
+const launchedProvider = argValue("--provider") ?? "haril";
 const LARGE_LINE_BYTES = 8 * 1024 * 1024 + 1;
 const PROPOSE_PLAN_TOOL = "haril_propose_plan";
 const ANALYST_MAX_TOKENS = 20000;
@@ -294,6 +298,30 @@ async function runPrompt() {
     return;
   }
   if (scenario === "hang" || scenario === "hang_abortable") return;
+  if (scenario === "metered") {
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "looking" }],
+        stopReason: "toolUse",
+        usage: { input: 100, output: 20, cacheRead: 1000, cacheWrite: 50, totalTokens: 1170 },
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "metered done" }],
+        stopReason: "stop",
+        usage: { input: 10, output: 5, cacheRead: 1200, cacheWrite: 0, totalTokens: 1215 },
+      },
+    });
+    emit({ type: "turn_end" });
+    emit({ type: "agent_settled", aborted: false });
+    return;
+  }
   const planning = allowedTools.includes(PROPOSE_PLAN_TOOL);
   if (scenario === "ok_via_broker") {
     await brokerChat(promptText);
@@ -390,7 +418,7 @@ function handleCommand(message) {
     case "get_state": {
       const model = scenario === "wrong_model" ? "other-model" : expectedModel;
       respond("get_state", message.id, {
-        model: { id: model, provider: "haril" },
+        model: { id: model, provider: launchedProvider },
         isStreaming: false,
       });
       return;

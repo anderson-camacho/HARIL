@@ -169,6 +169,21 @@ describe("the card", () => {
     expect(text).not.toContain("read-only for now");
   });
 
+  it("repeats the Agent SDK billing notice for a claude-bridge model, and only for one", () => {
+    const width = 80;
+    const bridged = renderCard(createCard("Go", "claude-bridge/claude-opus-5-5"), width, THEME);
+    const text = bridged.lines.map(stripAnsi).join(" ").replace(/\s+/g, " ");
+    expect(text).toContain("claude-bridge/claude-opus-5-5");
+    expect(text).toContain("Agent SDK on your Claude Code login");
+    expect(text).toContain("withdrew a billing change");
+    for (const line of bridged.lines) expect(textWidth(stripAnsi(line))).toBeLessThanOrEqual(width);
+    const other = renderCard(createCard("Go", MODEL), width, THEME).lines.map(stripAnsi).join("\n");
+    expect(other).not.toContain("Agent SDK");
+    expect(workflowStartArgs(createCard("Go", "claude-bridge/claude-opus-5-5"), "demo")).toContain(
+      "claude-bridge/claude-opus-5-5",
+    );
+  });
+
   it("acts on clicks: a stop row toggles it, the buttons start, cancel or choose the model", () => {
     const card = createCard("Goal", MODEL);
     const { hits } = renderCard(card, 100, THEME);

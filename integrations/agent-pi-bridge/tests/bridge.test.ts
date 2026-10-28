@@ -25,6 +25,7 @@ const ENV_KEYS = [
   "HARIL_MODEL",
   "HARIL_MODEL_CONTEXT",
   "HARIL_MODEL_MAX_TOKENS",
+  "HARIL_LANE",
 ] as const;
 
 interface RecordedPi extends BridgePiApi {
@@ -124,6 +125,7 @@ function setEnv(bridgeValue: string, tools = "read"): void {
   process.env.HARIL_MODEL = MODEL;
   delete process.env.HARIL_MODEL_CONTEXT;
   delete process.env.HARIL_MODEL_MAX_TOKENS;
+  delete process.env.HARIL_LANE;
 }
 
 function fakePi(): RecordedPi {
@@ -505,6 +507,28 @@ describe("agent-pi-bridge extension", () => {
   it("throws when the pipe cannot be reached, so Pi fails to load the extension", async () => {
     setEnv(`${join(tmp, "missing-pipe.sock")}#${TOKEN}`);
     await expect(bridge(fakePi())).rejects.toThrow();
+  });
+
+  it("registers no haril provider on the claude-bridge lane, and needs no Broker, key or model", async () => {
+    const fake = await startFakePipe();
+    pipe = fake;
+    setEnv(`${fake.path}#${TOKEN}`, "read,haril_delegate");
+    process.env.HARIL_LANE = "claude-bridge";
+    delete process.env.HARIL_VKEY;
+    delete process.env.HARIL_BROKER_URL;
+    delete process.env.HARIL_MODEL;
+    const pi = fakePi();
+    await bridge(pi);
+    expect(pi.providers).toEqual([]);
+    expect(pi.tools.map((tool) => tool.name)).toEqual(["read", "haril_delegate"]);
+    await waitFor(() => fake.hellos.length === 1);
+    expect(fake.hellos[0]).toMatchObject({ tools: ["read", "haril_delegate"] });
+  });
+
+  it("still needs the Broker, the key and the model outside the claude-bridge lane", async () => {
+    setEnv(`${join(tmp, "x.sock")}#${TOKEN}`);
+    delete process.env.HARIL_VKEY;
+    await expect(bridge(fakePi())).rejects.toThrow("the run environment is incomplete");
   });
 
   it("throws when the bridge environment is incomplete", async () => {

@@ -2,7 +2,10 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   type BridgeOperationEvent,
+  CLAUDE_BRIDGE_PROVIDER,
+  type ClaudeBridgeLaunch,
   createPiAgentRuntime,
+  type ModelUsage,
   type PiAgentHandle,
   type PiAgentRuntimeOptions,
 } from "@haril/agent-pi";
@@ -10,6 +13,7 @@ import { compactAtFor, type DelegationLayer, type DelegationSettings } from "@ha
 import type {
   AgentHandle,
   AgentOutcome,
+  AgentProcess,
   AgentRuntime,
   AgentSpec,
   Clock,
@@ -35,6 +39,14 @@ import {
   resolveModelRef,
 } from "../providers.js";
 import { findPayloadFile, readRuntime, runtimeRootFor } from "../runtime.js";
+import {
+  CLAUDE_BRIDGE_PREFIX,
+  type ClaudeBridgeInstall,
+  type ClaudeBridgeLookup,
+  claudeBridgeProblem,
+  findClaudeBridge,
+  isClaudeBridgeRef,
+} from "./claude-bridge.js";
 import type { ModelFacts } from "./live-models.js";
 import { killTrees } from "./processes.js";
 import { outcomeWithProvider } from "./provider-failure.js";
@@ -66,6 +78,8 @@ export type RealAgentReadiness =
       readonly paths: RealAgentPaths;
       // The providers of this run: a task's model is checked against them before its claim (M3-T7).
       readonly providers: readonly ProviderEntry[];
+      // The pi-claude-bridge extension, or why it cannot serve a claude-bridge model (claude-bridge.ts).
+      readonly claudeBridge: ClaudeBridgeLookup;
     }
   | { readonly ok: false; readonly what: string; readonly fix: string };
 
@@ -172,6 +186,161 @@ export function createRealAgents(options: RealAgentsOptions): RealAgents {
     return brokerStart;
   }
 
+  // The project's and the task's token budgets (M2-D5), which every model call of the run is charged to.
+  function budgetsOf(spec: AgentSpec, projectId: string, maxTokens: number) {
+    const projectBudget = store.budgets.ensure({
+      scopeType: "project",
+      scopeId: projectId,
+      projectId,
+      hardLimit: PROJECT_TOKEN_BUDGET,
+    });
+    const taskBudget = store.budgets.ensure({
+      scopeType: "task",
+      scopeId: spec.taskId,
+      projectId,
+      hardLimit: maxTokens,
+    });
+    return { projectBudget, taskBudget };
+  }
+
+  // The run's launch for its layer (3.12, 7.10), with its model's catalog facts when the catalog lists it.
+  function launchFor(spec: AgentSpec, facts: ModelFacts | undefined): AgentLaunch {
+    const delegation = loadDelegationSettings(host);
+    return agentLaunchOf({
+      settings: delegation.ok ? delegation.settings : delegationSettingsOf(undefined),
+      facts,
+      layer: spec.delegation?.role,
+      workflowLimits:
+        spec.delegation === undefined
+          ? undefined
+          : store.workflows.get(spec.delegation.workflowId)?.limits,
+    });
+  }
+
+  // What the Pi adapter gets on either lane besides the model: the runtime's paths, the project, the host's handlers and
+  // the verified tree kill.
+  function piBase(spec: AgentSpec, paths: RealAgentPaths, rootPath: string) {
+    return {
+      nodePath: paths.nodePath,
+      piCliPath: paths.piCliPath,
+      bridgePath: paths.bridgePath,
+      projectRoot: resolve(rootPath),
+      runsDir: join(dataDir, RUNS_DIR),
+      onBridgeOperation: (event: BridgeOperationEvent) => recordBridgeOperation(store, spec, event),
+      bootStartOf: (pid: number) => processControl.bootStarts?.([pid])?.get(pid),
+      // Every kill of the run walks the verified tree (start times checked), never taskkill /T on its own.
+      killTree: async (target: AgentProcess): Promise<"killed" | "gone" | "unreadable"> => {
+        const result = await killTrees(processControl, [target]);
+        if (result === undefined) return "unreadable";
+        return result.roots.length > 0 ? "killed" : "gone";
+      },
+      ...(options.proposePlan === undefined ? {} : { proposePlan: options.proposePlan }),
+      ...(options.delegationTools === undefined
+        ? {}
+        : { delegationTools: options.delegationTools }),
+    };
+  }
+
+  // What the agent was launched with (3.12, 7.10): its model's window and output and where they came from, the
+  // compaction point of its layer and the level Pi runs at (null: the gateway's default level). A claude-bridge run says
+  // so; its limits are the extension's own (limitsSource "bridge", null window and output).
+  function recordStarted(
+    runSpec: AgentSpec,
+    handle: AgentHandle,
+    source: {
+      readonly limitsSource: string;
+      readonly compactAtTokens: number;
+      readonly lane?: string;
+    },
+  ): void {
+    const launched = (handle as Partial<PiAgentHandle>).diagnostics?.launch;
+    recordEvent(store, runSpec, "run.started", {
+      agentRuntime: "pi",
+      ...(source.lane === undefined ? {} : { lane: source.lane }),
+      ...(launched === undefined
+        ? {}
+        : {
+            contextWindow: launched.contextWindow,
+            maxTokens: launched.maxTokens,
+            limitsSource: source.limitsSource,
+            compactAtTokens:
+              launched.contextWindow === null
+                ? null
+                : Math.min(source.compactAtTokens, launched.contextWindow),
+            reserveTokens: launched.compactionReserveTokens,
+            thinkingLevel: launched.thinkingLevel,
+          }),
+    });
+  }
+
+  // The claude-bridge lane (claude-bridge.ts): Pi runs the bare Claude model id on the extension's provider. No Broker
+  // meters the run, so each model call's usage, as Pi reports it, is charged to the budgets afterwards (a reservation of
+  // what the budgets still hold, settled with the real count: an overrun goes to the ledger's overrun). Once a budget is
+  // spent, a reply that asks for a tool ends the run as insufficient_quota, as the Broker refuses the next request.
+  async function startOnClaudeBridge(
+    spec: AgentSpec,
+    ref: string,
+    maxTokens: number,
+    paths: RealAgentPaths,
+    project: { readonly projectId: string; readonly rootPath: string },
+    install: ClaudeBridgeInstall,
+  ): Promise<Result<AgentHandle, HarilError>> {
+    const { projectBudget, taskBudget } = budgetsOf(spec, project.projectId, maxTokens);
+    const budgetIds = [projectBudget.budgetId, taskBudget.budgetId];
+    let calls = 0;
+    const roomOf = (budgetId: string): number => {
+      const budget = store.budgets.get(budgetId);
+      return budget === undefined
+        ? 0
+        : Math.max(0, budget.hardLimit - budget.spent - budget.reserved);
+    };
+    const charge = (usage: ModelUsage): "ok" | "exhausted" => {
+      const spend = usage.inputTokens + usage.outputTokens;
+      try {
+        const reservation = store.budgets.reserve({
+          budgetIds,
+          amount: Math.min(spend, ...budgetIds.map(roomOf)),
+          idempotencyKey: `claude-bridge:${spec.runId}:${++calls}`,
+          runId: spec.runId,
+          taskId: spec.taskId,
+          routeId: ref,
+        });
+        if (reservation.ok) {
+          store.budgets.commit({
+            reservationId: reservation.reservationId,
+            usage: { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens },
+            upperBound: spend,
+            modelRequested: ref,
+            modelServed: ref,
+          });
+        }
+      } catch {
+        // The ledger describes the run; a failed write must not change its outcome.
+      }
+      return budgetIds.some((budgetId) => roomOf(budgetId) === 0) ? "exhausted" : "ok";
+    };
+    const launch = launchFor(spec, undefined);
+    const claudeBridge: ClaudeBridgeLaunch = {
+      entryPath: install.entryPath,
+      config: install.config,
+    };
+    const started = await createPiAgentRuntime({
+      ...piBase(spec, paths, project.rootPath),
+      compactAtTokens: launch.compactAtTokens,
+      ...(launch.thinkingLevel === undefined ? {} : { thinkingLevel: launch.thinkingLevel }),
+      model: ref.slice(CLAUDE_BRIDGE_PREFIX.length),
+      claudeBridge,
+      onModelUsage: charge,
+    }).start(spec);
+    if (!started.ok) return started;
+    recordStarted(spec, started.value, {
+      lane: CLAUDE_BRIDGE_PROVIDER,
+      limitsSource: "bridge",
+      compactAtTokens: launch.compactAtTokens,
+    });
+    return { ok: true, value: wrapHandle(started.value, spec, store, upstreamFailures) };
+  }
+
   const runtime: AgentRuntime = {
     async start(spec: AgentSpec): Promise<Result<AgentHandle, HarilError>> {
       const ready = readinessOf(host);
@@ -204,6 +373,29 @@ export function createRealAgents(options: RealAgentsOptions): RealAgents {
           ok: false,
           error: { code: "agent.invalid_spec", message: "the task's project is not registered" },
         };
+      }
+
+      // The claude-bridge lane (claude-bridge.ts): the extension serves the model, with no provider file, key or Broker.
+      if (isClaudeBridgeRef(spec.model)) {
+        const lookup = ready.claudeBridge;
+        const problem = claudeBridgeProblem(spec.model, lookup);
+        if (problem !== undefined) {
+          return {
+            ok: false,
+            error: { code: "agent.not_ready", message: `${problem.what}: ${problem.fix}` },
+          };
+        }
+        // claudeBridgeProblem reports a lookup that failed, so the extension is installed here.
+        if (lookup.ok) {
+          return startOnClaudeBridge(
+            spec,
+            spec.model,
+            spec.maxTokens,
+            ready.paths,
+            project,
+            lookup,
+          );
+        }
       }
 
       // M3-T7: the task's model names its provider (or resolves to exactly one); that provider's key must be set.
@@ -255,18 +447,7 @@ export function createRealAgents(options: RealAgentsOptions): RealAgents {
         };
       }
 
-      const projectBudget = store.budgets.ensure({
-        scopeType: "project",
-        scopeId: projectId,
-        projectId,
-        hardLimit: PROJECT_TOKEN_BUDGET,
-      });
-      const taskBudget = store.budgets.ensure({
-        scopeType: "task",
-        scopeId: spec.taskId,
-        projectId,
-        hardLimit: spec.maxTokens,
-      });
+      const { projectBudget, taskBudget } = budgetsOf(spec, projectId, spec.maxTokens);
       const virtualKey = activeBroker.issueKey({
         runId: spec.runId,
         taskId: spec.taskId,
@@ -278,65 +459,26 @@ export function createRealAgents(options: RealAgentsOptions): RealAgents {
         ttlMs: spec.timeoutMs + KEY_GRACE_MS,
       });
 
-      const delegation = loadDelegationSettings(host);
-      const facts = options.modelFacts?.(resolved.ref);
-      const launch = agentLaunchOf({
-        settings: delegation.ok ? delegation.settings : delegationSettingsOf(undefined),
-        facts,
-        layer: spec.delegation?.role,
-        workflowLimits:
-          spec.delegation === undefined
-            ? undefined
-            : store.workflows.get(spec.delegation.workflowId)?.limits,
-      });
-
+      const launch = launchFor(spec, options.modelFacts?.(resolved.ref));
       const piOptions: PiAgentRuntimeOptions = {
         ...launch,
-        nodePath: ready.paths.nodePath,
-        piCliPath: ready.paths.piCliPath,
-        bridgePath: ready.paths.bridgePath,
+        ...piBase(spec, ready.paths, project.rootPath),
         brokerUrl: activeBroker.url,
-        projectRoot: resolve(project.rootPath),
-        runsDir: join(dataDir, RUNS_DIR),
         model: runModel,
         virtualKey,
-        onBridgeOperation: (event) => recordBridgeOperation(store, spec, event),
-        bootStartOf: (pid) => processControl.bootStarts?.([pid])?.get(pid),
-        // Every kill of the run walks the verified tree (start times checked), never taskkill /T on its own.
-        killTree: async (target) => {
-          const result = await killTrees(processControl, [target]);
-          if (result === undefined) return "unreadable";
-          return result.roots.length > 0 ? "killed" : "gone";
-        },
-        ...(options.proposePlan === undefined ? {} : { proposePlan: options.proposePlan }),
-        ...(options.delegationTools === undefined
-          ? {}
-          : { delegationTools: options.delegationTools }),
       };
       const started = await createPiAgentRuntime(piOptions).start(runSpec);
       if (!started.ok) {
         activeBroker.revokeRun(runSpec.runId);
         return started;
       }
-      // What the agent was launched with (3.12, 7.10): its model's window and output and where they came from, the
-      // compaction point of its layer and the level Pi runs at (null: the gateway's default level).
-      const launched = (started.value as Partial<PiAgentHandle>).diagnostics?.launch;
-      recordEvent(store, runSpec, "run.started", {
-        agentRuntime: "pi",
-        ...(launched === undefined
-          ? {}
-          : {
-              contextWindow: launched.contextWindow,
-              maxTokens: launched.maxTokens,
-              limitsSource: launch.modelContextWindow === undefined ? "fallback" : "catalog",
-              compactAtTokens: Math.min(launch.compactAtTokens, launched.contextWindow),
-              reserveTokens: launched.compactionReserveTokens,
-              thinkingLevel: launched.thinkingLevel,
-            }),
+      recordStarted(runSpec, started.value, {
+        limitsSource: launch.modelContextWindow === undefined ? "fallback" : "catalog",
+        compactAtTokens: launch.compactAtTokens,
       });
       return {
         ok: true,
-        value: wrapHandle(started.value, runSpec, activeBroker, store, upstreamFailures),
+        value: wrapHandle(started.value, runSpec, store, upstreamFailures, activeBroker),
       };
     },
   };
@@ -373,13 +515,25 @@ function listed(parts: readonly string[]): string {
 }
 
 // What keeps a real workflow from running on `model` now, the check `haril workflow start --preflight` makes: the
-// runtime's own readiness and, for a namespaced model, its provider key. Undefined when nothing does; an empty model is
-// not checked (the card picks it after the preflight and checks again). A runtime would leave such a workflow's turns
-// ready and skipped, so it would wait queued for a setup nobody is told about.
+// runtime's own readiness and, for a namespaced model, its provider key, or for a claude-bridge model its id and the
+// installed extension. Undefined when nothing does; an empty model is not checked (the card picks it after the preflight
+// and checks again). A runtime would leave such a workflow's turns ready and skipped, so it would wait queued for a
+// setup nobody is told about.
 export function realAgentProblem(host: HostInfo, model: string): ModelProblem | undefined {
   const ready = readinessOf(host);
   if (!ready.ok) return { what: ready.what, fix: ready.fix };
-  return model === "" ? undefined : modelProblemOf(model, ready.providers);
+  return model === "" ? undefined : realModelProblem(model, ready);
+}
+
+// What stops a real task's model before its claim (M3-T7): the provider key of a namespaced model, or for a
+// claude-bridge model its id and the installed extension.
+export function realModelProblem(
+  model: string | null,
+  ready: Extract<RealAgentReadiness, { ok: true }>,
+): ModelProblem | undefined {
+  return isClaudeBridgeRef(model)
+    ? claudeBridgeProblem(model, ready.claudeBridge)
+    : modelProblemOf(model, ready.providers);
 }
 
 // What a real run needs before a task is claimed (M2-T6): the isolated runtime, the bridge and a valid provider file.
@@ -409,7 +563,7 @@ function readinessOf(host: HostInfo): RealAgentReadiness {
       fix: providers.errors.join("; "),
     };
   }
-  return { ok: true, paths, providers: providers.providers };
+  return { ok: true, paths, providers: providers.providers, claudeBridge: findClaudeBridge(host) };
 }
 
 function runtimeSetupProblem(
@@ -451,13 +605,14 @@ function nonEmpty(value: string | undefined): string | undefined {
   return trimmed === "" ? undefined : trimmed;
 }
 
-// The handle reports the run's events and closes its virtual key when it is disposed (M2-T6).
+// The handle reports the run's events and closes its virtual key when it is disposed (M2-T6). A claude-bridge run has
+// no Broker and no key.
 function wrapHandle(
   handle: AgentHandle,
   spec: AgentSpec,
-  broker: Broker,
   store: Store,
   upstreamFailures: Map<string, UpstreamFailure>,
+  broker?: Broker,
 ): AgentHandle {
   const diagnostics = (handle as Partial<PiAgentHandle>).diagnostics;
   return {
@@ -487,7 +642,7 @@ function wrapHandle(
       try {
         await handle.dispose();
       } finally {
-        broker.revokeRun(spec.runId);
+        broker?.revokeRun(spec.runId);
       }
     },
   };

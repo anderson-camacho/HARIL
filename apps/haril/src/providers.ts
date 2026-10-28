@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { posix, win32 } from "node:path";
+import { CLAUDE_BRIDGE_PROVIDER } from "@haril/agent-pi";
 import {
   dockPreferenceErrors,
   envSecretRef,
@@ -125,6 +126,16 @@ export function loadProviderConfig(
   if (!("providers" in parsed)) return defaultProviders(env, path, secrets);
   const checked = validateHarilConfig({ providers: parsed.providers });
   if (!checked.ok) return { ok: false, path, errors: checked.errors };
+  // claude-bridge/<model> names the pi-claude-bridge extension's models (runtime/claude-bridge.ts), never a provider here.
+  if (checked.config.providers.some((entry) => entry.id === CLAUDE_BRIDGE_PROVIDER)) {
+    return {
+      ok: false,
+      path,
+      errors: [
+        `/providers: ${CLAUDE_BRIDGE_PROVIDER} is the Pi extension's provider (${CLAUDE_BRIDGE_PROVIDER}/<model>); give this provider another id`,
+      ],
+    };
+  }
   return {
     ok: true,
     source: "file",

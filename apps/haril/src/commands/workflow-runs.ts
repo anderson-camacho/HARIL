@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
-import { isStop, type Stop } from "@haril/contracts";
+import { DELEGATION_LAYERS, isStop, type Stop } from "@haril/contracts";
 import { orderPreview, visibleText } from "@haril/core";
 import type { Store, WorkflowIntake, WorkflowRecord } from "@haril/core/ports";
 import {
@@ -15,6 +15,7 @@ import { type CliIo, EXIT_INVALID, EXIT_OK, EXIT_USAGE, type HostInfo } from "..
 import { loadDelegationSettings } from "../delegation-config.js";
 import { delegationLimitsOf } from "../delegation-section.js";
 import { clockFor, storeAccess } from "../host.js";
+import { CLAUDE_BRIDGE_BILLING_NOTICE, isClaudeBridgeRef } from "../runtime/claude-bridge.js";
 import { resolveProgram } from "../runtime/host-commands.js";
 import { realAgentProblem } from "../runtime/real-agent.js";
 import { dataDirFor, openExisting, queueCommand, withProject } from "./common.js";
@@ -52,7 +53,8 @@ const START_USAGE = [
   "  and the delegators merge their work into the branch haril/<workflow>/integration for you to review; nothing is",
   "  merged into main or pushed. Implementation requires a writing base, Git worktrees and an allowed test command.",
   "  --read-only explicitly requests consultation. --preflight checks without queueing or running tests; with",
-  "  --agent orchestrator it also refuses when the real agents cannot run (runtime, bridge, the model's provider key).",
+  "  --agent orchestrator it also refuses when the real agents cannot run (runtime, bridge, the model's provider key,",
+  "  or for a claude-bridge/<id> model the pi-claude-bridge extension) and notes the Agent SDK billing notice.",
   "  Intake JSON: {projectRoot, plan:{sourceId,revision,text}, methodology:{id,instructions}}.",
   "  Plan and methodology instructions are required and snapshotted exactly; SHA-256 hashes are computed at start.",
 ].join("\n");
@@ -439,8 +441,27 @@ export async function workflowStart(
         `the real agents cannot run yet: ${agents.what} (${agents.fix}); nothing was queued`,
       );
     }
-    if (json) io.out(JSON.stringify({ mode, capabilities, status: "ready" }));
-    else io.out(visibleText(`${mode} preflight ready; worktree creation and tests have not run`));
+    // A workflow whose agents run on claude-bridge (its orchestrator, or a layer haril.json pins) carries the billing
+    // notice; it does not stop the start.
+    const bridged =
+      agent === REAL_ORCHESTRATOR &&
+      [model, ...DELEGATION_LAYERS.map((layer) => settings.models.layers[layer].model)].some(
+        (ref) => isClaudeBridgeRef(ref),
+      );
+    const notices = bridged ? [CLAUDE_BRIDGE_BILLING_NOTICE] : [];
+    if (json) {
+      io.out(
+        JSON.stringify({
+          mode,
+          capabilities,
+          status: "ready",
+          ...(notices.length === 0 ? {} : { notices }),
+        }),
+      );
+    } else {
+      io.out(visibleText(`${mode} preflight ready; worktree creation and tests have not run`));
+      for (const notice of notices) io.out(visibleText(`note: ${notice}`));
+    }
     return EXIT_OK;
   }
   // P11: haril.json's limits. With worktrees the writers no longer share one checkout, so as many write at once as

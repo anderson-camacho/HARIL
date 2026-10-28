@@ -31,8 +31,10 @@ import type {
 } from "@haril/core/ports";
 import { JsonlReader } from "./jsonl.js";
 import {
+  buildClaudeBridgeEnv,
   buildPiArgv,
   buildPiEnv,
+  CLAUDE_BRIDGE_PROVIDER,
   compactionReserveTokens,
   DEFAULT_MODEL_CONTEXT_WINDOW,
   DEFAULT_MODEL_MAX_TOKENS,
@@ -92,17 +94,38 @@ type OperationDetail = Pick<
   "reason" | "planSha256" | "planBytes" | "approvalId" | "tool" | "inputSha256" | "inputBytes"
 >;
 
+// The claude-bridge lane (no Broker): the pi-claude-bridge extension's entry file, and the claude-bridge.json the run's
+// agent directory gets (the extension reads its settings from there).
+export interface ClaudeBridgeLaunch {
+  readonly entryPath: string;
+  readonly config: Readonly<Record<string, unknown>>;
+}
+
+// What one assistant message of the run spent, as Pi reports it: the prompt (input, cache reads and cache writes, the way
+// a gateway counts prompt tokens) and the output.
+export interface ModelUsage {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+}
+
 export interface PiAgentRuntimeOptions {
   readonly nodePath: string;
   readonly piCliPath: string;
   readonly bridgePath: string;
-  readonly brokerUrl: string;
+  // The Broker's URL and the run's virtual key: required on the Broker lane, unused on the claude-bridge lane.
+  readonly brokerUrl?: string;
   readonly projectRoot: string;
   readonly runsDir: string;
   // Expected active model: passed as --model and checked with get_state before the first prompt.
   readonly model: string;
   // Virtual key for the Broker. Reserve delivery through HARIL_VKEY (ADR-0005 BR-4); never argv or events.
-  readonly virtualKey: string;
+  readonly virtualKey?: string;
+  // Set: the run is on the claude-bridge lane, `model` is the bare Claude model id, and no Broker meters it.
+  readonly claudeBridge?: ClaudeBridgeLaunch;
+  // Called with each assistant message's usage (the claude-bridge lane meters the run this way). "exhausted" ends a run
+  // whose message asks for another model call (a tool call) as insufficient_quota, the way the Broker refuses the next
+  // request of a spent budget; a final message still settles the run.
+  readonly onModelUsage?: (usage: ModelUsage) => "ok" | "exhausted";
   // Limits the bridge registers for the model (HARIL_MODEL_CONTEXT, HARIL_MODEL_MAX_TOKENS). Positive integers.
   readonly modelContextWindow?: number;
   readonly modelMaxTokens?: number;
@@ -133,9 +156,11 @@ export interface PiAgentRuntimeOptions {
   readonly killTree?: (process: AgentProcess) => Promise<"killed" | "gone" | "unreadable">;
 }
 
+// The model's limits are null on the claude-bridge lane: the extension registers its models with their own window and
+// output, and Pi compacts with its own reserve.
 interface PiLaunch {
-  readonly contextWindow: number;
-  readonly maxTokens: number;
+  readonly contextWindow: number | null;
+  readonly maxTokens: number | null;
   readonly compactionReserveTokens: number | null;
   readonly thinkingLevel: string | null;
 }
@@ -263,8 +288,13 @@ function validate(spec: AgentSpec, options: PiAgentRuntimeOptions): HarilError |
   ] as const) {
     if (!isAbsolutePath(value)) return invalid(`${name} must be an absolute path`);
   }
-  if (options.model.length === 0 || options.virtualKey.length === 0) {
-    return invalid("model and virtualKey must be non-empty");
+  if (options.model.length === 0) return invalid("model must be non-empty");
+  if (options.claudeBridge === undefined) {
+    if ((options.brokerUrl ?? "") === "" || (options.virtualKey ?? "") === "") {
+      return invalid("brokerUrl and virtualKey must be non-empty");
+    }
+  } else if (!isAbsolutePath(options.claudeBridge.entryPath)) {
+    return invalid("claudeBridge.entryPath must be an absolute path");
   }
   if (!spec.allowedTools.every((tool) => tool.length > 0 && !tool.includes(","))) {
     return invalid("allowedTools must be non-empty names without commas");
@@ -310,7 +340,17 @@ function validate(spec: AgentSpec, options: PiAgentRuntimeOptions): HarilError |
 
 // What a run is launched with: the model's limits (the catalog's, else the documented fallback), the compaction reserve
 // of its layer's threshold and the level Pi runs at, null when Pi's own reserve or the gateway's default level applies.
+// On the claude-bridge lane the extension knows the model: no limits and Pi's own reserve, and the layer's level as asked
+// (Pi clamps it to the levels the model takes).
 function launchOf(options: PiAgentRuntimeOptions): PiLaunch {
+  if (options.claudeBridge !== undefined) {
+    return {
+      contextWindow: null,
+      maxTokens: null,
+      compactionReserveTokens: null,
+      thinkingLevel: options.thinkingLevel ?? null,
+    };
+  }
   const contextWindow = options.modelContextWindow ?? DEFAULT_MODEL_CONTEXT_WINDOW;
   return {
     contextWindow,
@@ -504,6 +544,15 @@ class PiRun implements PiAgentHandle {
         "utf8",
       );
     }
+    // The claude-bridge lane: the extension reads claude-bridge.json from Pi's agent directory, which is the run's own.
+    const claudeBridge = this.options.claudeBridge;
+    if (claudeBridge !== undefined) {
+      writeFileSync(
+        join(this.runDir, "agent", "claude-bridge.json"),
+        `${JSON.stringify(claudeBridge.config, null, 2)}\n`,
+        "utf8",
+      );
+    }
     this.stderrLog = createWriteStream(join(this.runDir, "pi", "stderr.log"), { flags: "a" });
     this.stderrLog.on("error", () => {});
 
@@ -518,28 +567,35 @@ class PiRun implements PiAgentHandle {
     });
 
     const bridge = `${this.pipeName}#${this.token}`;
-    const env = buildPiEnv({
+    const base = {
       nodePath: this.options.nodePath,
       agentDir: join(this.runDir, "agent"),
       runId: this.runId,
       bridge,
       tools: this.spec.allowedTools,
-      brokerUrl: this.options.brokerUrl,
-      model: this.options.model,
-      modelContextWindow: this.launch.contextWindow,
-      modelMaxTokens: this.launch.maxTokens,
-      ...(this.launch.thinkingLevel === null || this.options.modelLevels === undefined
-        ? {}
-        : { modelLevels: this.options.modelLevels }),
-      virtualKey: this.options.virtualKey,
       osEnv: this.osEnv,
-    });
+    };
+    const env =
+      claudeBridge === undefined
+        ? buildPiEnv({
+            ...base,
+            brokerUrl: this.options.brokerUrl ?? "",
+            model: this.options.model,
+            modelContextWindow: this.launch.contextWindow ?? DEFAULT_MODEL_CONTEXT_WINDOW,
+            modelMaxTokens: this.launch.maxTokens ?? DEFAULT_MODEL_MAX_TOKENS,
+            ...(this.launch.thinkingLevel === null || this.options.modelLevels === undefined
+              ? {}
+              : { modelLevels: this.options.modelLevels }),
+            virtualKey: this.options.virtualKey ?? "",
+          })
+        : buildClaudeBridgeEnv(base);
     const argv = buildPiArgv({
       piCliPath: this.options.piCliPath,
       bridgePath: this.options.bridgePath,
       sessionDir: join(this.runDir, "pi"),
       model: this.options.model,
       ...(this.launch.thinkingLevel === null ? {} : { thinking: this.launch.thinkingLevel }),
+      ...(claudeBridge === undefined ? {} : { claudeBridgePath: claudeBridge.entryPath }),
     });
     const child = this.spawnFn(this.options.nodePath, argv, {
       cwd: this.runDir,
@@ -776,6 +832,12 @@ class PiRun implements PiAgentHandle {
     if (activeModel !== this.options.model) {
       return this.fail("agent.model_mismatch", "Pi reports a different active model");
     }
+    // The provider, when Pi names it, is the lane's: a claude-bridge run never falls back to another provider's model.
+    const provider = asRecord(model)?.provider;
+    const expected = this.options.claudeBridge === undefined ? "haril" : CLAUDE_BRIDGE_PROVIDER;
+    if (provider !== undefined && provider !== expected) {
+      return this.fail("agent.model_mismatch", `Pi serves the model from ${String(provider)}`);
+    }
     clearTimeout(this.startupTimer);
     this.readyD.resolve();
   }
@@ -984,6 +1046,7 @@ class PiRun implements PiAgentHandle {
           };
           const text = assistantText(assistant.content);
           if (text !== undefined) this.finalText = text;
+          this.meter(assistant);
         }
         return;
       }
@@ -1049,6 +1112,33 @@ class PiRun implements PiAgentHandle {
     }
     this.finish(outcome);
     this.beginGracefulShutdown();
+  }
+
+  // One assistant message's usage goes to the host (the claude-bridge lane, which no Broker meters). A spent budget ends
+  // the run only when the message asks for a tool, so another model call would follow; a final message settles.
+  private meter(assistant: Json): void {
+    const meter = this.options.onModelUsage;
+    const usage = asRecord(assistant.usage);
+    if (meter === undefined || usage === undefined) return;
+    const count = (name: string): number => {
+      const value = usage[name];
+      return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : 0;
+    };
+    let verdict: "ok" | "exhausted";
+    try {
+      verdict = meter({
+        inputTokens: count("input") + count("cacheRead") + count("cacheWrite"),
+        outputTokens: count("output"),
+      });
+    } catch {
+      verdict = "ok";
+    }
+    if (verdict === "exhausted" && assistant.stopReason === "toolUse") {
+      this.fail(
+        "insufficient_quota",
+        "insufficient_quota: the token budget was spent before the run ended",
+      );
+    }
   }
 
   // Pi retries a failed model call up to 3 times, so only the last assistant message decides: stop, toolUse and

@@ -69,6 +69,9 @@ const VKEY_ENV = "HARIL_VKEY";
 const CONTEXT_ENV = "HARIL_MODEL_CONTEXT";
 const MAX_TOKENS_ENV = "HARIL_MODEL_MAX_TOKENS";
 const LEVELS_ENV = "HARIL_MODEL_LEVELS";
+// HARIL_LANE=claude-bridge: the run is on the pi-claude-bridge provider (launch.ts buildClaudeBridgeEnv).
+const LANE_ENV = "HARIL_LANE";
+const CLAUDE_BRIDGE_LANE = "claude-bridge";
 const REASONING_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"];
 
 // The model's reasoning from the levels the gateway publishes (HARIL_MODEL_LEVELS, phase F7), which the runtime passes
@@ -112,7 +115,12 @@ export default async function harilBridge(pi: BridgePiApi): Promise<void> {
   const runId = process.env.HARIL_RUN_ID;
   const brokerUrl = process.env.HARIL_BROKER_URL;
   const model = process.env.HARIL_MODEL;
-  if (!bridgeValue || !toolsValue || !vkey || !runId || !brokerUrl || !model) {
+  // The claude-bridge lane: the pi-claude-bridge extension serves the model, so no haril provider, Broker or key.
+  const claudeBridgeLane = process.env[LANE_ENV] === CLAUDE_BRIDGE_LANE;
+  if (!bridgeValue || !toolsValue || !runId) {
+    throw new Error("haril bridge: the run environment is incomplete");
+  }
+  if (!claudeBridgeLane && (!vkey || !brokerUrl || !model)) {
     throw new Error("haril bridge: the run environment is incomplete");
   }
 
@@ -125,22 +133,24 @@ export default async function harilBridge(pi: BridgePiApi): Promise<void> {
   // A failed connection throws, so Pi fails to load the extension (fail closed).
   const channel = await openChannel(pipePath);
 
-  pi.registerProvider("haril", {
-    baseUrl: brokerUrl,
-    api: "openai-completions",
-    apiKey: vkey,
-    models: [
-      {
-        id: model,
-        name: model,
-        input: ["text"],
-        ...reasoningFromLevels(process.env[LEVELS_ENV]),
-        contextWindow: positiveIntegerEnv(process.env[CONTEXT_ENV], DEFAULT_CONTEXT_WINDOW),
-        maxTokens: positiveIntegerEnv(process.env[MAX_TOKENS_ENV], DEFAULT_MAX_TOKENS),
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      },
-    ],
-  });
+  if (!claudeBridgeLane) {
+    pi.registerProvider("haril", {
+      baseUrl: brokerUrl ?? "",
+      api: "openai-completions",
+      apiKey: vkey ?? "",
+      models: [
+        {
+          id: model ?? "",
+          name: model ?? "",
+          input: ["text"],
+          ...reasoningFromLevels(process.env[LEVELS_ENV]),
+          contextWindow: positiveIntegerEnv(process.env[CONTEXT_ENV], DEFAULT_CONTEXT_WINDOW),
+          maxTokens: positiveIntegerEnv(process.env[MAX_TOKENS_ENV], DEFAULT_MAX_TOKENS),
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      ],
+    });
+  }
 
   // The hello lists the tools registered here and nothing else: the Runtime compares it with the run's allowed tools,
   // so a name the bridge does not serve fails the handshake instead of being announced.

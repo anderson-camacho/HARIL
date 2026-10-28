@@ -34,7 +34,6 @@ import type {
 } from "@haril/core/ports";
 import { createProcessControl } from "@haril/os";
 import { StoreError } from "@haril/state-sqlite";
-import { modelProblemOf } from "../providers.js";
 import { projectFileReader, verificationPayload } from "./acceptance.js";
 import { applyDecidedApprovals, denyPlansOfFailedTask } from "./approvals.js";
 import { controlEventOf } from "./control-events.js";
@@ -51,7 +50,7 @@ import { withStoreState } from "./model-context.js";
 import { decideProviderRetry } from "./model-launch.js";
 import type { PlanAttemptReport, PlanProposals } from "./plan-proposals.js";
 import { killRecordedProcesses, recordSweep } from "./processes.js";
-import type { RealAgentReadiness, RealAgents } from "./real-agent.js";
+import { type RealAgentReadiness, type RealAgents, realModelProblem } from "./real-agent.js";
 import { createShutdown, type KillSwitch, RUNTIME_STOP, type Shutdown } from "./shutdown.js";
 import {
   cancelStrandedTurns,
@@ -1085,7 +1084,7 @@ function skipUnrunnableRealTasks(
   for (const task of store.tasks.list()) {
     if (task.state !== "ready" || !isRealAgent(task.agentRef)) continue;
     const problem = setup.ok
-      ? modelProblemOf(store.tasks.get(task.taskId)?.model ?? null, setup.providers)
+      ? realModelProblem(store.tasks.get(task.taskId)?.model ?? null, setup)
       : setup;
     if (problem === undefined) continue;
     excluded.push(task.taskId);

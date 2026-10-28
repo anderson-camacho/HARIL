@@ -348,12 +348,14 @@ export function listArg(list: readonly string[]): string {
   return JSON.stringify(list);
 }
 
-// HARIL's model reference of a Pi model the console registered (provider haril-<id>), else undefined: only HARIL's
-// providers serve agents.
+// HARIL's model reference of a Pi model the console registered (provider haril-<id>), or of a model of the
+// pi-claude-bridge extension (claude-bridge/<id>, the agents' claude-bridge lane), else undefined: only those serve
+// agents.
 export function harilRefOf(model: {
   readonly provider: string;
   readonly id: string;
 }): string | undefined {
+  if (model.provider === "claude-bridge") return `claude-bridge/${model.id}`;
   return model.provider.startsWith("haril-")
     ? `${model.provider.slice("haril-".length)}/${model.id}`
     : undefined;

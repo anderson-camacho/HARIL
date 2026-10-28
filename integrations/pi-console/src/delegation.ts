@@ -3,11 +3,13 @@ import { runHaril, runHarilJson } from "./cli.js";
 import { readApproval } from "./dashboard-data.js";
 import {
   type CardEffect,
+  CLAUDE_BRIDGE_NOTICE,
   cardClick,
   cardKey,
   cardProblem,
   createCard,
   type DelegateCard,
+  isClaudeBridgeModel,
   renderCard,
   selectedStops,
   workflowStartArgs,
@@ -43,9 +45,10 @@ export interface DelegationHost {
   currentPlan(): string | undefined;
   createPlan(ctx: ConsoleContext): void;
   consult(ctx: ConsoleContext): void;
-  // The current Pi model as a HARIL reference, the card's default.
+  // The current Pi model as a HARIL reference, the card's default: <provider>/<model> for a HARIL provider's, and
+  // claude-bridge/<model> for the pi-claude-bridge extension's, which the real agents run on Claude Code's login.
   harilModelRef(): string | undefined;
-  // Every model a HARIL provider serves, as <provider>/<model>, for the card's model choice.
+  // Every model a HARIL provider or the pi-claude-bridge extension serves, for the card's model choice.
   harilModels(): readonly string[];
   // Starts a runtime when none runs; returns what the notification adds.
   ensureRuntime(): Promise<string | undefined>;
@@ -377,7 +380,7 @@ async function confirmInOverlay(
     if (result.effect !== "choose-model") return result.effect === "start" ? current : undefined;
     if (models.length === 0) {
       ctx.ui.notify(
-        "No HARIL model is available yet: haril models lists them once a provider answers.",
+        "No HARIL model is available yet: haril models lists them once a provider answers, and /model lists the claude-bridge ones once pi-claude-bridge is installed.",
         "warning",
       );
       continue;
@@ -406,6 +409,7 @@ async function confirmInDialog(
     [
       `Goal: ${card.goal}`,
       `Orchestrator model: ${card.model}`,
+      ...(isClaudeBridgeModel(card.model) ? [CLAUDE_BRIDGE_NOTICE] : []),
       `Autonomy: ${stops.length === 0 ? "autonomous, no stops" : `stops at ${stops.join(", ")}`}`,
       `Mode: Implementation; base ${card.preflight?.baseBranch ?? "unverified"}`,
       `Test command: ${card.preflight?.testCommand ?? "unverified"} allowed, not run; worktree creation pending runtime.`,
