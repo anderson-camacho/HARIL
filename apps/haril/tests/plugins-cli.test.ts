@@ -39,10 +39,10 @@ function ids(out: readonly string[]): string[] {
 }
 
 describe("haril plugins (dock preferences, not Pi extension control)", () => {
-  it("lists the default five slots without creating config and explains the scope", async () => {
+  it("lists the default four slots without creating config and explains the scope", async () => {
     const list = await cli("list", "--json");
     expect(list.code).toBe(0);
-    expect(ids(list.out)).toEqual(["explorer", "git", "youtube", "memory", "themes"]);
+    expect(ids(list.out)).toEqual(["git", "youtube", "memory", "themes"]);
     expect(parseJson(list.out)).toMatchObject({ scope: "dock-preferences-only" });
     expect(readdirSync(root)).toEqual([]);
   });
@@ -52,7 +52,7 @@ describe("haril plugins (dock preferences, not Pi extension control)", () => {
     expect((await cli("hide", "youtube")).code).toBe(0);
     const moved = await cli("move", "youtube", "up", "--json");
     expect(moved.code).toBe(0);
-    expect(ids(moved.out)).toEqual(["explorer", "youtube", "git", "memory", "themes"]);
+    expect(ids(moved.out)).toEqual(["youtube", "git", "memory", "themes"]);
     const hidden = parseJson<{ plugins: { id: string; visible: boolean }[] }>(moved.out);
     expect(hidden.plugins.find((plugin) => plugin.id === "youtube")?.visible).toBe(false);
     expect((await cli("show", "youtube")).code).toBe(0);
@@ -61,17 +61,11 @@ describe("haril plugins (dock preferences, not Pi extension control)", () => {
     const document = JSON.parse(stored);
     expect(document.ui.theme).toBe("haril-blossom");
     expect(document.ui.locale).toBe("es");
-    expect(document.ui.plugins[1]).toEqual({ id: "youtube", visible: true });
+    expect(document.ui.plugins[0]).toEqual({ id: "youtube", visible: true });
     expect(readdirSync(root)).toEqual(["haril.json"]);
 
     expect((await cli("reset")).code).toBe(0);
-    expect(ids((await cli("list", "--json")).out)).toEqual([
-      "explorer",
-      "git",
-      "youtube",
-      "memory",
-      "themes",
-    ]);
+    expect(ids((await cli("list", "--json")).out)).toEqual(["git", "youtube", "memory", "themes"]);
   });
 
   it("does not overwrite malformed configuration or duplicate slots", async () => {
@@ -82,7 +76,6 @@ describe("haril plugins (dock preferences, not Pi extension control)", () => {
           { id: "git", visible: false },
           { id: "memory", visible: true },
           { id: "themes", visible: true },
-          { id: "youtube", visible: true },
         ],
       },
     });
@@ -101,14 +94,56 @@ describe("haril plugins (dock preferences, not Pi extension control)", () => {
   });
 
   it("does not move outside the first or last position", async () => {
-    expect((await cli("move", "explorer", "up")).code).toBe(0);
+    expect((await cli("move", "git", "up")).code).toBe(0);
     expect((await cli("move", "themes", "down")).code).toBe(0);
-    expect(ids((await cli("list", "--json")).out)).toEqual([
-      "explorer",
-      "git",
-      "youtube",
-      "memory",
-      "themes",
-    ]);
+    expect(ids((await cli("list", "--json")).out)).toEqual(["git", "youtube", "memory", "themes"]);
+  });
+
+  // Releases before the TREE removal stored five slots, the first one being the retired "explorer".
+  // Such a file must keep working: every command reads it and the next write drops the retired entry.
+  describe("a haril.json written before the TREE slot was removed", () => {
+    const legacy = JSON.stringify({
+      ui: {
+        theme: "haril-blossom",
+        plugins: [
+          { id: "explorer", visible: true },
+          { id: "memory", visible: false },
+          { id: "git", visible: true },
+          { id: "youtube", visible: true },
+          { id: "themes", visible: true },
+        ],
+      },
+    });
+
+    it("lists the remaining four slots in their stored order without rewriting the file", async () => {
+      writeFileSync(path, legacy);
+      const list = await cli("list", "--json");
+      expect(list.code).toBe(0);
+      expect(ids(list.out)).toEqual(["memory", "git", "youtube", "themes"]);
+      const plugins = parseJson<{ plugins: { id: string; visible: boolean }[] }>(list.out).plugins;
+      expect(plugins.find((plugin) => plugin.id === "memory")?.visible).toBe(false);
+      expect(readFileSync(path, "utf8")).toBe(legacy);
+    });
+
+    it("writes the four-entry list on the next change and keeps the other settings", async () => {
+      writeFileSync(path, legacy);
+      const hidden = await cli("hide", "youtube", "--json");
+      expect(hidden.code).toBe(0);
+      expect(ids(hidden.out)).toEqual(["memory", "git", "youtube", "themes"]);
+      const document = JSON.parse(readFileSync(path, "utf8"));
+      expect(document.ui.theme).toBe("haril-blossom");
+      expect(document.ui.plugins).toEqual([
+        { id: "memory", visible: false },
+        { id: "git", visible: true },
+        { id: "youtube", visible: false },
+        { id: "themes", visible: true },
+      ]);
+    });
+
+    it("no longer accepts explorer as a command target", async () => {
+      writeFileSync(path, legacy);
+      expect((await cli("show", "explorer")).code).toBe(2);
+      expect(readFileSync(path, "utf8")).toBe(legacy);
+    });
   });
 });

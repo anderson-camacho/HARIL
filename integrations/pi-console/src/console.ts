@@ -17,6 +17,8 @@ import {
 import {
   type DashboardArea,
   type DashboardFacts,
+  type NativeRailContent,
+  type RailHitAction,
   type RailSection,
   renderFooterNavigation,
   renderHeaderLayout,
@@ -41,8 +43,7 @@ import { effectText, sourceText, valueText } from "./delegation-settings.js";
 import { loadDockDetails } from "./dock-details.js";
 import { createDockPicker, type DockPickerResult, dockSlotAt } from "./dock-navigation.js";
 import { stopAll } from "./emergency.js";
-import { explorerFolderChoices, resolveExplorerFolder } from "./explorer-navigation.js";
-import { DEFAULT_UI_LOCALE, readConsoleLocale, type UiLocale } from "./locale.js";
+import { DEFAULT_UI_LOCALE, localized, readConsoleLocale, type UiLocale } from "./locale.js";
 import { installModes } from "./mode-controller.js";
 import { levelLabel } from "./model-levels.js";
 import { chooseLevel, chooseModel, createLevelMemory, type LevelMemory } from "./model-picker.js";
@@ -85,6 +86,7 @@ import type {
   SessionEntry,
 } from "./pi-types.js";
 import { type BoundProject, findProject, folderName } from "./project.js";
+import { buildRailMenu, runRailHit } from "./rail-actions.js";
 import { type PendingApproval, readStatus } from "./status.js";
 import { createTabPicker, type TabPickerResult } from "./tab-picker.js";
 import { clipText, plainText, truncate } from "./text.js";
@@ -98,13 +100,13 @@ import {
 
 const VERSION_ENV = "HARIL_VERSION";
 const OUTPUT_WIDGET = "haril-output";
+// Columns the right rail is rendered at for its keyboard menu: wider than any row, so no label is cut.
+const RAIL_MENU_WIDTH = 120;
 // The bar reads the runtime and the plans again this often, and only while a runtime runs or a plan waits.
 const REFRESH_MS = 5_000;
 
 interface Session extends CommandHost {
   readonly ctx: ConsoleContext;
-  explorerPath: string;
-  explorerExpanded: Set<string>;
   locale: UiLocale;
   project: BoundProject | undefined;
   pending: readonly PendingApproval[];
@@ -406,8 +408,6 @@ export default function harilConsole(pi: ConsolePi): void {
   function openSession(ctx: ConsoleContext): Session {
     const current: Session = {
       ctx,
-      explorerPath: ctx.cwd,
-      explorerExpanded: new Set(),
       locale: DEFAULT_UI_LOCALE,
       cwd: ctx.cwd,
       project: undefined,
@@ -712,35 +712,7 @@ export default function harilConsole(pi: ConsolePi): void {
           (item) => item.row === event.y && event.x >= item.start && event.x < item.end,
         );
         if (rail === undefined) return undefined;
-        switch (rail.action) {
-          case "toggle":
-            if (rail.section !== undefined) {
-              const baseline =
-                rail.section === "actions" ||
-                rail.section === "warnings" ||
-                rail.section === "orchestration";
-              current.railExpanded[rail.section] = !(
-                current.railExpanded[rail.section] ?? baseline
-              );
-              redraw();
-            }
-            break;
-          case "run":
-            if (rail.control !== undefined) openDashboardAction(current, rail.control);
-            break;
-          case "mode":
-            void chooseMode(current, current.ctx);
-            break;
-          case "menu":
-            void current.openActions(current.ctx);
-            break;
-          case "focus":
-            focusRightRail(current);
-            break;
-          case "details":
-            openDashboardAction(current, "details");
-            break;
-        }
+        runRail(current, rail);
         return { handled: true, render: true };
       },
       invalidate() {},
@@ -792,45 +764,30 @@ export default function harilConsole(pi: ConsolePi): void {
     });
   }
 
+  // The right rail's rows and the action of each: the native pane draws them and the keyboard menu lists them.
+  function railContent(current: Session, width: number): NativeRailContent {
+    return renderNativeRailContent(
+      dashboardFacts(current),
+      current.area,
+      width,
+      current.railExpanded,
+    );
+  }
+
   function mountNativePanes(current: Session, tui: ConsoleTui): void {
     if (current.closed || current.nativePanes?.attached) return;
     const mounted = attachNativePanes(tui, current.dock, {
       project: () => current.cwd,
       effortLevel: () => modelLevelOf(current).level,
       locale: () => current.locale,
-      right: (width) => {
-        return renderNativeRailContent(
-          dashboardFacts(current),
-          current.area,
-          width,
-          current.railExpanded,
-        );
-      },
+      right: (width) => railContent(current, width),
       select(id) {
         void openDockSlot(current, id);
-      },
-      toggleExplorer(path) {
-        void (async () => {
-          try {
-            const folder = await resolveExplorerFolder(
-              current.explorerPath,
-              current.explorerPath,
-              path,
-            );
-            if (current.explorerExpanded.has(folder)) current.explorerExpanded.delete(folder);
-            else current.explorerExpanded.add(folder);
-            await openDockSlot(current, "explorer");
-          } catch (error) {
-            current.ctx.ui.notify(
-              error instanceof Error ? error.message : "Carpeta inválida",
-              "warning",
-            );
-          }
-        })();
       },
       activate(id, action) {
         if (id === "themes") void changeTheme(current, action);
       },
+      railAction: (hit) => runRail(current, hit),
     });
     if (mounted.attached) current.nativePanes = mounted;
   }
@@ -843,7 +800,8 @@ export default function harilConsole(pi: ConsolePi): void {
     if (current.closed) return;
     current.dock.slots = readDockSlots(config);
     if (!current.dock.slots.some((slot) => slot.visible && slot.id === current.dock.selected)) {
-      current.dock.selected = current.dock.slots.find((slot) => slot.visible)?.id ?? "explorer";
+      current.dock.selected =
+        current.dock.slots.find((slot) => slot.visible)?.id ?? DOCK_LABELS[0].id;
     }
     if (current.dock.detail?.id !== current.dock.selected)
       void openDockSlot(current, current.dock.selected);
@@ -860,16 +818,11 @@ export default function harilConsole(pi: ConsolePi): void {
     current.dock.detail = undefined;
     redraw();
     const commands = safely(() => pi.getCommands().map((command) => command.name), []);
-    const details = await loadDockDetails(
-      id,
-      id === "explorer" ? current.explorerPath : current.cwd,
-      {
-        piCommands: commands,
-        expandedPaths: current.explorerExpanded,
-        theme: getHarilPalette(),
-        locale: current.locale,
-      },
-    );
+    const details = await loadDockDetails(id, current.cwd, {
+      piCommands: commands,
+      theme: getHarilPalette(),
+      locale: current.locale,
+    });
     if (current.closed || session !== current || current.dockLoadSeq !== seq) return;
     current.dock.detail = details;
     current.nativePanes?.refresh();
@@ -1018,33 +971,6 @@ export default function harilConsole(pi: ConsolePi): void {
         : updated.stderr || "No se pudo guardar la preferencia Pi",
       updated.ok ? "info" : "error",
     );
-  }
-
-  async function chooseExplorerFolder(current: Session, ctx: ConsoleContext): Promise<void> {
-    if (current.closed || !ctx.hasUI || ctx.mode !== "tui") return;
-    try {
-      const entries = await explorerFolderChoices(current.explorerPath);
-      const fixed = ["⌂ Raíz del proyecto", "↑ Carpeta superior"];
-      const chosen = await ctx.ui.select("Explorador · elige carpeta", [
-        ...fixed,
-        ...entries.map((item) => item.label),
-      ]);
-      if (!chosen || current.closed || current !== session) return;
-      const name =
-        chosen === fixed[0]
-          ? "/"
-          : chosen === fixed[1]
-            ? ".."
-            : entries.find((item) => item.label === chosen)?.name;
-      if (!name) return;
-      current.explorerPath = await resolveExplorerFolder(current.cwd, current.explorerPath, name);
-      await openDockSlot(current, "explorer");
-    } catch (error) {
-      ctx.ui.notify(
-        error instanceof Error ? error.message : "No se pudo abrir esa carpeta",
-        "warning",
-      );
-    }
   }
 
   function dashboardDetails(
@@ -1220,6 +1146,37 @@ export default function harilConsole(pi: ConsolePi): void {
     else openDashboardAction(current, "details");
   }
 
+  // A rail row means the same thing wherever it is drawn: the classic header and the native right pane both land here.
+  function runRail(current: Session, hit: RailHitAction): void {
+    runRailHit(
+      {
+        railExpanded: current.railExpanded,
+        redraw,
+        runControl: (control) => openDashboardAction(current, control),
+        chooseMode: () => void chooseMode(current, current.ctx),
+        openMenu: () => void current.openActions(current.ctx),
+        focus: () => focusRightRail(current),
+      },
+      hit,
+    );
+  }
+
+  // The rail takes no keyboard focus (Pi hands extension shortcuts to the editor only), so its keyboard path is a menu
+  // of what a click on it does. It is built from the same content the pane draws; the pane's own 39 columns would
+  // cut the long labels, so the content is rendered wide for it.
+  async function openRailMenu(ctx: ConsoleContext): Promise<void> {
+    const current = session;
+    if (current === undefined || !ctx.hasUI || ctx.mode !== "tui") return;
+    const entries = buildRailMenu(railContent(current, RAIL_MENU_WIDTH), current.locale);
+    const choice = await ctx.ui.select(
+      localized(current.locale, "Right panel", "Panel derecho"),
+      entries.map((entry) => entry.label),
+    );
+    if (choice === undefined || session !== current || current.closed) return;
+    const entry = entries.find((item) => item.label === choice);
+    if (entry !== undefined) runRail(current, entry.hit);
+  }
+
   async function changeTheme(current: Session, requested: string): Promise<void> {
     if (!HARIL_PALETTES.some((item) => item === requested)) {
       current.ctx.ui.notify(
@@ -1343,28 +1300,6 @@ export default function harilConsole(pi: ConsolePi): void {
     description: "List the HARIL and third-party extension commands available in this Pi session",
     handler: async (_args, ctx) => showCommandCatalog(ctx),
   });
-  pi.registerCommand("haril-explore", {
-    description: "Navigate folders inside the current project without modifying files",
-    handler: async (args, ctx) => {
-      const current = session;
-      if (!current || !ctx.hasUI || ctx.mode !== "tui") return;
-      const requested = args.trim();
-      if (!requested) return chooseExplorerFolder(current, ctx);
-      try {
-        current.explorerPath = await resolveExplorerFolder(
-          current.cwd,
-          current.explorerPath,
-          requested,
-        );
-        await openDockSlot(current, "explorer");
-      } catch (error) {
-        ctx.ui.notify(
-          error instanceof Error ? error.message : "No se pudo abrir esa carpeta",
-          "warning",
-        );
-      }
-    },
-  });
   pi.registerShortcut("alt+c", {
     description: "Show available HARIL / extension commands",
     handler: (ctx) => {
@@ -1372,8 +1307,7 @@ export default function harilConsole(pi: ConsolePi): void {
     },
   });
   pi.registerCommand("haril-plugin", {
-    description:
-      "Open a HARIL dock view: /haril-plugin [explorer|git|youtube|memory|themes|1..5|details]",
+    description: "Open a HARIL dock view: /haril-plugin [git|youtube|memory|themes|1..4|details]",
     handler: async (args, ctx) => {
       const current = session;
       if (current === undefined || !ctx.hasUI || ctx.mode !== "tui") return;
@@ -1389,10 +1323,7 @@ export default function harilConsole(pi: ConsolePi): void {
             ? dockSlotAt(current.dock.slots, Number(word))?.id
             : DOCK_LABELS.find((slot) => slot.id === word)?.id;
       if (id === undefined) {
-        ctx.ui.notify(
-          "Uso: /haril-plugin [explorer|git|youtube|memory|themes|1..5|details]",
-          "warning",
-        );
+        ctx.ui.notify("Uso: /haril-plugin [git|youtube|memory|themes|1..4|details]", "warning");
         return;
       }
       if (word !== "details") await openDockSlot(current, id);
@@ -1412,7 +1343,7 @@ export default function harilConsole(pi: ConsolePi): void {
   });
   // Pi's default bindings leave Alt+L / Alt+I free. Alt+Z is Pi's undo shortcut on WSL.
   pi.registerShortcut("alt+l", {
-    description: "Open HARIL's plugin list (then press 1..5, arrows, Enter or Esc)",
+    description: "Open HARIL's plugin list (then press 1..4, arrows, Enter or Esc)",
     handler: (ctx) => {
       const current = session;
       if (current === undefined || !ctx.hasUI || ctx.mode !== "tui") return;
@@ -1516,6 +1447,18 @@ export default function harilConsole(pi: ConsolePi): void {
       current.railVisible = !current.railVisible;
       redraw();
     },
+  });
+  // Alt+K is absent from Pi 1.2.0's default keybindings (pi-tui and pi-coding-agent), like Alt+H and Alt+I. The slash
+  // command always reaches the editor, even where a terminal swallows Alt chords.
+  pi.registerShortcut("alt+k", {
+    description: "Open the HARIL right-panel menu (arrows, Enter or Esc)",
+    handler: (ctx) => {
+      void openRailMenu(ctx);
+    },
+  });
+  pi.registerCommand("haril-panel", {
+    description: "Open the HARIL right-panel menu: its sections and actions, with arrows and Enter",
+    handler: async (_args, ctx) => openRailMenu(ctx),
   });
   // Alt+F belongs to Pi's editor.cursorWordRight; never override a built-in shortcut.
   pi.registerCommand("haril-focus", {

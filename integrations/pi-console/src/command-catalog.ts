@@ -12,8 +12,8 @@ const CONSOLE_COMMANDS: readonly CommandDescription[] = [
   { name: "haril-extensions", description: "Gestionar paquetes Pi declarados en HARIL" },
   { name: "haril-dock", description: "Mostrar u ocultar columnas" },
   { name: "haril-focus", description: "Abrir detalles de la sección actual" },
+  { name: "haril-panel", description: "Abrir el menú de teclado del panel derecho" },
   { name: "haril-commands", description: "Consultar los comandos registrados ahora" },
-  { name: "haril-explore", description: "Navegar por las carpetas del proyecto" },
   ...DASHBOARD_AREAS.map((area) => ({ name: area, description: `Abrir área ${area}` })),
 ];
 
@@ -42,8 +42,9 @@ export function commandCatalog(
     ...(other.length ? other.map((name) => `/${name}`) : ["No se reportan comandos adicionales."]),
     "",
     "ATAJOS HARIL",
-    "Alt+L · seleccionar plugin; luego 1–5, flechas y Enter",
+    "Alt+L · seleccionar plugin; luego 1–4, flechas y Enter",
     "Alt+I · mostrar u ocultar el panel derecho",
+    "Alt+K · menú del panel derecho (flechas y Enter) o /haril-panel",
     "Alt+H · elegir área; Alt+O · orquestación",
     "Alt+M · cambiar modo; Alt+X · detener todo",
     "",

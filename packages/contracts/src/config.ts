@@ -32,6 +32,7 @@ export const UiConfigSchema = Type.Object(
           { id: Type.String(), visible: Type.Boolean() },
           { additionalProperties: false },
         ),
+        // Four dock slots today; a file written before the TREE slot was removed may still hold five.
         { maxItems: 5 },
       ),
     ),

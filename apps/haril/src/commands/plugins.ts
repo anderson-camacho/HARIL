@@ -8,7 +8,7 @@ import { readConfigDocument, serializeConfig, writeConfigAtomically } from "./co
 // install, enable, unload or inspect Pi extensions: Pi's live inventory is not available here.
 const USAGE = [
   "usage: haril plugins list [--json]",
-  "       haril plugins show|hide <explorer|git|youtube|memory|themes> [--json]",
+  "       haril plugins show|hide <git|youtube|memory|themes> [--json]",
   "       haril plugins move <id> up|down [--json]",
   "       haril plugins reset [--json]",
   "These settings control HARIL's visual left dock; Pi extensions are not changed.",
@@ -78,9 +78,10 @@ export function plugins(args: readonly string[], io: CliIo, host: HostInfo): num
     slots.splice(0, slots.length, ...resolveDockSlots(undefined));
   } else {
     const index = slots.findIndex((slot) => slot.id === id);
-    if (index < 0) return failure(io, `unknown plugin dock slot: ${id}`);
+    const current = slots[index];
+    if (current === undefined) return failure(io, `unknown plugin dock slot: ${id}`);
     if (verb === "show" || verb === "hide") {
-      slots[index] = { id: slots[index]?.id ?? "explorer", visible: verb === "show" };
+      slots[index] = { id: current.id, visible: verb === "show" };
     } else if (verb === "move") {
       const nextIndex = index + (direction === "up" ? -1 : 1);
       if (nextIndex >= 0 && nextIndex < slots.length) {

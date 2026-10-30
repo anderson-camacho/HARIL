@@ -4,6 +4,35 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.23.11
+
+- **Fecha:** 2026-10-30
+- **Estado:** espacio TREE retirado del dock; el panel derecho responde al clic en secciones y acciones y ofrece un menú de teclado.
+
+### Añadido
+
+- Menú del panel derecho con `Alt+K` o `/haril-panel`: lista las secciones, acciones y el cambio de modo del panel y se maneja con flechas y Enter. Ejecuta exactamente lo mismo que el clic. Las pestañas siguen en `Alt+L`.
+- Lectura tolerante de un `ui.plugins` antiguo de cinco entradas: la entrada `explorer` se descarta antes de validar, ningún comando rechaza el archivo y el siguiente guardado (`haril plugins show|hide|move|reset`) deja cuatro entradas.
+
+### Cambiado
+
+- El dock pasa de cinco a cuatro espacios (GIT, YT, MEM, THEME); el espacio inicial es GIT y los números válidos van de `1` a `4`. Se eliminan TREE, el comando `/haril-explore`, el selector de carpeta y el módulo de navegación.
+- Las filas del panel nativo ya no muestran `[D]`, `[M]`, `[T]` ni `[R]`, porque nunca fueron teclas (y `Alt+D` es de Pi); la cabecera clásica no cambia. El pie de ayuda ocupa dos líneas para no cortarse a 39 columnas.
+- El panel dejó de recalcular herramientas, comandos y modelos en cada movimiento del ratón: solo reacciona al clic y a la rueda.
+
+### Corregido
+
+- El clic en las cabeceras AVISOS, EXTENSIONES, SESIÓN y ACCIONES, en las acciones y en «cambiar» del panel derecho no hacía nada: el panel descartaba esa información al dibujarse (desde 0.22.3).
+- La última columna de cada pestaña del dock no era clicable (desfase de una columna).
+
+### Verificación
+
+- `npm run check` (Biome, tipos, capas/pureza, knip, versión) correcto.
+- Suite principal: 2816 pruebas aprobadas, 1 omitida. Las correcciones de clic se escribieron con RED previo (19 de 23 pruebas fallaban antes) y las del menú también (21 fallaban antes).
+- No verificado: no hay un Pi real en este entorno. La llegada de clics y de `Alt+K` en Windows Terminal solo se probó con un Pi simulado; si la terminal intercepta `Alt+K`, `/haril-panel` abre el mismo menú.
+
+---
+
 ## 0.23.10
 
 - **Fecha:** 2026-10-28

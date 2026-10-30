@@ -443,6 +443,7 @@ En HARIL 0.21.8 los **avisos**, los **estados de extensiones** y la **orquestaci
 En terminales de **120 columnas y 40 filas o más**, el encabezado HARIL muestra una **columna a la derecha del todo** con sesión, proyecto, modelo, estado de extensiones observadas, avisos de proveedor (como `HARIL provider cliproxy: unreachable`), errores de HARIL y, al seleccionar ORCHESTRATION, el workflow y su progreso. La zona principal no vuelve a mostrar el gran widget de herramientas encima del editor.
 
 - `Alt+I`: ocultar/mostrar la columna derecha. En una terminal pequeña, donde se oculta automáticamente, abre el detalle.
+- `Alt+K` o `/haril-panel`: abrir un menú con las secciones y acciones de la columna derecha, que se elige con ↑/↓ y `Enter`.
 - `/haril-focus`: abrir la vista enfocada de la sección activa (visor de orquestación si estás en ORCHESTRATION).
 - Clic en la columna: abrir el detalle en el visor; `Alt+H` o las pestañas seleccionan la sección.
 - `/haril`: menú de las acciones originales.
@@ -670,9 +671,9 @@ El lanzador selecciona `--tui-mode fullscreen` para habilitar los eventos de mou
 
 ### Dock nativo de plugins y estado (0.22.3, integración experimental)
 
-La consola `haril` / `haril console` intenta mostrar **tres columnas verticales** en Pi: cinco espacios de plugins a la izquierda, el chat/editor originales de Pi en el centro y un panel con avisos, herramientas, orquestación y actividad a la derecha. El encabezado grande se compacta cuando el dock nativo está activo. Requiere una terminal de **al menos 132 columnas × 24 filas** y un Pi compatible con el layout interno de `@earendil-works/pi-tui`; si falta esa API, si Gentle Shell ya ocupa el layout o si el terminal es pequeño, HARIL conserva la cabecera anterior de forma segura.
+La consola `haril` / `haril console` intenta mostrar **tres columnas verticales** en Pi: cuatro espacios de plugins a la izquierda, el chat/editor originales de Pi en el centro y un panel con avisos, herramientas, orquestación y actividad a la derecha. El encabezado grande se compacta cuando el dock nativo está activo. Requiere una terminal de **al menos 132 columnas × 24 filas** y un Pi compatible con el layout interno de `@earendil-works/pi-tui`; si falta esa API, si Gentle Shell ya ocupa el layout o si el terminal es pequeño, HARIL conserva la cabecera anterior de forma segura.
 
-Los espacios visuales iniciales son Explorador, Git, YouTube, Memoria y Temas. Su **orden y visibilidad** se pueden guardar desde PowerShell:
+Los espacios visuales iniciales son Git, YouTube, Memoria y Temas. Su **orden y visibilidad** se pueden guardar desde PowerShell:
 
 ```powershell
 haril plugins list
@@ -683,31 +684,29 @@ haril plugins list --json
 haril plugins reset
 ```
 
-Desde la interfaz Pi, `/haril-plugins` abre un menú para mostrar, ocultar, subir o bajar espacios y actualiza inmediatamente la columna izquierda. `/haril-dock left|right|both` alterna las columnas y `Alt+I` alterna el panel derecho. La columna derecha puede desplazarse con la rueda del ratón. Los cambios realizados **externamente** desde PowerShell se cargan al iniciar una nueva sesión de `haril` o al abrir `/haril-plugins`.
+Desde la interfaz Pi, `/haril-plugins` abre un menú para mostrar, ocultar, subir o bajar espacios y actualiza inmediatamente la columna izquierda. `/haril-dock left|right|both` alterna las columnas y `Alt+I` alterna el panel derecho. La columna derecha puede desplazarse con la rueda del ratón. Sus cabeceras de sección (`AVISOS`, `EXTENSIONES`, `SESIÓN`, `ACCIONES`), sus acciones y el texto `cambiar` del modo responden al clic. Con el teclado, `Alt+K` o `/haril-panel` abren un menú con esas mismas secciones y acciones (abrir o cerrar una sección, cambiar el modo, ver detalles, elegir modelo…): muévete con ↑/↓, elige con `Enter` y cancela con `Esc`. El panel en sí **no recibe el foco del teclado** (Pi entrega los atajos de las extensiones al editor), así que ese menú es la vía de teclado; los prefijos `[D]`, `[M]`, `[T]` y `[R]` que se veían en sus acciones eran solo texto y ya no se dibujan en el panel. Los cambios realizados **externamente** desde PowerShell se cargan al iniciar una nueva sesión de `haril` o al abrir `/haril-plugins`.
 
-Las preferencias quedan en `ui.plugins` de `haril.json`, sin borrar otras opciones. **Un espacio visible no significa que su extensión Pi exista o esté ejecutándose**: YouTube, Explorador, Git, Memoria y Temas son lugares reservados para la integración de extensiones reales en próximos PR. Este PR no instala ni desactiva paquetes Pi. La unión de paneles se realiza mediante un adaptador interno experimental, se revierte al cerrar la sesión y deberá validarse manualmente en Windows Terminal antes de considerarse estable.
+Las preferencias quedan en `ui.plugins` de `haril.json`, sin borrar otras opciones. **Un espacio visible no significa que su extensión Pi exista o esté ejecutándose**: YouTube, Git, Memoria y Temas son lugares reservados para la integración de extensiones reales en próximos PR. Este PR no instala ni desactiva paquetes Pi. La unión de paneles se realiza mediante un adaptador interno experimental, se revierte al cerrar la sesión y deberá validarse manualmente en Windows Terminal antes de considerarse estable.
 
 #### Navegación y vistas de plugins (0.22.4)
 
-`Alt+L` abre un selector de plugins: presiona inmediatamente `1`–`5` según el orden de **espacios visibles**, o usa ↑/↓ y `Enter`; `Esc` cancela sin tocar el texto que estabas escribiendo a Pi. Funciona también en WSL sin sustituir `Alt+Z`, reservado allí por Pi para deshacer texto. `Alt+I` muestra u oculta el panel derecho. Ambos se pueden sustituir por los comandos `/haril-plugin` y `/haril-dock` si otra aplicación ocupa esas teclas. La selección cambia la información visible dentro de la columna izquierda; la conversación central permanece intacta.
+`Alt+L` abre un selector de plugins: presiona inmediatamente `1`–`4` según el orden de **espacios visibles**, o usa ↑/↓ y `Enter`; `Esc` cancela sin tocar el texto que estabas escribiendo a Pi. Funciona también en WSL sin sustituir `Alt+Z`, reservado allí por Pi para deshacer texto. `Alt+I` muestra u oculta el panel derecho. Ambos se pueden sustituir por los comandos `/haril-plugin` y `/haril-dock` si otra aplicación ocupa esas teclas. La selección cambia la información visible dentro de la columna izquierda; la conversación central permanece intacta.
 
 | Acción dentro de Pi | Resultado |
 | --- | --- |
 | `Alt+L`, después número | Abre directamente el espacio visible correspondiente; también ↑/↓ + Enter. |
 | `Alt+I` | Muestra u oculta la columna derecha. |
+| `Alt+K` o `/haril-panel` | Abre el menú de teclado del panel derecho: sus secciones y acciones, con ↑/↓ y `Enter`. |
 | `/haril-plugin` | Abre el selector de espacios. |
-| `/haril-plugin git` o `/haril-plugin 2` | Selecciona el espacio y muestra sus detalles completos en una vista cerrable con `Esc`. |
+| `/haril-plugin git` o `/haril-plugin 1` | Selecciona el espacio y muestra sus detalles completos en una vista cerrable con `Esc`. |
 | `/haril-plugin details` | Abre el detalle del espacio actual. |
 | Clic en un espacio de la izquierda | Lo selecciona y actualiza su ficha sin sustituir el chat. |
 
-Las fichas disponibles son de **solo lectura**: Explorador muestra archivos/carpetas del directorio abierto (sin abrir sus contenidos); Git muestra `git status`; Memoria consulta `haril memory status`. YouTube informa si Pi expone el comando `/yt` y cómo acceder a [pi-youtube-player](https://github.com/CinloDev/pi-youtube-player); **no instala ni inicia el reproductor**. Temas explica los temas incluidos de Pi y el acceso a `/settings → Theme`; el cambio directo de tema desde el dock se deja para otra etapa.
+Las fichas disponibles son de **solo lectura**: Git muestra `git status`; Memoria consulta `haril memory status`. YouTube informa si Pi expone el comando `/yt` y cómo acceder a [pi-youtube-player](https://github.com/CinloDev/pi-youtube-player); **no instala ni inicia el reproductor**. Temas explica los temas incluidos de Pi y el acceso a `/settings → Theme`; el cambio directo de tema desde el dock se deja para otra etapa.
 
-#### Catálogo de comandos y Explorador navegable (0.22.5)
+#### Catálogo de comandos (0.22.5)
 
 - `Alt+C` o `/haril-commands`: abre un visor desplazable con los **comandos que las extensiones realmente registraron** en la sesión Pi, diferenciando los de HARIL de los de otras extensiones (como `/yt` si está disponible). Incluye los atajos propios de HARIL. Esta API no enumera necesariamente todos los comandos nativos de Pi: usa `/hotkeys` para consultar los atajos reales de Pi y `haril help` en PowerShell para las opciones completas de CLI.
-- `/haril-explore`: permite elegir una subcarpeta con las flechas de Pi y `Enter`, volver a la carpeta superior o regresar a la raíz del proyecto. Hacer clic de nuevo en el espacio **Explorador** abre el mismo selector de carpetas.
-- `/haril-explore src`, `/haril-explore ..` y `/haril-explore /`: navegan dentro del proyecto, suben un nivel y vuelven a la raíz, respectivamente. Se verifica la ruta real; no se permite salir de la carpeta original ni abrir archivos como si fueran directorios. Es de **solo lectura**.
-- El Explorador coloca primero los nombres normales y después los ocultos (`.cache`, `.config`, etc.), conserva el desplazamiento con la rueda y reinicia el scroll al cambiar de ficha. Todavía no es un editor de archivos ni permite abrir documentos dentro del chat.
 
 #### Navegación de menús en Windows Terminal (0.22.6)
 
@@ -739,9 +738,9 @@ haril extensions remove "git:github.com/CinloDev/pi-youtube-player" --yes
 
 Los orígenes anteriores son ejemplos, **no recomendaciones de seguridad ni garantías de compatibilidad**: revisa sus dependencias, permisos y código antes de ejecutar un `install`. `--yes` es obligatorio y no se acepta instalar desde rutas locales, argumentos extra ni servidores Git arbitrarios en esta primera etapa. HARIL ejecuta `pi install|remove` mediante el Node y Pi registrados en **su propio runtime** con `PI_CODING_AGENT_DIR` apuntando al agente privado, sin usar el Pi de Gentle Shell ni el instalado globalmente. Reinicia HARIL tras los cambios. No se realiza instalación automática al abrir el dock; instalar una extensión no crea una ficha visual nueva. La actualización de paquetes, la auditoría de compatibilidad y los controles de integridad quedan pendientes.
 
-#### Dock compacto y Explorador expandible (0.22.9)
+#### Dock compacto (0.22.9)
 
-En una terminal de al menos **132 columnas × 24 filas**, `haril` muestra un dock fijo por pestañas en el lado izquierdo: `TREE`, `GIT`, `YT`, `MEM`, `THEME`. Solo se ve la ficha elegida, sin la antigua lista gigante. **TREE** permite expandir y contraer carpetas con clic; **GIT** enseña estado, cambios y los últimos ocho commits. La pestaña `YT` es únicamente un espacio reservado: no instala YouTube. `Alt+L` elige una vista con flechas y `Enter`; `Alt+I` oculta o muestra el panel derecho; `Alt+C` enumera los comandos reales. El orden y la visibilidad se administran con `/haril-plugins` y se conservan entre sesiones.
+En una terminal de al menos **132 columnas × 24 filas**, `haril` muestra un dock fijo por pestañas en el lado izquierdo: `GIT`, `YT`, `MEM`, `THEME`. Solo se ve la ficha elegida, sin la antigua lista gigante. **GIT** enseña estado, cambios y los últimos ocho commits. La pestaña `YT` es únicamente un espacio reservado: no instala YouTube. `Alt+L` elige una vista con flechas y `Enter`; `Alt+I` oculta o muestra el panel derecho; `Alt+K` abre el menú de teclado de ese panel; `Alt+C` enumera los comandos reales. El orden y la visibilidad se administran con `/haril-plugins` y se conservan entre sesiones.
 
 HARIL monta esas columnas solo si el Pi incluido ofrece el contrato interno de disposición compatible. En terminales pequeñas o con una versión diferente de Pi, deja intacto su chat y vuelve a la disposición original.
 
@@ -995,7 +994,7 @@ Los dossiers de `docs/research/` se leen solo bajo demanda, cuando un documento 
 
 ## Versiones
 
-Versión actual: **0.23.10**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
+Versión actual: **0.23.11**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
 
 ## Licencia
 

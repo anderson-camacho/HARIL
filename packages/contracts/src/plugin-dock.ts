@@ -2,7 +2,6 @@
 // A visible slot is not proof that an extension is installed or running. Integration with Pi's
 // extension lifecycle belongs to a later phase; these preferences only describe placement.
 export const DOCK_SLOTS = [
-  { id: "explorer", label: "Explorador" },
   { id: "git", label: "Git" },
   { id: "youtube", label: "YouTube" },
   { id: "memory", label: "Memoria" },
@@ -18,14 +17,29 @@ export interface DockSlotPreference {
 
 const IDS = new Set<string>(DOCK_SLOTS.map((slot) => slot.id));
 
+// Slots that older releases stored in ui.plugins and that no longer exist ("explorer" was the TREE view). A
+// haril.json written back then must keep loading, so these entries are ignored before anything is validated;
+// the next write of the preferences stores the list without them.
+const RETIRED_IDS: ReadonlySet<string> = new Set(["explorer"]);
+
+function isRetiredSlot(entry: unknown): boolean {
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return false;
+  const id = (entry as Record<string, unknown>).id;
+  return typeof id === "string" && RETIRED_IDS.has(id);
+}
+
 export function dockPreferenceErrors(value: unknown): string[] {
   if (!Array.isArray(value)) return ["/ui/plugins: must be an array of dock slots"];
-  if (value.length !== DOCK_SLOTS.length) {
+  // The index stays the one the entry has in the file, so a message points at the right line.
+  const entries = value
+    .map((entry: unknown, index) => ({ entry, index }))
+    .filter(({ entry }) => !isRetiredSlot(entry));
+  if (entries.length !== DOCK_SLOTS.length) {
     return [`/ui/plugins: must contain all ${DOCK_SLOTS.length} dock slots exactly once`];
   }
   const errors: string[] = [];
   const seen = new Set<string>();
-  for (const [index, entry] of value.entries()) {
+  for (const { entry, index } of entries) {
     const path = `/ui/plugins/${index}`;
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
       errors.push(`${path}: must be an object with id and visible`);
@@ -52,7 +66,10 @@ export function resolveDockSlots(value: unknown): DockSlotPreference[] {
   if (value === undefined || dockPreferenceErrors(value).length !== 0) {
     return DOCK_SLOTS.map((slot) => ({ id: slot.id, visible: true }));
   }
-  return (value as DockSlotPreference[]).map((slot) => ({ ...slot }));
+  // Valid here means an array; dropping the retired entries is what lets the next write heal the file.
+  return (value as DockSlotPreference[])
+    .filter((slot) => !isRetiredSlot(slot))
+    .map((slot) => ({ ...slot }));
 }
 
 export function dockSlotExists(id: string): id is DockSlotId {

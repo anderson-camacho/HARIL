@@ -1,9 +1,16 @@
 // Experimental full-height HARIL dock inside Pi's *existing* TUI. Pi does not expose a public split-pane API:
 // install only when its layoutRoot implements the @earendil-works/pi-tui layout-node contract. Never replace Pi's
 // editor, scrollback or chat; reuse its original layout node as the centre of the three-column stack.
+import type { NativeRailContent, RailHitAction } from "./dashboard.js";
 import { aiEyeTone, paddedCell, visualText } from "./dashboard-theme.js";
 import type { DockDetails } from "./dock-details.js";
-import { type DockId, type DockSlot, dockDefinition, readDockSlots } from "./dock-registry.js";
+import {
+  DOCK_LABELS,
+  type DockId,
+  type DockSlot,
+  dockDefinition,
+  readDockSlots,
+} from "./dock-registry.js";
 import type { UiLocale } from "./locale.js";
 import type { ConsoleMouseEvent, ConsoleTui } from "./pi-types.js";
 import { plainText } from "./text.js";
@@ -23,7 +30,7 @@ interface DockTabRow {
 }
 
 // The left rail is a tab host. A plugin owns its view only when selected; the rest
-// occupy small tabs, so a file tree cannot push the entire navigation off screen.
+// occupy small tabs, so a long view cannot push the entire navigation off screen.
 function dockTabs(state: PaneSettings, width: number): DockTabRow[] {
   const rows: DockTabRow[] = [];
   let label = "";
@@ -57,7 +64,7 @@ export interface PaneSettings {
 export function initialPaneSettings(): PaneSettings {
   return {
     slots: readDockSlots(undefined),
-    selected: "explorer",
+    selected: DOCK_LABELS[0].id,
     detail: undefined,
     leftVisible: false,
     rightVisible: true,
@@ -145,6 +152,8 @@ interface RightRailStructure {
   readonly tabStart: number;
   readonly detailStart: number;
   readonly detailCount: number;
+  // First row of the rail body (the dashboard lines), so a clicked row maps to the hit of its dashboard line.
+  readonly dashboardStart: number;
 }
 
 // In single-rail mode, the right rail hosts the active space (tabs, status and details)
@@ -162,8 +171,16 @@ function renderRightRailContent(
 
   if (state.leftVisible) {
     rows.push(paddedCell(` ▣ Espacio: ${selection}`, inside, "yellow", "panel"));
+    const dashboardStart = rows.length;
     for (const line of dashboardLines) rows.push(line);
-    return { lines: rows, tabRows: [], tabStart: -1, detailStart: -1, detailCount: 0 };
+    return {
+      lines: rows,
+      tabRows: [],
+      tabStart: -1,
+      detailStart: -1,
+      detailCount: 0,
+      dashboardStart,
+    };
   }
 
   const expanded = state.dockExpanded ?? true;
@@ -171,8 +188,16 @@ function renderRightRailContent(
   rows.push(paddedCell(` ${icon} Espacio: ${selection} · Alt+L`, inside, "yellow", "panel"));
 
   if (!expanded) {
+    const dashboardStart = rows.length;
     for (const line of dashboardLines) rows.push(line);
-    return { lines: rows, tabRows: [], tabStart: -1, detailStart: -1, detailCount: 0 };
+    return {
+      lines: rows,
+      tabRows: [],
+      tabStart: -1,
+      detailStart: -1,
+      detailCount: 0,
+      dashboardStart,
+    };
   }
 
   const tabRows = dockTabs(state, Math.max(1, inside - 1));
@@ -205,9 +230,10 @@ function renderRightRailContent(
   const detailCount = detail.length;
 
   rows.push(paddedCell(" ────────────────────────────────────────", inside, "muted", "panel"));
+  const dashboardStart = rows.length;
   for (const line of dashboardLines) rows.push(line);
 
-  return { lines: rows, tabRows, tabStart, detailStart, detailCount };
+  return { lines: rows, tabRows, tabStart, detailStart, detailCount, dashboardStart };
 }
 
 interface LayoutRoot {
@@ -238,10 +264,12 @@ export function attachNativePanes(
     readonly project: () => string;
     readonly effortLevel?: () => string | undefined;
     readonly locale?: () => UiLocale;
-    readonly right: (width: number) => readonly string[];
+    // The rail body: its rows and, aligned with them, the action a click on each row runs.
+    readonly right: (width: number) => NativeRailContent;
     readonly select: (id: DockId) => void;
-    readonly toggleExplorer?: (path: string) => void;
     readonly activate?: (id: DockId, action: string) => void;
+    // Runs the action of a clicked rail row (section toggle, dashboard action, mode, menu...).
+    readonly railAction?: (hit: RailHitAction) => void;
   },
 ): NativePanes {
   const host = tui as PaneTui;
@@ -300,11 +328,7 @@ export function attachNativePanes(
         options.activate?.(state.selected, action.action);
         return { handled: true, render: true };
       }
-      const row = detailLine - 1;
-      const node = state.selected === "explorer" ? state.detail?.treeNodes?.[row] : undefined;
-      if (!node?.directory) return undefined;
-      options.toggleExplorer?.(node.path);
-      return { handled: true, render: true };
+      return undefined;
     },
     invalidate() {},
   };
@@ -320,13 +344,27 @@ export function attachNativePanes(
       }
       const height = Math.max(1, tui.terminal.rows);
       const dashboard = options.right(width - 1);
-      const structure = renderRightRailContent(width, state, dashboard, options.locale?.() ?? "es");
+      const structure = renderRightRailContent(
+        width,
+        state,
+        dashboard.lines,
+        options.locale?.() ?? "es",
+      );
       scrollTop = Math.min(scrollTop, Math.max(0, structure.lines.length - height));
       return renderRightDock(width, height, structure.lines.slice(scrollTop));
     },
     handleMouse(event: ConsoleMouseEvent) {
+      // Pointer moves, presses and other buttons arrive constantly: leave before the rail (tool, command, MCP and
+      // model facts) is built, since only a left click and the wheel have anything to do.
+      const click = event.type === "click" && event.button === "left";
+      if (!click && event.type !== "wheel") return undefined;
       const dashboard = options.right(39);
-      const structure = renderRightRailContent(40, state, dashboard, options.locale?.() ?? "es");
+      const structure = renderRightRailContent(
+        40,
+        state,
+        dashboard.lines,
+        options.locale?.() ?? "es",
+      );
       if (event.type === "wheel") {
         const height = Math.max(1, tui.terminal.rows);
         const max = Math.max(0, structure.lines.length - height);
@@ -334,7 +372,6 @@ export function attachNativePanes(
         tui.requestRender();
         return { handled: true, render: true };
       }
-      if (event.type !== "click" || event.button !== "left") return undefined;
       const clickedRow = event.y + scrollTop;
       if (!state.leftVisible) {
         if (clickedRow === 0) {
@@ -350,8 +387,9 @@ export function attachNativePanes(
           ) {
             const tab = structure.tabRows[clickedRow - structure.tabStart];
             if (tab) {
+              // The row is drawn "│", a space, then the tab text: a tab starts two columns after its offset.
               const clicked = tab.cells.find(
-                (cell) => event.x >= cell.start + 1 && event.x < cell.end + 1,
+                (cell) => event.x >= cell.start + 2 && event.x < cell.end + 2,
               );
               if (clicked) {
                 scrollTop = 0;
@@ -373,15 +411,17 @@ export function attachNativePanes(
                 return { handled: true, render: true };
               }
             }
-            if (state.selected === "explorer") {
-              const row = detailLine - 1;
-              const node = state.detail?.treeNodes?.[row];
-              if (node?.directory) {
-                options.toggleExplorer?.(node.path);
-                return { handled: true, render: true };
-              }
-            }
           }
+        }
+        // The rail body (sections, dashboard actions, mode): the same actions the classic header runs on a click.
+        const hit =
+          clickedRow >= structure.dashboardStart
+            ? dashboard.hits[clickedRow - structure.dashboardStart]
+            : undefined;
+        if (hit !== undefined && options.railAction !== undefined) {
+          options.railAction(hit);
+          tui.requestRender();
+          return { handled: true, render: true };
         }
       }
       return undefined;
