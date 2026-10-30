@@ -64,9 +64,11 @@ export interface HeaderLayout {
     readonly row: number;
     readonly start: number;
     readonly end: number;
-    readonly action: "focus" | "details" | "toggle" | "run" | "mode" | "menu";
+    readonly action: "focus" | "details" | "toggle" | "run" | "mode" | "menu" | "area";
     readonly section?: RailSection;
     readonly control?: DashboardAction;
+    // Which area an "area" row opens.
+    readonly area?: DashboardArea;
   }[];
   readonly tabHits: readonly {
     readonly row: number;
@@ -200,7 +202,13 @@ function frameRow(text: string, width: number, tone: "cyan" | "teal" | "yellow" 
 const RIGHT_RAIL_MIN_COLUMNS = 120;
 const RIGHT_RAIL_MIN_ROWS = 40;
 
-function railWarnings(facts: DashboardFacts): string[] {
+// What the rail lists under AVISOS: the provider warnings, the data errors and a failing activity log. The bottom bar
+// counts the same list, so the number there is the one the sidebar shows.
+export function railWarnings(
+  facts: Pick<DashboardFacts, "providerWarnings" | "logFailures"> & {
+    readonly data: Pick<DashboardData, "errors">;
+  },
+): string[] {
   return [
     ...new Set([
       ...(facts.providerWarnings ?? []),
@@ -214,7 +222,7 @@ function railWarnings(facts: DashboardFacts): string[] {
 
 type RailHit = NonNullable<HeaderLayout["railHits"]>[number];
 // What a click on a rail row asks for, without the header's screen coordinates: the native dock hit-tests by row.
-export type RailHitAction = Pick<RailHit, "action" | "section" | "control">;
+export type RailHitAction = Pick<RailHit, "action" | "section" | "control" | "area">;
 interface RailRow {
   readonly line: string;
   readonly hit?: RailHitAction;
@@ -250,14 +258,21 @@ function eyeTone(facts: DashboardFacts): "teal" | "yellow" | "error" {
   return "teal";
 }
 
-// `showKeys` puts the [D]-style prefix before each action. The classic header keeps it from before; the native rail
-// leaves it out, because that rail takes no key presses and the prefix read as a shortcut (Alt+K opens its menu).
+interface RailOptions {
+  // `showKeys` puts the [D]-style prefix before each action. The classic header keeps it from before; the native rail
+  // leaves it out, because that rail takes no key presses and the prefix read as a shortcut (Alt+K opens its menu).
+  readonly showKeys: boolean;
+  // `areas` adds the clickable list of areas and the orchestration view. The classic header has its own row of area
+  // tabs and a bounded height, so it leaves the list out.
+  readonly areas: boolean;
+}
+
 function rightRailContent(
   facts: DashboardFacts,
   area: DashboardArea | undefined,
   width: number,
   expanded: Readonly<Partial<Record<RailSection, boolean>>>,
-  showKeys: boolean,
+  options: RailOptions,
 ): RailRow[] {
   const rows: RailRow[] = [];
   const warnings = railWarnings(facts);
@@ -301,6 +316,21 @@ function rightRailContent(
   });
   add(`${tr("Project", "Proyecto")}: ${facts.project}`, "muted");
   add(`${tr("Model", "Modelo")}: ${facts.modelLevel}`, "text");
+
+  if (options.areas) {
+    add(tr("AREAS", "ÁREAS"), "cyan");
+    for (const candidate of DASHBOARD_AREAS) {
+      add(
+        `${candidate === currentArea ? "●" : "○"} ${LABELS[candidate]}`,
+        candidate === currentArea ? "yellow" : "text",
+        { action: "area", area: candidate },
+      );
+    }
+    add(tr("Open orchestration view", "Abrir vista de orquestación"), "teal", {
+      action: "run",
+      control: "orchestration-view",
+    });
+  }
 
   section(tr("WARNINGS", "AVISOS"), "warnings", warnings.length);
   if (isExpanded("warnings")) {
@@ -347,15 +377,14 @@ function rightRailContent(
 
   section(tr("SESSION", "SESIÓN"), "status");
   if (isExpanded("status")) {
-    add(`Modelo: ${facts.modelLevel}`, "text");
+    // The project and the model are the two rows at the top; the session adds what they do not say.
     add(`Runtime: ${facts.runtime}`, "text");
-    add(`Proyecto: ${facts.project}`, "text");
-    add(`Memoria: ${facts.memory}`, "text");
+    add(`${tr("Memory", "Memoria")}: ${facts.memory}`, "text");
   }
   section(`${tr("ACTIONS", "ACCIONES")} · ${LABELS[currentArea]}`, "actions", controls.length);
   if (isExpanded("actions")) {
     for (const control of controls) {
-      add(showKeys ? `[${control.hint}] ${control.label}` : control.label, "teal", {
+      add(options.showKeys ? `[${control.hint}] ${control.label}` : control.label, "teal", {
         action: "run",
         control: control.action,
       });
@@ -375,7 +404,7 @@ export function renderNativeRailContent(
   expanded: Readonly<Partial<Record<RailSection, boolean>>>,
 ): NativeRailContent {
   const safeWidth = Math.max(1, width);
-  const body = rightRailContent(facts, area, safeWidth, expanded, false);
+  const body = rightRailContent(facts, area, safeWidth, expanded, { showKeys: false, areas: true });
   const rows = body.map((item) => item.line);
   // Only the rail body is clickable; the activity log and the key hints below it carry no action.
   const hits: (RailHitAction | undefined)[] = body.map((item) => item.hit);
@@ -418,7 +447,10 @@ function wideHeader(
     paddedCell(" Many minds. One flow.", leftWidth, "yellow", "base"),
     paddedCell(" Alt+H áreas · Alt+I panel · Alt+C comandos", leftWidth, "text", "base"),
   ];
-  const right = rightRailContent(facts, selected, railWidth, expanded, true);
+  const right = rightRailContent(facts, selected, railWidth, expanded, {
+    showKeys: true,
+    areas: false,
+  });
   const budget = Math.max(10, Math.min(24, height - 18));
   const clipped = right.length > budget;
   const shown = clipped
@@ -518,17 +550,20 @@ export function renderHeaderLayout(
   };
 }
 
+// The clickable areas line under the bar. `barLines` is how many lines the bar above it takes (two when it is the full
+// bar, one when it is compact), because the hit rows are counted from the top of the footer.
 export function renderFooterNavigation(
   width: number,
   selected: DashboardArea | undefined,
   _theme: ConsoleTheme,
+  barLines = 2,
 ): FooterNavigationLayout {
   const layout = tabs(width, selected);
   return {
     lines: layout.lines,
     tabHits: layout.hits.map((hit) => ({
       ...hit,
-      row: hit.row + 2,
+      row: hit.row + barLines,
       start: Math.max(0, hit.start - 1),
       end: hit.end - 1,
     })),

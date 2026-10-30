@@ -68,8 +68,10 @@ El panel lateral nativo (el derecho; el izquierdo está apagado por defecto) req
 | --- | --- | --- |
 | **Izquierda** | Apagada por defecto (`/haril-dock left`). Bajo `MAIN` solo remite al panel derecho; bajo `MEM` o `DOCS` repite su ficha | Pestañas, clic, `Alt+L`, rueda del mouse |
 | **Centro** | Chat real de Pi, comandos `/` y respuestas de herramientas | Escribes peticiones, `/model`, `/haril` |
-| **Derecha** | Tres pestañas: `MAIN` (ubicación, modo, proyecto, modelo, avisos, extensiones, sesión, acciones y eventos), `MEM` y `DOCS` | Clic en las pestañas y en `▶`/`▼`; `Alt+I`, `Alt+K` |
-| **Inferior** | Modo, modelo, uso del contexto, coste, planes pendientes, runtime y STOP ALL | `Alt+H`, `Alt+M`, clic |
+| **Derecha** | Tres pestañas: `MAIN` (ubicación, modo, proyecto, modelo, áreas, avisos, extensiones, sesión, acciones y eventos), `MEM` y `DOCS` | Clic en las pestañas, en `▶`/`▼` y en las áreas; `Alt+I`, `Alt+K` |
+| **Inferior** | Barra de una línea (compacta) o de dos (completa), con modo, modelo, uso del contexto, coste, runtime, STOP ALL y, en la completa, carpeta, rama y avisos; debajo, las cinco áreas | `Alt+H`, `Alt+M`, clic |
+
+El estado de la consola vive en **un solo sitio a la vez**. Con el panel derecho abierto y `MAIN` activa, está en el panel y la barra inferior es la **compacta** (una línea). Si cierras el panel con `Alt+I`, la terminal es menor de 132×24 o eliges `MEM` o `DOCS`, la barra inferior pasa a la **completa**: dos líneas, con la carpeta, la rama de git y un contador de avisos (el mismo número que `AVISOS` en `MAIN`).
 
 El centro puede estar negro y vacío al iniciar porque **no se ha conversado todavía**. Las columnas no crean una conversación automáticamente.
 
@@ -90,7 +92,7 @@ Las pestañas están en la parte alta del panel derecho: `[1:MAIN]  2:MEM  3:DOC
 
 | Pestaña | Qué significa | Qué puedes hacer | Límite |
 | --- | --- | --- | --- |
-| **MAIN / Principal** | El estado de la consola: ubicación, modo, proyecto, modelo, avisos, extensiones, sesión, acciones y actividad reciente (sección 5) | Todo lo de la sección 5 | Es la única pestaña que dibuja ese bloque; siempre va primera y siempre está visible |
+| **MAIN / Principal** | El estado de la consola: ubicación, modo, proyecto, modelo, áreas, avisos, extensiones, sesión, acciones y actividad reciente (sección 5) | Todo lo de la sección 5 | Es la única pestaña que dibuja ese bloque; siempre va primera y siempre está visible |
 | **MEM / Memoria** | Estado de salud del proveedor de memoria | Inspeccionar disponibilidad/errores | No implica que Engram esté conectado |
 | **DOCS / Documentación** | El espacio de la documentación: se conecta con una carpeta de documentación (la configuración llega en la siguiente entrega) | Por ahora solo avisa de que no hay carpeta conectada | Solo lectura; no escribe en ninguna carpeta |
 
@@ -116,9 +118,9 @@ Estas operaciones cambian la interfaz, no los paquetes Pi. Si gestionaste el doc
 
 Este bloque se dibuja **solo bajo la pestaña `MAIN`**; con `MEM` o `DOCS` el panel muestra únicamente la ficha de esa pestaña. Las secciones con `▶` están contraídas y con `▼` expandidas. Su contenido corresponde a la **sesión y área actuales**, no a un inventario universal.
 
-En el panel derecho responden al clic las cabeceras de sección (`AVISOS`, `EXTENSIONES`, `SESIÓN`, `ACCIONES`), cada acción de `ACCIONES` y el texto `cambiar` de la fila `Modo`.
+En el panel derecho responden al clic las cabeceras de sección (`AVISOS`, `EXTENSIONES`, `SESIÓN`, `ACCIONES`), las cinco filas de `ÁREAS` (abren esa área; el `●` marca la abierta), la fila «Abrir vista de orquestación», cada acción de `ACCIONES` y el texto `cambiar` de la fila `Modo`.
 
-**Con el teclado:** `Alt+K` (o el comando `/haril-panel`) abre un menú «Panel derecho» con esas mismas secciones y acciones: abrir o cerrar una sección, cambiar el modo, ver detalles completos, elegir modelo, etc. Muévete con `↑/↓`, elige con `Enter` y cancela con `Esc`. Elegir una entrada hace lo mismo que su clic. El panel en sí **no recibe el foco del teclado**: Pi entrega los atajos de las extensiones al editor, no a un panel. Por eso el menú es la vía de teclado, y los prefijos `[D]`, `[M]`, `[T]` y `[R]` que antes se veían ante las acciones (solo texto, no teclas) ya no se dibujan en el panel.
+**Con el teclado:** `Alt+K` (o el comando `/haril-panel`) abre un menú «Panel derecho» con esas mismas secciones, áreas y acciones: abrir o cerrar una sección, abrir un área, cambiar el modo, ver detalles completos, elegir modelo, etc. Muévete con `↑/↓`, elige con `Enter` y cancela con `Esc`. Elegir una entrada hace lo mismo que su clic. El panel en sí **no recibe el foco del teclado**: Pi entrega los atajos de las extensiones al editor, no a un panel. Por eso el menú es la vía de teclado, y los prefijos `[D]`, `[M]`, `[T]` y `[R]` que antes se veían ante las acciones (solo texto, no teclas) ya no se dibujan en el panel.
 
 | Elemento | Qué mide o representa | Qué hacer |
 | --- | --- | --- |
@@ -127,9 +129,10 @@ En el panel derecho responden al clic las cabeceras de sección (`AVISOS`, `EXTE
 | `Modo: ACTION` | Nivel de permisos/herramientas del chat | Clic, `Alt+M`, `/mode` |
 | `Proyecto: ander` | Proyecto asociado o nombre de la carpeta | `/init` y `haril project list` |
 | `Modelo: gpt-6.1-sol · medium` | Modelo Pi y esfuerzo/nivel que publica | `/model` o selector en barra |
+| `ÁREAS` | Las cinco áreas (`AGENTS`, `ORCHESTRATION`, `AUTOMATION`, `TOOLS`, `EVERYWHERE`) y «Abrir vista de orquestación» | Clic en una fila, o `Alt+K`; `●` marca el área abierta |
 | `AVISOS · 0` | Cantidad de avisos conocidos ahora | Expande; cero **no garantiza** ausencia total de errores |
 | `EXTENSIONES · 0` | **Estados observados** de extensiones, no paquetes instalados | `haril extensions list --json` para inventario declarado |
-| `SESIÓN` | Modelo, runtime, proyecto y memoria resumida | Expande con clic |
+| `SESIÓN` | Runtime y memoria resumida (el proyecto y el modelo ya están en las filas de arriba) | Expande con clic |
 | `ACCIONES · AGENTS · 4` | Cuatro controles disponibles en **esa área**, no cuatro agentes ejecutando | Clic en un control o `/haril` |
 | `ACTIVIDAD RECIENTE` | Eventos consultados del proyecto | `/events`, `haril events`, `haril usage log` |
 | `Sin eventos registrados` | No hay eventos que mostrar en la consulta | Revisa registro del proyecto; no implica fallo en Pi |
@@ -155,11 +158,12 @@ En el panel derecho responden al clic las cabeceras de sección (`AVISOS`, `EXTE
 | Valor | Qué significa | Ejemplo |
 | --- | --- | --- |
 | `MODE: ACTION` | Modo del chat | ACTION permite herramientas activas de Pi |
-| `ander` | Carpeta o proyecto | Puede ser solo la carpeta, aún no registrada |
+| `ander` | Carpeta o proyecto (solo en la barra completa) | Puede ser solo la carpeta, aún no registrada |
 | `gpt-6.1-sol · medium` | Modelo elegido y nivel de razonamiento | Se cambia por el selector de Pi |
 | `ctx ▱▱ 0%` | Porcentaje de ventana de contexto informado por Pi | `?%` si Pi no tiene dato |
 | `$0.000` | Coste acumulado de respuestas reportado en la sesión | **No** representa necesariamente toda la facturación externa |
 | `1 pending` | **Un plan pendiente de aprobación** conocido | Consulta `/plans` y revisa antes de aceptar |
+| `2 warnings` | Avisos conocidos (solo en la barra completa; el mismo número que `AVISOS` en `MAIN`) | Abre `MAIN` y expande `AVISOS` |
 | `runtime idle` | Motor local confirmado sin trabajo activo | Se puede preparar cola |
 | `runtime running` | Runtime compartido activo | Puede atender más de un proyecto |
 | `runtime unknown` | No hay confirmación fiable del runtime | Revisa estado; no asumas que está detenido |
@@ -275,7 +279,7 @@ Otros comandos disponibles incluyen `haril quota`, `haril memory status`, `haril
 ### A. Conocer la consola sin agentes reales
 
 1. Ejecuta `haril` desde una carpeta de proyecto.
-2. `Alt+L` → 2 (`MEM`) y vuelve a `MAIN` con `Alt+L` → 1.
+2. `Alt+L` → 2 (`MEM`) y vuelve a `MAIN` con `Alt+L` → 1; compara la barra inferior: compacta bajo `MAIN`, completa bajo `MEM`.
 3. `Alt+H` → recorre las cinco áreas y vuelve a AGENTS.
 4. Escribe `/orchestration demo` para activar una muestra. Repítelo para desactivarla.
 5. Ejecuta `/haril-commands` para ver qué comandos registra realmente Pi.

@@ -20,6 +20,7 @@ import {
   type NativeRailContent,
   type RailHitAction,
   type RailSection,
+  railWarnings,
   renderFooterNavigation,
   renderHeaderLayout,
   renderNativeRailContent,
@@ -53,11 +54,11 @@ import {
   DOCK_LABELS,
   initialPaneSettings,
   MAIN_DOCK_ID,
-  MIN_PANE_COLUMNS,
-  MIN_PANE_ROWS,
   type NativePanes,
   type PaneSettings,
+  panesShown,
   readDockSlots,
+  statusInSidebar,
 } from "./native-panes.js";
 import { ASCII_GLYPHS, orchestrationGlyphs } from "./orchestration-draw.js";
 import { createWorkflowFeed, type WorkflowFeed } from "./orchestration-feed.js";
@@ -229,10 +230,17 @@ export default function harilConsole(pi: ConsolePi): void {
     return "idle";
   }
 
-  function facts(current: Session, statuses: readonly string[], branch: string | null): BarFacts {
+  // `compact`: the status of the console is in the right sidebar, so the bar leaves it out (view.ts).
+  function facts(
+    current: Session,
+    statuses: readonly string[],
+    branch: string | null,
+    compact: boolean,
+  ): BarFacts {
     const model = current.model;
     const usage =
       model === undefined ? undefined : safely(() => current.ctx.getContextUsage(), undefined);
+    const logFailures = chatLog.status().failed;
     return {
       place: current.project?.slug ?? folderName(current.cwd),
       model: model?.id,
@@ -245,7 +253,36 @@ export default function harilConsole(pi: ConsolePi): void {
       branch,
       statuses,
       mode: modeLabel(modes.mode()),
-      logFailures: chatLog.status().failed,
+      logFailures,
+      // The same list the sidebar shows under AVISOS, so the count in the bar is the number written there.
+      warnings: railWarnings({
+        providerWarnings: current.providerWarnings,
+        data: current.dashboardData,
+        logFailures,
+      }).length,
+      compact,
+    };
+  }
+
+  // What the panes need to know about the terminal and the dock: whether they are drawn at all, and where the status
+  // of the console is shown. The header, the bar and the panes all decide with these two rules (native-panes.ts).
+  function paneLayout(current: Session, tui: ConsoleTui) {
+    const drawn = {
+      attached: current.nativePanes?.attached === true,
+      columns: tui.terminal.columns,
+      rows: tui.terminal.rows,
+    };
+    return {
+      panesShown: panesShown({
+        ...drawn,
+        leftVisible: current.dock.leftVisible,
+        rightVisible: current.dock.rightVisible,
+      }),
+      statusInSidebar: statusInSidebar({
+        ...drawn,
+        rightVisible: current.dock.rightVisible,
+        selected: current.dock.selected,
+      }),
     };
   }
 
@@ -665,12 +702,7 @@ export default function harilConsole(pi: ConsolePi): void {
     ctx.ui.setHeader((tui, theme) => ({
       render(width) {
         // Full-height sidebars own the panels; repeat neither the giant logo nor the old header rail above Pi chat.
-        if (
-          current.nativePanes?.attached &&
-          tui.terminal.columns >= MIN_PANE_COLUMNS &&
-          tui.terminal.rows >= MIN_PANE_ROWS &&
-          (current.dock.leftVisible || current.dock.rightVisible)
-        ) {
+        if (paneLayout(current, tui).panesShown) {
           headerLayout = { lines: [], tabHits: [] };
           return [
             `${visualText(" ◉", aiEyeTone(modelLevelOf(current).level))}${theme.fg(
@@ -723,8 +755,16 @@ export default function harilConsole(pi: ConsolePi): void {
           const statuses = [...footerData.getExtensionStatuses().values()];
           current.branch = footerData.getGitBranch();
           current.extensionStatuses = statuses;
-          navigation = renderFooterNavigation(width, current.area, theme);
-          bar = renderBarLayout(facts(current, statuses, footerData.getGitBranch()), width, theme);
+          // One line when the sidebar holds the status (open, on MAIN), the full bar anywhere else. Nothing here is
+          // cached: Alt+I and a tab change both ask Pi for a new frame, and this runs again with the new state.
+          const compact = paneLayout(current, tui).statusInSidebar;
+          bar = renderBarLayout(
+            facts(current, statuses, footerData.getGitBranch(), compact),
+            width,
+            theme,
+          );
+          // The areas line sits right under the bar, so its click rows start after however many lines the bar took.
+          navigation = renderFooterNavigation(width, current.area, theme, bar.lines.length);
           return [...bar.lines, ...navigation.lines];
         },
         handleMouse(event: ConsoleMouseEvent) {
@@ -1143,6 +1183,7 @@ export default function harilConsole(pi: ConsolePi): void {
         chooseMode: () => void chooseMode(current, current.ctx),
         openMenu: () => void current.openActions(current.ctx),
         focus: () => focusRightRail(current),
+        openArea: (area) => current.openArea(area),
       },
       hit,
     );

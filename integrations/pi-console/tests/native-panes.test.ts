@@ -5,9 +5,11 @@ import {
   initialPaneSettings,
   MIN_PANE_COLUMNS,
   MIN_PANE_ROWS,
+  panesShown,
   readDockSlots,
   renderLeftDock,
   renderRightDock,
+  statusInSidebar,
 } from "../src/native-panes.js";
 import { stripAnsi, textWidth } from "../src/text.js";
 
@@ -442,5 +444,48 @@ describe("the status block belongs to the MAIN tab", () => {
     const loadedText = renderLeftDock(23, 30, loaded, "code").map(stripAnsi).join("\n");
     expect(loadedText).toContain("Ready");
     expect(loadedText).not.toContain("Estado en el panel derecho.");
+  });
+});
+
+describe("where the status of the console is shown", () => {
+  const base = {
+    attached: true,
+    columns: 160,
+    rows: 45,
+    rightVisible: true,
+    selected: "main" as const,
+  };
+
+  it("is the sidebar only when it is drawn, on the right, with MAIN selected", () => {
+    expect(statusInSidebar(base)).toBe(true);
+    expect(statusInSidebar({ ...base, columns: MIN_PANE_COLUMNS })).toBe(true);
+    expect(statusInSidebar({ ...base, rows: MIN_PANE_ROWS })).toBe(true);
+  });
+
+  it.each([
+    ["the panes are not attached", { attached: false }],
+    ["the terminal is a column short", { columns: MIN_PANE_COLUMNS - 1 }],
+    ["the terminal is a row short", { rows: MIN_PANE_ROWS - 1 }],
+    ["the right sidebar is hidden", { rightVisible: false }],
+    ["MEM is selected", { selected: "memory" as const }],
+    ["DOCS is selected", { selected: "docs" as const }],
+  ])("is the bottom bar when %s", (_name, change) => {
+    expect(statusInSidebar({ ...base, ...change })).toBe(false);
+  });
+
+  it("is a sidebar layout whenever the panes fit and any of them is visible, whichever tab", () => {
+    const shown = {
+      attached: true,
+      columns: 160,
+      rows: 45,
+      leftVisible: false,
+      rightVisible: true,
+    };
+    expect(panesShown(shown)).toBe(true);
+    expect(panesShown({ ...shown, leftVisible: true, rightVisible: false })).toBe(true);
+    expect(panesShown({ ...shown, rightVisible: false })).toBe(false);
+    expect(panesShown({ ...shown, attached: false })).toBe(false);
+    expect(panesShown({ ...shown, columns: MIN_PANE_COLUMNS - 1 })).toBe(false);
+    expect(panesShown({ ...shown, rows: MIN_PANE_ROWS - 1 })).toBe(false);
   });
 });

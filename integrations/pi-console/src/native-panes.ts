@@ -24,6 +24,41 @@ export const MIN_PANE_ROWS = 24;
 export type { DockId, DockSlot } from "./dock-registry.js";
 export { DOCK_LABELS, MAIN_DOCK_ID, readDockSlots } from "./dock-registry.js";
 
+// Whether the native panes are drawn at all: attached to Pi's layout, on a terminal big enough for them. The layout
+// patch itself and everything that must agree with it (the header that steps aside, the bar that follows the status)
+// decide with this one rule.
+function panesFit(input: {
+  readonly attached: boolean;
+  readonly columns: number;
+  readonly rows: number;
+}): boolean {
+  return input.attached && input.columns >= MIN_PANE_COLUMNS && input.rows >= MIN_PANE_ROWS;
+}
+
+// True when at least one of the two sidebars is on screen, whichever tab it shows.
+export function panesShown(input: {
+  readonly attached: boolean;
+  readonly columns: number;
+  readonly rows: number;
+  readonly leftVisible: boolean;
+  readonly rightVisible: boolean;
+}): boolean {
+  return panesFit(input) && (input.leftVisible || input.rightVisible);
+}
+
+// True when the status of the console (the block with the folder, the mode, the warnings and the actions) is on
+// screen in the right sidebar: the panes are drawn, the right one is visible and MAIN is the selected tab. When it
+// is not, the status lives in the bottom bar.
+export function statusInSidebar(input: {
+  readonly attached: boolean;
+  readonly columns: number;
+  readonly rows: number;
+  readonly rightVisible: boolean;
+  readonly selected: DockId;
+}): boolean {
+  return panesFit(input) && input.rightVisible && input.selected === MAIN_DOCK_ID;
+}
+
 interface DockTabRow {
   readonly text: string;
   readonly cells: readonly { id: DockId; start: number; end: number }[];
