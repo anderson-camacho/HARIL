@@ -15,9 +15,11 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 - Con `memory.provider = "engram"`, `haril start` conecta el adaptador de Engram con datos y carpeta propios de HARIL (nunca `~/.engram`). Engram arranca de forma perezosa cuando el runtime obtiene su lease y se detiene con él. El runtime añade a los prompts de las tareas el recuerdo acotado (hasta 8 elementos y 1500 tokens, marcado como datos históricos no fiables) y guarda en el outbox un resumen de cada tarea real completada, sin los bloques `<private>`. Las tareas simuladas o con agente `fake:` no se archivan.
 - `npm run memory:install`: descarga Engram 3.6.0, comprueba su SHA-256 contra `checksums.txt`, lo copia a `<raíz>/vendor/engram/3.6.0/`, escribe `memory` en `haril.json` y registra las herramientas MCP para Pi (`.pi/mcp.json` queda fuera de git). Se niega a tocar `~/.engram`.
 - Prueba de contrato con el Engram real (`engram-real.test.ts`), que solo corre si `HARIL_TEST_ENGRAM_BINARY` apunta a un binario.
+- `haril tools status [--json] [--refresh]`: solo lectura. Busca `engram` (copia propia de HARIL, `memory.binary`, `PATH` y carpetas bin de Go) y `gentle-ai` (`PATH` y carpetas bin de Go), lee la versión real de cada instalación ejecutando `<binario> version`, marca la instalación activa y avisa de las duplicadas con versiones distintas. La última versión publicada sale de la redirección de `releases/latest` de GitHub (3 s de espera, caché de 24 h y enfriamiento de 1 h tras un fallo) en `<raíz>/state/tools.json`; sin `--refresh` no se usa la red. El estado de cada herramienta es `ok`, `outdated`, `missing` o `unknown`; para Engram se compara con la versión que HARIL ha calificado y una más nueva en GitHub solo se avisa.
 
 ### Cambiado
 
+- `compareVersions` y `versionParts` salen de `haril update` a un módulo compartido (`version-compare.ts`) sin cambiar su comportamiento.
 - `haril.json` admite la clave de primer nivel `memory`; `HARIL_CONFIG_TOP_LEVEL_KEYS` la incluye, así que el shell y la consola también la aceptan. El valor por defecto no cambia: `null`, que no guarda nada.
 
 ### Corregido

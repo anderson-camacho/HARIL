@@ -1,11 +1,12 @@
 import { existsSync, readFileSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, posix, win32 } from "node:path";
 import type { HostInfo } from "./context.js";
 import { harilConfigPath } from "./providers.js";
 import { runtimeRootFor } from "./runtime.js";
 
 // The version is pinned: changing it requires qualifying the real HTTP contract.
-const ENGRAM_VERSION = "3.6.0";
+export const ENGRAM_VERSION = "3.6.0";
+
 export interface MemorySettings {
   readonly provider: "null" | "engram";
   readonly binary: string;
@@ -31,6 +32,18 @@ export function memorySectionErrors(value: unknown): string[] {
   return errors;
 }
 
+// HARIL's own copy of Engram: isolated under the runtime root, one folder per pinned version, never the one in go/bin.
+export function defaultEngramBinary(host: HostInfo): string {
+  const windows = host.platform === "win32";
+  return (windows ? win32 : posix).join(
+    runtimeRootFor(host),
+    "vendor",
+    "engram",
+    ENGRAM_VERSION,
+    windows ? "engram.exe" : "engram",
+  );
+}
+
 export function loadMemorySettings(host: HostInfo): MemorySettings {
   const { path, explicit } = harilConfigPath(host);
   if (explicit && !existsSync(path)) throw new Error(`${path}: HARIL_CONFIG does not exist`);
@@ -44,15 +57,7 @@ export function loadMemorySettings(host: HostInfo): MemorySettings {
   }
   return {
     provider: section?.provider ?? "null",
-    binary:
-      section?.binary ??
-      join(
-        runtimeRootFor(host),
-        "vendor",
-        "engram",
-        ENGRAM_VERSION,
-        host.platform === "win32" ? "engram.exe" : "engram",
-      ),
+    binary: section?.binary ?? defaultEngramBinary(host),
     version: section?.version ?? ENGRAM_VERSION,
   };
 }

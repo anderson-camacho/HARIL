@@ -7,6 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
 import { defaultPidAlive } from "../host.js";
 import { runtimeRootFor } from "../runtime.js";
+import { compareVersions, versionParts } from "../version-compare.js";
 import { dataDirFor } from "./common.js";
 
 // Without --from, HARIL fetches its own main branch into an isolated temporary directory.
@@ -31,22 +32,6 @@ export interface UpdateServices {
   readonly install: (script: string, root: string, source: string) => Promise<number>;
   readonly confirm: () => Promise<boolean>;
   readonly checkoutMain: () => Promise<MainCheckout>;
-}
-
-function versionParts(input: unknown): number[] | null {
-  if (typeof input !== "string" || !/^\d+\.\d+\.\d+$/.test(input)) return null;
-  return input.split(".").map(Number);
-}
-
-function compareVersions(a: string, b: string): number {
-  const left = versionParts(a);
-  const right = versionParts(b);
-  if (left === null || right === null) throw new Error("invalid version");
-  for (let index = 0; index < 3; index++) {
-    const difference = (left[index] ?? 0) - (right[index] ?? 0);
-    if (difference !== 0) return difference;
-  }
-  return 0;
 }
 
 function readVersion(path: string, services: UpdateServices): string {

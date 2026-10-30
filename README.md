@@ -273,6 +273,8 @@ El `analyst` solo lee: lee archivos del proyecto y responde en el texto de su re
 
    `memory status` muestra el proveedor de memoria, su salud, si la memoria está degradada y cuántas filas esperan en el outbox (`--json` da lo mismo en JSON). Solo lee `haril.db` y funciona sin runtime: sin uno vivo, la salud sale como `not checked` junto al último estado que registró el runtime. Sin configurar memoria, el proveedor es `null`, que no guarda nada, así que no se encola ninguna escritura. Para activar Engram local y sus herramientas de conversación en Pi, ejecuta `npm run memory:install`, compila con `npm run build` y reinicia la consola o usa `/reload`; el instalador escribe `memory.provider = "engram"` en `haril.json` y, con él, el runtime recupera contexto de Engram para los prompts de las tareas y guarda un resumen de cada tarea real completada. `haril status` y la caja Connect de `haril shell` muestran el mismo estado.
 
+   `haril tools status` (`--json`, `--refresh`) muestra dónde están instalados `engram` y `gentle-ai`, la versión real de cada instalación (ejecuta `<binario> version`, que solo lee) y la última publicada en GitHub. Busca la copia propia de HARIL, `memory.binary`, el `PATH` y las carpetas bin de Go, y marca cuál es la instalación activa y las que hay duplicadas con versiones distintas. Sin `--refresh` no usa la red: lee la última versión de una caché de 24 h en `<raíz>/state/tools.json`; con `--refresh` la consulta ahora. Solo informa: no instala ni actualiza nada.
+
 8. Limpiar la variable de sesión: `Remove-Item Env:HARIL_HOME`.
 
 `task add` admite comprobaciones que el host ejecuta tras el agente; una comprobación fallida hace fallar el intento:

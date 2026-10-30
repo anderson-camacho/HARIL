@@ -113,6 +113,7 @@ describe("version and help", () => {
     expect(text).toContain("project init");
     expect(text).toContain("task add");
     expect(text).toContain("plan import");
+    expect(text).toContain("tools status");
     expect(text).toContain("status");
   });
 
