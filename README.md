@@ -271,7 +271,7 @@ El `analyst` solo lee: lee archivos del proyecto y responde en el texto de su re
    .\bin\haril.ps1 memory status
    ```
 
-   `memory status` muestra el proveedor de memoria, su salud, si la memoria está degradada y cuántas filas esperan en el outbox (`--json` da lo mismo en JSON). Solo lee `haril.db` y funciona sin runtime: sin uno vivo, la salud sale como `not checked` junto al último estado que registró el runtime. Mientras no llegue Engram, el proveedor es `null`, que no guarda nada, así que no se encola ninguna escritura; `haril status` y la caja Connect de `haril shell` muestran el mismo estado.
+   `memory status` muestra el proveedor de memoria, su salud, si la memoria está degradada y cuántas filas esperan en el outbox (`--json` da lo mismo en JSON). Solo lee `haril.db` y funciona sin runtime: sin uno vivo, la salud sale como `not checked` junto al último estado que registró el runtime. Sin configurar memoria, el proveedor es `null`, que no guarda nada, así que no se encola ninguna escritura. Para activar Engram local y sus herramientas de conversación en Pi, ejecuta `npm run memory:install`, compila con `npm run build` y reinicia la consola o usa `/reload`; el instalador escribe `memory.provider = "engram"` en `haril.json` y, con él, el runtime recupera contexto de Engram para los prompts de las tareas y guarda un resumen de cada tarea real completada. `haril status` y la caja Connect de `haril shell` muestran el mismo estado.
 
 8. Limpiar la variable de sesión: `Remove-Item Env:HARIL_HOME`.
 
@@ -523,7 +523,7 @@ Opciones:
 
 Volver a ejecutarlo actualiza la instalación.
 
-El instalador no edita el PATH, el registro ni los perfiles de shell. Si quieres llamar a `haril` sin la ruta completa, añades `bin` tú: en macOS y Linux, con la línea que imprime para tu perfil; en Windows, en la ventana de variables de entorno de tu usuario (`rundll32 sysdm.cpl,EditEnvironmentVariables`). En Windows también imprime una línea que vale solo para la sesión de PowerShell actual. Tampoco toca `~/.pi`, `~/.claude`, `~/.codex`, `~/.engram`, `~/.npmrc` ni `%APPDATA%\npm`. La integración con Engram llegará más adelante, en M4; por ahora el instalador no la configura.
+El instalador no edita el PATH, el registro ni los perfiles de shell. Si quieres llamar a `haril` sin la ruta completa, añades `bin` tú: en macOS y Linux, con la línea que imprime para tu perfil; en Windows, en la ventana de variables de entorno de tu usuario (`rundll32 sysdm.cpl,EditEnvironmentVariables`). En Windows también imprime una línea que vale solo para la sesión de PowerShell actual. Tampoco toca `~/.pi`, `~/.claude`, `~/.codex`, `~/.engram`, `~/.npmrc` ni `%APPDATA%\npm`. La memoria Engram se instala de forma explícita con `npm run memory:install`; el instalador general no la configura.
 
 Alternativa manual, con los mismos pasos uno a uno:
 
@@ -1029,7 +1029,7 @@ Los dossiers de `docs/research/` se leen solo bajo demanda, cuando un documento 
 
 ## Versiones
 
-Versión actual: **0.23.12**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
+Versión actual: **0.23.13**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
 
 ## Licencia
 
@@ -1058,6 +1058,6 @@ Cada referencia aporta una idea de diseño, nunca código. HARIL no está afilia
 - **Gentle Shell**. Su `LICENSE` (MIT) nombra a Mario Zechner; la titularidad real está pendiente de verificar. HARIL toma de esta referencia la maquetación de la TUI (paneles, rail de estado, cambios y tareas) y la idea de abrir Pi con una extensión propia. Los temas de HARIL usan el formato JSON de Pi, no el de Gentle Shell.
 - **Pi** (Mario Zechner, earendil-works). HARIL ejecuta Pi como proceso externo, sin fork (en modo RPC para los agentes y, en la consola, interactivo con una extensión de HARIL), y adopta su formato de temas JSON para la interfaz.
 - **Herdr**. HARIL toma la idea de agrupar terminales y sesiones de trabajo en paneles. La integración es opcional y se hará por su CLI en M4.
-- **Engram™**. HARIL toma la idea de una memoria persistente separada del estado transaccional. La integración está prevista para M4.
+- **Engram™**. HARIL toma la idea de una memoria persistente separada del estado transaccional. La integración local se activa con `npm run memory:install`; incluye el proveedor del runtime y las herramientas MCP para Pi.
 - **DC-Pi**. HARIL toma tres ideas de diseño: el lease con latido y TTL, la limpieza de procesos abandonados y el registro de viajes. También la composición de agentes con bloques de datos validados. No toma su pool de cuentas de suscripción ni la lectura de credenciales.
 - **CLIProxyAPI**. Es el gateway de modelos compatible con OpenAI al que se conecta HARIL en el carril real. HARIL no lo instala, no lo configura y no lee sus cuentas: solo usa la clave de cliente que aporta el usuario por variable de entorno.

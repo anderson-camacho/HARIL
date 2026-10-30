@@ -4,6 +4,35 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.23.13
+
+- **Fecha:** 2026-10-30
+- **Estado:** Engram conectado al runtime: `memory.provider = "engram"` en `haril.json` lo activa; sin esa clave el proveedor sigue siendo `null`.
+
+### Añadido
+
+- Sección `memory` de `haril.json` (`provider`: `null` o `engram`, `binary` absoluto y `version`), validada como las demás por `haril config` y por la carga de proveedores, con la ruta de cada error (`/memory/...`). La versión de Engram queda fijada en 3.6.0.
+- Con `memory.provider = "engram"`, `haril start` conecta el adaptador de Engram con datos y carpeta propios de HARIL (nunca `~/.engram`). Engram arranca de forma perezosa cuando el runtime obtiene su lease y se detiene con él. El runtime añade a los prompts de las tareas el recuerdo acotado (hasta 8 elementos y 1500 tokens, marcado como datos históricos no fiables) y guarda en el outbox un resumen de cada tarea real completada, sin los bloques `<private>`. Las tareas simuladas o con agente `fake:` no se archivan.
+- `npm run memory:install`: descarga Engram 3.6.0, comprueba su SHA-256 contra `checksums.txt`, lo copia a `<raíz>/vendor/engram/3.6.0/`, escribe `memory` en `haril.json` y registra las herramientas MCP para Pi (`.pi/mcp.json` queda fuera de git). Se niega a tocar `~/.engram`.
+- Prueba de contrato con el Engram real (`engram-real.test.ts`), que solo corre si `HARIL_TEST_ENGRAM_BINARY` apunta a un binario.
+
+### Cambiado
+
+- `haril.json` admite la clave de primer nivel `memory`; `HARIL_CONFIG_TOP_LEVEL_KEYS` la incluye, así que el shell y la consola también la aceptan. El valor por defecto no cambia: `null`, que no guarda nada.
+
+### Corregido
+
+- El adaptador de Engram se ajusta al Engram 3.6.0 publicado: la búsqueda devuelve una lista simple, el recuerdo usa `/observations/recent`, la sonda de salud busca entre todos los proyectos y un guardado confirmado como `saved` o `committed` se registra como `stored`.
+
+### Verificación
+
+- Las pruebas se copiaron antes que el código y fallaron (RED): `memory-config.test.ts` no cargaba su módulo y `memory-runtime.test.ts` fallaba en 2 casos (el outbox no entregaba los resúmenes y el prompt no recibía el recuerdo). Con el código quedaron en verde.
+- `npm run check` (Biome, tipos, capas/pureza, knip, versión) correcto.
+- Suite principal: 2954 pruebas aprobadas y 2 omitidas; pruebas de parada: 17 aprobadas y 1 omitida; pruebas de scripts: 133 aprobadas.
+- No verificado: `engram-real.test.ts` y `npm run memory:install` contra el Engram real quedan sin ejecutar en esta entrega (la prueba exige `HARIL_TEST_ENGRAM_BINARY`; el instalador descarga de GitHub).
+
+---
+
 ## 0.23.12
 
 - **Fecha:** 2026-10-30
