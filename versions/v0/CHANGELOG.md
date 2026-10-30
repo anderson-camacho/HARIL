@@ -4,6 +4,38 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.23.12
+
+- **Fecha:** 2026-10-30
+- **Estado:** el panel derecho queda con las pestañas MAIN, MEM y DOCS; el estado solo vive en MAIN y la barra inferior lo muestra cuando el panel no lo hace; se puede conectar una carpeta de documentación.
+
+### Añadido
+
+- Pestaña **MAIN**, siempre la primera, siempre visible y la predeterminada: estado, modos, avisos, acciones, un grupo **ÁREAS** clicable (también en el menú `Alt+K`) y la fila «Abrir vista de orquestación».
+- Pestaña **DOCS** y clave `docs.path`: `haril config set docs.path <ruta absoluta>` (la carpeta debe existir; `--reset` la desconecta), `get docs.path`, el comando `/haril-docs [ruta|clear]` y una fila `docs` en `haril doctor` (aviso, nunca error, si la carpeta desaparece). La pestaña muestra la ruta, el número de notas `.md` y las diez últimas, con acciones «Definir/Cambiar carpeta…» y «Desconectar». Es solo lectura: la carpeta se administra por fuera con Obsidian. El recorrido es acotado (2000 notas, 6 niveles) y omite carpetas que empiezan por punto (`.obsidian`), `node_modules` y enlaces simbólicos.
+- Barra inferior de una línea cuando el estado está en la barra lateral (panel derecho visible, terminal suficiente y MAIN activa); en cualquier otro caso, las dos líneas de siempre con un contador de avisos.
+- Una prueba compara los dos registros de pestañas (contratos y consola), que estaban duplicados sin ninguna comprobación.
+
+### Cambiado
+
+- Las pestañas **GIT**, **YT** y **THEME** salen del panel. Se elimina el código de la vista git del dock; la rama en la barra inferior y `integrations/git` se conservan. El selector de paletas desaparece del panel; `/haril-theme` y `ui.theme` siguen hasta la siguiente entrega.
+- El bloque de estado ya no se repite bajo cada pestaña; se quitaron además las filas duplicadas de Proyecto y Modelo.
+- Un `ui.plugins` antiguo (con `explorer`, `git`, `youtube` o `themes`) sigue siendo válido: los ids retirados se descartan, las ranuras que faltan se rellenan y el archivo se corrige en el siguiente `haril plugins`. `haril plugins hide main` y `move main` se rechazan con código 2.
+- `Alt+L` y `/haril-plugin` admiten los números 1 a 3. En la barra compacta se conserva el contador de aprobaciones pendientes, porque MAIN no las muestra.
+
+### Corregido
+
+- Cada cambio de ids del dock habría hecho que cualquier comando que carga la configuración rechazara un `haril.json` antiguo; la validación ahora tolera ids retirados y ranuras ausentes.
+
+### Verificación
+
+- `npm run check` (Biome, tipos, capas/pureza, knip, versión) correcto.
+- Suite principal: 2944 pruebas aprobadas, 1 omitida. Las partes nuevas se escribieron con RED previo (21 y 63 fallos en la reestructuración, 17 y 21 en `docs.path` y DOCS).
+- CLI real compilada con `HARIL_CONFIG` temporal: `set`, `get`, `--reset` y `doctor` de `docs.path`, con rutas relativas, inexistentes y de archivo rechazadas.
+- No verificado: no hay un Pi real en el entorno. El repintado de la barra inferior, la entrega de clics y la entrada de texto de la pestaña DOCS en Windows Terminal solo se probaron con un Pi simulado.
+
+---
+
 ## 0.23.11
 
 - **Fecha:** 2026-10-30
