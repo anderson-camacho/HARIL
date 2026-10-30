@@ -72,14 +72,30 @@ describe("native dock integration with the HARIL Pi extension", () => {
       expect(newHeader).toContain("HARIL");
       expect(newHeader).not.toContain("██████");
       expect(newHeader?.split("\n")).toHaveLength(1);
+      // The console opens on MAIN: the tabs and, under them, the status block.
       const right = rightPane.component.render(40).map(stripAnsi).join("\n");
       expect(right).toContain("ACTIVIDAD");
-      expect(right).toContain("Espacio: Git");
+      expect(right).toContain("Espacio: Principal");
+      expect(right).toContain("[1:MAIN]");
+      expect(right).not.toContain("GIT");
 
+      // DOCS shows its own view and none of the status block; MAIN brings the block back.
+      await fake.commands.get("haril-plugin")?.handler("docs", ctx);
+      const docs = rightPane.component.render(40).map(stripAnsi).join("\n");
+      expect(docs).toContain("Espacio: Documentación");
+      expect(docs).toContain("Carpeta de documentación sin conectar.");
+      expect(docs).not.toContain("ACTIVIDAD");
+      expect(docs).not.toContain("Estoy en");
+      await fake.commands.get("haril-plugin")?.handler("main", ctx);
+      const main = rightPane.component.render(40).map(stripAnsi).join("\n");
+      expect(main).toContain("ACTIVIDAD");
+      expect(main).toContain("Estoy en");
+
+      // The views that were removed are no longer a target of the command, and it says what is.
+      ctx.notes.length = 0;
       await fake.commands.get("haril-plugin")?.handler("youtube", ctx);
-      const rightUpdated = rightPane.component.render(40).map(stripAnsi).join("\n");
-      expect(rightUpdated).toContain("YouTube");
-      expect(rightUpdated).toContain("Extensión /yt");
+      expect(ctx.notes.at(-1)?.[0]).toBe("Uso: /haril-plugin [main|memory|docs|1..3|details]");
+      expect(rightPane.component.render(40).map(stripAnsi).join("\n")).toContain("ACTIVIDAD");
 
       await fake.fire("session_shutdown", {}, ctx);
       expect(root[LAYOUT_NODE]).toBe(original);

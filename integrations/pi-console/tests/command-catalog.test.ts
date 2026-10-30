@@ -20,7 +20,8 @@ describe("live HARIL / Pi extension command catalog", () => {
     expect(lines).toContain("OTRAS EXTENSIONES · COMANDOS (1)");
     expect(lines).toContain("/yt");
     expect(lines).not.toContain("danger");
-    expect(lines).toContain("Alt+L");
+    expect(lines).toContain("Alt+L · seleccionar plugin; luego 1–3, flechas y Enter");
+    expect(lines).not.toContain("1–4");
     expect(lines).toContain("Alt+I");
     expect(lines).toContain("Alt+K · menú del panel derecho (flechas y Enter) o /haril-panel");
     expect(lines).toContain("/hotkeys");

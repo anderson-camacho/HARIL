@@ -178,9 +178,9 @@ describe("a click on the right rail body", () => {
   it("keeps the header and the tab row working as before", () => {
     const pane = setup();
     const tabsRow = pane.rows()[1] ?? "";
-    expect(tabsRow).toContain("[1:GIT]");
-    pane.click(1, tabsRow.indexOf("2:YT"));
-    expect(pane.select).toHaveBeenCalledWith("youtube");
+    expect(tabsRow).toContain("[1:MAIN]");
+    pane.click(1, tabsRow.indexOf("2:MEM"));
+    expect(pane.select).toHaveBeenCalledWith("memory");
     expect(pane.railAction).not.toHaveBeenCalled();
     expect(pane.state.dockExpanded).toBe(true);
     expect(pane.click(0)).toEqual({ handled: true, render: true });

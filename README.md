@@ -671,26 +671,28 @@ El lanzador selecciona `--tui-mode fullscreen` para habilitar los eventos de mou
 
 ### Dock nativo de plugins y estado (0.22.3, integración experimental)
 
-La consola `haril` / `haril console` intenta mostrar **tres columnas verticales** en Pi: cuatro espacios de plugins a la izquierda, el chat/editor originales de Pi en el centro y un panel con avisos, herramientas, orquestación y actividad a la derecha. El encabezado grande se compacta cuando el dock nativo está activo. Requiere una terminal de **al menos 132 columnas × 24 filas** y un Pi compatible con el layout interno de `@earendil-works/pi-tui`; si falta esa API, si Gentle Shell ya ocupa el layout o si el terminal es pequeño, HARIL conserva la cabecera anterior de forma segura.
+La consola `haril` / `haril console` intenta mostrar en Pi el chat/editor originales en el centro y, a la derecha, un **panel con tres pestañas**: `MAIN`, `MEM` y `DOCS`. `MAIN` es el estado de la consola (avisos, herramientas, orquestación y actividad); `MEM` es la memoria; `DOCS` es el espacio de la documentación (se conecta con una carpeta de documentación, configuración en la siguiente entrega). El encabezado grande se compacta cuando el dock nativo está activo. Requiere una terminal de **al menos 132 columnas × 24 filas** y un Pi compatible con el layout interno de `@earendil-works/pi-tui`; si falta esa API, si Gentle Shell ya ocupa el layout o si el terminal es pequeño, HARIL conserva la cabecera anterior de forma segura.
 
-Los espacios visuales iniciales son Git, YouTube, Memoria y Temas. Su **orden y visibilidad** se pueden guardar desde PowerShell:
+Los espacios son `main`, `memory` y `docs`. **`MAIN` va siempre primera y siempre visible**: no se puede ocultar ni mover, y ningún espacio puede ponerse por encima. El bloque de estado (`Estoy en`, `Modo`, `Proyecto`, `Modelo`, `AVISOS`, `EXTENSIONES`, `SESIÓN`, `ACCIONES` y la actividad reciente) aparece **solo bajo `MAIN`**; bajo `MEM` o `DOCS` el panel muestra únicamente la ficha de esa pestaña. El **orden y la visibilidad** de `memory` y `docs` se pueden guardar desde PowerShell:
 
 ```powershell
 haril plugins list
-haril plugins hide youtube
-haril plugins move youtube up
-haril plugins show youtube
+haril plugins hide docs
+haril plugins move docs up
+haril plugins show docs
 haril plugins list --json
 haril plugins reset
 ```
 
-Desde la interfaz Pi, `/haril-plugins` abre un menú para mostrar, ocultar, subir o bajar espacios y actualiza inmediatamente la columna izquierda. `/haril-dock left|right|both` alterna las columnas y `Alt+I` alterna el panel derecho. La columna derecha puede desplazarse con la rueda del ratón. Sus cabeceras de sección (`AVISOS`, `EXTENSIONES`, `SESIÓN`, `ACCIONES`), sus acciones y el texto `cambiar` del modo responden al clic. Con el teclado, `Alt+K` o `/haril-panel` abren un menú con esas mismas secciones y acciones (abrir o cerrar una sección, cambiar el modo, ver detalles, elegir modelo…): muévete con ↑/↓, elige con `Enter` y cancela con `Esc`. El panel en sí **no recibe el foco del teclado** (Pi entrega los atajos de las extensiones al editor), así que ese menú es la vía de teclado; los prefijos `[D]`, `[M]`, `[T]` y `[R]` que se veían en sus acciones eran solo texto y ya no se dibujan en el panel. Los cambios realizados **externamente** desde PowerShell se cargan al iniciar una nueva sesión de `haril` o al abrir `/haril-plugins`.
+`haril plugins hide main` y `haril plugins move main …` se rechazan con un mensaje, igual que subir otro espacio por encima de `main`. Un `ui.plugins` de una versión anterior (con `git`, `youtube`, `themes` o `explorer`) sigue siendo válido: esas entradas se ignoran, los espacios que falten se completan como visibles y el archivo se reescribe con la lista nueva en el siguiente cambio que hagas con `haril plugins`.
 
-Las preferencias quedan en `ui.plugins` de `haril.json`, sin borrar otras opciones. **Un espacio visible no significa que su extensión Pi exista o esté ejecutándose**: YouTube, Git, Memoria y Temas son lugares reservados para la integración de extensiones reales en próximos PR. Este PR no instala ni desactiva paquetes Pi. La unión de paneles se realiza mediante un adaptador interno experimental, se revierte al cerrar la sesión y deberá validarse manualmente en Windows Terminal antes de considerarse estable.
+Desde la interfaz Pi, `/haril-plugins` abre un menú para mostrar, ocultar, subir o bajar espacios y actualiza inmediatamente el panel. `/haril-dock left|right|both` alterna las columnas (la izquierda está apagada por defecto y, bajo `MAIN`, solo remite al panel derecho) y `Alt+I` alterna el panel derecho. La columna derecha puede desplazarse con la rueda del ratón. Bajo `MAIN`, sus cabeceras de sección (`AVISOS`, `EXTENSIONES`, `SESIÓN`, `ACCIONES`), sus acciones y el texto `cambiar` del modo responden al clic. Con el teclado, `Alt+K` o `/haril-panel` abren un menú con esas mismas secciones y acciones (abrir o cerrar una sección, cambiar el modo, ver detalles, elegir modelo…): muévete con ↑/↓, elige con `Enter` y cancela con `Esc`. El panel en sí **no recibe el foco del teclado** (Pi entrega los atajos de las extensiones al editor), así que ese menú es la vía de teclado; los prefijos `[D]`, `[M]`, `[T]` y `[R]` que se veían en sus acciones eran solo texto y ya no se dibujan en el panel. Los cambios realizados **externamente** desde PowerShell se cargan al iniciar una nueva sesión de `haril` o al abrir `/haril-plugins`.
+
+Las preferencias quedan en `ui.plugins` de `haril.json`, sin borrar otras opciones. **Un espacio visible no significa que su extensión Pi exista o esté ejecutándose**: `MAIN`, `MEM` y `DOCS` son vistas propias de HARIL, no paquetes de Pi. Los espacios `GIT`, `YT` y `THEME` ya no existen: la rama de git sigue en la línea de la carpeta de la barra completa, y el reproductor de YouTube sigue siendo un paquete de Pi aparte (`/haril-extensions`). Esta entrega no instala ni desactiva paquetes Pi. La unión de paneles se realiza mediante un adaptador interno experimental, se revierte al cerrar la sesión y deberá validarse manualmente en Windows Terminal antes de considerarse estable.
 
 #### Navegación y vistas de plugins (0.22.4)
 
-`Alt+L` abre un selector de plugins: presiona inmediatamente `1`–`4` según el orden de **espacios visibles**, o usa ↑/↓ y `Enter`; `Esc` cancela sin tocar el texto que estabas escribiendo a Pi. Funciona también en WSL sin sustituir `Alt+Z`, reservado allí por Pi para deshacer texto. `Alt+I` muestra u oculta el panel derecho. Ambos se pueden sustituir por los comandos `/haril-plugin` y `/haril-dock` si otra aplicación ocupa esas teclas. La selección cambia la información visible dentro de la columna izquierda; la conversación central permanece intacta.
+`Alt+L` abre un selector de plugins: presiona inmediatamente `1`–`3` según el orden de **espacios visibles**, o usa ↑/↓ y `Enter`; `Esc` cancela sin tocar el texto que estabas escribiendo a Pi. Funciona también en WSL sin sustituir `Alt+Z`, reservado allí por Pi para deshacer texto. `Alt+I` muestra u oculta el panel derecho. Ambos se pueden sustituir por los comandos `/haril-plugin` y `/haril-dock` si otra aplicación ocupa esas teclas. La selección cambia la información visible dentro del panel derecho; la conversación central permanece intacta.
 
 | Acción dentro de Pi | Resultado |
 | --- | --- |
@@ -698,11 +700,11 @@ Las preferencias quedan en `ui.plugins` de `haril.json`, sin borrar otras opcion
 | `Alt+I` | Muestra u oculta la columna derecha. |
 | `Alt+K` o `/haril-panel` | Abre el menú de teclado del panel derecho: sus secciones y acciones, con ↑/↓ y `Enter`. |
 | `/haril-plugin` | Abre el selector de espacios. |
-| `/haril-plugin git` o `/haril-plugin 1` | Selecciona el espacio y muestra sus detalles completos en una vista cerrable con `Esc`. |
+| `/haril-plugin memory` o `/haril-plugin 2` | Selecciona el espacio y muestra sus detalles completos en una vista cerrable con `Esc`. Con `main` solo selecciona la pestaña: su contenido es el estado del panel. |
 | `/haril-plugin details` | Abre el detalle del espacio actual. |
-| Clic en un espacio de la izquierda | Lo selecciona y actualiza su ficha sin sustituir el chat. |
+| Clic en una pestaña del panel | La selecciona y actualiza su ficha sin sustituir el chat. |
 
-Las fichas disponibles son de **solo lectura**: Git muestra `git status`; Memoria consulta `haril memory status`. YouTube informa si Pi expone el comando `/yt` y cómo acceder a [pi-youtube-player](https://github.com/CinloDev/pi-youtube-player); **no instala ni inicia el reproductor**. Temas explica los temas incluidos de Pi y el acceso a `/settings → Theme`; el cambio directo de tema desde el dock se deja para otra etapa.
+Las fichas disponibles son de **solo lectura**: `MEM` consulta `haril memory status`; `DOCS` avisa por ahora de que no hay una carpeta de documentación conectada (se conecta con una carpeta de documentación; su configuración llega en la siguiente entrega). `MAIN` no carga nada: dibuja el estado vivo de la consola.
 
 #### Catálogo de comandos (0.22.5)
 
@@ -740,7 +742,7 @@ Los orígenes anteriores son ejemplos, **no recomendaciones de seguridad ni gara
 
 #### Dock compacto (0.22.9)
 
-En una terminal de al menos **132 columnas × 24 filas**, `haril` muestra un dock fijo por pestañas en el lado izquierdo: `GIT`, `YT`, `MEM`, `THEME`. Solo se ve la ficha elegida, sin la antigua lista gigante. **GIT** enseña estado, cambios y los últimos ocho commits. La pestaña `YT` es únicamente un espacio reservado: no instala YouTube. `Alt+L` elige una vista con flechas y `Enter`; `Alt+I` oculta o muestra el panel derecho; `Alt+K` abre el menú de teclado de ese panel; `Alt+C` enumera los comandos reales. El orden y la visibilidad se administran con `/haril-plugins` y se conservan entre sesiones.
+En una terminal de al menos **132 columnas × 24 filas**, `haril` muestra un dock por pestañas en el panel derecho: `MAIN`, `MEM`, `DOCS` (en versiones anteriores eran `GIT`, `YT`, `MEM` y `THEME`; `GIT`, `YT` y `THEME` se retiraron). Solo se ve la ficha elegida, sin la antigua lista gigante. `Alt+L` elige una vista con flechas y `Enter`; `Alt+I` oculta o muestra el panel derecho; `Alt+K` abre el menú de teclado de ese panel; `Alt+C` enumera los comandos reales. El orden y la visibilidad de `MEM` y `DOCS` se administran con `/haril-plugins` y se conservan entre sesiones.
 
 HARIL monta esas columnas solo si el Pi incluido ofrece el contrato interno de disposición compatible. En terminales pequeñas o con una versión diferente de Pi, deja intacto su chat y vuelve a la disposición original.
 
@@ -773,7 +775,7 @@ Remove-Item Env:\HARIL_STARTUP_MATRIX_ENGINE
 
 El video que inspiró el sonido no se descarga ni se reproduce automáticamente: para ese timbre concreto necesitas un archivo WAV local que tengas derecho a utilizar. En Windows se reproduce con el reproductor multimedia del sistema; en Linux se intenta `ffplay`, si está instalado.
 
-La paleta predeterminada es **matrix** (negro con verdes fosforescentes) en el dock, `haril shell` y la interfaz de Pi (editor, mensajes, herramientas y menús). El tema Pi se crea o repara al abrir `haril` dentro de su agente privado, sin tocar las extensiones ni el archivo `settings.json`. Las opciones anteriores **violet**, **rose**, **amber** y **obsidian** siguen disponibles en `THEME` o con `/haril-theme`. Si una instalación ya tenía otra paleta guardada en `haril.json`, puedes seleccionar Matrix una sola vez con `/haril-theme matrix` o `haril config set ui.theme matrix`. Los colores del dock se guardan en `haril.json`; Pi inicia con el tema Matrix administrado por HARIL. El indicador `◉` ocupa una celda y pasa a rojo en niveles de razonamiento `high`, `xhigh`, `max` o `ultra`. `/language es` y `/language en` siguen disponibles; el dock y su selector también muestran el idioma elegido. La cabecera muestra **Estoy en: <ruta>** sin invadir el chat.
+La paleta predeterminada es **matrix** (negro con verdes fosforescentes) en el dock, `haril shell` y la interfaz de Pi (editor, mensajes, herramientas y menús). El tema Pi se crea o repara al abrir `haril` dentro de su agente privado, sin tocar las extensiones ni el archivo `settings.json`. Las opciones anteriores **violet**, **rose**, **amber** y **obsidian** siguen disponibles con `/haril-theme` (la pestaña `THEME` del panel ya no existe). Si una instalación ya tenía otra paleta guardada en `haril.json`, puedes seleccionar Matrix una sola vez con `/haril-theme matrix` o `haril config set ui.theme matrix`. Los colores del dock se guardan en `haril.json`; Pi inicia con el tema Matrix administrado por HARIL. El indicador `◉` ocupa una celda y pasa a rojo en niveles de razonamiento `high`, `xhigh`, `max` o `ultra`. `/language es` y `/language en` siguen disponibles; el dock y su selector también muestran el idioma elegido. La cabecera muestra **Estoy en: <ruta>** sin invadir el chat.
 
 ### M4: interfaz de terminal (`haril shell`)
 

@@ -2,43 +2,44 @@ import { describe, expect, it } from "vitest";
 import { loadDockDetails } from "../src/dock-details.js";
 
 describe("plugin views backed by read-only sources", () => {
-  it("shows real Git and HARIL memory diagnostics", async () => {
-    const git = await loadDockDetails("git", ".", {
-      git: async () => "## main\n M app.ts\n?? new-file.ts\n",
-      gitHistory: async () => "* 123abcd latest commit\n* abcd999 initial\n",
-      gitChanges: async () => "src/app.ts | 2 ++\n",
-    });
-    expect(git.lines).toEqual([
-      "## main",
-      " M app.ts",
-      "?? new-file.ts",
-      "── CAMBIOS ──",
-      "src/app.ts | 2 ++",
-      "── HISTORIAL ──",
-      "* 123abcd latest commit",
-      "* abcd999 initial",
-    ]);
+  it("shows the HARIL memory diagnostics", async () => {
     const memory = await loadDockDetails("memory", ".", {
       memory: async () => ({ ok: true, stdout: "Memory provider: Engram\nReady", stderr: "" }),
     });
     expect(memory.lines).toContain("Ready");
+    expect(memory.status).toBe("Estado de memoria HARIL");
+    const english = await loadDockDetails("memory", ".", {
+      locale: "en",
+      memory: async () => ({ ok: false, stdout: "", stderr: "memory store locked" }),
+    });
+    expect(english.status).toBe("Memory unavailable");
+    expect(english.lines).toEqual(["memory store locked"]);
   });
 
-  it("never presents missing YouTube extensions as installed and exposes selectable HARIL palettes", async () => {
-    const absent = await loadDockDetails("youtube", ".", { piCommands: [] });
-    expect(absent.status).toContain("no detectada");
-    expect(absent.lines.join(" ")).toContain("no instala");
-    const present = await loadDockDetails("youtube", ".", { piCommands: ["yt"] });
-    expect(present.status).toContain("detectada");
-    const themes = await loadDockDetails("themes", ".", { theme: "rose" });
-    expect(themes.lines).toContain("Pi: /settings → Theme");
-    expect(themes.status).toContain("rose");
-    expect(themes.actions).toEqual([
-      { line: 1, action: "matrix" },
-      { line: 2, action: "violet" },
-      { line: 3, action: "rose" },
-      { line: 4, action: "amber" },
-      { line: 5, action: "obsidian" },
-    ]);
+  it("has nothing to load for MAIN: its content is the status block, drawn from live facts", async () => {
+    const main = await loadDockDetails("main", ".");
+    expect(main).toEqual({ id: "main", title: "Principal", status: "", lines: [] });
+    expect(main.actions).toBeUndefined();
+  });
+
+  it("shows a placeholder for DOCS until a documentation folder is connected", async () => {
+    const docs = await loadDockDetails("docs", ".");
+    expect(docs.id).toBe("docs");
+    expect(docs.lines).toEqual(["Carpeta de documentación sin conectar."]);
+    expect(docs.actions).toBeUndefined();
+    const english = await loadDockDetails("docs", ".", { locale: "en" });
+    expect(english.lines).toEqual(["Documentation folder not connected."]);
+  });
+
+  it("does not read git, the Pi commands or the palettes any more", async () => {
+    // The GIT, YT and THEME views are gone: the details of the remaining views never offer them.
+    for (const id of ["main", "memory", "docs"] as const) {
+      const details = await loadDockDetails(id, ".", {
+        memory: async () => ({ ok: true, stdout: "ok", stderr: "" }),
+      });
+      const text = [details.status, ...details.lines].join("\n");
+      expect(text, id).not.toMatch(/Paleta|palette|YouTube|\/yt|CAMBIOS|HISTORIAL/);
+      expect(details.actions, id).toBeUndefined();
+    }
   });
 });

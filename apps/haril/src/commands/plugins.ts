@@ -1,4 +1,4 @@
-import { DOCK_SLOTS, dockSlotExists, resolveDockSlots } from "@haril/contracts";
+import { DOCK_SLOTS, dockSlotExists, isPinnedDockSlot, resolveDockSlots } from "@haril/contracts";
 import { argsProblem, parseArgs } from "../args.js";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
 import { configDocumentErrors, harilConfigPath } from "../providers.js";
@@ -8,11 +8,15 @@ import { readConfigDocument, serializeConfig, writeConfigAtomically } from "./co
 // install, enable, unload or inspect Pi extensions: Pi's live inventory is not available here.
 const USAGE = [
   "usage: haril plugins list [--json]",
-  "       haril plugins show|hide <git|youtube|memory|themes> [--json]",
+  "       haril plugins show|hide <main|memory|docs> [--json]",
   "       haril plugins move <id> up|down [--json]",
   "       haril plugins reset [--json]",
-  "These settings control HARIL's visual left dock; Pi extensions are not changed.",
+  "These settings control HARIL's visual dock; Pi extensions are not changed.",
+  "main is always the first slot and always visible: it cannot be hidden or moved.",
 ].join("\n");
+
+const PINNED_MESSAGE =
+  "the main slot is always first and visible: it cannot be hidden or moved, and no slot goes above it";
 
 type Slot = ReturnType<typeof resolveDockSlots>[number];
 
@@ -30,7 +34,7 @@ function display(io: CliIo, slots: readonly Slot[], configPath: string, json: bo
   for (const [index, slot] of slots.entries()) {
     const label = DOCK_SLOTS.find((item) => item.id === slot.id)?.label ?? slot.id;
     io.out(
-      `  ${index + 1}. ${label.padEnd(12)} ${slot.visible ? "visible" : "hidden"}  (${slot.id})`,
+      `  ${index + 1}. ${label.padEnd(14)} ${slot.visible ? "visible" : "hidden"}  (${slot.id})`,
     );
   }
   io.out(
@@ -51,10 +55,12 @@ export function plugins(args: readonly string[], io: CliIo, host: HostInfo): num
     if (id === undefined || direction !== undefined || !dockSlotExists(id)) {
       return failure(io, USAGE);
     }
+    if (verb === "hide" && isPinnedDockSlot(id)) return failure(io, PINNED_MESSAGE);
   } else if (verb === "move") {
     if (id === undefined || !dockSlotExists(id) || (direction !== "up" && direction !== "down")) {
       return failure(io, USAGE);
     }
+    if (isPinnedDockSlot(id)) return failure(io, PINNED_MESSAGE);
   } else return failure(io, USAGE);
 
   const configPath = harilConfigPath(host).path;
@@ -84,6 +90,8 @@ export function plugins(args: readonly string[], io: CliIo, host: HostInfo): num
       slots[index] = { id: current.id, visible: verb === "show" };
     } else if (verb === "move") {
       const nextIndex = index + (direction === "up" ? -1 : 1);
+      // Slot 0 is main: nothing takes its place.
+      if (nextIndex === 0) return failure(io, PINNED_MESSAGE);
       if (nextIndex >= 0 && nextIndex < slots.length) {
         const [chosen] = slots.splice(index, 1);
         if (chosen !== undefined) slots.splice(nextIndex, 0, chosen);

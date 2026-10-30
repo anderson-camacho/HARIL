@@ -31,13 +31,7 @@ import {
 } from "./dashboard-actions.js";
 import type { DashboardAction } from "./dashboard-controls.js";
 import { type DashboardData, emptyDashboardData, loadDashboardData } from "./dashboard-data.js";
-import {
-  aiEyeTone,
-  getHarilPalette,
-  HARIL_PALETTES,
-  setHarilPalette,
-  visualText,
-} from "./dashboard-theme.js";
+import { aiEyeTone, HARIL_PALETTES, setHarilPalette, visualText } from "./dashboard-theme.js";
 import { delegateFromChat } from "./delegation.js";
 import { effectText, sourceText, valueText } from "./delegation-settings.js";
 import { loadDockDetails } from "./dock-details.js";
@@ -58,6 +52,7 @@ import {
   attachNativePanes,
   DOCK_LABELS,
   initialPaneSettings,
+  MAIN_DOCK_ID,
   MIN_PANE_COLUMNS,
   MIN_PANE_ROWS,
   type NativePanes,
@@ -784,9 +779,7 @@ export default function harilConsole(pi: ConsolePi): void {
       select(id) {
         void openDockSlot(current, id);
       },
-      activate(id, action) {
-        if (id === "themes") void changeTheme(current, action);
-      },
+      // No view declares click actions yet (DockDetails.actions), so there is nothing to activate: DOCS will.
       railAction: (hit) => runRail(current, hit),
     });
     if (mounted.attached) current.nativePanes = mounted;
@@ -800,8 +793,7 @@ export default function harilConsole(pi: ConsolePi): void {
     if (current.closed) return;
     current.dock.slots = readDockSlots(config);
     if (!current.dock.slots.some((slot) => slot.visible && slot.id === current.dock.selected)) {
-      current.dock.selected =
-        current.dock.slots.find((slot) => slot.visible)?.id ?? DOCK_LABELS[0].id;
+      current.dock.selected = current.dock.slots.find((slot) => slot.visible)?.id ?? MAIN_DOCK_ID;
     }
     if (current.dock.detail?.id !== current.dock.selected)
       void openDockSlot(current, current.dock.selected);
@@ -817,12 +809,7 @@ export default function harilConsole(pi: ConsolePi): void {
     current.dock.selected = id;
     current.dock.detail = undefined;
     redraw();
-    const commands = safely(() => pi.getCommands().map((command) => command.name), []);
-    const details = await loadDockDetails(id, current.cwd, {
-      piCommands: commands,
-      theme: getHarilPalette(),
-      locale: current.locale,
-    });
+    const details = await loadDockDetails(id, current.cwd, { locale: current.locale });
     if (current.closed || session !== current || current.dockLoadSeq !== seq) return;
     current.dock.detail = details;
     current.nativePanes?.refresh();
@@ -1200,7 +1187,8 @@ export default function harilConsole(pi: ConsolePi): void {
     }
     setHarilPalette(requested);
     current.ctx.ui.notify(`Tema HARIL: ${requested}`, "info");
-    if (current.dock.selected === "themes") await openDockSlot(current, "themes");
+    // No dock view lists the palettes any more: repaint the panes and the bar with the new colours.
+    current.nativePanes?.refresh();
     redraw();
   }
 
@@ -1307,7 +1295,7 @@ export default function harilConsole(pi: ConsolePi): void {
     },
   });
   pi.registerCommand("haril-plugin", {
-    description: "Open a HARIL dock view: /haril-plugin [git|youtube|memory|themes|1..4|details]",
+    description: "Open a HARIL dock view: /haril-plugin [main|memory|docs|1..3|details]",
     handler: async (args, ctx) => {
       const current = session;
       if (current === undefined || !ctx.hasUI || ctx.mode !== "tui") return;
@@ -1323,14 +1311,25 @@ export default function harilConsole(pi: ConsolePi): void {
             ? dockSlotAt(current.dock.slots, Number(word))?.id
             : DOCK_LABELS.find((slot) => slot.id === word)?.id;
       if (id === undefined) {
-        ctx.ui.notify("Uso: /haril-plugin [git|youtube|memory|themes|1..4|details]", "warning");
+        ctx.ui.notify("Uso: /haril-plugin [main|memory|docs|1..3|details]", "warning");
         return;
       }
       if (word !== "details") await openDockSlot(current, id);
       const detail = current.dock.detail;
-      if (detail?.id === id && !current.closed && session === current) {
-        await showInlineDetails(ctx, detail.title, [detail.status, ...detail.lines]);
+      if (detail?.id !== id || current.closed || session !== current) return;
+      // MAIN has no view to list: its content is the status block, which the right panel already shows.
+      if (id === MAIN_DOCK_ID) {
+        ctx.ui.notify(
+          localized(
+            current.locale,
+            "MAIN shows the status in the right panel; /haril-focus opens its details.",
+            "MAIN muestra el estado en el panel derecho; /haril-focus abre sus detalles.",
+          ),
+          "info",
+        );
+        return;
       }
+      await showInlineDetails(ctx, detail.title, [detail.status, ...detail.lines]);
     },
   });
   pi.registerCommand("haril-extensions", {
@@ -1343,7 +1342,7 @@ export default function harilConsole(pi: ConsolePi): void {
   });
   // Pi's default bindings leave Alt+L / Alt+I free. Alt+Z is Pi's undo shortcut on WSL.
   pi.registerShortcut("alt+l", {
-    description: "Open HARIL's plugin list (then press 1..4, arrows, Enter or Esc)",
+    description: "Open HARIL's plugin list (then press 1..3, arrows, Enter or Esc)",
     handler: (ctx) => {
       const current = session;
       if (current === undefined || !ctx.hasUI || ctx.mode !== "tui") return;

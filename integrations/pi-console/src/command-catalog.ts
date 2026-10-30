@@ -42,7 +42,7 @@ export function commandCatalog(
     ...(other.length ? other.map((name) => `/${name}`) : ["No se reportan comandos adicionales."]),
     "",
     "ATAJOS HARIL",
-    "Alt+L · seleccionar plugin; luego 1–4, flechas y Enter",
+    "Alt+L · seleccionar plugin; luego 1–3, flechas y Enter",
     "Alt+I · mostrar u ocultar el panel derecho",
     "Alt+K · menú del panel derecho (flechas y Enter) o /haril-panel",
     "Alt+H · elegir área; Alt+O · orquestación",
