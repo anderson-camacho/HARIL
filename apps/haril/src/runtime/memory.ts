@@ -2,15 +2,18 @@ import { createHash, randomUUID } from "node:crypto";
 import type { MemoryProviderState } from "@haril/contracts";
 import { estimateTokens, NullMemoryProvider } from "@haril/core";
 import type { Clock, Hasher, Ids, MemoryProvider, Store } from "@haril/core/ports";
+import { createEngramServe, EngramMemoryProvider } from "@haril/memory-engram";
+import type { HostInfo } from "../context.js";
+import { loadMemorySettings } from "../memory-config.js";
 
-// The memory of a runtime (MC-T4; memory.md 9.6; ARCH 8.3): the provider and the ids and hash core/memory needs. No
-// memory can be configured yet (the keys of config/haril.json are HC-05, and Engram comes with MC-T5 and MC-T6), so a
-// runtime runs the Null provider, the MVP default: it keeps nothing and nothing is queued (CM-04).
+// Runtime-owned memory. Engram starts lazily after the runtime acquires its lease,
+// with HARIL-owned data/home directories, authenticated loopback and a pinned binary.
 export interface RuntimeMemory {
   readonly provider: MemoryProvider;
   // Operation ids, generated at enqueue time and reused on every retry (ADR-0008 D4).
   readonly ids: Ids;
   readonly hasher: Hasher;
+  readonly close?: () => Promise<void>;
 }
 
 const nodeHasher: Hasher = {
@@ -24,6 +27,31 @@ export function defaultRuntimeMemory(clock: Clock): RuntimeMemory {
     provider: new NullMemoryProvider({ clock, ids: uuidIds, hasher: nodeHasher, estimateTokens }),
     ids: uuidIds,
     hasher: nodeHasher,
+  };
+}
+
+export function configuredRuntimeMemory(
+  host: HostInfo,
+  dataDir: string,
+  clock: Clock,
+): RuntimeMemory {
+  const settings = loadMemorySettings(host);
+  if (settings.provider === "null") return defaultRuntimeMemory(clock);
+  const serve = createEngramServe({
+    binary: { path: settings.binary },
+    harilDataDir: dataDir,
+    homeDir: host.homeDir ?? "",
+    osEnv: host.env ?? process.env,
+    platform: host.platform as NodeJS.Platform,
+  });
+  return {
+    provider: new EngramMemoryProvider(
+      { clock, ids: uuidIds, hasher: nodeHasher, estimateTokens },
+      { connect: () => serve.connect(), engramVersion: settings.version, harilDataDir: dataDir },
+    ),
+    ids: uuidIds,
+    hasher: nodeHasher,
+    close: () => serve.stop(),
   };
 }
 

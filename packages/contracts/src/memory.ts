@@ -140,6 +140,8 @@ export const WriteReceiptSchema = Type.Object(
       Type.Literal("updated"),
       Type.Literal("deduped"),
       Type.Literal("discarded"),
+      // Released Engram acknowledges persistence without distinguishing insert/upsert/dedupe.
+      Type.Literal("stored"),
     ]),
     truncated: Type.Boolean(),
     redacted: Type.Boolean(),

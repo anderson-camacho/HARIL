@@ -30,7 +30,7 @@ export interface WireObservation {
   readonly score: number | undefined;
 }
 
-type SaveOutcome = "created" | "updated" | "deduped";
+type SaveOutcome = "created" | "updated" | "deduped" | "stored";
 
 export interface WireSaveResult {
   readonly id: string;
@@ -141,7 +141,8 @@ function readList(value: unknown): WireObservation[] | undefined {
 }
 
 export function readSearch(value: unknown): WireObservation[] | undefined {
-  return readList(fields(value)?.results);
+  // Released Engram returns a bare array; older adapter fixtures used an envelope.
+  return readList(Array.isArray(value) ? value : fields(value)?.results);
 }
 
 export function readContext(value: unknown): WireContext | undefined {
@@ -156,10 +157,15 @@ export function readSaveResult(value: unknown): WireSaveResult | undefined {
   const outer = fields(value);
   const body = fields(outer?.result) ?? outer;
   const id = idOf(body?.id);
-  const outcome = body?.outcome;
+  const outcome =
+    body?.outcome ??
+    (body?.status === "saved" || body?.status === "committed" ? "stored" : undefined);
   if (
     id === undefined ||
-    (outcome !== "created" && outcome !== "updated" && outcome !== "deduped")
+    (outcome !== "created" &&
+      outcome !== "updated" &&
+      outcome !== "deduped" &&
+      outcome !== "stored")
   ) {
     return undefined;
   }

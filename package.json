@@ -28,6 +28,7 @@
     "build:bridge": "tsdown --config integrations/agent-pi-bridge/tsdown.config.ts",
     "build:console": "tsdown --config integrations/pi-console/tsdown.config.ts",
     "smoke": "npm run build && npm run build:bootstrap && npm run build:bridge && node apps/haril/dist/haril.mjs --version && node apps/haril/dist/haril.mjs plan validate examples/plan.valid.json && node apps/bootstrap/dist/haril-bootstrap.mjs --help",
+    "memory:install": "node scripts/install-engram.mjs",
     "runtime:install": "npm run build:bootstrap && node apps/bootstrap/dist/haril-bootstrap.mjs install-runtime",
     "e2e": "npm run build && node scripts/e2e.mjs",
     "e2e:demo": "npm run build && node scripts/e2e-demo.mjs",

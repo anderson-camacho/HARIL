@@ -46,6 +46,7 @@ import {
   memoryLeftOf,
   type RuntimeMemory,
 } from "./memory.js";
+import { rememberCompletedTask, withRecalledMemory } from "./memory-context.js";
 import { withStoreState } from "./model-context.js";
 import { decideProviderRetry } from "./model-launch.js";
 import type { PlanAttemptReport, PlanProposals } from "./plan-proposals.js";
@@ -125,7 +126,7 @@ export interface RunLoopOptions {
   >;
   // The ordered-stop control (ARCH 4.2). Defaults to a control nobody requests.
   readonly shutdown?: Shutdown;
-  // The memory provider of this runtime (MC-T4). Defaults to the Null provider: no memory can be configured yet.
+  // Injected by the composition root; direct/test callers default to Null.
   readonly memory?: RuntimeMemory;
   // haril shell started this runtime (LD-T6, ADR-0022): the start is recorded as runtime.started_by_shell, with the pid
   // and the epoch, once the lease is held.
@@ -440,6 +441,9 @@ async function serve(
         closeCancelled(options, attempt);
       } else if (attempt.workflow === null) closeStandalone(options, shutdown, context, attempt);
       else closeWorkflowTurn(options, shutdown, context, attempt, attempt.workflow);
+      if (attempt.endedBy === null) {
+        await rememberCompletedTask(context.memory, store, attempt.claimed, attempt.settled);
+      }
     }
     // The standalone lane runs one attempt at a time, as before: decisions and memory wait while it is busy.
     const standaloneBusy = [...live.values()].some((attempt) => attempt.workflow === null);
@@ -768,9 +772,14 @@ async function startWorkflowTurn(
       runId: claimed.runId,
     });
   }
-  const spec = buildAgentSpec(
-    { ...claimed, delegation, ...(workspace === null ? {} : { workspaceRoot: workspace.root }) },
-    { runId: claimed.runId, attempt: claimed.attempt },
+  const spec = await withRecalledMemory(
+    context.memory,
+    store,
+    claimed,
+    buildAgentSpec(
+      { ...claimed, delegation, ...(workspace === null ? {} : { workspaceRoot: workspace.root }) },
+      { runId: claimed.runId, attempt: claimed.attempt },
+    ),
   );
   let outcome: AgentOutcome;
   try {
@@ -1129,7 +1138,12 @@ async function executePlannedAttempt(
   attempt: LiveAttempt,
 ): Promise<AgentOutcome> {
   const task = attempt.claimed;
-  const spec = buildAgentSpec(task, { runId: task.runId, attempt: task.attempt });
+  const spec = await withRecalledMemory(
+    context.memory,
+    options.store,
+    task,
+    buildAgentSpec(task, { runId: task.runId, attempt: task.attempt }),
+  );
   const runtime = runtimeFor(options, task);
   if (task.kind !== "plan")
     return await runAttempt(runtime, options.clock, spec, shutdown, attempt, context.hooks);

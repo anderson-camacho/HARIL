@@ -18,6 +18,7 @@
     "@haril/core": "workspace:*",
     "@haril/gateway": "workspace:*",
     "@haril/git": "workspace:*",
+    "@haril/memory-engram": "workspace:*",
     "@haril/os": "workspace:*",
     "@haril/state-sqlite": "workspace:*"
   },

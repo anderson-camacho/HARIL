@@ -17,6 +17,7 @@ import { createOpenAiCompatibleClient, ProviderError } from "@haril/gateway";
 import { EnvSecretStore } from "@haril/os";
 import type { HostInfo } from "./context.js";
 import { delegationSectionErrors } from "./delegation-section.js";
+import { memorySectionErrors } from "./memory-config.js";
 import { runtimeRootFor } from "./runtime.js";
 
 // Providers of HARIL (M3-T7, ACE-06). They come from haril.json (HARIL_CONFIG, else <runtime root>/config/haril.json);
@@ -183,6 +184,7 @@ function ownKeyErrors(value: Record<string, unknown>): string[] {
   if ("ui" in value) errors.push(...uiErrors(value.ui));
   if ("delegation" in value) errors.push(...delegationSectionErrors(value.delegation));
   if ("docs" in value) errors.push(...docsSectionErrors(value.docs));
+  if ("memory" in value) errors.push(...memorySectionErrors(value.memory));
   return errors;
 }
 
