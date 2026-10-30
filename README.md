@@ -306,7 +306,7 @@ Con `--agent orchestrator` los agentes son reales: cada turno es un proceso de P
 | `haril difficulty show` | La tabla de dificultad en efecto: por clase, la tasa de éxito mínima, los modelos recomendados con su nivel de costo y el origen de cada valor (`config/difficulty.json` o el valor por defecto provisional), y las tasas medidas |
 | `haril difficulty calibrate` | El disparador manual de la tabla: recalcula las tasas de éxito con las ejecuciones reales que un auditor juzgó (nunca las simuladas), muestra el cambio y lo escribe solo con `--yes` |
 | `haril config get [<ruta>]` | Un valor o un grupo de `haril.json` (por defecto toda la sección `delegation`), cada valor con su origen: `haril.json` o el valor por defecto. Con `--json`, cada campo trae además su valor por defecto, su rango válido y cuándo surte efecto |
-| `haril config set <ruta> <valor>` | Cambia un valor de la delegación: lo lee según su campo (`400000`, una lista, un nivel, `null`), comprueba el archivo entero con las mismas reglas que todo lector, conserva las demás claves, la sangría y los finales de línea, y escribe en un archivo temporal que renombra sobre `haril.json`. `--reset` lo devuelve a su valor por defecto. Solo cambia la sección `delegation` y nunca escribe una clave |
+| `haril config set <ruta> <valor>` | Cambia un valor de la delegación: lo lee según su campo (`400000`, una lista, un nivel, `null`), comprueba el archivo entero con las mismas reglas que todo lector, conserva las demás claves, la sangría y los finales de línea, y escribe en un archivo temporal que renombra sobre `haril.json`. `--reset` lo devuelve a su valor por defecto. Cambia la sección `delegation`, `ui.locale`, `ui.theme` y `docs.path` (la carpeta de documentación; ver [Carpeta de documentación](#carpeta-de-documentación-docspath)) y nunca escribe una clave |
 | `haril usage log` | Una línea por orden o por intento, como `haril events`: `--since 2h` o `--from`/`--to`, `--kind order\|chat\|agent_run`, `--model`, `--workflow`, `--layer`, `--mode`, `--difficulty`, `--limit`, `--json` |
 | `haril usage summary` | Tokens, tokens no reportados, tiempo, reintentos y veredictos por día, modelo, capa, dificultad, workflow, modo o rol (`--by`). `log` y `summary` dejan fuera las filas de corridas simuladas salvo `--include-simulated` |
 | `haril usage verify` | Recorre la cadena de hashes de las órdenes y del consumo; sale con 1 y nombra la primera fila si alguien la alteró o la borró a mano |
@@ -432,6 +432,21 @@ Puedes cambiar el idioma de los menús y mensajes **propios de HARIL** sin reini
 ```
 
 `/language` muestra un selector entre **Español** y **English**; `/language es` y `/language en` cambian directamente. La elección se guarda mediante `haril config set ui.locale <es|en>` y se recupera al iniciar otra sesión. Si falla el guardado, se conserva el idioma anterior y se informa el error. Pi, las extensiones de terceros y el contenido escrito por los modelos mantienen su propio idioma.
+
+### Carpeta de documentación (`docs.path`)
+
+Tu documentación vive en una carpeta que administras **fuera de HARIL**, por ejemplo una bóveda de Obsidian. HARIL solo guarda su ruta en `haril.json` y la **lee**: nunca crea, cambia ni borra nada dentro de ella (Obsidian sigue siendo quien la administra). Si no conectas ninguna carpeta, no pasa nada: es el estado normal.
+
+```powershell
+haril config set docs.path "D:\Obsidian\MiBoveda"   # conecta la carpeta
+haril config get docs.path                           # muestra la ruta guardada (o "is not set")
+haril config set docs.path --reset                   # desconecta; no toca la carpeta
+```
+
+- La ruta debe ser **absoluta** (unidad de Windows, ruta UNC o ruta POSIX) y **existir como carpeta en el momento de guardarla**: una errata no se guarda en silencio, falla con un mensaje claro y deja `haril.json` como estaba. Se recortan los espacios y las comillas que añade «Copiar como ruta»; las barras se conservan tal como las escribes.
+- Al **leer** `haril.json` no se mira la carpeta: si la bóveda está en un disco que no está conectado, HARIL sigue funcionando y solo lo avisa.
+- `haril doctor` añade la fila `docs`: `ok  not connected` sin carpeta, `ok  <ruta>` si existe, y una **advertencia** (`warn`, nunca un error) si la ruta ya no existe o apunta a un archivo. Un `haril.json` antiguo, sin la sección `docs`, sigue siendo válido tal cual.
+- No hay un `docs` de ejemplo en `config/haril.example.json`: una ruta de ejemplo copiada tal cual dejaría una advertencia permanente en `haril doctor`.
 
 ### Columna lateral y modo enfoque de HARIL
 

@@ -94,7 +94,7 @@ Las pestañas están en la parte alta del panel derecho: `[1:MAIN]  2:MEM  3:DOC
 | --- | --- | --- | --- |
 | **MAIN / Principal** | El estado de la consola: ubicación, modo, proyecto, modelo, áreas, avisos, extensiones, sesión, acciones y actividad reciente (sección 5) | Todo lo de la sección 5 | Es la única pestaña que dibuja ese bloque; siempre va primera y siempre está visible |
 | **MEM / Memoria** | Estado de salud del proveedor de memoria | Inspeccionar disponibilidad/errores | No implica que Engram esté conectado |
-| **DOCS / Documentación** | El espacio de la documentación: se conecta con una carpeta de documentación (la configuración llega en la siguiente entrega) | Por ahora solo avisa de que no hay carpeta conectada | Solo lectura; no escribe en ninguna carpeta |
+| **DOCS / Documentación** | El espacio de la documentación: se conecta con tu carpeta de documentación (por ejemplo una bóveda de Obsidian) con `haril config set docs.path <ruta absoluta>` | Conectar o desconectar la carpeta (`--reset`); `haril doctor` muestra si sigue disponible | Solo lectura; no escribe en ninguna carpeta |
 
 ### Ocultar, mostrar o reordenar espacios
 

@@ -3,6 +3,7 @@ import { posix, win32 } from "node:path";
 import { CLAUDE_BRIDGE_PROVIDER } from "@haril/agent-pi";
 import {
   dockPreferenceErrors,
+  docsSectionErrors,
   envSecretRef,
   HARIL_CONFIG_TOP_LEVEL_KEYS,
   isUiLocale,
@@ -149,8 +150,8 @@ export function loadProviderConfig(
   };
 }
 
-// The top-level keys haril.json may hold: providers (the provider schema), ui (TUI-D14) and delegation (phases F6 and
-// F7; delegation-section.ts). Anything else is refused. haril shell reads the same list from @haril/contracts.
+// The top-level keys haril.json may hold: providers (the provider schema), ui (TUI-D14), delegation (phases F6 and
+// F7; delegation-section.ts) and docs (the documentation folder, docs-config.ts). Anything else is refused. haril shell reads the same list from @haril/contracts.
 const TOP_LEVEL_KEYS: ReadonlySet<string> = new Set(HARIL_CONFIG_TOP_LEVEL_KEYS);
 const THEME_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const UI_KEYS: ReadonlySet<string> = new Set(["theme", "locale", "plugins"]);
@@ -169,7 +170,8 @@ export function configDocumentErrors(value: unknown): string[] {
   return checked.ok ? [] : checked.errors;
 }
 
-// The rules the provider schema does not own: the top-level keys, the literal apiKey refusal and the ui object.
+// The rules the provider schema does not own: the top-level keys, the literal apiKey refusal, the ui object and the
+// delegation and docs sections.
 function ownKeyErrors(value: Record<string, unknown>): string[] {
   const errors: string[] = [];
   if ("apiKey" in value) {
@@ -180,6 +182,7 @@ function ownKeyErrors(value: Record<string, unknown>): string[] {
   }
   if ("ui" in value) errors.push(...uiErrors(value.ui));
   if ("delegation" in value) errors.push(...delegationSectionErrors(value.delegation));
+  if ("docs" in value) errors.push(...docsSectionErrors(value.docs));
   return errors;
 }
 
