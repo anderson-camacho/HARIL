@@ -16,13 +16,24 @@ interface LayoutRow {
   readonly basis: number;
   readonly component: {
     render(width: number): string[];
-    handleMouse?(event: { type: string; button: string; x: number; y: number }): unknown;
+    handleMouse?(event: {
+      type: string;
+      button: string;
+      x: number;
+      y: number;
+      wheelDelta?: number;
+    }): unknown;
     [key: symbol]: unknown;
   };
 }
 interface NativeLayout {
   readonly type: string;
   readonly entries: LayoutRow[];
+}
+
+// What the pane asks of its host for the right rail's body: the rows and, per row, the action a click runs.
+function rail(lines: string[] = []) {
+  return { lines, hits: [] };
 }
 
 function fakeTui() {
@@ -46,7 +57,7 @@ describe("Pi's native split-pane adapter", () => {
     const { tui, root, original } = fakeTui();
     const state = initialPaneSettings();
     const select = vi.fn();
-    const options = { project: () => "my-project", right: () => [" STATUS"], select };
+    const options = { project: () => "my-project", right: () => rail([" STATUS"]), select };
     const panel = attachNativePanes(tui, state, options);
     expect(panel.attached).toBe(true);
     expect(attachNativePanes(tui, state, options).attached).toBe(false);
@@ -77,7 +88,7 @@ describe("Pi's native split-pane adapter", () => {
 
   it("backs out on narrow terminals, missing layout internals and competing Gentle Shell rail", () => {
     const state = initialPaneSettings();
-    const options = { project: () => "x", right: () => [], select: () => undefined };
+    const options = { project: () => "x", right: () => rail(), select: () => undefined };
     const { tui, root, original } = fakeTui();
     const panel = attachNativePanes(tui, state, options);
     tui.terminal.columns = MIN_PANE_COLUMNS - 1;
@@ -142,7 +153,7 @@ describe("Pi's native split-pane adapter", () => {
     const state = { ...initialPaneSettings(), leftVisible: true };
     const pane = attachNativePanes(tui, state, {
       project: () => "repo",
-      right: () => [],
+      right: () => rail(),
       select: () => undefined,
     });
     for (const columns of [135, 156, 180, 132]) {
@@ -165,7 +176,7 @@ describe("Pi's native split-pane adapter", () => {
     const activate = vi.fn();
     const panel = attachNativePanes(tui, state, {
       project: () => "repo",
-      right: () => [],
+      right: () => rail(),
       select,
       activate,
     });
@@ -205,5 +216,56 @@ describe("Pi's native split-pane adapter", () => {
     right?.handleMouse?.({ type: "click", button: "left", y: violetRow, x: 4 });
     expect(activate).toHaveBeenCalledWith("themes", "violet");
     panel.close();
+  });
+
+  it("hits a tab on exactly the columns it is drawn on", () => {
+    const { tui, root } = fakeTui();
+    const select = vi.fn();
+    attachNativePanes(tui, initialPaneSettings(), {
+      project: () => "repo",
+      right: () => rail(),
+      select,
+    });
+    const right = (root[LAYOUT_NODE] as () => NativeLayout)().entries[1]?.component;
+    const row = stripAnsi(right?.render(40)[1] ?? "");
+    const clickAt = (x: number) => {
+      select.mockClear();
+      right?.handleMouse?.({ type: "click", button: "left", y: 1, x });
+      return select.mock.calls.map((call) => call[0]);
+    };
+    // Drawn as "│ [1:GIT]  2:YT   3:MEM ...": the dock's "│", a space, then the tab text.
+    // An unselected tab keeps one padding space on each side of its text.
+    const git = row.indexOf("[1:GIT]");
+    const youtube = row.indexOf("2:YT") - 1;
+    const youtubeLast = youtube + " 2:YT ".length - 1;
+    expect(git).toBe(2);
+    expect(clickAt(git)).toEqual(["git"]);
+    expect(clickAt(git + "[1:GIT]".length - 1)).toEqual(["git"]);
+    expect(clickAt(git - 1)).toEqual([]);
+    expect(clickAt(youtube)).toEqual(["youtube"]);
+    expect(clickAt(youtubeLast)).toEqual(["youtube"]);
+    // The separator column between two tabs belongs to neither.
+    expect(clickAt(youtube - 1)).toEqual([]);
+    expect(clickAt(youtubeLast + 1)).toEqual([]);
+  });
+
+  it("ignores pointer movement without building the rail, but keeps the wheel scrolling", () => {
+    const { tui, root } = fakeTui();
+    const content = vi.fn(() => rail([" STATUS"]));
+    attachNativePanes(tui, initialPaneSettings(), {
+      project: () => "repo",
+      right: content,
+      select: () => undefined,
+    });
+    const right = (root[LAYOUT_NODE] as () => NativeLayout)().entries[1]?.component;
+    for (const type of ["move", "press", "release", "drag"]) {
+      expect(right?.handleMouse?.({ type, button: "none", y: 3, x: 6 })).toBeUndefined();
+    }
+    expect(right?.handleMouse?.({ type: "click", button: "right", y: 3, x: 6 })).toBeUndefined();
+    expect(content).not.toHaveBeenCalled();
+    expect(
+      right?.handleMouse?.({ type: "wheel", button: "none", y: 3, x: 6, wheelDelta: 1 }),
+    ).toEqual({ handled: true, render: true });
+    expect(content).toHaveBeenCalledTimes(1);
   });
 });

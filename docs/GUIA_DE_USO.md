@@ -115,6 +115,8 @@ Estas operaciones cambian la interfaz, no los paquetes Pi. Si gestionaste el doc
 
 Las secciones con `▶` están contraídas y con `▼` expandidas. Su contenido corresponde a la **sesión y área actuales**, no a un inventario universal.
 
+En el panel derecho responden al clic las cabeceras de sección (`AVISOS`, `EXTENSIONES`, `SESIÓN`, `ACCIONES`), cada acción de `ACCIONES` y el texto `cambiar` de la fila `Modo`.
+
 | Elemento | Qué mide o representa | Qué hacer |
 | --- | --- | --- |
 | `HARIL · AGENTS · panel` | Área actualmente enfocada | `Alt+H` o pestañas inferiores |

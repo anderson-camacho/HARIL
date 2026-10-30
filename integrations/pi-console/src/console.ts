@@ -17,6 +17,7 @@ import {
 import {
   type DashboardArea,
   type DashboardFacts,
+  type RailHitAction,
   type RailSection,
   renderFooterNavigation,
   renderHeaderLayout,
@@ -84,6 +85,7 @@ import type {
   SessionEntry,
 } from "./pi-types.js";
 import { type BoundProject, findProject, folderName } from "./project.js";
+import { runRailHit } from "./rail-actions.js";
 import { type PendingApproval, readStatus } from "./status.js";
 import { createTabPicker, type TabPickerResult } from "./tab-picker.js";
 import { clipText, plainText, truncate } from "./text.js";
@@ -707,35 +709,7 @@ export default function harilConsole(pi: ConsolePi): void {
           (item) => item.row === event.y && event.x >= item.start && event.x < item.end,
         );
         if (rail === undefined) return undefined;
-        switch (rail.action) {
-          case "toggle":
-            if (rail.section !== undefined) {
-              const baseline =
-                rail.section === "actions" ||
-                rail.section === "warnings" ||
-                rail.section === "orchestration";
-              current.railExpanded[rail.section] = !(
-                current.railExpanded[rail.section] ?? baseline
-              );
-              redraw();
-            }
-            break;
-          case "run":
-            if (rail.control !== undefined) openDashboardAction(current, rail.control);
-            break;
-          case "mode":
-            void chooseMode(current, current.ctx);
-            break;
-          case "menu":
-            void current.openActions(current.ctx);
-            break;
-          case "focus":
-            focusRightRail(current);
-            break;
-          case "details":
-            openDashboardAction(current, "details");
-            break;
-        }
+        runRail(current, rail);
         return { handled: true, render: true };
       },
       invalidate() {},
@@ -807,6 +781,7 @@ export default function harilConsole(pi: ConsolePi): void {
       activate(id, action) {
         if (id === "themes") void changeTheme(current, action);
       },
+      railAction: (hit) => runRail(current, hit),
     });
     if (mounted.attached) current.nativePanes = mounted;
   }
@@ -1163,6 +1138,21 @@ export default function harilConsole(pi: ConsolePi): void {
   function focusRightRail(current: Session): void {
     if (current.area === "orchestration") void current.openOrchestrationView(current.ctx);
     else openDashboardAction(current, "details");
+  }
+
+  // A rail row means the same thing wherever it is drawn: the classic header and the native right pane both land here.
+  function runRail(current: Session, hit: RailHitAction): void {
+    runRailHit(
+      {
+        railExpanded: current.railExpanded,
+        redraw,
+        runControl: (control) => openDashboardAction(current, control),
+        chooseMode: () => void chooseMode(current, current.ctx),
+        openMenu: () => void current.openActions(current.ctx),
+        focus: () => focusRightRail(current),
+      },
+      hit,
+    );
   }
 
   async function changeTheme(current: Session, requested: string): Promise<void> {

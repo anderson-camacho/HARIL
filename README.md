@@ -683,7 +683,7 @@ haril plugins list --json
 haril plugins reset
 ```
 
-Desde la interfaz Pi, `/haril-plugins` abre un menú para mostrar, ocultar, subir o bajar espacios y actualiza inmediatamente la columna izquierda. `/haril-dock left|right|both` alterna las columnas y `Alt+I` alterna el panel derecho. La columna derecha puede desplazarse con la rueda del ratón. Los cambios realizados **externamente** desde PowerShell se cargan al iniciar una nueva sesión de `haril` o al abrir `/haril-plugins`.
+Desde la interfaz Pi, `/haril-plugins` abre un menú para mostrar, ocultar, subir o bajar espacios y actualiza inmediatamente la columna izquierda. `/haril-dock left|right|both` alterna las columnas y `Alt+I` alterna el panel derecho. La columna derecha puede desplazarse con la rueda del ratón. Sus cabeceras de sección (`AVISOS`, `EXTENSIONES`, `SESIÓN`, `ACCIONES`), sus acciones y el texto `cambiar` del modo responden al clic. Los cambios realizados **externamente** desde PowerShell se cargan al iniciar una nueva sesión de `haril` o al abrir `/haril-plugins`.
 
 Las preferencias quedan en `ui.plugins` de `haril.json`, sin borrar otras opciones. **Un espacio visible no significa que su extensión Pi exista o esté ejecutándose**: YouTube, Git, Memoria y Temas son lugares reservados para la integración de extensiones reales en próximos PR. Este PR no instala ni desactiva paquetes Pi. La unión de paneles se realiza mediante un adaptador interno experimental, se revierte al cerrar la sesión y deberá validarse manualmente en Windows Terminal antes de considerarse estable.
 

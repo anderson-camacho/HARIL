@@ -213,9 +213,27 @@ function railWarnings(facts: DashboardFacts): string[] {
 }
 
 type RailHit = NonNullable<HeaderLayout["railHits"]>[number];
+// What a click on a rail row asks for, without the header's screen coordinates: the native dock hit-tests by row.
+export type RailHitAction = Pick<RailHit, "action" | "section" | "control">;
 interface RailRow {
   readonly line: string;
-  readonly hit?: Pick<RailHit, "action" | "section" | "control">;
+  readonly hit?: RailHitAction;
+}
+
+// The rail body of the native full-height dock: its rows and, aligned with them, the action a click on each runs.
+export interface NativeRailContent {
+  readonly lines: string[];
+  readonly hits: readonly (RailHitAction | undefined)[];
+}
+
+// Sections open by default; a user toggle (rail-actions.ts) overrides it.
+const SECTIONS_OPEN_BY_DEFAULT: readonly RailSection[] = ["actions", "warnings", "orchestration"];
+
+export function railSectionOpen(
+  expanded: Readonly<Partial<Record<RailSection, boolean>>>,
+  section: RailSection,
+): boolean {
+  return expanded[section] ?? SECTIONS_OPEN_BY_DEFAULT.includes(section);
 }
 
 function eyeTone(facts: DashboardFacts): "teal" | "yellow" | "error" {
@@ -252,9 +270,7 @@ function rightRailContent(
     facts.orchestration.demo,
     facts.locale ?? DEFAULT_UI_LOCALE,
   );
-  const isExpanded = (section: RailSection): boolean =>
-    expanded[section] ??
-    (section === "actions" || section === "warnings" || section === "orchestration");
+  const isExpanded = (section: RailSection): boolean => railSectionOpen(expanded, section);
   const add = (
     content: string,
     tone: "cyan" | "teal" | "yellow" | "text" | "muted" | "error",
@@ -354,11 +370,16 @@ export function renderNativeRailContent(
   area: DashboardArea | undefined,
   width: number,
   expanded: Readonly<Partial<Record<RailSection, boolean>>>,
-): string[] {
+): NativeRailContent {
   const safeWidth = Math.max(1, width);
-  const rows = rightRailContent(facts, area, safeWidth, expanded).map((item) => item.line);
-  const add = (line: string, tone: "cyan" | "teal" | "muted" | "text" = "text") =>
+  const body = rightRailContent(facts, area, safeWidth, expanded);
+  const rows = body.map((item) => item.line);
+  // Only the rail body is clickable; the activity log and the key hints below it carry no action.
+  const hits: (RailHitAction | undefined)[] = body.map((item) => item.hit);
+  const add = (line: string, tone: "cyan" | "teal" | "muted" | "text" = "text") => {
     rows.push(paddedCell(` ${line}`, safeWidth, tone, "panel"));
+    hits.push(undefined);
+  };
   add("", "muted");
   add("─ ACTIVIDAD RECIENTE ─", "cyan");
   const recent = facts.data.events.slice(-5).reverse();
@@ -368,7 +389,7 @@ export function renderNativeRailContent(
   }
   add("", "muted");
   add("Alt+H áreas · Alt+I panel · Alt+C comandos", "muted");
-  return rows;
+  return { lines: rows, hits };
 }
 
 function wideHeader(
