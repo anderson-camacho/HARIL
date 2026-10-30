@@ -119,6 +119,12 @@ describe("a click on the right rail body", () => {
     ["cambiar", { action: "mode" }],
     ["Abrir menú completo", { action: "menu" }],
     ["! Provider offline", { action: "details" }],
+    ["● AGENTS", { action: "area", area: "agents" }],
+    ["○ ORCHESTRATION", { action: "area", area: "orchestration" }],
+    ["○ AUTOMATION", { action: "area", area: "automation" }],
+    ["○ TOOLS", { action: "area", area: "tools" }],
+    ["○ EVERYWHERE", { action: "area", area: "everywhere" }],
+    ["Abrir vista de orquestación", { action: "run", control: "orchestration-view" }],
   ] as const)("on the row %s runs the action that row declares", (needle, expected) => {
     const pane = setup({ expanded: { extensions: true } });
     const { y, hit } = pane.find(needle);
@@ -141,6 +147,38 @@ describe("a click on the right rail body", () => {
     expect(hit).toEqual({ action: "run", control: "refresh" });
     pane.click(y);
     expect(pane.railAction).toHaveBeenCalledWith(hit);
+  });
+
+  it("marks the current area and draws the areas under a heading that is not a click target", () => {
+    const pane = setup({ area: "tools" });
+    const rows = pane.rows();
+    expect(rows.some((row) => row.includes("● TOOLS"))).toBe(true);
+    expect(rows.some((row) => row.includes("○ AGENTS"))).toBe(true);
+    const { y } = pane.find("ÁREAS");
+    expect(pane.find("ÁREAS").hit).toBeUndefined();
+    expect(pane.click(y)).toBeUndefined();
+    expect(pane.railAction).not.toHaveBeenCalled();
+  });
+
+  it("shows the project and the model once, even with the session section open", () => {
+    const text = renderNativeRailContent(facts(), "agents", 39, { status: true })
+      .lines.map(stripAnsi)
+      .join("\n");
+    expect(text.match(/Proyecto:/g)).toHaveLength(1);
+    expect(text.match(/Modelo:/g)).toHaveLength(1);
+    // The session section keeps what the top rows do not say.
+    expect(text).toContain("Runtime: idle");
+    expect(text).toContain("Memoria: not loaded");
+    const english = renderNativeRailContent({ ...facts(), locale: "en" }, "agents", 39, {
+      status: true,
+    })
+      .lines.map(stripAnsi)
+      .join("\n");
+    expect(english.match(/Project:/g)).toHaveLength(1);
+    expect(english.match(/Model:/g)).toHaveLength(1);
+    expect(english).toContain("Memory: not loaded");
+    expect(english).not.toContain("Memoria");
+    expect(english).not.toContain("Proyecto");
   });
 
   it("still reaches the rows when the Espacio block is collapsed", () => {
@@ -178,9 +216,9 @@ describe("a click on the right rail body", () => {
   it("keeps the header and the tab row working as before", () => {
     const pane = setup();
     const tabsRow = pane.rows()[1] ?? "";
-    expect(tabsRow).toContain("[1:GIT]");
-    pane.click(1, tabsRow.indexOf("2:YT"));
-    expect(pane.select).toHaveBeenCalledWith("youtube");
+    expect(tabsRow).toContain("[1:MAIN]");
+    pane.click(1, tabsRow.indexOf("2:MEM"));
+    expect(pane.select).toHaveBeenCalledWith("memory");
     expect(pane.railAction).not.toHaveBeenCalled();
     expect(pane.state.dockExpanded).toBe(true);
     expect(pane.click(0)).toEqual({ handled: true, render: true });
@@ -198,6 +236,7 @@ describe("the actions a rail hit runs", () => {
       chooseMode: () => calls.push("mode"),
       openMenu: () => calls.push("menu"),
       focus: () => calls.push("focus"),
+      openArea: (area) => calls.push(`area:${area}`),
     };
     return { host, calls, expanded };
   }
@@ -228,7 +267,14 @@ describe("the actions a rail hit runs", () => {
     runRailHit(host, { action: "mode" });
     runRailHit(host, { action: "menu" });
     runRailHit(host, { action: "focus" });
-    expect(calls).toEqual(["run:tasks", "run:details", "mode", "menu", "focus"]);
+    runRailHit(host, { action: "area", area: "tools" });
+    expect(calls).toEqual(["run:tasks", "run:details", "mode", "menu", "focus", "area:tools"]);
+  });
+
+  it("ignores an area hit that names no area", () => {
+    const { host, calls } = target();
+    runRailHit(host, { action: "area" });
+    expect(calls).toEqual([]);
   });
 });
 
@@ -323,6 +369,64 @@ describe("the console's rails", () => {
       expect(selects[0]).toMatch(/^Console mode/);
 
       click("Ver detalles completos");
+      expect(customs()).toBe(1);
+    });
+  });
+
+  it("opens the area whose row is clicked in the native right pane, and moves the marker", async () => {
+    await withConsole(({ anchor }) => {
+      const root = {
+        render: () => ["Pi chat"],
+        invalidate: () => undefined,
+        [LAYOUT_NODE]: () => ({ type: "vstack", gap: 0, align: "stretch", entries: [] }),
+      };
+      const tui = {
+        layoutRoot: root,
+        terminal: { columns: 160, rows: 45 },
+        requestRender: vi.fn(),
+      };
+      anchor(tui, THEME);
+      const layout = (root[LAYOUT_NODE] as () => { entries: { component: RightPane }[] })();
+      const right = layout.entries[1]?.component;
+      if (!right) throw new Error("Expected the right pane");
+      const rows = () => right.render(40).map(stripAnsi);
+      const click = (needle: string) => {
+        const y = rows().findIndex((row) => row.includes(needle));
+        if (y < 0) throw new Error(`Row not found: ${needle}`);
+        return right.handleMouse?.({ type: "click", button: "left", x: 8, y });
+      };
+      expect(rows().some((row) => row.includes("● AGENTS"))).toBe(true);
+      expect(click("○ TOOLS")).toEqual({ handled: true, render: true });
+      expect(rows().some((row) => row.includes("● TOOLS"))).toBe(true);
+      expect(rows().some((row) => row.includes("○ AGENTS"))).toBe(true);
+      expect(rows().some((row) => row.includes("● AGENTS"))).toBe(false);
+      // The actions below follow the area that was opened.
+      expect(rows().some((row) => row.includes("ACCIONES · TOOLS"))).toBe(true);
+    });
+  });
+
+  it("opens the orchestration view from its row, whichever area is open", async () => {
+    await withConsole(({ anchor, customs }) => {
+      const root = {
+        render: () => ["Pi chat"],
+        invalidate: () => undefined,
+        [LAYOUT_NODE]: () => ({ type: "vstack", gap: 0, align: "stretch", entries: [] }),
+      };
+      const tui = {
+        layoutRoot: root,
+        terminal: { columns: 160, rows: 45 },
+        requestRender: vi.fn(),
+      };
+      anchor(tui, THEME);
+      const layout = (root[LAYOUT_NODE] as () => { entries: { component: RightPane }[] })();
+      const right = layout.entries[1]?.component;
+      if (!right) throw new Error("Expected the right pane");
+      const y = right
+        .render(40)
+        .map(stripAnsi)
+        .findIndex((row) => row.includes("Abrir vista de orquestación"));
+      expect(y).toBeGreaterThan(0);
+      right.handleMouse?.({ type: "click", button: "left", x: 8, y });
       expect(customs()).toBe(1);
     });
   });

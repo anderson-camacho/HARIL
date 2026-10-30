@@ -217,6 +217,8 @@ describe("doctor", async () => {
       }),
       // P10 (phase F7): no haril.json, so the delegation section is section 5's defaults.
       delegation: expect.objectContaining({ status: "ok", source: "defaults" }),
+      // The documentation folder is optional: without haril.json nothing is connected, and that is not a problem.
+      docs: { status: "ok", connected: false, path: null },
       runtime: RUNTIME_MISSING,
     });
   });

@@ -306,7 +306,7 @@ Con `--agent orchestrator` los agentes son reales: cada turno es un proceso de P
 | `haril difficulty show` | La tabla de dificultad en efecto: por clase, la tasa de éxito mínima, los modelos recomendados con su nivel de costo y el origen de cada valor (`config/difficulty.json` o el valor por defecto provisional), y las tasas medidas |
 | `haril difficulty calibrate` | El disparador manual de la tabla: recalcula las tasas de éxito con las ejecuciones reales que un auditor juzgó (nunca las simuladas), muestra el cambio y lo escribe solo con `--yes` |
 | `haril config get [<ruta>]` | Un valor o un grupo de `haril.json` (por defecto toda la sección `delegation`), cada valor con su origen: `haril.json` o el valor por defecto. Con `--json`, cada campo trae además su valor por defecto, su rango válido y cuándo surte efecto |
-| `haril config set <ruta> <valor>` | Cambia un valor de la delegación: lo lee según su campo (`400000`, una lista, un nivel, `null`), comprueba el archivo entero con las mismas reglas que todo lector, conserva las demás claves, la sangría y los finales de línea, y escribe en un archivo temporal que renombra sobre `haril.json`. `--reset` lo devuelve a su valor por defecto. Solo cambia la sección `delegation` y nunca escribe una clave |
+| `haril config set <ruta> <valor>` | Cambia un valor de la delegación: lo lee según su campo (`400000`, una lista, un nivel, `null`), comprueba el archivo entero con las mismas reglas que todo lector, conserva las demás claves, la sangría y los finales de línea, y escribe en un archivo temporal que renombra sobre `haril.json`. `--reset` lo devuelve a su valor por defecto. Cambia la sección `delegation`, `ui.locale`, `ui.theme` y `docs.path` (la carpeta de documentación; ver [Carpeta de documentación](#carpeta-de-documentación-docspath)) y nunca escribe una clave |
 | `haril usage log` | Una línea por orden o por intento, como `haril events`: `--since 2h` o `--from`/`--to`, `--kind order\|chat\|agent_run`, `--model`, `--workflow`, `--layer`, `--mode`, `--difficulty`, `--limit`, `--json` |
 | `haril usage summary` | Tokens, tokens no reportados, tiempo, reintentos y veredictos por día, modelo, capa, dificultad, workflow, modo o rol (`--by`). `log` y `summary` dejan fuera las filas de corridas simuladas salvo `--include-simulated` |
 | `haril usage verify` | Recorre la cadena de hashes de las órdenes y del consumo; sale con 1 y nombra la primera fila si alguien la alteró o la borró a mano |
@@ -432,6 +432,37 @@ Puedes cambiar el idioma de los menús y mensajes **propios de HARIL** sin reini
 ```
 
 `/language` muestra un selector entre **Español** y **English**; `/language es` y `/language en` cambian directamente. La elección se guarda mediante `haril config set ui.locale <es|en>` y se recupera al iniciar otra sesión. Si falla el guardado, se conserva el idioma anterior y se informa el error. Pi, las extensiones de terceros y el contenido escrito por los modelos mantienen su propio idioma.
+
+### Carpeta de documentación (`docs.path`)
+
+Tu documentación vive en una carpeta que administras **fuera de HARIL**, por ejemplo una bóveda de Obsidian. HARIL solo guarda su ruta en `haril.json` y la **lee**: nunca crea, cambia ni borra nada dentro de ella (Obsidian sigue siendo quien la administra). Si no conectas ninguna carpeta, no pasa nada: es el estado normal.
+
+```powershell
+haril config set docs.path "D:\Obsidian\MiBoveda"   # conecta la carpeta
+haril config get docs.path                           # muestra la ruta guardada (o "is not set")
+haril config set docs.path --reset                   # desconecta; no toca la carpeta
+```
+
+- La ruta debe ser **absoluta** (unidad de Windows, ruta UNC o ruta POSIX) y **existir como carpeta en el momento de guardarla**: una errata no se guarda en silencio, falla con un mensaje claro y deja `haril.json` como estaba. Se recortan los espacios y las comillas que añade «Copiar como ruta»; las barras se conservan tal como las escribes.
+- Al **leer** `haril.json` no se mira la carpeta: si la bóveda está en un disco que no está conectado, HARIL sigue funcionando y solo lo avisa.
+- `haril doctor` añade la fila `docs`: `ok  not connected` sin carpeta, `ok  <ruta>` si existe, y una **advertencia** (`warn`, nunca un error) si la ruta ya no existe o apunta a un archivo. Un `haril.json` antiguo, sin la sección `docs`, sigue siendo válido tal cual.
+- No hay un `docs` de ejemplo en `config/haril.example.json`: una ruta de ejemplo copiada tal cual dejaría una advertencia permanente en `haril doctor`.
+
+**La pestaña `DOCS`** del panel derecho (`Alt+L` o clic en `3:DOCS`) muestra, en solo lectura:
+
+- **Sin carpeta conectada**: «Sin carpeta conectada.», una invitación a conectar tu carpeta de documentación y la fila **▸ Definir carpeta…**.
+- **Con una carpeta**: la ruta (si no cabe en el panel se muestra el final, para que siempre se vea el nombre de la carpeta), el número de notas `.md` (con `+` si el recorrido llegó a su límite, por ejemplo «2000+ notas .md») y las **10 últimas notas** con su fecha, de la más reciente a la más antigua. Filas: **▸ Cambiar carpeta…** y **▸ Desconectar**.
+- **Con una ruta que ya no existe** (o que es un archivo): «Carpeta no encontrada: <ruta>» (o «No es una carpeta»), con las mismas dos filas, para que corrijas la ruta o la desconectes.
+
+**▸ Definir carpeta…** y **▸ Cambiar carpeta…** abren una entrada de texto «Ruta de la carpeta de documentación» (con la ruta actual como sugerencia) y ejecutan `haril config set docs.path <ruta>`; si la ruta no sirve, la consola muestra el mensaje del propio comando y no cambia nada. **▸ Desconectar** ejecuta `haril config set docs.path --reset`. Para el teclado existe `/haril-docs`:
+
+```text
+/haril-docs                  # abre la entrada de texto
+/haril-docs D:\Obsidian\MiBoveda   # conecta esa carpeta (los espacios de la ruta se respetan)
+/haril-docs clear            # desconecta
+```
+
+El recorrido es acotado: cuenta como máximo 2000 notas y baja como máximo 6 niveles de carpetas. **Omite** cualquier carpeta o archivo cuyo nombre empiece por punto (`.obsidian`, `.git`, `.trash`, `.DS_Store`...), `node_modules` y las carpetas del sistema de Windows (`$RECYCLE.BIN`, `System Volume Information`), y **no sigue enlaces simbólicos ni uniones**, así que no puede salir de la carpeta. Solo cuentan los archivos `.md`. Esta entrega no se ha probado con un Pi real: la entrada de texto y la entrega de los clics en el panel están cubiertas con pruebas automáticas, no en una terminal real.
 
 ### Columna lateral y modo enfoque de HARIL
 
@@ -576,10 +607,12 @@ La extensión solo llama a la CLI `haril`, sin shell: el estado sigue en `haril.
 
 | Zona | Qué muestra |
 |---|---|
-| Izquierda | `◆ HARIL ◇ MODE: <modo> ◇ <proyecto o carpeta> ◇ <modelo> · <nivel>`. Sin proyecto registrado sale el nombre de la carpeta; si el modelo no razona, `<modelo> · no reasoning`. Clic en `MODE`: selector de los cuatro modos; clic en el modelo: selector de los modelos con acceso, agrupados por proveedor y cuenta, con su contexto y sus niveles; clic en el nivel: solo los niveles de ese modelo |
-| Derecha | `ctx <medidor> <pct>% ◇ $<coste> ◇ <N pending> ◇ runtime <estado> ◇ log ✗ <n>   ■ STOP ALL`: contexto usado, coste de la sesión según Pi, planes por aprobar (solo si hay), runtime (`running`, `starting`, `idle` o `unknown`), filas del registro de consumo que no se pudieron escribir (solo si hay) y, siempre al final, el botón de emergencia. Si la terminal es estrecha, cede primero la nota del registro, luego el coste, el runtime, los planes y el medidor; el botón no cede nunca |
-| Segunda línea | La carpeta, su rama de git y los estados que ponen otras extensiones de Pi |
+| Izquierda | `◆ HARIL ◇ MODE: <modo> ◇ <proyecto o carpeta> ◇ <modelo> · <nivel>`. Sin proyecto registrado sale el nombre de la carpeta; si el modelo no razona, `<modelo> · no reasoning`. Clic en `MODE`: selector de los cuatro modos; clic en el modelo: selector de los modelos con acceso, agrupados por proveedor y cuenta, con su contexto y sus niveles; clic en el nivel: solo los niveles de ese modelo. En la barra compacta no sale el proyecto o carpeta |
+| Derecha | `ctx <medidor> <pct>% ◇ $<coste> ◇ <N pending> ◇ <N warnings> ◇ runtime <estado> ◇ log ✗ <n>   ■ STOP ALL`: contexto usado, coste de la sesión según Pi, planes por aprobar (solo si hay), avisos (solo si hay; es el número que el panel derecho muestra en `AVISOS`), runtime (`running`, `starting`, `idle` o `unknown`), filas del registro de consumo que no se pudieron escribir (solo si hay) y, siempre al final, el botón de emergencia. Si la terminal es estrecha, cede primero la nota del registro, luego el coste, el runtime, los avisos, los planes y el medidor; el botón no cede nunca. La barra compacta solo muestra medidor, coste, runtime, los planes por aprobar si hay y el botón |
+| Segunda línea | La carpeta, su rama de git y los estados que ponen otras extensiones de Pi. Solo en la barra completa |
 | Cabecera | Panel HARIL en cian/teal con acentos amarillos, marca tipográfica y arte neural de terminal; en terminales amplias incluye una tarjeta con datos observados. Las dos muestran el modelo y su nivel. Los clics usan eventos de mouse Pi en modo fullscreen. |
+
+**Barra compacta o completa.** El estado de la consola (carpeta, modo, proyecto, modelo, avisos, secciones y acciones) vive en un solo sitio a la vez. Con el panel derecho abierto y la pestaña `MAIN` activa, el estado está en ese panel y la barra amarilla es **una sola línea** (sin proyecto, sin la línea de la carpeta y sin avisos). En cualquier otro caso (panel cerrado con `Alt+I`, terminal de menos de 132 columnas × 24 filas, o `MEM` o `DOCS` activa), la barra es la **completa**: dos líneas, con la carpeta, la rama de git y un contador de avisos. Debajo de la barra, la fila de áreas (`AGENTS`, `ORCHESTRATION`, `AUTOMATION`, `TOOLS`, `EVERYWHERE`) responde al clic en ambos casos.
 
 **Modelo y nivel.** Los niveles de cada modelo de CLIProxyAPI salen de su lista `GET /v1/models?client_version=0.99.0`, que trae también el contexto y la salida reales; para leerla, la extensión usa en memoria la misma variable de clave que Pi y no sigue redirecciones. Un modelo que esa lista no describe toma los niveles del catálogo de Pi por nombre (sin prefijo de cuenta y aceptando variantes como `-preview`); sin dato, sale `no reasoning` y solo ofrece `off`. Así, `/thinking`, `Shift+Tab` y `/model` de Pi ofrecen solo los niveles de cada modelo, y el nivel llega al proveedor como `reasoning_effort`. Si la lista falla, la consola lo avisa y usa el catálogo de Pi. HARIL recuerda el nivel de cada modelo durante la sesión; para conservarlo al reiniciar está `/settings` › *Default thinking level per model* de Pi.
 
@@ -671,38 +704,40 @@ El lanzador selecciona `--tui-mode fullscreen` para habilitar los eventos de mou
 
 ### Dock nativo de plugins y estado (0.22.3, integración experimental)
 
-La consola `haril` / `haril console` intenta mostrar **tres columnas verticales** en Pi: cuatro espacios de plugins a la izquierda, el chat/editor originales de Pi en el centro y un panel con avisos, herramientas, orquestación y actividad a la derecha. El encabezado grande se compacta cuando el dock nativo está activo. Requiere una terminal de **al menos 132 columnas × 24 filas** y un Pi compatible con el layout interno de `@earendil-works/pi-tui`; si falta esa API, si Gentle Shell ya ocupa el layout o si el terminal es pequeño, HARIL conserva la cabecera anterior de forma segura.
+La consola `haril` / `haril console` intenta mostrar en Pi el chat/editor originales en el centro y, a la derecha, un **panel con tres pestañas**: `MAIN`, `MEM` y `DOCS`. `MAIN` es el estado de la consola (avisos, herramientas, orquestación, áreas y actividad); `MEM` es la memoria; `DOCS` muestra tu carpeta de documentación conectada (por ejemplo una bóveda de Obsidian; ver [Carpeta de documentación](#carpeta-de-documentación-docspath)). El encabezado grande se compacta cuando el dock nativo está activo. Requiere una terminal de **al menos 132 columnas × 24 filas** y un Pi compatible con el layout interno de `@earendil-works/pi-tui`; si falta esa API, si Gentle Shell ya ocupa el layout o si el terminal es pequeño, HARIL conserva la cabecera anterior de forma segura.
 
-Los espacios visuales iniciales son Git, YouTube, Memoria y Temas. Su **orden y visibilidad** se pueden guardar desde PowerShell:
+Los espacios son `main`, `memory` y `docs`. **`MAIN` va siempre primera y siempre visible**: no se puede ocultar ni mover, y ningún espacio puede ponerse por encima. El bloque de estado (`Estoy en`, `Modo`, `Proyecto`, `Modelo`, `ÁREAS`, `AVISOS`, `EXTENSIONES`, `SESIÓN`, `ACCIONES` y la actividad reciente) aparece **solo bajo `MAIN`**; bajo `MEM` o `DOCS` el panel muestra únicamente la ficha de esa pestaña. El **orden y la visibilidad** de `memory` y `docs` se pueden guardar desde PowerShell:
 
 ```powershell
 haril plugins list
-haril plugins hide youtube
-haril plugins move youtube up
-haril plugins show youtube
+haril plugins hide docs
+haril plugins move docs up
+haril plugins show docs
 haril plugins list --json
 haril plugins reset
 ```
 
-Desde la interfaz Pi, `/haril-plugins` abre un menú para mostrar, ocultar, subir o bajar espacios y actualiza inmediatamente la columna izquierda. `/haril-dock left|right|both` alterna las columnas y `Alt+I` alterna el panel derecho. La columna derecha puede desplazarse con la rueda del ratón. Sus cabeceras de sección (`AVISOS`, `EXTENSIONES`, `SESIÓN`, `ACCIONES`), sus acciones y el texto `cambiar` del modo responden al clic. Con el teclado, `Alt+K` o `/haril-panel` abren un menú con esas mismas secciones y acciones (abrir o cerrar una sección, cambiar el modo, ver detalles, elegir modelo…): muévete con ↑/↓, elige con `Enter` y cancela con `Esc`. El panel en sí **no recibe el foco del teclado** (Pi entrega los atajos de las extensiones al editor), así que ese menú es la vía de teclado; los prefijos `[D]`, `[M]`, `[T]` y `[R]` que se veían en sus acciones eran solo texto y ya no se dibujan en el panel. Los cambios realizados **externamente** desde PowerShell se cargan al iniciar una nueva sesión de `haril` o al abrir `/haril-plugins`.
+`haril plugins hide main` y `haril plugins move main …` se rechazan con un mensaje, igual que subir otro espacio por encima de `main`. Un `ui.plugins` de una versión anterior (con `git`, `youtube`, `themes` o `explorer`) sigue siendo válido: esas entradas se ignoran, los espacios que falten se completan como visibles y el archivo se reescribe con la lista nueva en el siguiente cambio que hagas con `haril plugins`.
 
-Las preferencias quedan en `ui.plugins` de `haril.json`, sin borrar otras opciones. **Un espacio visible no significa que su extensión Pi exista o esté ejecutándose**: YouTube, Git, Memoria y Temas son lugares reservados para la integración de extensiones reales en próximos PR. Este PR no instala ni desactiva paquetes Pi. La unión de paneles se realiza mediante un adaptador interno experimental, se revierte al cerrar la sesión y deberá validarse manualmente en Windows Terminal antes de considerarse estable.
+Desde la interfaz Pi, `/haril-plugins` abre un menú para mostrar, ocultar, subir o bajar espacios y actualiza inmediatamente el panel. `/haril-dock left|right|both` alterna las columnas (la izquierda está apagada por defecto y, bajo `MAIN`, solo remite al panel derecho) y `Alt+I` alterna el panel derecho. La columna derecha puede desplazarse con la rueda del ratón. Bajo `MAIN`, sus cabeceras de sección (`AVISOS`, `EXTENSIONES`, `SESIÓN`, `ACCIONES`), las filas de `ÁREAS` (una por área, con `●` en la abierta; un clic abre esa área), la fila «Abrir vista de orquestación», sus acciones y el texto `cambiar` del modo responden al clic. Con el teclado, `Alt+K` o `/haril-panel` abren un menú con esas mismas secciones, áreas y acciones (abrir o cerrar una sección, abrir un área, cambiar el modo, ver detalles, elegir modelo…): muévete con ↑/↓, elige con `Enter` y cancela con `Esc`. El panel en sí **no recibe el foco del teclado** (Pi entrega los atajos de las extensiones al editor), así que ese menú es la vía de teclado; los prefijos `[D]`, `[M]`, `[T]` y `[R]` que se veían en sus acciones eran solo texto y ya no se dibujan en el panel. Los cambios realizados **externamente** desde PowerShell se cargan al iniciar una nueva sesión de `haril` o al abrir `/haril-plugins`.
+
+Las preferencias quedan en `ui.plugins` de `haril.json`, sin borrar otras opciones. **Un espacio visible no significa que su extensión Pi exista o esté ejecutándose**: `MAIN`, `MEM` y `DOCS` son vistas propias de HARIL, no paquetes de Pi. Los espacios `GIT`, `YT` y `THEME` ya no existen: la rama de git sigue en la línea de la carpeta de la barra completa, y el reproductor de YouTube sigue siendo un paquete de Pi aparte (`/haril-extensions`). Esta entrega no instala ni desactiva paquetes Pi. La unión de paneles se realiza mediante un adaptador interno experimental, se revierte al cerrar la sesión y deberá validarse manualmente en Windows Terminal antes de considerarse estable.
 
 #### Navegación y vistas de plugins (0.22.4)
 
-`Alt+L` abre un selector de plugins: presiona inmediatamente `1`–`4` según el orden de **espacios visibles**, o usa ↑/↓ y `Enter`; `Esc` cancela sin tocar el texto que estabas escribiendo a Pi. Funciona también en WSL sin sustituir `Alt+Z`, reservado allí por Pi para deshacer texto. `Alt+I` muestra u oculta el panel derecho. Ambos se pueden sustituir por los comandos `/haril-plugin` y `/haril-dock` si otra aplicación ocupa esas teclas. La selección cambia la información visible dentro de la columna izquierda; la conversación central permanece intacta.
+`Alt+L` abre un selector de plugins: presiona inmediatamente `1`–`3` según el orden de **espacios visibles**, o usa ↑/↓ y `Enter`; `Esc` cancela sin tocar el texto que estabas escribiendo a Pi. Funciona también en WSL sin sustituir `Alt+Z`, reservado allí por Pi para deshacer texto. `Alt+I` muestra u oculta el panel derecho. Ambos se pueden sustituir por los comandos `/haril-plugin` y `/haril-dock` si otra aplicación ocupa esas teclas. La selección cambia la información visible dentro del panel derecho; la conversación central permanece intacta.
 
 | Acción dentro de Pi | Resultado |
 | --- | --- |
 | `Alt+L`, después número | Abre directamente el espacio visible correspondiente; también ↑/↓ + Enter. |
-| `Alt+I` | Muestra u oculta la columna derecha. |
-| `Alt+K` o `/haril-panel` | Abre el menú de teclado del panel derecho: sus secciones y acciones, con ↑/↓ y `Enter`. |
+| `Alt+I` | Muestra u oculta la columna derecha. Al cerrarla, el estado pasa a la barra inferior completa. |
+| `Alt+K` o `/haril-panel` | Abre el menú de teclado del panel derecho: sus secciones, áreas y acciones, con ↑/↓ y `Enter`. |
 | `/haril-plugin` | Abre el selector de espacios. |
-| `/haril-plugin git` o `/haril-plugin 1` | Selecciona el espacio y muestra sus detalles completos en una vista cerrable con `Esc`. |
+| `/haril-plugin memory` o `/haril-plugin 2` | Selecciona el espacio y muestra sus detalles completos en una vista cerrable con `Esc`. Con `main` solo selecciona la pestaña: su contenido es el estado del panel. |
 | `/haril-plugin details` | Abre el detalle del espacio actual. |
-| Clic en un espacio de la izquierda | Lo selecciona y actualiza su ficha sin sustituir el chat. |
+| Clic en una pestaña del panel | La selecciona y actualiza su ficha sin sustituir el chat. |
 
-Las fichas disponibles son de **solo lectura**: Git muestra `git status`; Memoria consulta `haril memory status`. YouTube informa si Pi expone el comando `/yt` y cómo acceder a [pi-youtube-player](https://github.com/CinloDev/pi-youtube-player); **no instala ni inicia el reproductor**. Temas explica los temas incluidos de Pi y el acceso a `/settings → Theme`; el cambio directo de tema desde el dock se deja para otra etapa.
+Las fichas disponibles son de **solo lectura**: `MEM` consulta `haril memory status`; `DOCS` lee la carpeta de documentación conectada (`docs.path`) y no escribe nada en ella. `MAIN` no carga nada: dibuja el estado vivo de la consola.
 
 #### Catálogo de comandos (0.22.5)
 
@@ -740,7 +775,7 @@ Los orígenes anteriores son ejemplos, **no recomendaciones de seguridad ni gara
 
 #### Dock compacto (0.22.9)
 
-En una terminal de al menos **132 columnas × 24 filas**, `haril` muestra un dock fijo por pestañas en el lado izquierdo: `GIT`, `YT`, `MEM`, `THEME`. Solo se ve la ficha elegida, sin la antigua lista gigante. **GIT** enseña estado, cambios y los últimos ocho commits. La pestaña `YT` es únicamente un espacio reservado: no instala YouTube. `Alt+L` elige una vista con flechas y `Enter`; `Alt+I` oculta o muestra el panel derecho; `Alt+K` abre el menú de teclado de ese panel; `Alt+C` enumera los comandos reales. El orden y la visibilidad se administran con `/haril-plugins` y se conservan entre sesiones.
+En una terminal de al menos **132 columnas × 24 filas**, `haril` muestra un dock por pestañas en el panel derecho: `MAIN`, `MEM`, `DOCS` (en versiones anteriores eran `GIT`, `YT`, `MEM` y `THEME`; `GIT`, `YT` y `THEME` se retiraron). Solo se ve la ficha elegida, sin la antigua lista gigante. `Alt+L` elige una vista con flechas y `Enter`; `Alt+I` oculta o muestra el panel derecho; `Alt+K` abre el menú de teclado de ese panel; `Alt+C` enumera los comandos reales. El orden y la visibilidad de `MEM` y `DOCS` se administran con `/haril-plugins` y se conservan entre sesiones.
 
 HARIL monta esas columnas solo si el Pi incluido ofrece el contrato interno de disposición compatible. En terminales pequeñas o con una versión diferente de Pi, deja intacto su chat y vuelve a la disposición original.
 
@@ -773,7 +808,7 @@ Remove-Item Env:\HARIL_STARTUP_MATRIX_ENGINE
 
 El video que inspiró el sonido no se descarga ni se reproduce automáticamente: para ese timbre concreto necesitas un archivo WAV local que tengas derecho a utilizar. En Windows se reproduce con el reproductor multimedia del sistema; en Linux se intenta `ffplay`, si está instalado.
 
-La paleta predeterminada es **matrix** (negro con verdes fosforescentes) en el dock, `haril shell` y la interfaz de Pi (editor, mensajes, herramientas y menús). El tema Pi se crea o repara al abrir `haril` dentro de su agente privado, sin tocar las extensiones ni el archivo `settings.json`. Las opciones anteriores **violet**, **rose**, **amber** y **obsidian** siguen disponibles en `THEME` o con `/haril-theme`. Si una instalación ya tenía otra paleta guardada en `haril.json`, puedes seleccionar Matrix una sola vez con `/haril-theme matrix` o `haril config set ui.theme matrix`. Los colores del dock se guardan en `haril.json`; Pi inicia con el tema Matrix administrado por HARIL. El indicador `◉` ocupa una celda y pasa a rojo en niveles de razonamiento `high`, `xhigh`, `max` o `ultra`. `/language es` y `/language en` siguen disponibles; el dock y su selector también muestran el idioma elegido. La cabecera muestra **Estoy en: <ruta>** sin invadir el chat.
+La paleta predeterminada es **matrix** (negro con verdes fosforescentes) en el dock, `haril shell` y la interfaz de Pi (editor, mensajes, herramientas y menús). El tema Pi se crea o repara al abrir `haril` dentro de su agente privado, sin tocar las extensiones ni el archivo `settings.json`. Las opciones anteriores **violet**, **rose**, **amber** y **obsidian** siguen disponibles con `/haril-theme` (la pestaña `THEME` del panel ya no existe). Si una instalación ya tenía otra paleta guardada en `haril.json`, puedes seleccionar Matrix una sola vez con `/haril-theme matrix` o `haril config set ui.theme matrix`. Los colores del dock se guardan en `haril.json`; Pi inicia con el tema Matrix administrado por HARIL. El indicador `◉` ocupa una celda y pasa a rojo en niveles de razonamiento `high`, `xhigh`, `max` o `ultra`. `/language es` y `/language en` siguen disponibles; el dock y su selector también muestran el idioma elegido. La cabecera muestra **Estoy en: <ruta>** sin invadir el chat.
 
 ### M4: interfaz de terminal (`haril shell`)
 
@@ -994,7 +1029,7 @@ Los dossiers de `docs/research/` se leen solo bajo demanda, cuando un documento 
 
 ## Versiones
 
-Versión actual: **0.23.11**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
+Versión actual: **0.23.12**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
 
 ## Licencia
 

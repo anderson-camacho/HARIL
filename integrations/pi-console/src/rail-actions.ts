@@ -1,4 +1,5 @@
 import {
+  type DashboardArea,
   type NativeRailContent,
   type RailHitAction,
   type RailSection,
@@ -17,6 +18,7 @@ export interface RailActionTarget {
   chooseMode(): void;
   openMenu(): void;
   focus(): void;
+  openArea(area: DashboardArea): void;
 }
 
 export function runRailHit(target: RailActionTarget, hit: RailHitAction): void {
@@ -41,6 +43,9 @@ export function runRailHit(target: RailActionTarget, hit: RailHitAction): void {
       break;
     case "details":
       target.runControl("details");
+      break;
+    case "area":
+      if (hit.area !== undefined) target.openArea(hit.area);
       break;
   }
 }
@@ -95,6 +100,11 @@ function menuEntry(hit: RailHitAction, text: string, locale: UiLocale): RailMenu
         label: localized(locale, "View complete details", "Ver detalles completos"),
         hit: DETAILS_HIT,
       };
+    case "area":
+      // The row reads "● AGENTS" or "○ AGENTS": the dot says whether it is the open one, the name is what it opens.
+      return hit.area === undefined
+        ? undefined
+        : { label: `${localized(locale, "Open area", "Abrir área")} ${plainLabel(text)}`, hit };
   }
 }
 
@@ -114,7 +124,7 @@ export function buildRailMenu(
     if (hit === undefined) continue;
     const entry = menuEntry(hit, stripAnsi(line).trim(), locale);
     if (entry === undefined) continue;
-    const effect = `${entry.hit.action}:${entry.hit.section ?? ""}:${entry.hit.control ?? ""}`;
+    const effect = `${entry.hit.action}:${entry.hit.section ?? ""}:${entry.hit.control ?? ""}:${entry.hit.area ?? ""}`;
     if (seen.has(effect)) continue;
     seen.add(effect);
     entries.push(entry);

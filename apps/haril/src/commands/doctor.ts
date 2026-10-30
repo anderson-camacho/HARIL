@@ -9,6 +9,7 @@ import {
   type HostInfo,
 } from "../context.js";
 import { loadDelegationSettings } from "../delegation-config.js";
+import { type DocsLoad, docsFolderState, loadDocsPath } from "../docs-config.js";
 import { storeAccess } from "../host.js";
 import {
   KEY_REJECTED,
@@ -24,6 +25,7 @@ import { dataDirFor } from "./common.js";
 // `haril doctor` (M1-D2): read-only. A 24.x below the supported range is a warning (the kept deviation, MC-D6); any
 // other version outside the range is an error, as the store gate refuses it (INV-19). The delegation section of
 // haril.json is checked by the same rules every reader applies (P10, phase F7): a problem is an error, with its path.
+// The docs row says whether the documentation folder (docs.path) is connected and still there.
 
 const NODE_REQUIREMENT = "^24.21.0 || >=26.8.0";
 
@@ -80,6 +82,52 @@ function providerRowStatus(listing: Pick<ProviderListing, "status" | "detail">):
   return listing.detail === KEY_REJECTED ? "error" : "warn";
 }
 
+// The documentation folder (docs.path): not connected is not a problem, a folder that is gone or is a file is only a
+// warning (a vault on a drive that is not plugged in), and a docs section that breaks the rules is an error, like the
+// delegation one. Doctor only looks at the folder; it never creates or touches anything in it.
+interface DocsRow {
+  readonly status: Status;
+  // JSON of the row and the text that follows the status in the plain output.
+  readonly json: Record<string, unknown>;
+  readonly line: string;
+  readonly errors: readonly string[];
+}
+
+function docsRow(docs: DocsLoad): DocsRow {
+  if (!docs.ok) {
+    return {
+      status: "error",
+      json: { status: "error", configPath: docs.configPath, errors: docs.errors },
+      line: docs.configPath,
+      errors: docs.errors,
+    };
+  }
+  if (docs.path === null) {
+    return {
+      status: "ok",
+      json: { status: "ok", connected: false, path: null },
+      line: "not connected",
+      errors: [],
+    };
+  }
+  const state = docsFolderState(docs.path);
+  if (state === "directory") {
+    return {
+      status: "ok",
+      json: { status: "ok", connected: true, path: docs.path },
+      line: docs.path,
+      errors: [],
+    };
+  }
+  const detail = state === "file" ? "not a directory" : "folder not found";
+  return {
+    status: "warn",
+    json: { status: "warn", connected: true, path: docs.path, detail },
+    line: `${docs.path}  ${detail}`,
+    errors: [],
+  };
+}
+
 // Doctor is read-only: it describes the store and the providers and never creates the directory or the database.
 export async function doctor(args: readonly string[], io: CliIo, host: HostInfo): Promise<number> {
   const parsed = parseArgs(args, { values: ["--data-dir"], flags: ["--json"] });
@@ -105,9 +153,10 @@ export async function doctor(args: readonly string[], io: CliIo, host: HostInfo)
   const providers = providersStatus(loaded.ok, listings);
   const delegation = loadDelegationSettings(host);
   const delegationStatus: Status = delegation.ok ? "ok" : "error";
+  const docs = docsRow(loadDocsPath(host));
   // The runtime is reported but does not change the exit code: it is installed by the user, not by M1 flows.
   const runtime = (host.inspectRuntime ?? readRuntime)(runtimeRootFor(host), host.platform);
-  const overall = worst(node, storeStatus(store), providers, delegationStatus);
+  const overall = worst(node, storeStatus(store), providers, delegationStatus, docs.status);
   const configLine = loaded.ok
     ? `${loaded.source === "file" ? "file" : "defaults"}  ${loaded.path}`
     : `${loaded.path}`;
@@ -141,6 +190,7 @@ export async function doctor(args: readonly string[], io: CliIo, host: HostInfo)
         delegation: delegation.ok
           ? { status: delegationStatus, source: delegation.source, path: delegation.path }
           : { status: delegationStatus, path: delegation.path, errors: delegation.errors },
+        docs: docs.json,
         runtime,
       }),
     );
@@ -167,6 +217,8 @@ export async function doctor(args: readonly string[], io: CliIo, host: HostInfo)
         : `  delegation  error  ${delegation.path}`,
     );
     if (!delegation.ok) for (const error of delegation.errors) io.out(`    error     ${error}`);
+    io.out(`  docs      ${docs.status}  ${docs.line}`);
+    for (const error of docs.errors) io.out(`    error     ${error}`);
     io.out(`  runtime   ${runtime.status}  ${runtime.root}`);
     io.out(`    detail    ${runtime.detail}`);
     if (runtime.node !== undefined)

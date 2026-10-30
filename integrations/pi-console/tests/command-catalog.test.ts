@@ -20,10 +20,17 @@ describe("live HARIL / Pi extension command catalog", () => {
     expect(lines).toContain("OTRAS EXTENSIONES · COMANDOS (1)");
     expect(lines).toContain("/yt");
     expect(lines).not.toContain("danger");
-    expect(lines).toContain("Alt+L");
+    expect(lines).toContain("Alt+L · seleccionar plugin; luego 1–3, flechas y Enter");
+    expect(lines).not.toContain("1–4");
     expect(lines).toContain("Alt+I");
     expect(lines).toContain("Alt+K · menú del panel derecho (flechas y Enter) o /haril-panel");
     expect(lines).toContain("/hotkeys");
+  });
+
+  it("lists /haril-docs, the keyboard way to connect the documentation folder", () => {
+    const lines = commandCatalog(["haril-docs"], []).join("\n");
+    expect(lines).toContain("HARIL (1 disponibles)");
+    expect(lines).toContain("/haril-docs · Conectar la carpeta de documentación (Obsidian)");
   });
 
   it("shows a useful empty state when Pi reports no commands", () => {

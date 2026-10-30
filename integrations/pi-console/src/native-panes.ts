@@ -5,15 +5,15 @@ import type { NativeRailContent, RailHitAction } from "./dashboard.js";
 import { aiEyeTone, paddedCell, visualText } from "./dashboard-theme.js";
 import type { DockDetails } from "./dock-details.js";
 import {
-  DOCK_LABELS,
   type DockId,
   type DockSlot,
   dockDefinition,
+  MAIN_DOCK_ID,
   readDockSlots,
 } from "./dock-registry.js";
 import type { UiLocale } from "./locale.js";
 import type { ConsoleMouseEvent, ConsoleTui } from "./pi-types.js";
-import { plainText } from "./text.js";
+import { plainText, wrap } from "./text.js";
 
 const LAYOUT_NODE = Symbol.for("@earendil-works/pi-tui/layout-node");
 const HARIL_OWNER = Symbol.for("haril.native-panes.owner");
@@ -22,7 +22,42 @@ export const MIN_PANE_COLUMNS = 132;
 export const MIN_PANE_ROWS = 24;
 
 export type { DockId, DockSlot } from "./dock-registry.js";
-export { DOCK_LABELS, readDockSlots } from "./dock-registry.js";
+export { DOCK_LABELS, MAIN_DOCK_ID, readDockSlots } from "./dock-registry.js";
+
+// Whether the native panes are drawn at all: attached to Pi's layout, on a terminal big enough for them. The layout
+// patch itself and everything that must agree with it (the header that steps aside, the bar that follows the status)
+// decide with this one rule.
+function panesFit(input: {
+  readonly attached: boolean;
+  readonly columns: number;
+  readonly rows: number;
+}): boolean {
+  return input.attached && input.columns >= MIN_PANE_COLUMNS && input.rows >= MIN_PANE_ROWS;
+}
+
+// True when at least one of the two sidebars is on screen, whichever tab it shows.
+export function panesShown(input: {
+  readonly attached: boolean;
+  readonly columns: number;
+  readonly rows: number;
+  readonly leftVisible: boolean;
+  readonly rightVisible: boolean;
+}): boolean {
+  return panesFit(input) && (input.leftVisible || input.rightVisible);
+}
+
+// True when the status of the console (the block with the folder, the mode, the warnings and the actions) is on
+// screen in the right sidebar: the panes are drawn, the right one is visible and MAIN is the selected tab. When it
+// is not, the status lives in the bottom bar.
+export function statusInSidebar(input: {
+  readonly attached: boolean;
+  readonly columns: number;
+  readonly rows: number;
+  readonly rightVisible: boolean;
+  readonly selected: DockId;
+}): boolean {
+  return panesFit(input) && input.rightVisible && input.selected === MAIN_DOCK_ID;
+}
 
 interface DockTabRow {
   readonly text: string;
@@ -64,7 +99,7 @@ export interface PaneSettings {
 export function initialPaneSettings(): PaneSettings {
   return {
     slots: readDockSlots(undefined),
-    selected: DOCK_LABELS[0].id,
+    selected: MAIN_DOCK_ID,
     detail: undefined,
     leftVisible: false,
     rightVisible: true,
@@ -108,13 +143,22 @@ export function renderLeftDock(
   const module = dockDefinition(state.selected);
   const selection = (locale === "es" ? module?.label : module?.labelEn) ?? state.selected;
   rows.push(line(` ${selection.toUpperCase()}`, "cyan"));
-  rows.push(
-    line(
-      ` ${state.detail?.status ?? (locale === "es" ? "Cargando vista…" : "Loading view…")}`,
-      "teal",
-    ),
-  );
-  const detail = state.detail?.id === state.selected ? state.detail.lines : [];
+  // MAIN's content is the status block, which lives in the right panel: this dock only points at it (in as many
+  // rows as the width asks for).
+  const pointsRight = state.selected === MAIN_DOCK_ID;
+  if (pointsRight) {
+    const pointer =
+      locale === "es" ? "Estado en el panel derecho." : "Status is in the right panel.";
+    for (const part of wrap(pointer, Math.max(1, inside - 2))) rows.push(line(` ${part}`, "teal"));
+  } else {
+    rows.push(
+      line(
+        ` ${state.detail?.status ?? (locale === "es" ? "Cargando vista…" : "Loading view…")}`,
+        "teal",
+      ),
+    );
+  }
+  const detail = !pointsRight && state.detail?.id === state.selected ? state.detail.lines : [];
   const budget = Math.max(0, height - rows.length - 2);
   for (const item of detail.slice(detailOffset, detailOffset + budget)) rows.push(line(` ${item}`));
   rows.push(line(" ────────────────────", "muted"));
@@ -152,12 +196,17 @@ interface RightRailStructure {
   readonly tabStart: number;
   readonly detailStart: number;
   readonly detailCount: number;
-  // First row of the rail body (the dashboard lines), so a clicked row maps to the hit of its dashboard line.
+  // First row of the status block (the dashboard lines), so a clicked row maps to the hit of its dashboard line; -1
+  // when the block is not drawn, so no click is ever looked up in a block that is not there.
   readonly dashboardStart: number;
 }
 
-// In single-rail mode, the right rail hosts the active space (tabs, status and details)
-// directly under the "Espacio" section, freeing the left side entirely for the Pi chat.
+// The rail with nothing to show for the status block: what a tab other than MAIN passes in.
+const NO_BLOCK: NativeRailContent = { lines: [], hits: [] };
+
+// In single-rail mode, the right rail hosts the active space (tabs and, under them, its view) directly under the
+// "Espacio" section, freeing the left side entirely for the Pi chat. The status block (status, mode, sections, actions
+// and recent activity) is MAIN's own view: it is drawn only when MAIN is the selected tab.
 function renderRightRailContent(
   width: number,
   state: PaneSettings,
@@ -168,11 +217,17 @@ function renderRightRailContent(
   const rows: string[] = [];
   const module = dockDefinition(state.selected);
   const selection = (locale === "es" ? module?.label : module?.labelEn) ?? state.selected;
+  const showBlock = state.selected === MAIN_DOCK_ID;
+  const appendBlock = (): number => {
+    if (!showBlock) return -1;
+    const first = rows.length;
+    for (const line of dashboardLines) rows.push(line);
+    return first;
+  };
 
   if (state.leftVisible) {
     rows.push(paddedCell(` ▣ Espacio: ${selection}`, inside, "yellow", "panel"));
-    const dashboardStart = rows.length;
-    for (const line of dashboardLines) rows.push(line);
+    const dashboardStart = appendBlock();
     return {
       lines: rows,
       tabRows: [],
@@ -188,8 +243,7 @@ function renderRightRailContent(
   rows.push(paddedCell(` ${icon} Espacio: ${selection} · Alt+L`, inside, "yellow", "panel"));
 
   if (!expanded) {
-    const dashboardStart = rows.length;
-    for (const line of dashboardLines) rows.push(line);
+    const dashboardStart = appendBlock();
     return {
       lines: rows,
       tabRows: [],
@@ -213,6 +267,13 @@ function renderRightRailContent(
     );
   }
 
+  if (showBlock) {
+    // MAIN has no view of its own to load: the tabs, a separator and the block.
+    rows.push(paddedCell(" ────────────────────────────────────────", inside, "muted", "panel"));
+    const dashboardStart = appendBlock();
+    return { lines: rows, tabRows, tabStart, detailStart: -1, detailCount: 0, dashboardStart };
+  }
+
   rows.push(
     paddedCell(
       ` ${state.detail?.status ?? (locale === "es" ? "Cargando vista…" : "Loading view…")}`,
@@ -227,13 +288,15 @@ function renderRightRailContent(
   for (const item of detail) {
     rows.push(paddedCell(` ${item}`, inside, "text", "panel"));
   }
-  const detailCount = detail.length;
 
-  rows.push(paddedCell(" ────────────────────────────────────────", inside, "muted", "panel"));
-  const dashboardStart = rows.length;
-  for (const line of dashboardLines) rows.push(line);
-
-  return { lines: rows, tabRows, tabStart, detailStart, detailCount, dashboardStart };
+  return {
+    lines: rows,
+    tabRows,
+    tabStart,
+    detailStart,
+    detailCount: detail.length,
+    dashboardStart: -1,
+  };
 }
 
 interface LayoutRoot {
@@ -267,6 +330,7 @@ export function attachNativePanes(
     // The rail body: its rows and, aligned with them, the action a click on each row runs.
     readonly right: (width: number) => NativeRailContent;
     readonly select: (id: DockId) => void;
+    // Runs the action a view declares for a clicked detail row (DockDetails.actions).
     readonly activate?: (id: DockId, action: string) => void;
     // Runs the action of a clicked rail row (section toggle, dashboard action, mode, menu...).
     readonly railAction?: (hit: RailHitAction) => void;
@@ -343,7 +407,8 @@ export function attachNativePanes(
         scrollTop = 0;
       }
       const height = Math.max(1, tui.terminal.rows);
-      const dashboard = options.right(width - 1);
+      // The block is built (it reads the tools, the commands and the model) only for the tab that draws it.
+      const dashboard = state.selected === MAIN_DOCK_ID ? options.right(width - 1) : NO_BLOCK;
       const structure = renderRightRailContent(
         width,
         state,
@@ -358,7 +423,7 @@ export function attachNativePanes(
       // model facts) is built, since only a left click and the wheel have anything to do.
       const click = event.type === "click" && event.button === "left";
       if (!click && event.type !== "wheel") return undefined;
-      const dashboard = options.right(39);
+      const dashboard = state.selected === MAIN_DOCK_ID ? options.right(39) : NO_BLOCK;
       const structure = renderRightRailContent(
         40,
         state,
@@ -403,19 +468,19 @@ export function attachNativePanes(
             clickedRow >= structure.detailStart &&
             clickedRow < structure.detailStart + structure.detailCount
           ) {
+            // The actions a view declares are its own, whichever tab it is: any detail row may be clickable.
             const detailLine = clickedRow - structure.detailStart;
-            if (state.selected === "themes") {
-              const action = state.detail?.actions?.find((item) => item.line === detailLine);
-              if (action !== undefined && state.detail?.id === state.selected) {
-                options.activate?.(state.selected, action.action);
-                return { handled: true, render: true };
-              }
+            const action = state.detail?.actions?.find((item) => item.line === detailLine);
+            if (action !== undefined && state.detail?.id === state.selected) {
+              options.activate?.(state.selected, action.action);
+              return { handled: true, render: true };
             }
           }
         }
         // The rail body (sections, dashboard actions, mode): the same actions the classic header runs on a click.
+        // Only a block that is drawn has hits to look up.
         const hit =
-          clickedRow >= structure.dashboardStart
+          structure.dashboardStart >= 0 && clickedRow >= structure.dashboardStart
             ? dashboard.hits[clickedRow - structure.dashboardStart]
             : undefined;
         if (hit !== undefined && options.railAction !== undefined) {

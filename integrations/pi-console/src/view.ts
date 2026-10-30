@@ -27,6 +27,13 @@ export interface BarFacts {
   readonly mode: string;
   // Rows of the console's chat log (orders and usage) that could not be recorded; 0 or absent shows nothing.
   readonly logFailures?: number;
+  // How many warnings the right sidebar would list under AVISOS (provider warnings, data errors, a failing log);
+  // 0 or absent shows nothing. Only the full bar counts them.
+  readonly warnings?: number;
+  // The status of the console is in the right sidebar (it is open on MAIN): the bar is one line, with the session
+  // and the model, and leaves out what the sidebar already says (the folder, the branch, the statuses, the warnings).
+  // Absent or false is the full bar: two lines, with the folder line and the warnings count.
+  readonly compact?: boolean;
 }
 
 // The parts of the bar a click acts on: the model opens the model selector, the level the level selector, the mode the
@@ -56,7 +63,7 @@ const GAUGE_CELLS = 8;
 // The emergency button (3.14.6, P20): pinned at the right end of the bar in every mode, never dropped for room.
 const STOP_PART: Part = { text: "■ STOP ALL", tone: "error", bold: true, target: "stop" };
 // The right side gives way from its least needed part: the log note first, the context gauge last.
-const DROP_ORDER = ["log", "cost", "runtime", "pending", "context"] as const;
+const DROP_ORDER = ["log", "cost", "runtime", "warnings", "pending", "context"] as const;
 const OUTPUT_MAX_LINES = 30;
 
 type RightPart = (typeof DROP_ORDER)[number];
@@ -118,13 +125,32 @@ function rightParts(facts: BarFacts): Map<RightPart, Part[]> {
     { text: "runtime ", tone: MAIN },
     { text: facts.runtime, tone: facts.runtime === "running" ? "success" : MAIN },
   ]);
+  if (facts.compact === true) {
+    // The sidebar lists the warnings and the failing log; the bar keeps only what it does not show. A count of
+    // approvals that wait stays, since a human has to act on it, but "approvals ?" (not known yet) is the sidebar's.
+    if (facts.pending === undefined) parts.delete("pending");
+    return parts;
+  }
+  const warnings = facts.warnings ?? 0;
+  if (warnings > 0) {
+    parts.set("warnings", [
+      { text: `${warnings} ${warnings === 1 ? "warning" : "warnings"}`, tone: "warning" },
+    ]);
+  }
   if ((facts.logFailures ?? 0) > 0) {
     parts.set("log", [{ text: `log ✗ ${facts.logFailures}`, tone: "warning" }]);
   }
   return parts;
 }
 
-const RIGHT_ORDER: readonly RightPart[] = ["context", "cost", "pending", "runtime", "log"];
+const RIGHT_ORDER: readonly RightPart[] = [
+  "context",
+  "cost",
+  "pending",
+  "warnings",
+  "runtime",
+  "log",
+];
 
 // The columns of the parts a click acts on, in the parts as drawn from column `from`.
 function hitsOf(parts: readonly Part[], from = 0): BarLayout["hits"][number][] {
@@ -166,7 +192,7 @@ function barLine(
   const left = joined([
     [{ text: "◆ HARIL", tone: MAIN, bold: true }],
     [{ text: `MODE: ${plainText(facts.mode)}`, tone: MAIN, bold: true, target: "mode" }],
-    [{ text: plainText(facts.place), tone: MAIN }],
+    ...(facts.compact === true ? [] : [[{ text: plainText(facts.place), tone: MAIN }]]),
     modelParts(facts),
   ]);
   const right = rightParts(facts);
@@ -221,12 +247,14 @@ function placeLine(facts: BarFacts, width: number, theme: ConsoleTheme): string 
   return paint(fit(parts, width), theme);
 }
 
-// The two lines of the bar: HARIL, the mode, the place and `model · level` on the left, the session and the runtime on
-// the right, and the STOP ALL button at the right end; below, the folder, its git branch and the statuses other
-// extensions set. The hit-boxes are the mode, the model, the level and the button on the first line.
+// The full bar is two lines: HARIL, the mode, the place and `model · level` on the left, the session, the runtime and the
+// warnings count on the right, and the STOP ALL button at the right end; below, the folder, its git branch and the
+// statuses other extensions set. The compact bar (the status is in the sidebar) is the first line without the place,
+// the warnings and the folder line. The hit-boxes are the mode, the model, the level and the button on the first line.
 export function renderBarLayout(facts: BarFacts, width: number, theme: ConsoleTheme): BarLayout {
   if (width <= 0) return { lines: [], hits: [] };
   const first = barLine(facts, width, theme);
+  if (facts.compact === true) return { lines: [first.line], hits: first.hits };
   return { lines: [first.line, placeLine(facts, width, theme)], hits: first.hits };
 }
 

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import harilConsole from "../src/console.js";
 import {
+  DASHBOARD_AREAS,
   type DashboardFacts,
   type RailSection,
   renderNativeRailContent,
@@ -68,6 +69,12 @@ describe("buildRailMenu", () => {
     expect(menu.map((entry) => entry.label)).toEqual([
       "Abrir detalles del área",
       "Cambiar modo",
+      "Abrir área AGENTS",
+      "Abrir área ORCHESTRATION",
+      "Abrir área AUTOMATION",
+      "Abrir área TOOLS",
+      "Abrir área EVERYWHERE",
+      "Abrir vista de orquestación",
       "Cerrar sección avisos (1)",
       "Ver detalles completos",
       "Cerrar sección extensiones (1)",
@@ -81,6 +88,12 @@ describe("buildRailMenu", () => {
     expect(menu.map((entry) => entry.hit)).toEqual([
       { action: "focus" },
       { action: "mode" },
+      { action: "area", area: "agents" },
+      { action: "area", area: "orchestration" },
+      { action: "area", area: "automation" },
+      { action: "area", area: "tools" },
+      { action: "area", area: "everywhere" },
+      { action: "run", control: "orchestration-view" },
       { action: "toggle", section: "warnings" },
       { action: "run", control: "details" },
       { action: "toggle", section: "extensions" },
@@ -100,6 +113,12 @@ describe("buildRailMenu", () => {
     expect(menu.map((entry) => entry.label)).toEqual([
       "Abrir detalles del área",
       "Cambiar modo",
+      "Abrir área AGENTS",
+      "Abrir área ORCHESTRATION",
+      "Abrir área AUTOMATION",
+      "Abrir área TOOLS",
+      "Abrir área EVERYWHERE",
+      "Abrir vista de orquestación",
       "Abrir sección avisos (1)",
       "Abrir sección extensiones (1)",
       "Abrir sección sesión",
@@ -147,6 +166,12 @@ describe("buildRailMenu", () => {
     expect(menu.map((entry) => entry.label)).toEqual([
       "Open the area details",
       "Change mode",
+      "Open area AGENTS",
+      "Open area ORCHESTRATION",
+      "Open area AUTOMATION",
+      "Open area TOOLS",
+      "Open area EVERYWHERE",
+      "Open orchestration view",
       "Close section warnings (1)",
       "View complete details",
       "Open section extensions (1)",
@@ -157,6 +182,33 @@ describe("buildRailMenu", () => {
       "Refresh data",
       "Open full /haril menu",
     ]);
+  });
+
+  it("offers the five areas and the orchestration view whichever area is open, once each", () => {
+    for (const area of ["agents", "orchestration"] as const) {
+      const { menu } = menuOf(area, { actions: true });
+      const areas = menu.filter((entry) => entry.hit.action === "area");
+      expect(
+        areas.map((entry) => entry.hit.area),
+        area,
+      ).toEqual(DASHBOARD_AREAS);
+      expect(
+        menu.filter((entry) => entry.hit.control === "orchestration-view").map((e) => e.label),
+        area,
+      ).toEqual(["Abrir vista de orquestación"]);
+    }
+  });
+
+  it("marks the current area in the rail and names every area, whole, in the menu", () => {
+    const rows = renderNativeRailContent(facts(), "tools", MENU_WIDTH, {}).lines.map(stripAnsi);
+    expect(rows.some((row) => row.includes("● TOOLS"))).toBe(true);
+    for (const other of ["AGENTS", "ORCHESTRATION", "AUTOMATION", "EVERYWHERE"]) {
+      expect(
+        rows.some((row) => row.includes(`○ ${other}`)),
+        other,
+      ).toBe(true);
+    }
+    expect(rows.some((row) => row.includes("ÁREAS"))).toBe(true);
   });
 
   it("has nothing to offer from an empty rail", () => {

@@ -9,24 +9,30 @@ import {
 import { argsProblem, parseArgs } from "../args.js";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
 import { delegationFieldsOf } from "../delegation-section.js";
+import { docsFolderState, docsPathText } from "../docs-config.js";
 import { configDocumentErrors, harilConfigPath } from "../providers.js";
 import { readConfigDocument, serializeConfig, writeConfigAtomically } from "./config-file.js";
 
 // `haril config get [<path>]` and `haril config set <path> <value> | --reset` (docs/modos-y-delegacion.md 6, 7.7;
 // phase F7). get shows one value or a whole group, each value with its source: haril.json, or the default. Other keys of
-// the file are shown as they are. set changes delegation settings, ui.locale or ui.theme: the value is read for its field
-// (a number, a list, a level...), the whole resulting file is checked by the rules every reader applies, then written,
-// keeping every other key and the file's formatting, through a temporary file renamed over it. --reset removes the
-// value so the default applies again. Only delegation settings and safe UI preferences can be set: provider key variables are
-// edited by hand, and no key is ever written (a file that holds one is refused). The console's Delegation section edits
-// through this command.
+// the file are shown as they are. set changes delegation settings, ui.locale, ui.theme or docs.path: the value is read
+// for its field (a number, a list, a level...), the whole resulting file is checked by the rules every reader applies,
+// then written, keeping every other key and the file's formatting, through a temporary file renamed over it. --reset
+// removes the value so the default applies again (docs.path has none: the folder is disconnected). Only delegation
+// settings and safe preferences can be set: provider key variables are edited by hand, and no key is ever written (a
+// file that holds one is refused). docs.path is the documentation folder the DOCS tab shows (an Obsidian vault kept
+// outside HARIL; HARIL only reads it): it must be an absolute path to an existing directory at the moment it is set,
+// while reading the file never looks at the folder. The console's Delegation section and DOCS tab edit through this
+// command.
 
 const USAGE = [
   "usage: haril config get [<path>] [--json]",
   "       haril config set <path> <value> [--json]",
   "       haril config set <path> --reset [--json]",
   "  get shows a value, or every value of a group (default: delegation), with its source (haril.json or the default).",
-  "  set changes delegation settings, ui.locale or ui.theme after checking the file; --reset restores defaults.",
+  "  set changes delegation settings, ui.locale, ui.theme or docs.path after checking the file; --reset restores defaults.",
+  "  docs.path is the folder with your documentation (for example an Obsidian vault): an absolute path to an existing",
+  "  directory. haril only reads it. --reset disconnects it.",
 ].join("\n");
 
 const SOURCE_FILE = "haril.json";
@@ -86,6 +92,18 @@ function uiThemeField(document: Record<string, unknown>): {
     : { value: configured, source: "file" };
 }
 
+// docs.path has no default: without it no folder is connected, which `get` says as "unset" (the convention for the
+// keys outside the defaults) and `set` prints as "not set".
+function docsPathField(document: Record<string, unknown>): {
+  value: unknown;
+  source: "unset" | "file";
+} {
+  const configured = valueAt(document, ["docs", "path"]);
+  return configured === undefined
+    ? { value: null, source: "unset" }
+    : { value: configured, source: "file" };
+}
+
 export async function config(args: readonly string[], io: CliIo, host: HostInfo): Promise<number> {
   const [verb, ...rest] = args;
   if (verb === "get") return configGet(rest, io, host);
@@ -126,6 +144,14 @@ function configGet(args: readonly string[], io: CliIo, host: HostInfo): number {
   }
 
   if (path !== SECTION && !path.startsWith(`${SECTION}.`)) {
+    if (path === "docs" || path.startsWith("docs.")) {
+      const errors = configDocumentErrors(document).filter((error) => error.startsWith("/docs"));
+      if (errors.length > 0) {
+        io.err(`haril: ${configPath} has problems; fix them first (haril doctor lists them):`);
+        for (const error of errors) io.err(`  ${error}`);
+        return EXIT_USAGE;
+      }
+    }
     const value = valueAt(document, path.split("."));
     if (json) {
       io.out(
@@ -264,37 +290,56 @@ function configSet(args: readonly string[], io: CliIo, host: HostInfo): number {
     return fail(io, USAGE);
   }
   const uiPath = path === "ui.locale" || path === "ui.theme";
-  if (!uiPath && !path.startsWith(`${SECTION}.`)) {
+  const docsPath = path === "docs.path";
+  const preferencePath = uiPath || docsPath;
+  if (!preferencePath && !path.startsWith(`${SECTION}.`)) {
     return fail(
       io,
-      `only delegation settings, ui.locale and ui.theme can be set; ${path} is not one (edit the rest of haril.json by hand)`,
+      `only delegation settings, ui.locale, ui.theme and docs.path can be set; ${path} is not one (edit the rest of haril.json by hand)`,
     );
   }
-  const field = uiPath ? undefined : delegationField(path.slice(SECTION.length + 1));
-  if (!uiPath && field === undefined) {
+  const field = preferencePath ? undefined : delegationField(path.slice(SECTION.length + 1));
+  if (!preferencePath && field === undefined) {
     return fail(io, `unknown setting ${path} (haril config get ${SECTION} lists them)`);
   }
   const configPath = harilConfigPath(host).path;
   const read = readConfigDocument(configPath);
   if (!read.ok) return fail(io, `${configPath}: ${read.error}`);
 
-  const before = uiPath
-    ? path === "ui.locale"
-      ? uiLocaleField(read.document)
-      : uiThemeField(read.document)
+  const preferenceOf = (document: Record<string, unknown>) =>
+    docsPath
+      ? docsPathField(document)
+      : path === "ui.locale"
+        ? uiLocaleField(document)
+        : uiThemeField(document);
+  const before = preferencePath
+    ? preferenceOf(read.document)
     : delegationFieldsOf(read.document).find((item) => item.path === path);
   const next = JSON.parse(JSON.stringify(read.document)) as Record<string, unknown>;
   const value = reset
     ? undefined
-    : uiPath
-      ? text
-      : settingValue(field as DelegationField, text as string);
+    : docsPath
+      ? docsPathText(text as string)
+      : uiPath
+        ? text
+        : settingValue(field as DelegationField, text as string);
   const placed = putValue(next, path.split("."), value);
   const errors = placed === null ? configDocumentErrors(next) : [placed];
   if (errors.length > 0) {
     io.err(`haril: ${path} was not changed; ${configPath} would have these problems:`);
     for (const error of errors) io.err(`  ${error}`);
     return EXIT_USAGE;
+  }
+  // A folder that is not there is refused now, while the user can still fix the typo; reading the file later never
+  // looks at it, so a vault on a drive that is gone does not break HARIL.
+  if (docsPath && !reset) {
+    const state = docsFolderState(value as string);
+    if (state !== "directory") {
+      return fail(
+        io,
+        `${path} was not changed; ${value as string} ${state === "file" ? "is a file, not a directory" : "is not an existing directory"}`,
+      );
+    }
   }
   const content = serializeConfig(next, read.exists ? read.text : undefined);
   const written = !read.exists || content !== read.text;
@@ -308,12 +353,11 @@ function configSet(args: readonly string[], io: CliIo, host: HostInfo): number {
       );
     }
   }
-  const after = uiPath
-    ? path === "ui.locale"
-      ? uiLocaleField(next)
-      : uiThemeField(next)
+  const after = preferencePath
+    ? preferenceOf(next)
     : (delegationFieldsOf(next).find((item) => item.path === path) as DelegationFieldValue);
   const previous = before ?? after;
+  const effect = field?.effect ?? (docsPath ? "the DOCS tab" : "new sessions");
   if (json) {
     io.out(
       JSON.stringify({
@@ -322,19 +366,17 @@ function configSet(args: readonly string[], io: CliIo, host: HostInfo): number {
         value: after.value,
         source: after.source,
         written,
-        effect: field?.effect ?? "new sessions",
+        effect,
         configPath,
       }),
     );
     return EXIT_OK;
   }
-  const label = (item: { value: unknown; source: "file" | "default" }): string =>
-    `${shown(item.value)} (${item.source === "file" ? SOURCE_FILE : "default"})`;
+  const label = (item: { value: unknown; source: "file" | "default" | "unset" }): string =>
+    item.source === "unset"
+      ? "not set"
+      : `${shown(item.value)} (${item.source === "file" ? SOURCE_FILE : "default"})`;
   io.out(`${path}: ${label(previous)} -> ${label(after)}`);
-  io.out(
-    written
-      ? `written ${configPath} · affects ${field?.effect ?? "new sessions"}`
-      : `unchanged ${configPath}`,
-  );
+  io.out(written ? `written ${configPath} · affects ${effect}` : `unchanged ${configPath}`);
   return EXIT_OK;
 }

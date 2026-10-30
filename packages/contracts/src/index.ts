@@ -4,6 +4,7 @@ export * from "./blocks.js";
 export * from "./config.js";
 export * from "./delegation.js";
 export * from "./delegation-config.js";
+export * from "./docs-config.js";
 export * from "./enums.js";
 export * from "./memory.js";
 export * from "./plan.js";

@@ -20,6 +20,7 @@ import {
   type NativeRailContent,
   type RailHitAction,
   type RailSection,
+  railWarnings,
   renderFooterNavigation,
   renderHeaderLayout,
   renderNativeRailContent,
@@ -31,16 +32,10 @@ import {
 } from "./dashboard-actions.js";
 import type { DashboardAction } from "./dashboard-controls.js";
 import { type DashboardData, emptyDashboardData, loadDashboardData } from "./dashboard-data.js";
-import {
-  aiEyeTone,
-  getHarilPalette,
-  HARIL_PALETTES,
-  setHarilPalette,
-  visualText,
-} from "./dashboard-theme.js";
+import { aiEyeTone, HARIL_PALETTES, setHarilPalette, visualText } from "./dashboard-theme.js";
 import { delegateFromChat } from "./delegation.js";
 import { effectText, sourceText, valueText } from "./delegation-settings.js";
-import { loadDockDetails } from "./dock-details.js";
+import { loadDockDetails, readDocsPath } from "./dock-details.js";
 import { createDockPicker, type DockPickerResult, dockSlotAt } from "./dock-navigation.js";
 import { stopAll } from "./emergency.js";
 import { DEFAULT_UI_LOCALE, localized, readConsoleLocale, type UiLocale } from "./locale.js";
@@ -58,11 +53,12 @@ import {
   attachNativePanes,
   DOCK_LABELS,
   initialPaneSettings,
-  MIN_PANE_COLUMNS,
-  MIN_PANE_ROWS,
+  MAIN_DOCK_ID,
   type NativePanes,
   type PaneSettings,
+  panesShown,
   readDockSlots,
+  statusInSidebar,
 } from "./native-panes.js";
 import { ASCII_GLYPHS, orchestrationGlyphs } from "./orchestration-draw.js";
 import { createWorkflowFeed, type WorkflowFeed } from "./orchestration-feed.js";
@@ -234,10 +230,17 @@ export default function harilConsole(pi: ConsolePi): void {
     return "idle";
   }
 
-  function facts(current: Session, statuses: readonly string[], branch: string | null): BarFacts {
+  // `compact`: the status of the console is in the right sidebar, so the bar leaves it out (view.ts).
+  function facts(
+    current: Session,
+    statuses: readonly string[],
+    branch: string | null,
+    compact: boolean,
+  ): BarFacts {
     const model = current.model;
     const usage =
       model === undefined ? undefined : safely(() => current.ctx.getContextUsage(), undefined);
+    const logFailures = chatLog.status().failed;
     return {
       place: current.project?.slug ?? folderName(current.cwd),
       model: model?.id,
@@ -250,7 +253,36 @@ export default function harilConsole(pi: ConsolePi): void {
       branch,
       statuses,
       mode: modeLabel(modes.mode()),
-      logFailures: chatLog.status().failed,
+      logFailures,
+      // The same list the sidebar shows under AVISOS, so the count in the bar is the number written there.
+      warnings: railWarnings({
+        providerWarnings: current.providerWarnings,
+        data: current.dashboardData,
+        logFailures,
+      }).length,
+      compact,
+    };
+  }
+
+  // What the panes need to know about the terminal and the dock: whether they are drawn at all, and where the status
+  // of the console is shown. The header, the bar and the panes all decide with these two rules (native-panes.ts).
+  function paneLayout(current: Session, tui: ConsoleTui) {
+    const drawn = {
+      attached: current.nativePanes?.attached === true,
+      columns: tui.terminal.columns,
+      rows: tui.terminal.rows,
+    };
+    return {
+      panesShown: panesShown({
+        ...drawn,
+        leftVisible: current.dock.leftVisible,
+        rightVisible: current.dock.rightVisible,
+      }),
+      statusInSidebar: statusInSidebar({
+        ...drawn,
+        rightVisible: current.dock.rightVisible,
+        selected: current.dock.selected,
+      }),
     };
   }
 
@@ -670,12 +702,7 @@ export default function harilConsole(pi: ConsolePi): void {
     ctx.ui.setHeader((tui, theme) => ({
       render(width) {
         // Full-height sidebars own the panels; repeat neither the giant logo nor the old header rail above Pi chat.
-        if (
-          current.nativePanes?.attached &&
-          tui.terminal.columns >= MIN_PANE_COLUMNS &&
-          tui.terminal.rows >= MIN_PANE_ROWS &&
-          (current.dock.leftVisible || current.dock.rightVisible)
-        ) {
+        if (paneLayout(current, tui).panesShown) {
           headerLayout = { lines: [], tabHits: [] };
           return [
             `${visualText(" ◉", aiEyeTone(modelLevelOf(current).level))}${theme.fg(
@@ -728,8 +755,16 @@ export default function harilConsole(pi: ConsolePi): void {
           const statuses = [...footerData.getExtensionStatuses().values()];
           current.branch = footerData.getGitBranch();
           current.extensionStatuses = statuses;
-          navigation = renderFooterNavigation(width, current.area, theme);
-          bar = renderBarLayout(facts(current, statuses, footerData.getGitBranch()), width, theme);
+          // One line when the sidebar holds the status (open, on MAIN), the full bar anywhere else. Nothing here is
+          // cached: Alt+I and a tab change both ask Pi for a new frame, and this runs again with the new state.
+          const compact = paneLayout(current, tui).statusInSidebar;
+          bar = renderBarLayout(
+            facts(current, statuses, footerData.getGitBranch(), compact),
+            width,
+            theme,
+          );
+          // The areas line sits right under the bar, so its click rows start after however many lines the bar took.
+          navigation = renderFooterNavigation(width, current.area, theme, bar.lines.length);
           return [...bar.lines, ...navigation.lines];
         },
         handleMouse(event: ConsoleMouseEvent) {
@@ -784,8 +819,9 @@ export default function harilConsole(pi: ConsolePi): void {
       select(id) {
         void openDockSlot(current, id);
       },
+      // A click on a row a view declared an action for (DockDetails.actions); DOCS is the one that declares them.
       activate(id, action) {
-        if (id === "themes") void changeTheme(current, action);
+        void runDockAction(current, id, action);
       },
       railAction: (hit) => runRail(current, hit),
     });
@@ -800,8 +836,7 @@ export default function harilConsole(pi: ConsolePi): void {
     if (current.closed) return;
     current.dock.slots = readDockSlots(config);
     if (!current.dock.slots.some((slot) => slot.visible && slot.id === current.dock.selected)) {
-      current.dock.selected =
-        current.dock.slots.find((slot) => slot.visible)?.id ?? DOCK_LABELS[0].id;
+      current.dock.selected = current.dock.slots.find((slot) => slot.visible)?.id ?? MAIN_DOCK_ID;
     }
     if (current.dock.detail?.id !== current.dock.selected)
       void openDockSlot(current, current.dock.selected);
@@ -817,12 +852,7 @@ export default function harilConsole(pi: ConsolePi): void {
     current.dock.selected = id;
     current.dock.detail = undefined;
     redraw();
-    const commands = safely(() => pi.getCommands().map((command) => command.name), []);
-    const details = await loadDockDetails(id, current.cwd, {
-      piCommands: commands,
-      theme: getHarilPalette(),
-      locale: current.locale,
-    });
+    const details = await loadDockDetails(id, current.cwd, { locale: current.locale });
     if (current.closed || session !== current || current.dockLoadSeq !== seq) return;
     current.dock.detail = details;
     current.nativePanes?.refresh();
@@ -837,6 +867,125 @@ export default function harilConsole(pi: ConsolePi): void {
     );
     if (result?.type !== "open" || current.closed || session !== current) return;
     await openDockSlot(current, result.id);
+  }
+
+  // The rows a dock view declares (DockDetails.actions), by the tab they belong to. Only DOCS has any: its rows connect,
+  // change and disconnect the documentation folder.
+  async function runDockAction(current: Session, id: string, action: string): Promise<void> {
+    if (id !== "docs") return;
+    if (action === "docs:set") await connectDocsFolder(current, current.ctx);
+    else if (action === "docs:clear") await disconnectDocsFolder(current, current.ctx);
+  }
+
+  // One docs prompt or save at a time: a second click while the input is open must not open another.
+  let docsBusy = false;
+
+  // Connects (or changes) the documentation folder: the path comes from `given` (/haril-docs <path>) or from the input,
+  // which proposes the folder that is connected now. HARIL stores the path through `haril config set docs.path`, which
+  // refuses what is not an existing directory; the console shows that message as it is. Nothing is written in the folder.
+  async function connectDocsFolder(
+    current: Session,
+    ctx: ConsoleContext,
+    given?: string,
+  ): Promise<void> {
+    if (docsBusy || current.closed) return;
+    if (!cliAvailable()) {
+      ctx.ui.notify(NOT_LAUNCHED, "warning");
+      return;
+    }
+    docsBusy = true;
+    try {
+      let typed = given;
+      if (typed === undefined) {
+        const connected = await readDocsPath(current.cwd).catch(() => undefined);
+        if (current.closed || session !== current) return;
+        typed = await ctx.ui.input(
+          localized(
+            current.locale,
+            "Documentation folder path",
+            "Ruta de la carpeta de documentación",
+          ),
+          connected ?? "",
+        );
+      }
+      const value = typed?.trim() ?? "";
+      if (value === "" || current.closed || session !== current) return;
+      await saveDocsPath(current, ctx, value);
+    } finally {
+      docsBusy = false;
+    }
+  }
+
+  // Disconnects the folder (`--reset`): the folder itself is not touched.
+  async function disconnectDocsFolder(current: Session, ctx: ConsoleContext): Promise<void> {
+    if (docsBusy || current.closed) return;
+    if (!cliAvailable()) {
+      ctx.ui.notify(NOT_LAUNCHED, "warning");
+      return;
+    }
+    docsBusy = true;
+    try {
+      await saveDocsPath(current, ctx, undefined);
+    } finally {
+      docsBusy = false;
+    }
+  }
+
+  // Runs `haril config set docs.path <value>` (or `--reset` without a value), tells the user how it went with the CLI's
+  // own words when it fails, and loads the DOCS tab again when it is the one on screen. Another tab loads fresh when it
+  // is selected, so a command typed from there does not pull the user away from it.
+  async function saveDocsPath(
+    current: Session,
+    ctx: ConsoleContext,
+    value: string | undefined,
+  ): Promise<void> {
+    const result = await runHaril(
+      value === undefined
+        ? ["config", "set", "docs.path", "--reset", "--json"]
+        : ["config", "set", "docs.path", value, "--json"],
+      { cwd: current.cwd, timeoutMs: 10_000 },
+    );
+    if (current.closed || session !== current) return;
+    if (!result.ok) {
+      const reason = result.stderr
+        .split(/\r?\n/)
+        .map((line) => plainText(line.trimEnd()))
+        .filter(Boolean)
+        .join("\n");
+      ctx.ui.notify(
+        reason ||
+          localized(
+            current.locale,
+            "Could not save the documentation folder.",
+            "No se pudo guardar la carpeta de documentación.",
+          ),
+        "error",
+      );
+      return;
+    }
+    let stored = value;
+    try {
+      const written = (JSON.parse(result.stdout) as { value?: unknown }).value;
+      if (typeof written === "string" && written !== "") stored = plainText(written);
+    } catch {
+      // The CLI's answer is only used to show the path it stored; the typed one stands in.
+    }
+    ctx.ui.notify(
+      stored === undefined
+        ? localized(
+            current.locale,
+            "Documentation folder disconnected.",
+            "Carpeta de documentación desconectada.",
+          )
+        : localized(
+            current.locale,
+            `Documentation folder connected: ${stored}`,
+            `Carpeta de documentación conectada: ${stored}`,
+          ),
+      "info",
+    );
+    // Not awaited: the tab loads on its own, and the next click on its rows must not wait for the scan.
+    if (current.dock.selected === "docs") void openDockSlot(current, "docs");
   }
 
   async function managePiExtensions(current: Session, ctx: ConsoleContext): Promise<void> {
@@ -1156,6 +1305,7 @@ export default function harilConsole(pi: ConsolePi): void {
         chooseMode: () => void chooseMode(current, current.ctx),
         openMenu: () => void current.openActions(current.ctx),
         focus: () => focusRightRail(current),
+        openArea: (area) => current.openArea(area),
       },
       hit,
     );
@@ -1200,7 +1350,8 @@ export default function harilConsole(pi: ConsolePi): void {
     }
     setHarilPalette(requested);
     current.ctx.ui.notify(`Tema HARIL: ${requested}`, "info");
-    if (current.dock.selected === "themes") await openDockSlot(current, "themes");
+    // No dock view lists the palettes any more: repaint the panes and the bar with the new colours.
+    current.nativePanes?.refresh();
     redraw();
   }
 
@@ -1307,7 +1458,7 @@ export default function harilConsole(pi: ConsolePi): void {
     },
   });
   pi.registerCommand("haril-plugin", {
-    description: "Open a HARIL dock view: /haril-plugin [git|youtube|memory|themes|1..4|details]",
+    description: "Open a HARIL dock view: /haril-plugin [main|memory|docs|1..3|details]",
     handler: async (args, ctx) => {
       const current = session;
       if (current === undefined || !ctx.hasUI || ctx.mode !== "tui") return;
@@ -1323,14 +1474,42 @@ export default function harilConsole(pi: ConsolePi): void {
             ? dockSlotAt(current.dock.slots, Number(word))?.id
             : DOCK_LABELS.find((slot) => slot.id === word)?.id;
       if (id === undefined) {
-        ctx.ui.notify("Uso: /haril-plugin [git|youtube|memory|themes|1..4|details]", "warning");
+        ctx.ui.notify("Uso: /haril-plugin [main|memory|docs|1..3|details]", "warning");
         return;
       }
       if (word !== "details") await openDockSlot(current, id);
       const detail = current.dock.detail;
-      if (detail?.id === id && !current.closed && session === current) {
-        await showInlineDetails(ctx, detail.title, [detail.status, ...detail.lines]);
+      if (detail?.id !== id || current.closed || session !== current) return;
+      // MAIN has no view to list: its content is the status block, which the right panel already shows.
+      if (id === MAIN_DOCK_ID) {
+        ctx.ui.notify(
+          localized(
+            current.locale,
+            "MAIN shows the status in the right panel; /haril-focus opens its details.",
+            "MAIN muestra el estado en el panel derecho; /haril-focus abre sus detalles.",
+          ),
+          "info",
+        );
+        return;
       }
+      await showInlineDetails(ctx, detail.title, [detail.status, ...detail.lines]);
+    },
+  });
+  // The documentation folder (DOCS tab): the keyboard way to what its rows do with a click.
+  pi.registerCommand("haril-docs", {
+    description:
+      "HARIL: conectar la carpeta de documentación (por ejemplo Obsidian): /haril-docs [<ruta>|clear]",
+    getArgumentCompletions: (prefix: string) =>
+      [{ value: "clear", label: "clear", description: "Desconectar la carpeta" }].filter((item) =>
+        item.value.startsWith(prefix.trim().toLowerCase()),
+      ),
+    async handler(args, ctx) {
+      const current = session;
+      if (current === undefined) return;
+      const word = args.trim();
+      if (word.toLowerCase() === "clear") await disconnectDocsFolder(current, ctx);
+      else if (word !== "") await connectDocsFolder(current, ctx, word);
+      else if (ctx.hasUI) await connectDocsFolder(current, ctx);
     },
   });
   pi.registerCommand("haril-extensions", {
@@ -1343,7 +1522,7 @@ export default function harilConsole(pi: ConsolePi): void {
   });
   // Pi's default bindings leave Alt+L / Alt+I free. Alt+Z is Pi's undo shortcut on WSL.
   pi.registerShortcut("alt+l", {
-    description: "Open HARIL's plugin list (then press 1..4, arrows, Enter or Esc)",
+    description: "Open HARIL's plugin list (then press 1..3, arrows, Enter or Esc)",
     handler: (ctx) => {
       const current = session;
       if (current === undefined || !ctx.hasUI || ctx.mode !== "tui") return;
