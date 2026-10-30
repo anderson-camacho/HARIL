@@ -59,6 +59,11 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 });
 
+// The tab reads the folder asynchronously and races the console's startup load; under a loaded parallel run the
+// default 1 s of vi.waitFor is not enough, so every wait here gets a generous ceiling (it returns as soon as true).
+const waitFor = <T>(assertion: () => T | Promise<T>): Promise<T> =>
+  vi.waitFor(assertion, { timeout: 15_000, interval: 25 });
+
 // A vault with one note, on disk, so the tab has something real to read. It has a space in its name on purpose.
 function makeVault(): string {
   const vault = join(root, "Mi Boveda");
@@ -118,7 +123,7 @@ async function withConsole(
       ctx,
       input,
       sidebar: () => rows().join("\n"),
-      shows: (text) => vi.waitFor(() => expect(rows().join("\n")).toContain(text)),
+      shows: (text) => waitFor(() => expect(rows().join("\n")).toContain(text)),
       clickRow(needle) {
         const y = rows().findIndex((row) => row.includes(needle));
         if (y < 0) throw new Error(`Row not found: ${needle}\n${rows().join("\n")}`);
@@ -158,10 +163,10 @@ describe("the DOCS tab with no folder connected", () => {
         await open(h);
         await h.shows("▸ Definir carpeta…");
         h.clickRow("Definir carpeta…");
-        await vi.waitFor(() => expect(h.setCalls()).toHaveLength(1));
+        await waitFor(() => expect(h.setCalls()).toHaveLength(1));
         expect(h.input).toHaveBeenCalledWith(PROMPT_ES, "");
         expect(h.setCalls()[0]).toEqual(["config", "set", "docs.path", vault, "--json"]);
-        await vi.waitFor(() =>
+        await waitFor(() =>
           expect(h.notes()).toContain(`Carpeta de documentación conectada: ${vault}`),
         );
         // The tab loads again and now shows the folder and its notes, and not what the editor keeps for itself.
@@ -192,7 +197,7 @@ describe("the DOCS tab with no folder connected", () => {
         await open(h);
         await h.shows("▸ Definir carpeta…");
         h.clickRow("Definir carpeta…");
-        await vi.waitFor(() => expect(h.input).toHaveBeenCalled());
+        await waitFor(() => expect(h.input).toHaveBeenCalled());
         await new Promise((resolve) => setTimeout(resolve, 100));
         expect(h.setCalls()).toEqual([]);
         expect(h.notes()).not.toMatch(/documentaci|docs\.path/i);
@@ -213,7 +218,7 @@ describe("the DOCS tab with no folder connected", () => {
         await open(h);
         await h.shows("▸ Definir carpeta…");
         h.clickRow("Definir carpeta…");
-        await vi.waitFor(() => expect(h.notes()).toContain("is not an existing directory"));
+        await waitFor(() => expect(h.notes()).toContain("is not an existing directory"));
         const note = h.ctx.notes.find(([message]) => message.includes("not an existing"));
         expect(note?.[1]).toBe("error");
         expect(note?.[0]).toContain("Z:\\nada");
@@ -238,7 +243,7 @@ describe("the DOCS tab with no folder connected", () => {
       await open(h);
       await h.shows("▸ Definir carpeta…");
       h.clickRow("Definir carpeta…");
-      await vi.waitFor(() => expect(release).toBeDefined());
+      await waitFor(() => expect(release).toBeDefined());
       h.clickRow("Definir carpeta…");
       await new Promise((resolve) => setTimeout(resolve, 50));
       expect((h.ctx.ui.input as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
@@ -258,7 +263,7 @@ describe("the DOCS tab with a folder connected", () => {
         await open(h);
         await h.shows("▸ Cambiar carpeta…");
         h.clickRow("Cambiar carpeta…");
-        await vi.waitFor(() => expect(h.setCalls()).toHaveLength(1));
+        await waitFor(() => expect(h.setCalls()).toHaveLength(1));
         expect(h.input).toHaveBeenCalledWith(PROMPT_ES, vault);
         expect(h.setCalls()[0]).toEqual(["config", "set", "docs.path", other, "--json"]);
       },
@@ -275,7 +280,7 @@ describe("the DOCS tab with a folder connected", () => {
       await h.shows("▸ Desconectar");
       cli.answer("config get docs.path", { stdout: connected(null) });
       h.clickRow("Desconectar");
-      await vi.waitFor(() => expect(h.setCalls()).toHaveLength(1));
+      await waitFor(() => expect(h.setCalls()).toHaveLength(1));
       expect(h.setCalls()[0]).toEqual(["config", "set", "docs.path", "--reset", "--json"]);
       expect(h.input).not.toHaveBeenCalled();
       await h.shows("Sin carpeta conectada.");
