@@ -35,7 +35,6 @@ describe("native dock integration with the HARIL Pi extension", () => {
       expect(fake.commands.has("haril-plugin")).toBe(true);
       expect(fake.commands.has("haril-commands")).toBe(true);
       expect(fake.commands.has("haril-theme")).toBe(true);
-      expect(fake.commands.has("haril-explore")).toBe(true);
       expect(fake.shortcuts.has("alt+c")).toBe(true);
       expect(fake.shortcuts.has("alt+l")).toBe(true);
       expect(fake.shortcuts.has("alt+i")).toBe(true);
@@ -73,7 +72,7 @@ describe("native dock integration with the HARIL Pi extension", () => {
       expect(newHeader?.split("\n")).toHaveLength(1);
       const right = rightPane.component.render(40).map(stripAnsi).join("\n");
       expect(right).toContain("ACTIVIDAD");
-      expect(right).toContain("Espacio: Explorador");
+      expect(right).toContain("Espacio: Git");
 
       await fake.commands.get("haril-plugin")?.handler("youtube", ctx);
       const rightUpdated = rightPane.component.render(40).map(stripAnsi).join("\n");

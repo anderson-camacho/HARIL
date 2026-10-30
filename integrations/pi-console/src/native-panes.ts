@@ -3,7 +3,13 @@
 // editor, scrollback or chat; reuse its original layout node as the centre of the three-column stack.
 import { aiEyeTone, paddedCell, visualText } from "./dashboard-theme.js";
 import type { DockDetails } from "./dock-details.js";
-import { type DockId, type DockSlot, dockDefinition, readDockSlots } from "./dock-registry.js";
+import {
+  DOCK_LABELS,
+  type DockId,
+  type DockSlot,
+  dockDefinition,
+  readDockSlots,
+} from "./dock-registry.js";
 import type { UiLocale } from "./locale.js";
 import type { ConsoleMouseEvent, ConsoleTui } from "./pi-types.js";
 import { plainText } from "./text.js";
@@ -23,7 +29,7 @@ interface DockTabRow {
 }
 
 // The left rail is a tab host. A plugin owns its view only when selected; the rest
-// occupy small tabs, so a file tree cannot push the entire navigation off screen.
+// occupy small tabs, so a long view cannot push the entire navigation off screen.
 function dockTabs(state: PaneSettings, width: number): DockTabRow[] {
   const rows: DockTabRow[] = [];
   let label = "";
@@ -57,7 +63,7 @@ export interface PaneSettings {
 export function initialPaneSettings(): PaneSettings {
   return {
     slots: readDockSlots(undefined),
-    selected: "explorer",
+    selected: DOCK_LABELS[0].id,
     detail: undefined,
     leftVisible: false,
     rightVisible: true,
@@ -240,7 +246,6 @@ export function attachNativePanes(
     readonly locale?: () => UiLocale;
     readonly right: (width: number) => readonly string[];
     readonly select: (id: DockId) => void;
-    readonly toggleExplorer?: (path: string) => void;
     readonly activate?: (id: DockId, action: string) => void;
   },
 ): NativePanes {
@@ -300,11 +305,7 @@ export function attachNativePanes(
         options.activate?.(state.selected, action.action);
         return { handled: true, render: true };
       }
-      const row = detailLine - 1;
-      const node = state.selected === "explorer" ? state.detail?.treeNodes?.[row] : undefined;
-      if (!node?.directory) return undefined;
-      options.toggleExplorer?.(node.path);
-      return { handled: true, render: true };
+      return undefined;
     },
     invalidate() {},
   };
@@ -370,14 +371,6 @@ export function attachNativePanes(
               const action = state.detail?.actions?.find((item) => item.line === detailLine);
               if (action !== undefined && state.detail?.id === state.selected) {
                 options.activate?.(state.selected, action.action);
-                return { handled: true, render: true };
-              }
-            }
-            if (state.selected === "explorer") {
-              const row = detailLine - 1;
-              const node = state.detail?.treeNodes?.[row];
-              if (node?.directory) {
-                options.toggleExplorer?.(node.path);
                 return { handled: true, render: true };
               }
             }

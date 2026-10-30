@@ -61,13 +61,13 @@ describe("Pi's native split-pane adapter", () => {
     );
     expect(centre.component.render(40)).toEqual(["Pi chat and editor"]);
     const dock = right.component.render(40).map(stripAnsi).join("\n");
-    expect(dock).toContain("Espacio: Explorador");
-    expect(dock).toContain("[1:TREE]");
+    expect(dock).toContain("Espacio: Git");
+    expect(dock).toContain("[1:GIT]");
     expect(dock).toContain("STATUS");
     expect(right.component.render(40)).toHaveLength(tui.terminal.rows);
 
     right.component.handleMouse?.({ type: "click", button: "left", y: 1, x: 3 });
-    expect(select).toHaveBeenCalledWith("explorer");
+    expect(select).toHaveBeenCalledWith("git");
     state.rightVisible = false;
     expect((root[LAYOUT_NODE] as () => unknown)()).toEqual(original());
     panel.close();
@@ -107,14 +107,18 @@ describe("Pi's native split-pane adapter", () => {
         { id: "themes", visible: true },
       ],
     });
+    // A stored "explorer" (the retired TREE slot) is not a registered view, so it never reaches the dock.
+    expect(slots.map((slot) => slot.id)).toEqual(["youtube", "git", "memory", "themes"]);
     const state = { ...initialPaneSettings(), slots, selected: "youtube" as const };
     const lines = renderLeftDock(23, 25, state, "code").map(stripAnsi);
     expect(lines).toHaveLength(25);
     expect(lines.every((line) => textWidth(line) === 23)).toBe(true);
     const text = lines.join("\n");
-    expect(text.indexOf("1:YT")).toBeLessThan(text.indexOf("2:TREE"));
+    expect(text.indexOf("1:YT")).toBeLessThan(text.indexOf("2:MEM"));
     expect(text).not.toContain(" Git ");
-    expect(readDockSlots({ value: [{ id: "explorer", visible: true }] })).toHaveLength(5);
+    expect(
+      readDockSlots({ value: [{ id: "explorer", visible: true }] }).map((slot) => slot.id),
+    ).toEqual(["git", "youtube", "memory", "themes"]);
     const oldSettings = readDockSlots({
       value: [
         { id: "git", visible: false },
@@ -123,8 +127,8 @@ describe("Pi's native split-pane adapter", () => {
       ],
     });
     expect(oldSettings[0]).toEqual({ id: "git", visible: false });
-    expect(oldSettings[1]).toEqual({ id: "explorer", visible: true });
-    expect(oldSettings).toHaveLength(5);
+    expect(oldSettings[1]).toEqual({ id: "youtube", visible: true });
+    expect(oldSettings.map((slot) => slot.id)).toEqual(["git", "youtube", "memory", "themes"]);
     expect(renderRightDock(20, 4, [" ".repeat(19)]).map(stripAnsi)).toHaveLength(4);
     const english = renderLeftDock(23, 25, state, "code", 0, "high", "en")
       .map(stripAnsi)
@@ -154,38 +158,39 @@ describe("Pi's native split-pane adapter", () => {
     expect(root[LAYOUT_NODE]).toBe(original);
   });
 
-  it("clicks a compact tab without consuming the main chat or opening an Explorer modal", () => {
+  it("clicks a compact tab without consuming the main chat", () => {
     const { tui, root } = fakeTui();
     const state = initialPaneSettings();
     const select = vi.fn();
-    const toggleExplorer = vi.fn();
     const activate = vi.fn();
     const panel = attachNativePanes(tui, state, {
       project: () => "repo",
       right: () => [],
       select,
-      toggleExplorer,
       activate,
     });
     const layout = (root[LAYOUT_NODE] as () => NativeLayout)();
     const right = layout.entries[1]?.component;
     const tabRows = right?.render(40).map(stripAnsi);
-    expect(tabRows?.[1]).toContain("1:TREE");
+    expect(tabRows?.[1]).toContain("1:GIT");
+    expect(tabRows?.[1]).toContain("2:YT");
     right?.handleMouse?.({ type: "click", button: "left", y: 1, x: 11 });
-    expect(select).toHaveBeenCalledWith("git");
+    expect(select).toHaveBeenCalledWith("youtube");
 
+    // A detail row of a view without actions is plain text: a click on it is left unhandled.
     state.detail = {
-      id: "explorer",
-      title: "Explorador",
-      status: "Árbol",
-      lines: ["repo", "▸ ▣ src"],
-      treeNodes: [{ path: "/repo/src", directory: true, depth: 0 }],
+      id: "git",
+      title: "Git",
+      status: "Git",
+      lines: ["## main", " M app.ts"],
     };
-    const treeRows = right?.render(40).map(stripAnsi) ?? [];
-    const folderRow = treeRows.findIndex((row) => row.includes("src"));
-    expect(folderRow).toBeGreaterThan(1);
-    right?.handleMouse?.({ type: "click", button: "left", y: folderRow, x: 4 });
-    expect(toggleExplorer).toHaveBeenCalledWith("/repo/src");
+    const gitRows = right?.render(40).map(stripAnsi) ?? [];
+    const changedRow = gitRows.findIndex((row) => row.includes("app.ts"));
+    expect(changedRow).toBeGreaterThan(1);
+    expect(right?.handleMouse?.({ type: "click", button: "left", y: changedRow, x: 4 })).toBe(
+      undefined,
+    );
+    expect(activate).not.toHaveBeenCalled();
     state.selected = "themes";
     state.detail = {
       id: "themes",

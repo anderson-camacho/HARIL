@@ -9,12 +9,12 @@ describe("HARIL dock shortcuts", () => {
       { id: "memory", visible: true },
       { id: "youtube", visible: false },
       { id: "git", visible: true },
-      { id: "explorer", visible: true },
       { id: "themes", visible: true },
     ] as const;
     expect(dockSlotAt(slots, 1)?.id).toBe("memory");
     expect(dockSlotAt(slots, 2)?.id).toBe("git");
-    expect(dockSlotAt(slots, 5)).toBeUndefined();
+    expect(dockSlotAt(slots, 3)?.id).toBe("themes");
+    expect(dockSlotAt(slots, 4)).toBeUndefined();
     expect(dockSlotAt(slots, 0)).toBeUndefined();
   });
 
@@ -22,7 +22,7 @@ describe("HARIL dock shortcuts", () => {
     const state = initialPaneSettings();
     const chosen = vi.fn();
     const tui = { requestRender: vi.fn() };
-    const picker = createDockPicker(state.slots, "explorer", chosen, tui);
+    const picker = createDockPicker(state.slots, "git", chosen, tui);
     expect(
       picker
         .render(48)
@@ -31,14 +31,14 @@ describe("HARIL dock shortcuts", () => {
     ).toBe(true);
     picker.handleInput("\u001b[B");
     picker.handleInput("\r");
-    expect(chosen).toHaveBeenCalledWith({ type: "open", id: "git" });
+    expect(chosen).toHaveBeenCalledWith({ type: "open", id: "youtube" });
     picker.handleInput("3");
     expect(chosen).toHaveBeenCalledTimes(1);
 
-    const numeric = createDockPicker(state.slots, "explorer", chosen);
-    numeric.handleInput("5");
+    const numeric = createDockPicker(state.slots, "git", chosen);
+    numeric.handleInput("4");
     expect(chosen).toHaveBeenLastCalledWith({ type: "open", id: "themes" });
-    const cancel = createDockPicker(state.slots, "explorer", chosen);
+    const cancel = createDockPicker(state.slots, "git", chosen);
     cancel.handleInput("\u001b");
     expect(chosen).toHaveBeenLastCalledWith({ type: "cancel" });
   });
@@ -50,13 +50,13 @@ describe("HARIL dock shortcuts", () => {
   ])("navigates plugin rows with %s terminal arrows", (_name, up, down) => {
     const selected = vi.fn();
     const tui = { requestRender: vi.fn() };
-    const picker = createDockPicker(initialPaneSettings().slots, "explorer", selected, tui);
+    const picker = createDockPicker(initialPaneSettings().slots, "git", selected, tui);
     picker.handleInput(down);
-    expect(picker.render(48).map(stripAnsi).join("\n")).toContain("▸ 2. Git");
+    expect(picker.render(48).map(stripAnsi).join("\n")).toContain("▸ 2. YouTube");
     picker.handleInput(up);
-    expect(picker.render(48).map(stripAnsi).join("\n")).toContain("▸ 1. Explorador");
+    expect(picker.render(48).map(stripAnsi).join("\n")).toContain("▸ 1. Git");
     picker.handleInput(up);
-    expect(picker.render(48).map(stripAnsi).join("\n")).toContain("▸ 5. Temas");
+    expect(picker.render(48).map(stripAnsi).join("\n")).toContain("▸ 4. Temas");
     expect(tui.requestRender).toHaveBeenCalledTimes(3);
     picker.handleInput("\u001b[13u");
     expect(selected).toHaveBeenCalledWith({ type: "open", id: "themes" });
@@ -64,7 +64,7 @@ describe("HARIL dock shortcuts", () => {
 
   it("ignores unrelated shortcuts and accepts Kitty Escape", () => {
     const chosen = vi.fn();
-    const picker = createDockPicker(initialPaneSettings().slots, "explorer", chosen);
+    const picker = createDockPicker(initialPaneSettings().slots, "git", chosen);
     picker.handleInput("\u001b[97;3u");
     picker.handleInput("\u001b[27u");
     expect(chosen).toHaveBeenCalledWith({ type: "cancel" });

@@ -66,7 +66,7 @@ Los dos paneles laterales nativos requieren una terminal de al menos **132 colum
 
 | Zona | Qué contiene | Cómo interactúas |
 | --- | --- | --- |
-| **Izquierda** | Vistas TREE, GIT, YT, MEM y THEME | Pestañas, clic, `Alt+L`, rueda del mouse |
+| **Izquierda** | Vistas GIT, YT, MEM y THEME | Pestañas, clic, `Alt+L`, rueda del mouse |
 | **Centro** | Chat real de Pi, comandos `/` y respuestas de herramientas | Escribes peticiones, `/model`, `/haril` |
 | **Derecha** | Ubicación, modo, modelo, avisos, extensiones, sesión, acciones y eventos | Clic en `▶`/`▼`, `Alt+I` |
 | **Inferior** | Modo, modelo, uso del contexto, coste, planes pendientes, runtime y STOP ALL | `Alt+H`, `Alt+M`, clic |
@@ -86,17 +86,14 @@ La paleta visual de HARIL y el tema interno de Pi son configuraciones relacionad
 
 ## 4. Panel izquierdo: todas las vistas
 
-La cabecera incluye la carpeta y «VISTAS · Alt+L». Los números 1–5 indican el **orden actual de espacios visibles**; si cambias el orden, los números cambian.
+La cabecera incluye la carpeta y «VISTAS · Alt+L». Los números 1–4 indican el **orden actual de espacios visibles**; si cambias el orden, los números cambian.
 
 | Vista | Qué significa | Qué puedes hacer | Límite |
 | --- | --- | --- | --- |
-| **TREE / Explorador** | Árbol de carpetas y archivos, con un recuento de entradas | Clic para expandir/contraer directorios, desplazar con rueda; `/haril-explore` | **Solo lectura**: no edita archivos |
 | **GIT** | Rama, estado `git status`, cambios resumidos e historial | Consultar diferencias e historial | No hace commit, push ni merge desde esta vista |
 | **YT / YouTube** | Espacio reservado para un reproductor externo | Ver si se detecta el comando `/yt` | No instala ni abre un reproductor automáticamente |
 | **MEM / Memoria** | Estado de salud del proveedor de memoria | Inspeccionar disponibilidad/errores | No implica que Engram esté conectado |
 | **THEME / Temas** | Paleta visual del dock | Cambiar matrix, violet, rose, amber, obsidian | No cambia los modelos ni instala extensiones |
-
-**Ejemplo:** «Árbol · 129 entradas» quiere decir que el explorador encontró 129 entradas en la ubicación consultada; **no** significa que hay 129 tareas, agentes o proyectos.
 
 ### Ocultar, mostrar o reordenar espacios
 
@@ -110,7 +107,7 @@ haril plugins move git up
 haril plugins reset
 ```
 
-Dentro de HARIL usa `/haril-plugins`. Se ofrecen **Mostrar, Ocultar, Subir y Bajar**. Para entrar directamente a una vista: `/haril-plugin explorer`, `/haril-plugin git` o `/haril-plugin themes`. El argumento numérico selecciona una vista **visible**.
+Dentro de HARIL usa `/haril-plugins`. Se ofrecen **Mostrar, Ocultar, Subir y Bajar**. Para entrar directamente a una vista: `/haril-plugin git`, `/haril-plugin memory` o `/haril-plugin themes`. El argumento numérico selecciona una vista **visible**.
 
 Estas operaciones cambian la interfaz, no los paquetes Pi. Si gestionaste el dock desde otra ventana, usa `/haril-plugins` o reabre HARIL para verlo reflejado.
 
@@ -216,7 +213,7 @@ Si solo tienes Claude Code, instala la extensión una vez con `haril extensions 
 
 | Teclas | Resultado |
 | --- | --- |
-| **Alt+L** | Selector del dock izquierdo: **1–5**, `↑/↓`, `Enter`, `Esc` |
+| **Alt+L** | Selector del dock izquierdo: **1–4**, `↑/↓`, `Enter`, `Esc` |
 | **Alt+H** | Selector de las cinco áreas: `↑/↓`, `Enter`, `Esc` |
 | **Alt+I** | Mostrar/ocultar panel derecho; en terminal compacta abre acciones |
 | **Alt+C** | Catálogo de comandos Pi/HARIL disponibles |
@@ -272,7 +269,7 @@ Otros comandos disponibles incluyen `haril quota`, `haril memory status`, `haril
 ### A. Conocer la consola sin agentes reales
 
 1. Ejecuta `haril` desde una carpeta de proyecto.
-2. `Alt+L` → Explorador; expande carpetas y usa la rueda.
+2. `Alt+L` → Git; recorre el estado y el historial con la rueda.
 3. `Alt+H` → recorre las cinco áreas y vuelve a AGENTS.
 4. Escribe `/orchestration demo` para activar una muestra. Repítelo para desactivarla.
 5. Ejecuta `/haril-commands` para ver qué comandos registra realmente Pi.
@@ -338,7 +335,6 @@ Al arrancar, HARIL intenta el efecto original `tte matrix` y, si no está dispon
 | Panel central verde pero laterales naranja/rosa | `haril config get ui.theme`; dentro, `/haril-theme matrix`; o `haril config set ui.theme matrix` y reabrir |
 | No aparece un lateral | Ancho/alto de la terminal, compatibilidad Pi; `Alt+I` o `/haril-dock both` |
 | `EXTENSIONES · 0` aunque hay paquetes | El contador no es inventario; `haril extensions list --json` |
-| Explorador abre `C:\Users\...` | Iniciaste HARIL desde tu carpeta de usuario; usa `cd` al proyecto |
 | No hay tareas y runtime está idle | `/tasks` y `haril status`; registrar proyecto y preparar objetivo |
 | Runtime `unknown` | `haril doctor`, avisos y estado; **no asumir** que está detenido |
 | No puedes elegir un modelo o responde 401 | `/model`, `/login`, `haril models`, `haril doctor`; revisar proveedor y autenticación |
@@ -354,7 +350,7 @@ HARIL usa una **instancia privada de Pi**: sus extensiones y sesiones no se copi
 | --- | --- |
 | Chat, modelos, temas e idioma | Disponibles si los proveedores y Pi responden |
 | Paneles | Nativos en Pi y terminal compatibles; en tamaños pequeños se compactan |
-| TREE y GIT | Vistas de inspección, **no** un IDE/cliente Git de edición |
+| GIT | Vista de inspección, **no** un IDE/cliente Git de edición |
 | YouTube | Espacio visual dependiente de una extensión externa |
 | AGENTS | Agentes observados en tareas; **no** catálogo universal de perfiles |
 | AUTOMATION | Cola y runtime; **no** un calendario de tareas recurrentes |
