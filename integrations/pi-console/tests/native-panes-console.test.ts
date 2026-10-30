@@ -38,6 +38,8 @@ describe("native dock integration with the HARIL Pi extension", () => {
       expect(fake.shortcuts.has("alt+c")).toBe(true);
       expect(fake.shortcuts.has("alt+l")).toBe(true);
       expect(fake.shortcuts.has("alt+i")).toBe(true);
+      expect(fake.shortcuts.has("alt+k")).toBe(true);
+      expect(fake.commands.has("haril-panel")).toBe(true);
       expect(fake.shortcuts.has("alt+z")).toBe(false);
       expect(fake.shortcuts.has("alt+r")).toBe(false);
 

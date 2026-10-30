@@ -68,7 +68,7 @@ Los dos paneles laterales nativos requieren una terminal de al menos **132 colum
 | --- | --- | --- |
 | **Izquierda** | Vistas GIT, YT, MEM y THEME | Pestañas, clic, `Alt+L`, rueda del mouse |
 | **Centro** | Chat real de Pi, comandos `/` y respuestas de herramientas | Escribes peticiones, `/model`, `/haril` |
-| **Derecha** | Ubicación, modo, modelo, avisos, extensiones, sesión, acciones y eventos | Clic en `▶`/`▼`, `Alt+I` |
+| **Derecha** | Ubicación, modo, modelo, avisos, extensiones, sesión, acciones y eventos | Clic en `▶`/`▼`, `Alt+I`, `Alt+K` |
 | **Inferior** | Modo, modelo, uso del contexto, coste, planes pendientes, runtime y STOP ALL | `Alt+H`, `Alt+M`, clic |
 
 El centro puede estar negro y vacío al iniciar porque **no se ha conversado todavía**. Las columnas no crean una conversación automáticamente.
@@ -116,6 +116,8 @@ Estas operaciones cambian la interfaz, no los paquetes Pi. Si gestionaste el doc
 Las secciones con `▶` están contraídas y con `▼` expandidas. Su contenido corresponde a la **sesión y área actuales**, no a un inventario universal.
 
 En el panel derecho responden al clic las cabeceras de sección (`AVISOS`, `EXTENSIONES`, `SESIÓN`, `ACCIONES`), cada acción de `ACCIONES` y el texto `cambiar` de la fila `Modo`.
+
+**Con el teclado:** `Alt+K` (o el comando `/haril-panel`) abre un menú «Panel derecho» con esas mismas secciones y acciones: abrir o cerrar una sección, cambiar el modo, ver detalles completos, elegir modelo, etc. Muévete con `↑/↓`, elige con `Enter` y cancela con `Esc`. Elegir una entrada hace lo mismo que su clic. El panel en sí **no recibe el foco del teclado**: Pi entrega los atajos de las extensiones al editor, no a un panel. Por eso el menú es la vía de teclado, y los prefijos `[D]`, `[M]`, `[T]` y `[R]` que antes se veían ante las acciones (solo texto, no teclas) ya no se dibujan en el panel.
 
 | Elemento | Qué mide o representa | Qué hacer |
 | --- | --- | --- |
@@ -218,6 +220,7 @@ Si solo tienes Claude Code, instala la extensión una vez con `haril extensions 
 | **Alt+L** | Selector del dock izquierdo: **1–4**, `↑/↓`, `Enter`, `Esc` |
 | **Alt+H** | Selector de las cinco áreas: `↑/↓`, `Enter`, `Esc` |
 | **Alt+I** | Mostrar/ocultar panel derecho; en terminal compacta abre acciones |
+| **Alt+K** | Menú del panel derecho (también `/haril-panel`): `↑/↓`, `Enter`, `Esc` |
 | **Alt+C** | Catálogo de comandos Pi/HARIL disponibles |
 | **Alt+M** | Siguiente modo de consola |
 | **Alt+O** | Vista de orquestación |
@@ -340,7 +343,7 @@ Al arrancar, HARIL intenta el efecto original `tte matrix` y, si no está dispon
 | No hay tareas y runtime está idle | `/tasks` y `haril status`; registrar proyecto y preparar objetivo |
 | Runtime `unknown` | `haril doctor`, avisos y estado; **no asumir** que está detenido |
 | No puedes elegir un modelo o responde 401 | `/model`, `/login`, `haril models`, `haril doctor`; revisar proveedor y autenticación |
-| Flechas no funcionan | Asegúrate de que el selector `Alt+L`/`Alt+H` tiene foco; prueba números y `Enter` |
+| Flechas no funcionan | Asegúrate de que el selector `Alt+L`/`Alt+H` tiene foco; prueba números y `Enter`. El panel derecho no recibe foco: usa `Alt+K` o `/haril-panel` |
 | Cambio de plugins no aparece | `/haril-plugins` para recargar o reinicia HARIL |
 | Lluvia Matrix recortada | Fuente monoespaciada, tamaño de terminal, soporte ANSI y motor TTE/integrado |
 

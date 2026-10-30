@@ -250,11 +250,14 @@ function eyeTone(facts: DashboardFacts): "teal" | "yellow" | "error" {
   return "teal";
 }
 
+// `showKeys` puts the [D]-style prefix before each action. The classic header keeps it from before; the native rail
+// leaves it out, because that rail takes no key presses and the prefix read as a shortcut (Alt+K opens its menu).
 function rightRailContent(
   facts: DashboardFacts,
   area: DashboardArea | undefined,
   width: number,
   expanded: Readonly<Partial<Record<RailSection, boolean>>>,
+  showKeys: boolean,
 ): RailRow[] {
   const rows: RailRow[] = [];
   const warnings = railWarnings(facts);
@@ -352,7 +355,7 @@ function rightRailContent(
   section(`${tr("ACTIONS", "ACCIONES")} · ${LABELS[currentArea]}`, "actions", controls.length);
   if (isExpanded("actions")) {
     for (const control of controls) {
-      add(`[${control.hint}] ${control.label}`, "teal", {
+      add(showKeys ? `[${control.hint}] ${control.label}` : control.label, "teal", {
         action: "run",
         control: control.action,
       });
@@ -372,7 +375,7 @@ export function renderNativeRailContent(
   expanded: Readonly<Partial<Record<RailSection, boolean>>>,
 ): NativeRailContent {
   const safeWidth = Math.max(1, width);
-  const body = rightRailContent(facts, area, safeWidth, expanded);
+  const body = rightRailContent(facts, area, safeWidth, expanded, false);
   const rows = body.map((item) => item.line);
   // Only the rail body is clickable; the activity log and the key hints below it carry no action.
   const hits: (RailHitAction | undefined)[] = body.map((item) => item.hit);
@@ -388,7 +391,9 @@ export function renderNativeRailContent(
     add(`#${event.seq} ${event.type}`, "teal");
   }
   add("", "muted");
-  add("Alt+H áreas · Alt+I panel · Alt+C comandos", "muted");
+  // Two rows: all four hints do not fit the rail's 39 columns on one.
+  add("Alt+K menú del panel · Alt+H áreas", "muted");
+  add("Alt+I panel · Alt+C comandos", "muted");
   return { lines: rows, hits };
 }
 
@@ -413,7 +418,7 @@ function wideHeader(
     paddedCell(" Many minds. One flow.", leftWidth, "yellow", "base"),
     paddedCell(" Alt+H áreas · Alt+I panel · Alt+C comandos", leftWidth, "text", "base"),
   ];
-  const right = rightRailContent(facts, selected, railWidth, expanded);
+  const right = rightRailContent(facts, selected, railWidth, expanded, true);
   const budget = Math.max(10, Math.min(24, height - 18));
   const clipped = right.length > budget;
   const shown = clipped

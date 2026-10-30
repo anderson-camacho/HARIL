@@ -443,6 +443,7 @@ En HARIL 0.21.8 los **avisos**, los **estados de extensiones** y la **orquestaci
 En terminales de **120 columnas y 40 filas o más**, el encabezado HARIL muestra una **columna a la derecha del todo** con sesión, proyecto, modelo, estado de extensiones observadas, avisos de proveedor (como `HARIL provider cliproxy: unreachable`), errores de HARIL y, al seleccionar ORCHESTRATION, el workflow y su progreso. La zona principal no vuelve a mostrar el gran widget de herramientas encima del editor.
 
 - `Alt+I`: ocultar/mostrar la columna derecha. En una terminal pequeña, donde se oculta automáticamente, abre el detalle.
+- `Alt+K` o `/haril-panel`: abrir un menú con las secciones y acciones de la columna derecha, que se elige con ↑/↓ y `Enter`.
 - `/haril-focus`: abrir la vista enfocada de la sección activa (visor de orquestación si estás en ORCHESTRATION).
 - Clic en la columna: abrir el detalle en el visor; `Alt+H` o las pestañas seleccionan la sección.
 - `/haril`: menú de las acciones originales.
@@ -683,7 +684,7 @@ haril plugins list --json
 haril plugins reset
 ```
 
-Desde la interfaz Pi, `/haril-plugins` abre un menú para mostrar, ocultar, subir o bajar espacios y actualiza inmediatamente la columna izquierda. `/haril-dock left|right|both` alterna las columnas y `Alt+I` alterna el panel derecho. La columna derecha puede desplazarse con la rueda del ratón. Sus cabeceras de sección (`AVISOS`, `EXTENSIONES`, `SESIÓN`, `ACCIONES`), sus acciones y el texto `cambiar` del modo responden al clic. Los cambios realizados **externamente** desde PowerShell se cargan al iniciar una nueva sesión de `haril` o al abrir `/haril-plugins`.
+Desde la interfaz Pi, `/haril-plugins` abre un menú para mostrar, ocultar, subir o bajar espacios y actualiza inmediatamente la columna izquierda. `/haril-dock left|right|both` alterna las columnas y `Alt+I` alterna el panel derecho. La columna derecha puede desplazarse con la rueda del ratón. Sus cabeceras de sección (`AVISOS`, `EXTENSIONES`, `SESIÓN`, `ACCIONES`), sus acciones y el texto `cambiar` del modo responden al clic. Con el teclado, `Alt+K` o `/haril-panel` abren un menú con esas mismas secciones y acciones (abrir o cerrar una sección, cambiar el modo, ver detalles, elegir modelo…): muévete con ↑/↓, elige con `Enter` y cancela con `Esc`. El panel en sí **no recibe el foco del teclado** (Pi entrega los atajos de las extensiones al editor), así que ese menú es la vía de teclado; los prefijos `[D]`, `[M]`, `[T]` y `[R]` que se veían en sus acciones eran solo texto y ya no se dibujan en el panel. Los cambios realizados **externamente** desde PowerShell se cargan al iniciar una nueva sesión de `haril` o al abrir `/haril-plugins`.
 
 Las preferencias quedan en `ui.plugins` de `haril.json`, sin borrar otras opciones. **Un espacio visible no significa que su extensión Pi exista o esté ejecutándose**: YouTube, Git, Memoria y Temas son lugares reservados para la integración de extensiones reales en próximos PR. Este PR no instala ni desactiva paquetes Pi. La unión de paneles se realiza mediante un adaptador interno experimental, se revierte al cerrar la sesión y deberá validarse manualmente en Windows Terminal antes de considerarse estable.
 
@@ -695,6 +696,7 @@ Las preferencias quedan en `ui.plugins` de `haril.json`, sin borrar otras opcion
 | --- | --- |
 | `Alt+L`, después número | Abre directamente el espacio visible correspondiente; también ↑/↓ + Enter. |
 | `Alt+I` | Muestra u oculta la columna derecha. |
+| `Alt+K` o `/haril-panel` | Abre el menú de teclado del panel derecho: sus secciones y acciones, con ↑/↓ y `Enter`. |
 | `/haril-plugin` | Abre el selector de espacios. |
 | `/haril-plugin git` o `/haril-plugin 1` | Selecciona el espacio y muestra sus detalles completos en una vista cerrable con `Esc`. |
 | `/haril-plugin details` | Abre el detalle del espacio actual. |
@@ -738,7 +740,7 @@ Los orígenes anteriores son ejemplos, **no recomendaciones de seguridad ni gara
 
 #### Dock compacto (0.22.9)
 
-En una terminal de al menos **132 columnas × 24 filas**, `haril` muestra un dock fijo por pestañas en el lado izquierdo: `GIT`, `YT`, `MEM`, `THEME`. Solo se ve la ficha elegida, sin la antigua lista gigante. **GIT** enseña estado, cambios y los últimos ocho commits. La pestaña `YT` es únicamente un espacio reservado: no instala YouTube. `Alt+L` elige una vista con flechas y `Enter`; `Alt+I` oculta o muestra el panel derecho; `Alt+C` enumera los comandos reales. El orden y la visibilidad se administran con `/haril-plugins` y se conservan entre sesiones.
+En una terminal de al menos **132 columnas × 24 filas**, `haril` muestra un dock fijo por pestañas en el lado izquierdo: `GIT`, `YT`, `MEM`, `THEME`. Solo se ve la ficha elegida, sin la antigua lista gigante. **GIT** enseña estado, cambios y los últimos ocho commits. La pestaña `YT` es únicamente un espacio reservado: no instala YouTube. `Alt+L` elige una vista con flechas y `Enter`; `Alt+I` oculta o muestra el panel derecho; `Alt+K` abre el menú de teclado de ese panel; `Alt+C` enumera los comandos reales. El orden y la visibilidad se administran con `/haril-plugins` y se conservan entre sesiones.
 
 HARIL monta esas columnas solo si el Pi incluido ofrece el contrato interno de disposición compatible. En terminales pequeñas o con una versión diferente de Pi, deja intacto su chat y vuelve a la disposición original.
 

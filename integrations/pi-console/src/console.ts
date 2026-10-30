@@ -17,6 +17,7 @@ import {
 import {
   type DashboardArea,
   type DashboardFacts,
+  type NativeRailContent,
   type RailHitAction,
   type RailSection,
   renderFooterNavigation,
@@ -42,7 +43,7 @@ import { effectText, sourceText, valueText } from "./delegation-settings.js";
 import { loadDockDetails } from "./dock-details.js";
 import { createDockPicker, type DockPickerResult, dockSlotAt } from "./dock-navigation.js";
 import { stopAll } from "./emergency.js";
-import { DEFAULT_UI_LOCALE, readConsoleLocale, type UiLocale } from "./locale.js";
+import { DEFAULT_UI_LOCALE, localized, readConsoleLocale, type UiLocale } from "./locale.js";
 import { installModes } from "./mode-controller.js";
 import { levelLabel } from "./model-levels.js";
 import { chooseLevel, chooseModel, createLevelMemory, type LevelMemory } from "./model-picker.js";
@@ -85,7 +86,7 @@ import type {
   SessionEntry,
 } from "./pi-types.js";
 import { type BoundProject, findProject, folderName } from "./project.js";
-import { runRailHit } from "./rail-actions.js";
+import { buildRailMenu, runRailHit } from "./rail-actions.js";
 import { type PendingApproval, readStatus } from "./status.js";
 import { createTabPicker, type TabPickerResult } from "./tab-picker.js";
 import { clipText, plainText, truncate } from "./text.js";
@@ -99,6 +100,8 @@ import {
 
 const VERSION_ENV = "HARIL_VERSION";
 const OUTPUT_WIDGET = "haril-output";
+// Columns the right rail is rendered at for its keyboard menu: wider than any row, so no label is cut.
+const RAIL_MENU_WIDTH = 120;
 // The bar reads the runtime and the plans again this often, and only while a runtime runs or a plan waits.
 const REFRESH_MS = 5_000;
 
@@ -761,20 +764,23 @@ export default function harilConsole(pi: ConsolePi): void {
     });
   }
 
+  // The right rail's rows and the action of each: the native pane draws them and the keyboard menu lists them.
+  function railContent(current: Session, width: number): NativeRailContent {
+    return renderNativeRailContent(
+      dashboardFacts(current),
+      current.area,
+      width,
+      current.railExpanded,
+    );
+  }
+
   function mountNativePanes(current: Session, tui: ConsoleTui): void {
     if (current.closed || current.nativePanes?.attached) return;
     const mounted = attachNativePanes(tui, current.dock, {
       project: () => current.cwd,
       effortLevel: () => modelLevelOf(current).level,
       locale: () => current.locale,
-      right: (width) => {
-        return renderNativeRailContent(
-          dashboardFacts(current),
-          current.area,
-          width,
-          current.railExpanded,
-        );
-      },
+      right: (width) => railContent(current, width),
       select(id) {
         void openDockSlot(current, id);
       },
@@ -1155,6 +1161,22 @@ export default function harilConsole(pi: ConsolePi): void {
     );
   }
 
+  // The rail takes no keyboard focus (Pi hands extension shortcuts to the editor only), so its keyboard path is a menu
+  // of what a click on it does. It is built from the same content the pane draws; the pane's own 39 columns would
+  // cut the long labels, so the content is rendered wide for it.
+  async function openRailMenu(ctx: ConsoleContext): Promise<void> {
+    const current = session;
+    if (current === undefined || !ctx.hasUI || ctx.mode !== "tui") return;
+    const entries = buildRailMenu(railContent(current, RAIL_MENU_WIDTH), current.locale);
+    const choice = await ctx.ui.select(
+      localized(current.locale, "Right panel", "Panel derecho"),
+      entries.map((entry) => entry.label),
+    );
+    if (choice === undefined || session !== current || current.closed) return;
+    const entry = entries.find((item) => item.label === choice);
+    if (entry !== undefined) runRail(current, entry.hit);
+  }
+
   async function changeTheme(current: Session, requested: string): Promise<void> {
     if (!HARIL_PALETTES.some((item) => item === requested)) {
       current.ctx.ui.notify(
@@ -1425,6 +1447,18 @@ export default function harilConsole(pi: ConsolePi): void {
       current.railVisible = !current.railVisible;
       redraw();
     },
+  });
+  // Alt+K is absent from Pi 1.2.0's default keybindings (pi-tui and pi-coding-agent), like Alt+H and Alt+I. The slash
+  // command always reaches the editor, even where a terminal swallows Alt chords.
+  pi.registerShortcut("alt+k", {
+    description: "Open the HARIL right-panel menu (arrows, Enter or Esc)",
+    handler: (ctx) => {
+      void openRailMenu(ctx);
+    },
+  });
+  pi.registerCommand("haril-panel", {
+    description: "Open the HARIL right-panel menu: its sections and actions, with arrows and Enter",
+    handler: async (_args, ctx) => openRailMenu(ctx),
   });
   // Alt+F belongs to Pi's editor.cursorWordRight; never override a built-in shortcut.
   pi.registerCommand("haril-focus", {

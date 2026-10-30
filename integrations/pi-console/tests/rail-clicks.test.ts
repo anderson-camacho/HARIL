@@ -112,10 +112,10 @@ describe("a click on the right rail body", () => {
     ["EXTENSIONES", { action: "toggle", section: "extensions" }],
     ["SESIÓN", { action: "toggle", section: "status" }],
     ["ACCIONES", { action: "toggle", section: "actions" }],
-    ["[D] Ver detalles completos", { action: "run", control: "details" }],
-    ["[M] Elegir modelo de Pi", { action: "run", control: "model" }],
-    ["[T] Tareas por agente observado", { action: "run", control: "tasks" }],
-    ["[R] Actualizar datos", { action: "run", control: "refresh" }],
+    ["Ver detalles completos", { action: "run", control: "details" }],
+    ["Elegir modelo de Pi", { action: "run", control: "model" }],
+    ["Tareas por agente observado", { action: "run", control: "tasks" }],
+    ["Actualizar datos", { action: "run", control: "refresh" }],
     ["cambiar", { action: "mode" }],
     ["Abrir menú completo", { action: "menu" }],
     ["! Provider offline", { action: "details" }],
@@ -137,7 +137,7 @@ describe("a click on the right rail body", () => {
       expanded: { extensions: true, status: true, warnings: true, actions: true },
     });
     pane.right.handleMouse?.({ type: "wheel", button: "none", x: 8, y: 5, wheelDelta: 6 });
-    const { y, hit } = pane.find("[R] Actualizar datos");
+    const { y, hit } = pane.find("Actualizar datos");
     expect(hit).toEqual({ action: "run", control: "refresh" });
     pane.click(y);
     expect(pane.railAction).toHaveBeenCalledWith(hit);
@@ -145,7 +145,7 @@ describe("a click on the right rail body", () => {
 
   it("still reaches the rows when the Espacio block is collapsed", () => {
     const pane = setup({ state: { dockExpanded: false } });
-    const { y, hit } = pane.find("[D] Ver detalles completos");
+    const { y, hit } = pane.find("Ver detalles completos");
     pane.click(y);
     expect(pane.railAction).toHaveBeenCalledWith(hit);
   });
@@ -171,7 +171,7 @@ describe("a click on the right rail body", () => {
 
   it("does not swallow a click when nobody handles rail actions", () => {
     const pane = setup({ withoutRailAction: true });
-    const { y } = pane.find("[D] Ver detalles completos");
+    const { y } = pane.find("Ver detalles completos");
     expect(pane.click(y)).toBeUndefined();
   });
 
@@ -322,7 +322,7 @@ describe("the console's rails", () => {
       expect(selects).toHaveLength(1);
       expect(selects[0]).toMatch(/^Console mode/);
 
-      click("[D] Ver detalles completos");
+      click("Ver detalles completos");
       expect(customs()).toBe(1);
     });
   });
