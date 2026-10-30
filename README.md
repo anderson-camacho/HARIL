@@ -448,6 +448,22 @@ haril config set docs.path --reset                   # desconecta; no toca la ca
 - `haril doctor` añade la fila `docs`: `ok  not connected` sin carpeta, `ok  <ruta>` si existe, y una **advertencia** (`warn`, nunca un error) si la ruta ya no existe o apunta a un archivo. Un `haril.json` antiguo, sin la sección `docs`, sigue siendo válido tal cual.
 - No hay un `docs` de ejemplo en `config/haril.example.json`: una ruta de ejemplo copiada tal cual dejaría una advertencia permanente en `haril doctor`.
 
+**La pestaña `DOCS`** del panel derecho (`Alt+L` o clic en `3:DOCS`) muestra, en solo lectura:
+
+- **Sin carpeta conectada**: «Sin carpeta conectada.», una invitación a conectar tu carpeta de documentación y la fila **▸ Definir carpeta…**.
+- **Con una carpeta**: la ruta (si no cabe en el panel se muestra el final, para que siempre se vea el nombre de la carpeta), el número de notas `.md` (con `+` si el recorrido llegó a su límite, por ejemplo «2000+ notas .md») y las **10 últimas notas** con su fecha, de la más reciente a la más antigua. Filas: **▸ Cambiar carpeta…** y **▸ Desconectar**.
+- **Con una ruta que ya no existe** (o que es un archivo): «Carpeta no encontrada: <ruta>» (o «No es una carpeta»), con las mismas dos filas, para que corrijas la ruta o la desconectes.
+
+**▸ Definir carpeta…** y **▸ Cambiar carpeta…** abren una entrada de texto «Ruta de la carpeta de documentación» (con la ruta actual como sugerencia) y ejecutan `haril config set docs.path <ruta>`; si la ruta no sirve, la consola muestra el mensaje del propio comando y no cambia nada. **▸ Desconectar** ejecuta `haril config set docs.path --reset`. Para el teclado existe `/haril-docs`:
+
+```text
+/haril-docs                  # abre la entrada de texto
+/haril-docs D:\Obsidian\MiBoveda   # conecta esa carpeta (los espacios de la ruta se respetan)
+/haril-docs clear            # desconecta
+```
+
+El recorrido es acotado: cuenta como máximo 2000 notas y baja como máximo 6 niveles de carpetas. **Omite** cualquier carpeta o archivo cuyo nombre empiece por punto (`.obsidian`, `.git`, `.trash`, `.DS_Store`...), `node_modules` y las carpetas del sistema de Windows (`$RECYCLE.BIN`, `System Volume Information`), y **no sigue enlaces simbólicos ni uniones**, así que no puede salir de la carpeta. Solo cuentan los archivos `.md`. Esta entrega no se ha probado con un Pi real: la entrada de texto y la entrega de los clics en el panel están cubiertas con pruebas automáticas, no en una terminal real.
+
 ### Columna lateral y modo enfoque de HARIL
 
 En HARIL 0.21.8 los **avisos**, los **estados de extensiones** y la **orquestación** tienen prioridad sobre las acciones largas cuando el alto de la terminal es reducido. Los bloques muestran hasta tres entradas y dejan abrir el detalle completo desde su fila «ver todos». La orquestación se despliega por defecto en su área, y el menú `/haril` sigue mostrando todas las acciones. La lista de extensiones es de **estados reportados**, no un inventario de extensiones instaladas.
@@ -688,7 +704,7 @@ El lanzador selecciona `--tui-mode fullscreen` para habilitar los eventos de mou
 
 ### Dock nativo de plugins y estado (0.22.3, integración experimental)
 
-La consola `haril` / `haril console` intenta mostrar en Pi el chat/editor originales en el centro y, a la derecha, un **panel con tres pestañas**: `MAIN`, `MEM` y `DOCS`. `MAIN` es el estado de la consola (avisos, herramientas, orquestación, áreas y actividad); `MEM` es la memoria; `DOCS` es el espacio de la documentación (se conecta con una carpeta de documentación, configuración en la siguiente entrega). El encabezado grande se compacta cuando el dock nativo está activo. Requiere una terminal de **al menos 132 columnas × 24 filas** y un Pi compatible con el layout interno de `@earendil-works/pi-tui`; si falta esa API, si Gentle Shell ya ocupa el layout o si el terminal es pequeño, HARIL conserva la cabecera anterior de forma segura.
+La consola `haril` / `haril console` intenta mostrar en Pi el chat/editor originales en el centro y, a la derecha, un **panel con tres pestañas**: `MAIN`, `MEM` y `DOCS`. `MAIN` es el estado de la consola (avisos, herramientas, orquestación, áreas y actividad); `MEM` es la memoria; `DOCS` muestra tu carpeta de documentación conectada (por ejemplo una bóveda de Obsidian; ver [Carpeta de documentación](#carpeta-de-documentación-docspath)). El encabezado grande se compacta cuando el dock nativo está activo. Requiere una terminal de **al menos 132 columnas × 24 filas** y un Pi compatible con el layout interno de `@earendil-works/pi-tui`; si falta esa API, si Gentle Shell ya ocupa el layout o si el terminal es pequeño, HARIL conserva la cabecera anterior de forma segura.
 
 Los espacios son `main`, `memory` y `docs`. **`MAIN` va siempre primera y siempre visible**: no se puede ocultar ni mover, y ningún espacio puede ponerse por encima. El bloque de estado (`Estoy en`, `Modo`, `Proyecto`, `Modelo`, `ÁREAS`, `AVISOS`, `EXTENSIONES`, `SESIÓN`, `ACCIONES` y la actividad reciente) aparece **solo bajo `MAIN`**; bajo `MEM` o `DOCS` el panel muestra únicamente la ficha de esa pestaña. El **orden y la visibilidad** de `memory` y `docs` se pueden guardar desde PowerShell:
 
@@ -721,7 +737,7 @@ Las preferencias quedan en `ui.plugins` de `haril.json`, sin borrar otras opcion
 | `/haril-plugin details` | Abre el detalle del espacio actual. |
 | Clic en una pestaña del panel | La selecciona y actualiza su ficha sin sustituir el chat. |
 
-Las fichas disponibles son de **solo lectura**: `MEM` consulta `haril memory status`; `DOCS` avisa por ahora de que no hay una carpeta de documentación conectada (se conecta con una carpeta de documentación; su configuración llega en la siguiente entrega). `MAIN` no carga nada: dibuja el estado vivo de la consola.
+Las fichas disponibles son de **solo lectura**: `MEM` consulta `haril memory status`; `DOCS` lee la carpeta de documentación conectada (`docs.path`) y no escribe nada en ella. `MAIN` no carga nada: dibuja el estado vivo de la consola.
 
 #### Catálogo de comandos (0.22.5)
 

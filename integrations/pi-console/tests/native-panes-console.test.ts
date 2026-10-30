@@ -90,7 +90,8 @@ describe("native dock integration with the HARIL Pi extension", () => {
       await fake.commands.get("haril-plugin")?.handler("docs", ctx);
       const docs = rightPane.component.render(40).map(stripAnsi).join("\n");
       expect(docs).toContain("Espacio: Documentación");
-      expect(docs).toContain("Carpeta de documentación sin conectar.");
+      expect(docs).toContain("Sin carpeta conectada.");
+      expect(docs).toContain("Definir carpeta…");
       expect(docs).not.toContain("ACTIVIDAD");
       expect(docs).not.toContain("Estoy en");
       await fake.commands.get("haril-plugin")?.handler("main", ctx);

@@ -27,6 +27,12 @@ describe("live HARIL / Pi extension command catalog", () => {
     expect(lines).toContain("/hotkeys");
   });
 
+  it("lists /haril-docs, the keyboard way to connect the documentation folder", () => {
+    const lines = commandCatalog(["haril-docs"], []).join("\n");
+    expect(lines).toContain("HARIL (1 disponibles)");
+    expect(lines).toContain("/haril-docs · Conectar la carpeta de documentación (Obsidian)");
+  });
+
   it("shows a useful empty state when Pi reports no commands", () => {
     const lines = commandCatalog([], []).join("\n");
     expect(lines).toContain("HARIL (0 disponibles)");

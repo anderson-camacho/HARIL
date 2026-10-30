@@ -35,7 +35,7 @@ import { type DashboardData, emptyDashboardData, loadDashboardData } from "./das
 import { aiEyeTone, HARIL_PALETTES, setHarilPalette, visualText } from "./dashboard-theme.js";
 import { delegateFromChat } from "./delegation.js";
 import { effectText, sourceText, valueText } from "./delegation-settings.js";
-import { loadDockDetails } from "./dock-details.js";
+import { loadDockDetails, readDocsPath } from "./dock-details.js";
 import { createDockPicker, type DockPickerResult, dockSlotAt } from "./dock-navigation.js";
 import { stopAll } from "./emergency.js";
 import { DEFAULT_UI_LOCALE, localized, readConsoleLocale, type UiLocale } from "./locale.js";
@@ -819,7 +819,10 @@ export default function harilConsole(pi: ConsolePi): void {
       select(id) {
         void openDockSlot(current, id);
       },
-      // No view declares click actions yet (DockDetails.actions), so there is nothing to activate: DOCS will.
+      // A click on a row a view declared an action for (DockDetails.actions); DOCS is the one that declares them.
+      activate(id, action) {
+        void runDockAction(current, id, action);
+      },
       railAction: (hit) => runRail(current, hit),
     });
     if (mounted.attached) current.nativePanes = mounted;
@@ -864,6 +867,125 @@ export default function harilConsole(pi: ConsolePi): void {
     );
     if (result?.type !== "open" || current.closed || session !== current) return;
     await openDockSlot(current, result.id);
+  }
+
+  // The rows a dock view declares (DockDetails.actions), by the tab they belong to. Only DOCS has any: its rows connect,
+  // change and disconnect the documentation folder.
+  async function runDockAction(current: Session, id: string, action: string): Promise<void> {
+    if (id !== "docs") return;
+    if (action === "docs:set") await connectDocsFolder(current, current.ctx);
+    else if (action === "docs:clear") await disconnectDocsFolder(current, current.ctx);
+  }
+
+  // One docs prompt or save at a time: a second click while the input is open must not open another.
+  let docsBusy = false;
+
+  // Connects (or changes) the documentation folder: the path comes from `given` (/haril-docs <path>) or from the input,
+  // which proposes the folder that is connected now. HARIL stores the path through `haril config set docs.path`, which
+  // refuses what is not an existing directory; the console shows that message as it is. Nothing is written in the folder.
+  async function connectDocsFolder(
+    current: Session,
+    ctx: ConsoleContext,
+    given?: string,
+  ): Promise<void> {
+    if (docsBusy || current.closed) return;
+    if (!cliAvailable()) {
+      ctx.ui.notify(NOT_LAUNCHED, "warning");
+      return;
+    }
+    docsBusy = true;
+    try {
+      let typed = given;
+      if (typed === undefined) {
+        const connected = await readDocsPath(current.cwd).catch(() => undefined);
+        if (current.closed || session !== current) return;
+        typed = await ctx.ui.input(
+          localized(
+            current.locale,
+            "Documentation folder path",
+            "Ruta de la carpeta de documentación",
+          ),
+          connected ?? "",
+        );
+      }
+      const value = typed?.trim() ?? "";
+      if (value === "" || current.closed || session !== current) return;
+      await saveDocsPath(current, ctx, value);
+    } finally {
+      docsBusy = false;
+    }
+  }
+
+  // Disconnects the folder (`--reset`): the folder itself is not touched.
+  async function disconnectDocsFolder(current: Session, ctx: ConsoleContext): Promise<void> {
+    if (docsBusy || current.closed) return;
+    if (!cliAvailable()) {
+      ctx.ui.notify(NOT_LAUNCHED, "warning");
+      return;
+    }
+    docsBusy = true;
+    try {
+      await saveDocsPath(current, ctx, undefined);
+    } finally {
+      docsBusy = false;
+    }
+  }
+
+  // Runs `haril config set docs.path <value>` (or `--reset` without a value), tells the user how it went with the CLI's
+  // own words when it fails, and loads the DOCS tab again when it is the one on screen. Another tab loads fresh when it
+  // is selected, so a command typed from there does not pull the user away from it.
+  async function saveDocsPath(
+    current: Session,
+    ctx: ConsoleContext,
+    value: string | undefined,
+  ): Promise<void> {
+    const result = await runHaril(
+      value === undefined
+        ? ["config", "set", "docs.path", "--reset", "--json"]
+        : ["config", "set", "docs.path", value, "--json"],
+      { cwd: current.cwd, timeoutMs: 10_000 },
+    );
+    if (current.closed || session !== current) return;
+    if (!result.ok) {
+      const reason = result.stderr
+        .split(/\r?\n/)
+        .map((line) => plainText(line.trimEnd()))
+        .filter(Boolean)
+        .join("\n");
+      ctx.ui.notify(
+        reason ||
+          localized(
+            current.locale,
+            "Could not save the documentation folder.",
+            "No se pudo guardar la carpeta de documentación.",
+          ),
+        "error",
+      );
+      return;
+    }
+    let stored = value;
+    try {
+      const written = (JSON.parse(result.stdout) as { value?: unknown }).value;
+      if (typeof written === "string" && written !== "") stored = plainText(written);
+    } catch {
+      // The CLI's answer is only used to show the path it stored; the typed one stands in.
+    }
+    ctx.ui.notify(
+      stored === undefined
+        ? localized(
+            current.locale,
+            "Documentation folder disconnected.",
+            "Carpeta de documentación desconectada.",
+          )
+        : localized(
+            current.locale,
+            `Documentation folder connected: ${stored}`,
+            `Carpeta de documentación conectada: ${stored}`,
+          ),
+      "info",
+    );
+    // Not awaited: the tab loads on its own, and the next click on its rows must not wait for the scan.
+    if (current.dock.selected === "docs") void openDockSlot(current, "docs");
   }
 
   async function managePiExtensions(current: Session, ctx: ConsoleContext): Promise<void> {
@@ -1371,6 +1493,23 @@ export default function harilConsole(pi: ConsolePi): void {
         return;
       }
       await showInlineDetails(ctx, detail.title, [detail.status, ...detail.lines]);
+    },
+  });
+  // The documentation folder (DOCS tab): the keyboard way to what its rows do with a click.
+  pi.registerCommand("haril-docs", {
+    description:
+      "HARIL: conectar la carpeta de documentación (por ejemplo Obsidian): /haril-docs [<ruta>|clear]",
+    getArgumentCompletions: (prefix: string) =>
+      [{ value: "clear", label: "clear", description: "Desconectar la carpeta" }].filter((item) =>
+        item.value.startsWith(prefix.trim().toLowerCase()),
+      ),
+    async handler(args, ctx) {
+      const current = session;
+      if (current === undefined) return;
+      const word = args.trim();
+      if (word.toLowerCase() === "clear") await disconnectDocsFolder(current, ctx);
+      else if (word !== "") await connectDocsFolder(current, ctx, word);
+      else if (ctx.hasUI) await connectDocsFolder(current, ctx);
     },
   });
   pi.registerCommand("haril-extensions", {

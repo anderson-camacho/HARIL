@@ -94,7 +94,15 @@ Las pestañas están en la parte alta del panel derecho: `[1:MAIN]  2:MEM  3:DOC
 | --- | --- | --- | --- |
 | **MAIN / Principal** | El estado de la consola: ubicación, modo, proyecto, modelo, áreas, avisos, extensiones, sesión, acciones y actividad reciente (sección 5) | Todo lo de la sección 5 | Es la única pestaña que dibuja ese bloque; siempre va primera y siempre está visible |
 | **MEM / Memoria** | Estado de salud del proveedor de memoria | Inspeccionar disponibilidad/errores | No implica que Engram esté conectado |
-| **DOCS / Documentación** | El espacio de la documentación: se conecta con tu carpeta de documentación (por ejemplo una bóveda de Obsidian) con `haril config set docs.path <ruta absoluta>` | Conectar o desconectar la carpeta (`--reset`); `haril doctor` muestra si sigue disponible | Solo lectura; no escribe en ninguna carpeta |
+| **DOCS / Documentación** | Tu carpeta de documentación conectada (por ejemplo una bóveda de Obsidian): la ruta, cuántas notas `.md` tiene y las 10 últimas | Clic en **▸ Definir carpeta…**, **▸ Cambiar carpeta…** o **▸ Desconectar**; o `/haril-docs` | Solo lectura: HARIL no escribe en la carpeta, la administras tú (con Obsidian) |
+
+### Conectar tu documentación (DOCS)
+
+La carpeta de documentación se administra **fuera de HARIL**; HARIL solo guarda su ruta (`docs.path` en `haril.json`) y la lee. Sin carpeta conectada, `DOCS` dice «Sin carpeta conectada.» y ofrece **▸ Definir carpeta…**: se abre una entrada «Ruta de la carpeta de documentación»; escribe una ruta **absoluta** (por ejemplo `D:\Obsidian\MiBoveda`) y pulsa `Enter`. Una ruta que no existe, que es un archivo o que no es absoluta se rechaza con el mensaje del comando y no se guarda nada. Si cancelas o dejas la entrada vacía, no cambia nada.
+
+Con una carpeta conectada, `DOCS` muestra la ruta (si no cabe, su final), el número de notas `.md` (con `+` si el recorrido llegó a su límite de 2000, por ejemplo «2000+ notas .md») y las 10 últimas con su fecha. Si la carpeta desaparece (un disco que no está conectado), `DOCS` dice «Carpeta no encontrada» y puedes cambiarla o desconectarla; HARIL sigue funcionando y `haril doctor` lo marca solo como advertencia. El recorrido omite lo que empieza por punto (`.obsidian`, `.git`, `.trash`), `node_modules` y las carpetas del sistema de Windows, y no sigue enlaces.
+
+Desde la consola con el teclado: `/haril-docs` (abre la entrada), `/haril-docs <ruta>` (conecta esa carpeta) y `/haril-docs clear` (desconecta). Fuera de la consola, en PowerShell: `haril config set docs.path "<ruta>"`, `haril config get docs.path` y `haril config set docs.path --reset`. Ninguna de estas órdenes toca el contenido de la carpeta.
 
 ### Ocultar, mostrar o reordenar espacios
 
@@ -241,6 +249,7 @@ Las flechas `←/→` también pueden mover la selección en los diálogos, pero
 | `/haril-commands` | Comandos efectivamente disponibles en esta sesión |
 | `/haril-plugin [main\|memory\|docs\|1..3\|details]` | Abrir una pestaña del dock |
 | `/haril-plugins` | Mostrar, ocultar o mover espacios del dock |
+| `/haril-docs [<ruta>\|clear]` | Conectar o desconectar la carpeta de documentación (pestaña `DOCS`) |
 | `/haril-extensions` | Administrar paquetes Pi declarados; la carga puede requerir reiniciar |
 | `/haril-dock left` / `right` / `both` | Mostrar u ocultar columnas |
 | `/haril-theme matrix` | Cambiar paleta del dock |
@@ -361,7 +370,7 @@ HARIL usa una **instancia privada de Pi**: sus extensiones y sesiones no se copi
 | Chat, modelos, temas e idioma | Disponibles si los proveedores y Pi responden |
 | Paneles | Nativos en Pi y terminal compatibles; en tamaños pequeños se compactan |
 | MAIN | El estado vivo de la consola; la única pestaña con ese bloque |
-| MEM y DOCS | Fichas de solo lectura; DOCS aún no tiene carpeta conectada |
+| MEM y DOCS | Fichas de solo lectura; DOCS lee la carpeta conectada con `docs.path` y nunca escribe en ella |
 | AGENTS | Agentes observados en tareas; **no** catálogo universal de perfiles |
 | AUTOMATION | Cola y runtime; **no** un calendario de tareas recurrentes |
 | ORCHESTRATION demo | **Simulada**, no invoca agentes reales |
