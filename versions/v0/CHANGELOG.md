@@ -4,6 +4,33 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.23.10
+
+- **Fecha:** 2026-10-28
+- **Estado:** los auditores tienen presupuesto para llegar a su veredicto, un auditor sin presupuesto ya no relanza al ejecutor y el presupuesto del proyecto se configura en haril.json y lo revisa la verificación previa.
+
+### Añadido
+
+- `delegation.limits.minAuditorTokens` (60 000 por defecto): el mínimo del presupuesto de un auditor. Sigue recibiendo un tercio del de su ejecutor, pero nunca menos (`auditorBudgetTokens` en `@haril/core`); el workflow lo guarda en su instantánea de límites.
+- `delegation.limits.projectTokens` (50 000 000 por defecto): el presupuesto de tokens de toda la vida del proyecto, que antes era la constante de 1 000 000 de `real-agent.ts`. Cada arranque de un agente real lo aplica, también a un presupuesto que ya existía (`budgets.setHardLimit`; un límite menor que lo gastado y reservado se queda ahí, sin espacio).
+- `budgets.find` y `budgets.setHardLimit` en el almacén.
+- `haril workflow start --preflight --agent orchestrator` rechaza, sin encolar nada, un proyecto cuyo presupuesto no cubre el turno del orquestador, con lo que queda y cómo subirlo.
+
+### Cambiado
+
+- Un auditor que termina por `insufficient_quota` antes de su veredicto no relanza al ejecutor: el paso queda fallido (y `on_audit_failure` para el workflow si se pidió) y su rama `step` conserva el trabajo. Otros fallos del auditor siguen contando como un intento fallido.
+- La demo simulada (`haril workflow demo`) reparte el presupuesto de los auditores con la misma regla.
+
+### Corregido
+
+- Con claude-bridge cada llamada vuelve a enviar todo el contexto (unos 10 000 tokens o más), así que el tercio que recibía un auditor (15 000 a 23 000 tokens) se agotaba en la segunda llamada: ninguna auditoría llegaba a su veredicto, cada ejecutor se relanzaba y repetía su trabajo, y un workflow de once pasos gastó el millón de tokens del proyecto. Desde ahí todos los agentes del proyecto fallaban en su primera llamada, sin aviso.
+
+### Verificación
+
+- Pruebas nuevas: el mínimo del auditor (`archetypes.test.ts`), `find` y `setHardLimit` (`budgets.test.ts`), y de punta a punta con el Pi falso de claude-bridge (`workflow-claude-bridge.test.ts`): auditores de 60 000 tokens, el presupuesto del proyecto con el valor por defecto y con el de haril.json sobre uno creado antes con 1 000 000, un auditor que agota su presupuesto sin relanzar al ejecutor (sin la corrección, 4 turnos de ejecutor en vez de 2) y la verificación previa que rechaza y luego acepta al subir el límite. Diagnóstico sobre la base de datos del workflow real que falló. No se repitió el workflow real con Claude.
+
+---
+
 ## 0.23.9
 
 - **Fecha:** 2026-10-27

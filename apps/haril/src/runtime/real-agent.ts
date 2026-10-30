@@ -59,7 +59,6 @@ import { outcomeWithProvider } from "./provider-failure.js";
 // Test-only seam (M2-T6): a script run with the current Node instead of the isolated Pi. It also skips the
 // manifest and INV-19 checks. Nothing in a real setup sets it.
 const PI_CLI_OVERRIDE_ENV = "HARIL_PI_CLI_OVERRIDE";
-const PROJECT_TOKEN_BUDGET = 1_000_000; // M2-D5
 const KEY_GRACE_MS = 30_000;
 const UPSTREAM_TIMEOUT_MS = 120_000;
 const RUNS_DIR = "runs";
@@ -186,14 +185,20 @@ export function createRealAgents(options: RealAgentsOptions): RealAgents {
     return brokerStart;
   }
 
-  // The project's and the task's token budgets (M2-D5), which every model call of the run is charged to.
+  // The project's and the task's token budgets (M2-D5), which every model call of the run is charged to. The project's
+  // limit is haril.json's delegation.limits.projectTokens as it is at this launch, also for a budget created before.
   function budgetsOf(spec: AgentSpec, projectId: string, maxTokens: number) {
-    const projectBudget = store.budgets.ensure({
+    const projectTokens = delegationSettings().limits.projectTokens;
+    const ensured = store.budgets.ensure({
       scopeType: "project",
       scopeId: projectId,
       projectId,
-      hardLimit: PROJECT_TOKEN_BUDGET,
+      hardLimit: projectTokens,
     });
+    const projectBudget =
+      ensured.hardLimit === projectTokens
+        ? ensured
+        : store.budgets.setHardLimit(ensured.budgetId, projectTokens);
     const taskBudget = store.budgets.ensure({
       scopeType: "task",
       scopeId: spec.taskId,
@@ -203,11 +208,16 @@ export function createRealAgents(options: RealAgentsOptions): RealAgents {
     return { projectBudget, taskBudget };
   }
 
+  // haril.json's delegation section as it is now; a file the rules refuse gives the defaults.
+  function delegationSettings(): DelegationSettings {
+    const delegation = loadDelegationSettings(host);
+    return delegation.ok ? delegation.settings : delegationSettingsOf(undefined);
+  }
+
   // The run's launch for its layer (3.12, 7.10), with its model's catalog facts when the catalog lists it.
   function launchFor(spec: AgentSpec, facts: ModelFacts | undefined): AgentLaunch {
-    const delegation = loadDelegationSettings(host);
     return agentLaunchOf({
-      settings: delegation.ok ? delegation.settings : delegationSettingsOf(undefined),
+      settings: delegationSettings(),
       facts,
       layer: spec.delegation?.role,
       workflowLimits:
@@ -523,6 +533,24 @@ export function realAgentProblem(host: HostInfo, model: string): ModelProblem | 
   const ready = readinessOf(host);
   if (!ready.ok) return { what: ready.what, fix: ready.fix };
   return model === "" ? undefined : realModelProblem(model, ready);
+}
+
+// What the project's token budget (M2-D5) leaves for a turn of `needed` tokens under the limit haril.json sets now, or
+// undefined when it is enough. A spent budget ends every real agent at its first tool call, so a workflow started on it
+// would fail at once. Reads only: the first launch creates the budget and sets its limit.
+export function projectBudgetProblem(
+  store: Store,
+  projectId: string,
+  limit: number,
+  needed: number,
+): ModelProblem | undefined {
+  const budget = store.budgets.find("project", projectId);
+  const left = Math.max(0, limit - (budget === undefined ? 0 : budget.spent + budget.reserved));
+  if (left >= needed) return undefined;
+  return {
+    what: `the project's token budget has ${left} of ${limit} tokens left and the orchestrator's turn takes ${needed}`,
+    fix: "raise it with haril config set delegation.limits.projectTokens <tokens>",
+  };
 }
 
 // What stops a real task's model before its claim (M3-T7): the provider key of a namespaced model, or for a

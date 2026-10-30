@@ -2,7 +2,8 @@
 
 ## Estado actual
 
-- **Versión actual:** 0.23.9.
+- **Versión actual:** 0.23.10.
+- **Estado (0.23.10):** los auditores reciben al menos `delegation.limits.minAuditorTokens` y, si agotan su presupuesto antes del veredicto, no relanzan al ejecutor; el presupuesto del proyecto es `delegation.limits.projectTokens` y la verificación previa lo revisa.
 - **Estado (0.23.9):** los agentes de delegación corren con los modelos `claude-bridge/<id>` de `/model` (extensión `pi-claude-bridge`), sobre el login de Claude Code y sin Broker; su uso se carga en los presupuestos y la verificación previa acepta o rechaza el carril con el motivo.
 - **Estado (0.23.8):** los planes se guardan en `docs/planes` (`/save-plan`, `haril_save_plan`) y DELEGATION los ofrece primero; la delegación arranca sin paradas por defecto y la verificación previa rechaza agentes reales que no pueden correr, en vez de dejar el workflow encolado.
 - **Estado (0.23.7):** la tarjeta `/delegate` se dibuja con márgenes, ocupa el ancho completo sin mezclarse con el panel de fondo y distingue las etiquetas de sus valores.
@@ -77,4 +78,4 @@ Las versiones 0.x son preliminares: pueden cambiar sin compatibilidad hacia atr�
 
 Más reciente primero. Cada carpeta contiene el archivo de cambios de su versión mayor, con las versiones menores y de parche, la más nueva arriba.
 
-- [v0](v0/CHANGELOG.md): versiones 0.1.0 a 0.23.9.
+- [v0](v0/CHANGELOG.md): versiones 0.1.0 a 0.23.10.

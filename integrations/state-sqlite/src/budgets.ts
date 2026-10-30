@@ -161,6 +161,26 @@ export function createBudgetFacets(options: BudgetFacetOptions): BudgetFacets {
       });
     },
 
+    find(scopeType, scopeId): BudgetRecord | undefined {
+      return db
+        .prepare(
+          `SELECT ${BUDGET_COLUMNS} FROM budgets WHERE scope_type = ? AND scope_id = ? AND unit = 'tokens' AND period_start = 0`,
+        )
+        .get(scopeType, scopeId) as unknown as BudgetRecord | undefined;
+    },
+
+    // A limit below what the budget spent and holds reserved stops there (the table's check): no room is left.
+    setHardLimit(budgetId: string, hardLimit: number): BudgetRecord {
+      return write(() => {
+        const row = requireBudget(budgetId);
+        const limit = Math.max(hardLimit, row.spent + row.reserved);
+        if (limit !== row.hardLimit) {
+          db.prepare("UPDATE budgets SET hard_limit = ? WHERE budget_id = ?").run(limit, budgetId);
+        }
+        return requireBudget(budgetId);
+      });
+    },
+
     get(budgetId: string): BudgetRecord | undefined {
       return budgetRow(budgetId);
     },

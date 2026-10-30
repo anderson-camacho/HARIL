@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   ARCHETYPES,
   archetypeTools,
+  auditorBudgetTokens,
   checkArchetypeTaskKind,
   childArchetypeOf,
   DECIDING_TOOLS,
@@ -184,6 +185,7 @@ describe("DEFAULT_DELEGATION_LIMITS", () => {
       maxWorkflowWallMs: 7_200_000,
       largeTaskTokens: 50_000,
       attemptTimeoutMs: 3_600_000,
+      minAuditorTokens: 60_000,
     });
   });
 
@@ -191,5 +193,13 @@ describe("DEFAULT_DELEGATION_LIMITS", () => {
     expect(Object.isFrozen(DEFAULT_DELEGATION_LIMITS)).toBe(true);
     expect(Object.isFrozen(DEFAULT_DELEGATION_LIMITS.maxConcurrent)).toBe(true);
     expect(Object.isFrozen(DEFAULT_DELEGATION_LIMITS.maxActiveChildren)).toBe(true);
+  });
+});
+
+describe("auditorBudgetTokens", () => {
+  it("gives an auditor a third of its executor's budget, never below minAuditorTokens", () => {
+    expect(auditorBudgetTokens(45_000, DEFAULT_DELEGATION_LIMITS)).toBe(60_000);
+    expect(auditorBudgetTokens(300_000, DEFAULT_DELEGATION_LIMITS)).toBe(100_000);
+    expect(auditorBudgetTokens(100_000, { minAuditorTokens: 1_000 })).toBe(33_334);
   });
 });

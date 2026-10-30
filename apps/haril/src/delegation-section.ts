@@ -52,5 +52,6 @@ export function delegationLimitsOf(limits: DelegationSettings["limits"]): Delega
     maxWorkflowWallMs: limits.maxWorkflowWallMs,
     largeTaskTokens: limits.largeTaskTokens,
     attemptTimeoutMs: limits.attemptTimeoutMs,
+    minAuditorTokens: limits.minAuditorTokens,
   };
 }
