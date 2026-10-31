@@ -5,6 +5,7 @@
 // push a border out of its column.
 import { type DashboardTone, paddedCell, visualText } from "./dashboard-theme.js";
 import {
+  BUTTON_LABEL_WIDTH,
   BUTTON_WIDTH,
   CARD_CONTENT_WIDTH,
   CARD_WIDTH,
@@ -204,6 +205,108 @@ export function button(label: string, options: BoxOptions = {}): string[] {
     rows.map((row) => textRow(row, "text", width - 4)),
     { ...options, width },
   );
+}
+
+// A chip is a small bordered box around a short label: three rows tall, a border and one padding column at each side of
+// the label (what a button keeps around its own). Chips sit side by side on one row, one column apart.
+const CHIP_CHROME = BUTTON_WIDTH - BUTTON_LABEL_WIDTH;
+const CHIP_GAP = 1;
+// The chip of the range in force, and the one whose dialog is open, wear the selected tone.
+const ACTIVE_TONE: DashboardTone = "yellow";
+
+export interface ChipSpec {
+  readonly label: string;
+  readonly active?: boolean;
+}
+
+// The columns a chip takes in the row, counted from the first column of the card's content: `from` is the first column
+// of its border and `to` the one after the last (the gap between two chips belongs to neither).
+interface ChipCell {
+  readonly from: number;
+  readonly to: number;
+}
+
+export interface ChipRow {
+  // The three styled rows, each exactly `width` columns wide.
+  readonly rows: string[];
+  // One cell for each chip that was drawn.
+  readonly cells: ChipCell[];
+}
+
+// The width of the label of each chip so that the row fits `room` columns. A label that does not fit is cut with an
+// ellipsis, as a button's is: the widest first (the last of equals), a column at a time, down to one column. Chips that
+// still do not fit are dropped from the end, so the row never grows.
+function fitChipLabels(natural: readonly number[], room: number): number[] {
+  const labels = [...natural];
+  const total = (): number =>
+    labels.reduce((sum, width) => sum + width + CHIP_CHROME, 0) +
+    CHIP_GAP * Math.max(0, labels.length - 1);
+  while (total() > room) {
+    let widest = -1;
+    for (const [index, width] of labels.entries()) {
+      if (width > 1 && (widest < 0 || width >= (labels[widest] ?? 0))) widest = index;
+    }
+    if (widest < 0) break;
+    labels[widest] = (labels[widest] ?? 1) - 1;
+  }
+  while (labels.length > 0 && total() > room) labels.pop();
+  return labels;
+}
+
+// Several actions as chips on one row: three rows of `width` columns (a card's content by default) and the columns each
+// chip answers a click in. The chips are as narrow as their labels and left-aligned; what is left of the row is blank.
+export function chipRow(
+  chips: readonly ChipSpec[],
+  options: { readonly ascii?: boolean; readonly width?: number } = {},
+): ChipRow {
+  const glyphs = railGlyphs(options.ascii);
+  const room = options.width ?? CARD_CONTENT_WIDTH;
+  const labels = chips.map((chip) => plainText(chip.label).trim());
+  const widths = fitChipLabels(
+    labels.map((label) => textWidth(label)),
+    room,
+  );
+  const top: string[] = [];
+  const middle: string[] = [];
+  const bottom: string[] = [];
+  const cells: ChipCell[] = [];
+  let used = 0;
+  for (const [index, labelWidth] of widths.entries()) {
+    const chip = chips[index];
+    const width = labelWidth + CHIP_CHROME;
+    const border = chip?.active === true ? ACTIVE_TONE : BORDER_TONE;
+    const text = chip?.active === true ? ACTIVE_TONE : "text";
+    if (index > 0) {
+      const gap = visualText(" ".repeat(CHIP_GAP), "text", "panel");
+      top.push(gap);
+      middle.push(gap);
+      bottom.push(gap);
+      used += CHIP_GAP;
+    }
+    top.push(
+      visualText(
+        `${glyphs.topLeft}${glyphs.horizontal.repeat(width - 2)}${glyphs.topRight}`,
+        border,
+        "panel",
+      ),
+    );
+    middle.push(
+      visualText(`${glyphs.vertical} `, border, "panel") +
+        paddedCell(labels[index] ?? "", labelWidth, text, "panel") +
+        visualText(` ${glyphs.vertical}`, border, "panel"),
+    );
+    bottom.push(
+      visualText(
+        `${glyphs.bottomLeft}${glyphs.horizontal.repeat(width - 2)}${glyphs.bottomRight}`,
+        border,
+        "panel",
+      ),
+    );
+    cells.push({ from: used, to: used + width });
+    used += width;
+  }
+  const rest = paddedCell("", room - used, "text", "panel");
+  return { rows: [top, middle, bottom].map((parts) => parts.join("") + rest), cells };
 }
 
 // A row of a titleless box: text and the tone it is drawn in (the header's selected row is yellow).

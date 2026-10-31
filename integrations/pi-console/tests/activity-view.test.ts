@@ -12,7 +12,7 @@ import {
 } from "../src/activity-view.js";
 import { NOT_LAUNCHED } from "../src/cli.js";
 import { CARD_CONTENT_WIDTH, RAIL_BODY_WIDTH } from "../src/rail-metrics.js";
-import { flatView, railRows } from "../src/rail-view.js";
+import { flatView, railHitAt, railRows } from "../src/rail-view.js";
 import { stripAnsi, textWidth } from "../src/text.js";
 
 // The ACT tab: what it asks `haril events` for, what it reads from the answer, and the cards it makes of it.
@@ -211,14 +211,14 @@ describe("the cards of the tab", () => {
       ]),
       { locale: "es", range: ALL_RANGE, busy: false },
     );
-    expect(status).toBe("Actividad reciente");
+    expect(status).toBe("Actividad");
     expect(titles(cards)).toEqual(["Filtro", "Acciones", "Actividad · 3"]);
     const english = activityRows(loaded([event(1, "a.b", 1)]), {
       locale: "en",
       range: ALL_RANGE,
       busy: false,
     });
-    expect(english.status).toBe("Recent activity");
+    expect(english.status).toBe("Activity");
     expect(titles(english.cards)).toEqual(["Filter", "Actions", "Activity · 1"]);
   });
 
@@ -342,24 +342,25 @@ describe("the cards of the tab", () => {
     expect(english.cards[2]?.rows.join(" ")).toContain("No project registered");
   });
 
-  it("offer five buttons, each with its own action", () => {
+  it("offer four compact chips and a «Actualizar» button, each with its own action", () => {
     const { cards } = activityRows(loaded([]), { locale: "es", range: ALL_RANGE, busy: false });
     expect(cards[1]?.rows).toEqual([]);
-    expect(cards[1]?.buttons).toEqual([
-      { label: "Última hora", action: ACTIVITY_ACTIONS.hour },
-      { label: "Último día", action: ACTIVITY_ACTIONS.day },
-      { label: "Rango…", action: ACTIVITY_ACTIONS.range },
-      { label: "Todo", action: ACTIVITY_ACTIONS.all },
-      { label: "Actualizar", action: ACTIVITY_ACTIONS.refresh },
+    // The chips carry a short word to draw and the full words of the menu entry.
+    expect(cards[1]?.chips).toEqual([
+      { label: "1h", name: "Última hora", action: ACTIVITY_ACTIONS.hour, active: false },
+      { label: "1d", name: "Último día", action: ACTIVITY_ACTIONS.day, active: false },
+      { label: "Rango", name: "Rango…", action: ACTIVITY_ACTIONS.range, active: false },
+      { label: "Todo", name: "Todo", action: ACTIVITY_ACTIONS.all, active: true },
     ]);
+    expect(cards[1]?.buttons).toEqual([{ label: "Actualizar", action: ACTIVITY_ACTIONS.refresh }]);
     const english = activityRows(loaded([]), { locale: "en", range: ALL_RANGE, busy: false });
-    expect(english.cards[1]?.buttons?.map((button) => button.label)).toEqual([
-      "Last hour",
-      "Last day",
-      "Range…",
-      "All",
-      "Refresh",
+    expect(english.cards[1]?.chips?.map((chip) => [chip.label, chip.name])).toEqual([
+      ["1h", "Last hour"],
+      ["1d", "Last day"],
+      ["Range", "Range…"],
+      ["All", "All"],
     ]);
+    expect(english.cards[1]?.buttons?.map((button) => button.label)).toEqual(["Refresh"]);
     expect(Object.values(ACTIVITY_ACTIONS)).toEqual([
       "activity:hour",
       "activity:day",
@@ -367,6 +368,60 @@ describe("the cards of the tab", () => {
       "activity:all",
       "activity:refresh",
     ]);
+  });
+
+  it.each([
+    ["every event", ALL_RANGE, "Todo"],
+    ["the last hour", { kind: "hour" } as ActivityRange, "1h"],
+    ["the last day", { kind: "day" } as ActivityRange, "1d"],
+    [
+      "a range typed by the user",
+      { kind: "custom", from: NOW - 3_600_000 } as ActivityRange,
+      "Rango",
+    ],
+  ])("highlight the chip of the range in force (%s) and no other", (_name, range, label) => {
+    const { cards } = activityRows(loaded([]), { locale: "es", range, busy: false });
+    const active = cards[1]?.chips
+      ?.filter((chip) => chip.active === true)
+      .map((chip) => chip.label);
+    expect(active).toEqual([label]);
+  });
+
+  it("show the «Rango» chip as waiting, and highlighted, while its dialog is open", () => {
+    const es = activityRows(loaded([]), {
+      locale: "es",
+      range: ALL_RANGE,
+      busy: false,
+      waiting: true,
+    });
+    expect(es.cards[1]?.chips?.map((chip) => chip.label)).toEqual(["1h", "1d", "Espera", "Todo"]);
+    // The dialog is the user's now: the chip is lit, whatever range is in force, and «Todo» is not.
+    expect(es.cards[1]?.chips?.filter((chip) => chip.active).map((chip) => chip.action)).toEqual([
+      ACTIVITY_ACTIONS.range,
+    ]);
+    // The words of the menu entry do not change.
+    expect(es.cards[1]?.chips?.[2]?.name).toBe("Rango…");
+    const en = activityRows(loaded([]), {
+      locale: "en",
+      range: { kind: "hour" },
+      busy: false,
+      waiting: true,
+    });
+    expect(en.cards[1]?.chips?.map((chip) => chip.label)).toEqual(["1h", "1d", "Waiting", "All"]);
+    expect(en.cards[1]?.chips?.filter((chip) => chip.active).map((chip) => chip.label)).toEqual([
+      "Waiting",
+    ]);
+  });
+
+  it("keep the chips in the card while only the dialog is open: the «Cargando…» row is for reading", () => {
+    const { cards } = activityRows(loaded([]), {
+      locale: "es",
+      range: ALL_RANGE,
+      busy: false,
+      waiting: true,
+    });
+    expect(cards[1]?.rows).toEqual([]);
+    expect(cards[1]?.buttons).toEqual([{ label: "Actualizar", action: ACTIVITY_ACTIONS.refresh }]);
   });
 
   it("show «… Cargando…» in place of the buttons while the events are read, and keep what was read", () => {
@@ -377,6 +432,7 @@ describe("the cards of the tab", () => {
     });
     expect(busy.cards[1]?.rows).toEqual(["… Cargando…"]);
     expect(busy.cards[1]?.buttons).toBeUndefined();
+    expect(busy.cards[1]?.chips).toBeUndefined();
     expect(busy.cards[2]?.rows).toEqual(["#1 task.started · hace 1 min"]);
     const english = activityRows(loaded([]), { locale: "en", range: ALL_RANGE, busy: true });
     expect(english.cards[1]?.rows).toEqual(["… Loading…"]);
@@ -413,44 +469,62 @@ describe("the tab as the right rail draws it", () => {
     "draws every row (%s) exactly the rail's width, in Unicode and ASCII, in both languages",
     (_name, data) => {
       for (const locale of ["es", "en"] as const) {
-        const { cards } = activityRows(data, {
-          locale,
-          range: { kind: "custom", from: NOW - 5 * 3_600_000, to: NOW },
-          busy: false,
-        });
-        for (const ascii of [false, true]) {
-          const drawn = railRows({ title: "Actividad", lines: [], cards }, ascii);
-          const plain = drawn.rows.map(stripAnsi);
-          expect(new Set(plain.map(textWidth)), `${locale} ascii=${ascii}`).toEqual(
-            new Set([RAIL_BODY_WIDTH]),
-          );
-          expect(drawn.hits).toHaveLength(drawn.rows.length);
-          if (ascii) expect(plain.join("")).not.toMatch(/[╭╮╰╯─│▸]/u);
+        for (const waiting of [false, true]) {
+          const { cards } = activityRows(data, {
+            locale,
+            range: { kind: "custom", from: NOW - 5 * 3_600_000, to: NOW },
+            busy: false,
+            waiting,
+          });
+          for (const ascii of [false, true]) {
+            const drawn = railRows({ title: "Actividad", lines: [], cards }, ascii);
+            const plain = drawn.rows.map(stripAnsi);
+            expect(new Set(plain.map(textWidth)), `${locale} ascii=${ascii}`).toEqual(
+              new Set([RAIL_BODY_WIDTH]),
+            );
+            expect(drawn.hits).toHaveLength(drawn.rows.length);
+            if (ascii) expect(plain.join("")).not.toMatch(/[╭╮╰╯─│▸]/u);
+          }
         }
       }
     },
   );
 
-  it("gives all three rows of each button its action, and no other row one", () => {
-    const { cards } = activityRows(loaded(events.slice(0, 3)), {
-      locale: "es",
-      range: ALL_RANGE,
-      busy: false,
-    });
-    const drawn = railRows({ title: "Actividad", lines: [], cards }, false);
-    const plain = drawn.rows.map(stripAnsi);
-    for (const [label, action] of [
-      ["Última hora", ACTIVITY_ACTIONS.hour],
-      ["Último día", ACTIVITY_ACTIONS.day],
-      ["Rango…", ACTIVITY_ACTIONS.range],
-      ["Todo", ACTIVITY_ACTIONS.all],
-      ["Actualizar", ACTIVITY_ACTIONS.refresh],
+  it("draws the four chips on one row of three, the button below, and gives each its columns", () => {
+    for (const [locale, words] of [
+      ["es", "│ 1h │ │ 1d │ │ Rango │ │ Todo │"],
+      ["en", "│ 1h │ │ 1d │ │ Range │ │ All │"],
     ] as const) {
-      const middle = plain.findIndex((row) => row.includes(`▸ ${label}`));
-      expect(middle, label).toBeGreaterThan(0);
-      expect(drawn.hits.slice(middle - 1, middle + 2), label).toEqual([action, action, action]);
+      const { cards } = activityRows(loaded(events.slice(0, 3)), {
+        locale,
+        range: ALL_RANGE,
+        busy: false,
+      });
+      const drawn = railRows({ title: "Actividad", lines: [], cards }, false);
+      const plain = drawn.rows.map(stripAnsi);
+      const middle = plain.findIndex((row) => row.includes(words));
+      expect(middle, locale).toBeGreaterThan(0);
+      // The same cells on the three rows of the chips, a click anywhere on a chip's rows runs its action.
+      const chipRows = [drawn.hits[middle - 1], drawn.hits[middle], drawn.hits[middle + 1]];
+      const at = (x: number) => chipRows.map((hit) => railHitAt(hit, x));
+      // A click's column counts the rail's separator, which a row of the body does not carry.
+      const first = (plain[middle]?.indexOf("│ 1h") ?? -2) + 1;
+      const run = (offset: number) => at(first + offset);
+      expect(run(1), locale).toEqual(Array(3).fill(ACTIVITY_ACTIONS.hour));
+      expect(run(8), locale).toEqual(Array(3).fill(ACTIVITY_ACTIONS.day));
+      expect(run(16), locale).toEqual(Array(3).fill(ACTIVITY_ACTIONS.range));
+      expect(run(27), locale).toEqual(Array(3).fill(ACTIVITY_ACTIONS.all));
+      expect(run(6), locale).toEqual(Array(3).fill(undefined));
+      // The button under the chips is a whole-row action.
+      const refresh = plain.findIndex(
+        (row) => row.includes("▸ Refresh") || row.includes("▸ Actualizar"),
+      );
+      expect(drawn.hits.slice(refresh - 1, refresh + 2), locale).toEqual(
+        Array(3).fill(ACTIVITY_ACTIONS.refresh),
+      );
+      // Nothing else in the card runs anything: the three chip rows and the three of the button.
+      expect(drawn.hits.filter((hit) => hit !== undefined)).toHaveLength(6);
     }
-    expect(drawn.hits.filter((hit) => hit !== undefined)).toHaveLength(15);
   });
 
   it("is also a flat view whose actions carry the words the keyboard menu reads", () => {

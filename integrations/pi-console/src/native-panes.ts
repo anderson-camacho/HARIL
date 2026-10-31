@@ -15,7 +15,7 @@ import type { UiLocale } from "./locale.js";
 import type { ConsoleMouseEvent, ConsoleTui } from "./pi-types.js";
 import { type BoxRow, blankRow, inset, plainBox, railGlyphs } from "./rail-cards.js";
 import { CARD_CONTENT_WIDTH, CARD_TEXT_X, RAIL_BODY_WIDTH, RAIL_WIDTH } from "./rail-metrics.js";
-import { railRows } from "./rail-view.js";
+import { type RailHit, railHitAt, railRows } from "./rail-view.js";
 import { plainText, wrap } from "./text.js";
 
 const LAYOUT_NODE = Symbol.for("@earendil-works/pi-tui/layout-node");
@@ -202,8 +202,9 @@ interface RightRailStructure {
   readonly toggleRows: number;
   readonly detailStart: number;
   readonly detailCount: number;
-  // The action a click runs on each row of the view (aligned with it, from detailStart); undefined where there is none.
-  readonly detailHits: readonly (string | undefined)[];
+  // What a click runs on each row of the view (aligned with it, from detailStart): an action for the whole row, an action
+  // for each column range (a row of chips), or nothing.
+  readonly detailHits: readonly RailHit[];
   // First row of the status block (the dashboard lines), so a clicked row maps to the hit of its dashboard line; -1
   // when the block is not drawn, so no click is ever looked up in a block that is not there.
   readonly dashboardStart: number;
@@ -242,7 +243,7 @@ function renderRightRailContent(
     tabStart: -1,
     detailStart: -1,
     detailCount: 0,
-    detailHits: [] as (string | undefined)[],
+    detailHits: [] as RailHit[],
   };
 
   if (state.leftVisible) {
@@ -507,8 +508,11 @@ export function attachNativePanes(
             clickedRow < structure.detailStart + structure.detailCount
           ) {
             // The actions a view declares are its own, whichever tab it is: any row of it may be clickable (the
-            // three rows of a button run the same action).
-            const action = structure.detailHits[clickedRow - structure.detailStart];
+            // three rows of a button run the same action; those of a chip, the action of the chip under the click).
+            const action = railHitAt(
+              structure.detailHits[clickedRow - structure.detailStart],
+              event.x,
+            );
             if (action !== undefined && state.detail?.id === state.selected) {
               options.activate?.(state.selected, action);
               return { handled: true, render: true };

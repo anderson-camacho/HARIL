@@ -68,6 +68,8 @@ export interface DockSource {
   readonly now?: () => number;
   // The ACT tab is being loaded again: its buttons give way to a «Cargando…» row.
   readonly activityBusy?: boolean;
+  // The «Rango…» dialog of the ACT tab is open: its chip says it is waiting.
+  readonly activityWaiting?: boolean;
   // The area chosen in MAIN and its controls, for the ACC tab: it reads nothing, it is made of this.
   readonly actions?: ActionsInput;
   readonly locale?: UiLocale;
@@ -306,6 +308,7 @@ export async function loadDockDetails(
           locale: source.locale ?? "es",
           range: source.activityRange ?? ALL_RANGE,
           busy: source.activityBusy ?? false,
+          waiting: source.activityWaiting ?? false,
         });
       }
       // ACC has nothing to load either: the console hands in the area and its controls.

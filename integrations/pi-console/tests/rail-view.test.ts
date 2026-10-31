@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { CARD_CONTENT_WIDTH, RAIL_BODY_WIDTH } from "../src/rail-metrics.js";
-import { type DockCard, flatView, railRows } from "../src/rail-view.js";
+import { CARD_CONTENT_WIDTH, CARD_TEXT_X, RAIL_BODY_WIDTH } from "../src/rail-metrics.js";
+import { type DockCard, flatView, railHitAt, railRows } from "../src/rail-view.js";
 import { stripAnsi, textWidth } from "../src/text.js";
 
 // A view is data (cards and buttons); the rail draws it and the left dock reads it flat. What a menu or a click needs
@@ -155,6 +155,139 @@ describe("the tone of a row", () => {
       "  a",
       "  b",
     ]);
+  });
+});
+
+// Several chips share the same three rows, so a row can carry one action for each column range instead of a single
+// action for the whole row (cells), and a click is resolved against the cells by its column.
+describe("chips in a card", () => {
+  const CHIPS_CARD: DockCard = {
+    title: "Acciones",
+    rows: [],
+    chips: [
+      { label: "1h", name: "Última hora", action: "a:hour" },
+      { label: "1d", name: "Último día", action: "a:day" },
+      { label: "Rango", name: "Rango…", action: "a:range", active: true },
+      { label: "Todo", name: "Todo", action: "a:all" },
+    ],
+    buttons: [{ label: "Actualizar", action: "a:refresh" }],
+  };
+  const view = (ascii: boolean) =>
+    railRows({ title: "Actividad", lines: [], cards: [CHIPS_CARD] }, ascii);
+
+  it("reads flat as one line for each chip, with the words of its menu entry, then the buttons", () => {
+    const { lines, actions } = flatView([CHIPS_CARD]);
+    expect(lines).toEqual([
+      "Acciones",
+      "▸ Última hora",
+      "▸ Último día",
+      "▸ Rango…",
+      "▸ Todo",
+      "▸ Actualizar",
+    ]);
+    expect(actions).toEqual([
+      { line: 1, action: "a:hour", label: "Última hora" },
+      { line: 2, action: "a:day", label: "Último día" },
+      { line: 3, action: "a:range", label: "Rango…" },
+      { line: 4, action: "a:all", label: "Todo" },
+      { line: 5, action: "a:refresh", label: "Actualizar" },
+    ]);
+  });
+
+  it("draws the chips in one row of boxes, above the buttons, each row the width of the rail's body", () => {
+    const drawn = view(false);
+    const rows = drawn.rows.map(stripAnsi);
+    // Border, three rows of chips, a button of three rows and the border.
+    expect(rows).toHaveLength(8);
+    expect(new Set(rows.map(textWidth))).toEqual(new Set([RAIL_BODY_WIDTH]));
+    expect(rows[1]).toContain("╭────╮ ╭────╮ ╭───────╮ ╭──────╮");
+    expect(rows[2]).toContain("│ 1h │ │ 1d │ │ Rango │ │ Todo │");
+    expect(rows[5]).toContain("▸ Actualizar");
+    // The labels are the chips' own short words; the long ones are the menu's.
+    expect(rows.join("\n")).not.toContain("Última hora");
+  });
+
+  it("aligns cells with the chip rows and one action with each row of the button", () => {
+    const drawn = view(false);
+    expect(drawn.hits).toHaveLength(drawn.rows.length);
+    const cells = {
+      cells: [
+        { from: 0, to: 6, action: "a:hour" },
+        { from: 7, to: 13, action: "a:day" },
+        { from: 14, to: 23, action: "a:range" },
+        { from: 24, to: 32, action: "a:all" },
+      ],
+    };
+    expect(drawn.hits).toEqual([
+      undefined,
+      cells,
+      cells,
+      cells,
+      "a:refresh",
+      "a:refresh",
+      "a:refresh",
+      undefined,
+    ]);
+  });
+
+  it("resolves a click by its column: a chip, from its first border to its last; never a gap or the margins", () => {
+    const { hits } = view(false);
+    const at = (x: number) => railHitAt(hits[2], x);
+    const first = CARD_TEXT_X;
+    expect(at(first - 1)).toBeUndefined();
+    expect(at(first)).toBe("a:hour");
+    expect(at(first + 5)).toBe("a:hour");
+    expect(at(first + 6)).toBeUndefined();
+    expect(at(first + 7)).toBe("a:day");
+    expect(at(first + 12)).toBe("a:day");
+    expect(at(first + 13)).toBeUndefined();
+    expect(at(first + 14)).toBe("a:range");
+    expect(at(first + 22)).toBe("a:range");
+    expect(at(first + 23)).toBeUndefined();
+    expect(at(first + 24)).toBe("a:all");
+    expect(at(first + 31)).toBe("a:all");
+    // The spare column after the last chip, the card's padding and its border, and the rail's margin and separator.
+    expect(at(first + 32)).toBeUndefined();
+    expect(at(first + CARD_CONTENT_WIDTH)).toBeUndefined();
+    expect(at(RAIL_BODY_WIDTH)).toBeUndefined();
+    expect(at(0)).toBeUndefined();
+    // The same three rows answer the same way; the top and bottom borders of the card answer nothing.
+    for (const row of [1, 2, 3]) expect(railHitAt(hits[row], first + 8)).toBe("a:day");
+    expect(railHitAt(hits[0], first + 8)).toBeUndefined();
+    expect(railHitAt(hits[7], first + 8)).toBeUndefined();
+  });
+
+  it("keeps a single action for the whole row for a button, whatever the column", () => {
+    const { hits } = view(false);
+    for (const x of [0, CARD_TEXT_X, 20, RAIL_BODY_WIDTH]) {
+      expect(railHitAt(hits[5], x)).toBe("a:refresh");
+    }
+    expect(railHitAt(undefined, 10)).toBeUndefined();
+  });
+
+  it("draws and answers the same in ASCII", () => {
+    const ascii = view(true);
+    const plain = ascii.rows.map(stripAnsi);
+    expect(new Set(plain.map(textWidth))).toEqual(new Set([RAIL_BODY_WIDTH]));
+    expect(plain[2]).toContain("| 1h | | 1d | | Rango | | Todo |");
+    expect(plain.join("")).not.toMatch(/[╭╮╰╯─│▸]/u);
+    expect(ascii.hits).toEqual(view(false).hits);
+  });
+
+  it("draws the rows of a card before its chips, and keeps those rows without a hit", () => {
+    const drawn = railRows(
+      {
+        title: "x",
+        lines: [],
+        cards: [{ ...CHIPS_CARD, rows: ["Filtro: Todo"], buttons: undefined }],
+      },
+      false,
+    );
+    const plain = drawn.rows.map(stripAnsi);
+    expect(plain[1]).toContain("Filtro: Todo");
+    expect(plain[3]).toContain("│ 1h │");
+    expect(drawn.hits[1]).toBeUndefined();
+    expect(railHitAt(drawn.hits[3], CARD_TEXT_X + 8)).toBe("a:day");
   });
 });
 

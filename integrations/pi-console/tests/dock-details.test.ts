@@ -340,7 +340,7 @@ describe("the ACT view", () => {
     ]);
     expect(details.id).toBe("activity");
     expect(details.title).toBe("Actividad");
-    expect(details.status).toBe("Actividad reciente");
+    expect(details.status).toBe("Actividad");
     expect(details.lines).toContain("Actividad · 2");
     expect(details.lines).toContain("  #375 watchdog.closed · hace 3 min");
     expect(details.lines).toContain("  #373 workflow.failed · hace 9 min");
@@ -374,7 +374,7 @@ describe("the ACT view", () => {
       },
     });
     expect(calls).toEqual([["events", "--project", "demo", "--limit", "50", "--json"]]);
-    expect(details.status).toBe("Recent activity");
+    expect(details.status).toBe("Activity");
     expect(details.lines).toContain("  #375 watchdog.closed · 3 min ago");
     expect(details.actions?.map((action) => action.label)).toContain("Last hour");
   });
