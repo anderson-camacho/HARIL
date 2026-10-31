@@ -124,7 +124,7 @@ describe("Pi's native split-pane adapter", () => {
     });
     // A stored "explorer" (the retired TREE slot) or "git" is not a registered view, so it never reaches the dock.
     // MAIN is first and visible whatever the stored list says.
-    expect(slots.map((slot) => slot.id)).toEqual(["main", "docs", "memory"]);
+    expect(slots.map((slot) => slot.id)).toEqual(["main", "docs", "memory", "activity"]);
     expect(slots[0]).toEqual({ id: "main", visible: true });
     const state = { ...initialPaneSettings(), slots, selected: "docs" as const };
     const lines = renderLeftDock(23, 25, state, "code").map(stripAnsi);
@@ -135,7 +135,7 @@ describe("Pi's native split-pane adapter", () => {
     expect(text).not.toContain("MEM");
     expect(
       readDockSlots({ value: [{ id: "explorer", visible: true }] }).map((slot) => slot.id),
-    ).toEqual(["main", "memory", "docs"]);
+    ).toEqual(["main", "memory", "docs", "activity"]);
     const oldSettings = readDockSlots({
       value: [
         { id: "memory", visible: false },
@@ -145,7 +145,7 @@ describe("Pi's native split-pane adapter", () => {
     });
     expect(oldSettings[1]).toEqual({ id: "memory", visible: false });
     expect(oldSettings[2]).toEqual({ id: "docs", visible: true });
-    expect(oldSettings.map((slot) => slot.id)).toEqual(["main", "memory", "docs"]);
+    expect(oldSettings.map((slot) => slot.id)).toEqual(["main", "memory", "docs", "activity"]);
     expect(renderRightDock(20, 4, [" ".repeat(19)]).map(stripAnsi)).toHaveLength(4);
     const english = renderLeftDock(23, 25, state, "code", 0, "high", "en")
       .map(stripAnsi)

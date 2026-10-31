@@ -10,6 +10,14 @@ const current = [
   { id: "main", visible: true },
   { id: "memory", visible: false },
   { id: "docs", visible: true },
+  { id: "activity", visible: true },
+];
+
+// The list the previous release wrote: MAIN, MEM and DOCS, before the ACT slot existed.
+const threeSlots = [
+  { id: "main", visible: true },
+  { id: "memory", visible: false },
+  { id: "docs", visible: true },
 ];
 
 // Releases before the MAIN/MEM/DOCS dock stored GIT, YT, MEM and THEME. MAIN did not exist and the other three
@@ -28,11 +36,14 @@ const defaults = [
   { id: "main", visible: true },
   { id: "memory", visible: true },
   { id: "docs", visible: true },
+  { id: "activity", visible: true },
 ];
 
 describe("dock slot preferences", () => {
-  it("offers MAIN, MEM and DOCS and no longer knows the retired slots", () => {
-    expect(DOCK_SLOTS.map((slot) => slot.id)).toEqual(["main", "memory", "docs"]);
+  it("offers MAIN, MEM, DOCS and ACT and no longer knows the retired slots", () => {
+    expect(DOCK_SLOTS.map((slot) => slot.id)).toEqual(["main", "memory", "docs", "activity"]);
+    expect(DOCK_SLOTS.find((slot) => slot.id === "activity")?.label).toBe("Actividad");
+    expect(dockSlotExists("activity")).toBe(true);
     for (const retired of ["explorer", "git", "youtube", "themes"]) {
       expect(dockSlotExists(retired)).toBe(false);
     }
@@ -40,9 +51,37 @@ describe("dock slot preferences", () => {
     expect(dockSlotExists("docs")).toBe(true);
   });
 
-  it("accepts the three-entry list as it is", () => {
+  it("accepts the four-entry list as it is", () => {
     expect(dockPreferenceErrors(current)).toEqual([]);
     expect(resolveDockSlots(current)).toEqual(current);
+  });
+
+  it("keeps validating the three-entry list of the previous release: ACT is appended, visible", () => {
+    expect(dockPreferenceErrors(threeSlots)).toEqual([]);
+    expect(resolveDockSlots(threeSlots)).toEqual(current);
+    // Where the user put the others stays; ACT goes after them.
+    const reordered = [threeSlots[0], threeSlots[2], threeSlots[1]];
+    expect(resolveDockSlots(reordered).map((slot) => slot.id)).toEqual([
+      "main",
+      "docs",
+      "memory",
+      "activity",
+    ]);
+    // It is not written back by a read: the stored list is untouched.
+    const stored = threeSlots.map((slot) => ({ ...slot }));
+    resolveDockSlots(stored);
+    expect(stored).toEqual(threeSlots);
+  });
+
+  it("keeps a hidden ACT hidden and its place in the list", () => {
+    const stored = [
+      { id: "main", visible: true },
+      { id: "activity", visible: false },
+      { id: "docs", visible: true },
+      { id: "memory", visible: true },
+    ];
+    expect(dockPreferenceErrors(stored)).toEqual([]);
+    expect(resolveDockSlots(stored)).toEqual(stored);
   });
 
   it("defaults to every slot visible, with main first, when nothing is stored", () => {
@@ -73,6 +112,7 @@ describe("dock slot preferences", () => {
         { id: "main", visible: true },
         { id: "docs", visible: true },
         { id: "memory", visible: false },
+        { id: "activity", visible: true },
       ]);
     });
   });
@@ -86,6 +126,7 @@ describe("dock slot preferences", () => {
         { id: "main", visible: true },
         { id: "docs", visible: false },
         { id: "memory", visible: true },
+        { id: "activity", visible: true },
       ]);
     });
   });
@@ -96,11 +137,12 @@ describe("dock slot preferences", () => {
       expect(dockPreferenceErrors(withExplorer)).toEqual([]);
     });
 
-    it("resolves to main, memory and docs, keeping the visibility and the place of memory", () => {
+    it("resolves to main, memory, docs and activity, keeping the visibility and the place of memory", () => {
       expect(resolveDockSlots(fourSlots)).toEqual([
         { id: "main", visible: true },
         { id: "memory", visible: false },
         { id: "docs", visible: true },
+        { id: "activity", visible: true },
       ]);
       expect(resolveDockSlots(withExplorer)).toEqual(resolveDockSlots(fourSlots));
       const reordered = [fourSlots[3], fourSlots[2], fourSlots[0], fourSlots[1]];
@@ -108,6 +150,7 @@ describe("dock slot preferences", () => {
         "main",
         "memory",
         "docs",
+        "activity",
       ]);
     });
 

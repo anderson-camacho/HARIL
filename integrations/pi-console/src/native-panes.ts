@@ -214,7 +214,7 @@ const NO_BLOCK: NativeRailContent = { lines: [], hits: [] };
 
 // In single-rail mode, the right rail hosts the active space (tabs and, under them, its view) directly under the
 // "Espacio" section, freeing the left side entirely for the Pi chat. The header is a box (the space, the tabs); the
-// status block (status, mode, sections, actions and recent activity) is MAIN's own view, drawn only when MAIN is the
+// status block (status, mode, sections and actions; the recent activity is the ACT tab's) is MAIN's own view, drawn only when MAIN is the
 // selected tab; any other tab shows its view as cards.
 function renderRightRailContent(
   state: PaneSettings,

@@ -313,3 +313,112 @@ describe("the DOCS view", () => {
     });
   });
 });
+
+// The ACT view: the project's recent events through `haril events`, in the range the console holds. The cards and every
+// state of them are covered in activity-view.test.ts; this is the plain fact that the view reads through the CLI and
+// that nothing that goes wrong reaches the console as an exception.
+describe("the ACT view", () => {
+  const NOW = Date.UTC(2026, 9, 30, 20, 15, 0);
+  const events = JSON.stringify([
+    { seq: 373, type: "workflow.failed", time: new Date(NOW - 9 * 60_000).toISOString() },
+    { seq: 375, type: "watchdog.closed", time: new Date(NOW - 3 * 60_000).toISOString() },
+  ]);
+
+  it("asks `haril events` for the project and the range, and shows the newest event first", async () => {
+    const calls: (readonly string[])[] = [];
+    const details = await loadDockDetails("activity", ".", {
+      projectSlug: "demo",
+      activityRange: { kind: "hour" },
+      now: () => NOW,
+      events: async (args) => {
+        calls.push(args);
+        return { ok: true, stdout: events, stderr: "" };
+      },
+    });
+    expect(calls).toEqual([
+      ["events", "--project", "demo", "--limit", "50", "--since", "1h", "--json"],
+    ]);
+    expect(details.id).toBe("activity");
+    expect(details.title).toBe("Actividad");
+    expect(details.status).toBe("Actividad reciente");
+    expect(details.lines).toContain("Actividad · 2");
+    expect(details.lines).toContain("  #375 watchdog.closed · hace 3 min");
+    expect(details.lines).toContain("  #373 workflow.failed · hace 9 min");
+    expect(details.lines.indexOf("  #375 watchdog.closed · hace 3 min")).toBeLessThan(
+      details.lines.indexOf("  #373 workflow.failed · hace 9 min"),
+    );
+    // The buttons come first and carry the words the keyboard menu reads.
+    expect(details.actions?.map((action) => action.label)).toEqual([
+      "Última hora",
+      "Último día",
+      "Rango…",
+      "Todo",
+      "Actualizar",
+    ]);
+    expect(details.cards?.map((card) => card.title)).toEqual([
+      "Filtro",
+      "Acciones",
+      "Actividad · 2",
+    ]);
+  });
+
+  it("defaults to every event, in the interface language", async () => {
+    const calls: (readonly string[])[] = [];
+    const details = await loadDockDetails("activity", ".", {
+      locale: "en",
+      projectSlug: "demo",
+      now: () => NOW,
+      events: async (args) => {
+        calls.push(args);
+        return { ok: true, stdout: events, stderr: "" };
+      },
+    });
+    expect(calls).toEqual([["events", "--project", "demo", "--limit", "50", "--json"]]);
+    expect(details.status).toBe("Recent activity");
+    expect(details.lines).toContain("  #375 watchdog.closed · 3 min ago");
+    expect(details.actions?.map((action) => action.label)).toContain("Last hour");
+  });
+
+  it("runs nothing for a folder that is no project", async () => {
+    let called = false;
+    const details = await loadDockDetails("activity", ".", {
+      events: async () => {
+        called = true;
+        return { ok: true, stdout: "[]", stderr: "" };
+      },
+    });
+    expect(called).toBe(false);
+    expect(details.lines.join("\n")).toContain("Sin proyecto registrado");
+  });
+
+  it("shows a command that fails or cannot run inside the card, and never throws", async () => {
+    const failed = await loadDockDetails("activity", ".", {
+      projectSlug: "demo",
+      events: async () => ({ ok: false, stdout: "", stderr: "haril: store not initialized" }),
+    });
+    expect(failed.lines).toContain("Actividad · no disponible");
+    expect(failed.lines.join("\n")).toContain("store not initialized");
+    const rejected = await loadDockDetails("activity", ".", {
+      projectSlug: "demo",
+      events: async () => {
+        throw new Error("spawn EPERM");
+      },
+    });
+    expect(rejected.lines.join("\n")).toContain("spawn EPERM");
+    expect(rejected.actions).toBeDefined();
+  });
+
+  it("reads through the HARIL CLI of the console when no source is given", async () => {
+    const cli = installFakeCli();
+    try {
+      cli.answer("events", { stdout: events });
+      const details = await loadDockDetails("activity", process.cwd(), { projectSlug: "demo" });
+      expect(cli.calls().map((call) => call.args)).toEqual([
+        ["events", "--project", "demo", "--limit", "50", "--json"],
+      ]);
+      expect(details.lines).toContain("Actividad · 2");
+    } finally {
+      cli.restore();
+    }
+  });
+});

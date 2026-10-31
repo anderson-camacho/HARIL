@@ -98,6 +98,66 @@ describe("cards as rows of the rail", () => {
   });
 });
 
+// A card may tint some of its rows (the ACT tab marks a failed event); the text and the width stay the same.
+describe("the tone of a row", () => {
+  // The rail draws in colour only when the terminal does: pin it, whatever the environment of the test run.
+  function withColour<T>(run: () => T): T {
+    const color = process.env.NO_COLOR;
+    const term = process.env.TERM;
+    try {
+      delete process.env.NO_COLOR;
+      process.env.TERM = "xterm-256color";
+      return run();
+    } finally {
+      if (color === undefined) delete process.env.NO_COLOR;
+      else process.env.NO_COLOR = color;
+      if (term === undefined) delete process.env.TERM;
+      else process.env.TERM = term;
+    }
+  }
+
+  const rows = ["#2 task.failed · hace 1 min", "#1 task.started · hace 2 min", "Sin más."];
+  const draw = (card: DockCard) => railRows({ title: "x", lines: [], cards: [card] }, false);
+
+  it("tints the row it names and no other, without changing what is written", () => {
+    withColour(() => {
+      const plain = draw({ title: "Actividad · 2", rows });
+      const tinted = draw({
+        title: "Actividad · 2",
+        rows,
+        tones: ["error", undefined, "muted"],
+      });
+      expect(tinted.rows.map(stripAnsi)).toEqual(plain.rows.map(stripAnsi));
+      expect(tinted.rows[1]).not.toBe(plain.rows[1]);
+      expect(tinted.rows[2]).toBe(plain.rows[2]);
+      expect(tinted.rows[3]).not.toBe(plain.rows[3]);
+      // The borders are not touched.
+      expect(tinted.rows[0]).toBe(plain.rows[0]);
+      expect(tinted.rows[4]).toBe(plain.rows[4]);
+    });
+  });
+
+  it("follows its row when a long title gives its state to the card's first row", () => {
+    withColour(() => {
+      const title = "Proceso de memoria · no disponible";
+      const plain = draw({ title, rows: ["haril: store locked"] });
+      const tinted = draw({ title, rows: ["haril: store locked"], tones: ["error"] });
+      // Row 1 is the state moved into the card; row 2 is the original first row, the one that was tinted.
+      expect(tinted.rows[1]).toBe(plain.rows[1]);
+      expect(tinted.rows[2]).not.toBe(plain.rows[2]);
+      expect(tinted.rows.map(stripAnsi)).toEqual(plain.rows.map(stripAnsi));
+    });
+  });
+
+  it("leaves the flat form alone: the left dock reads text only", () => {
+    expect(flatView([{ title: "T", rows: ["a", "b"], tones: ["error", "muted"] }]).lines).toEqual([
+      "T",
+      "  a",
+      "  b",
+    ]);
+  });
+});
+
 describe("a view with only lines", () => {
   it("is one box titled with the view, and a line with an action stays clickable", () => {
     const drawn = railRows(

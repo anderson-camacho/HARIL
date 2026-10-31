@@ -192,11 +192,7 @@ describe("a click on the right rail body", () => {
     const pane = setup();
     const rendersBefore = pane.tui.requestRender.mock.calls.length;
     const content = renderNativeRailContent(facts(), "agents", 39, {});
-    for (const needle of [
-      "Proyecto: fake-project",
-      "Modelo: fake-model",
-      "Sin eventos registrados",
-    ]) {
+    for (const needle of ["Proyecto: fake-project", "Modelo: fake-model", "Alt+K menú del panel"]) {
       const y = pane.rows().findIndex((row) => row.includes(needle));
       expect(y).toBeGreaterThan(0);
       const index = content.lines.findIndex((line) => stripAnsi(line).includes(needle));

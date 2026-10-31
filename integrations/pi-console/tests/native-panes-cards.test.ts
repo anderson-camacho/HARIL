@@ -190,7 +190,7 @@ describe("the header box", () => {
     expect(rows().slice(0, 5)).toEqual([
       `│ ╭${"─".repeat(35)}╮ `,
       `│ │ ${"▼ Espacio: Principal · Alt+L".padEnd(33)} │ `,
-      `│ │ ${"[1:MAIN]  2:MEM   3:DOCS".padEnd(33)} │ `,
+      `│ │ ${"[1:MAIN]  2:MEM   3:DOCS   4:ACT".padEnd(33)} │ `,
       `│ ╰${"─".repeat(35)}╯ `,
       `│${" ".repeat(39)}`,
     ]);
@@ -201,7 +201,7 @@ describe("the header box", () => {
     expect(rows().slice(0, 4)).toEqual([
       `| +${"-".repeat(35)}+ `,
       `| | ${"v Espacio: Memoria · Alt+L".padEnd(33)} | `,
-      `| | ${" 1:MAIN  [2:MEM]  3:DOCS".padEnd(33)} | `,
+      `| | ${" 1:MAIN  [2:MEM]  3:DOCS   4:ACT".padEnd(33)} | `,
       `| +${"-".repeat(35)}+ `,
     ]);
   });

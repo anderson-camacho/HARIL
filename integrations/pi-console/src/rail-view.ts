@@ -1,6 +1,7 @@
 // How a dock view (the MEM and DOCS tabs) is laid out in the right rail: as cards, the actions of a card as buttons.
 // The view declares its sections as data (DockCard) and this module draws them, so what a menu or a click needs (an
 // action and its label) is carried by the data and never read back from the rows that were drawn.
+import type { DashboardTone } from "./dashboard-theme.js";
 import { blankRow, boxFrame, button, inset, textRow } from "./rail-cards.js";
 import { CARD_GAP } from "./rail-metrics.js";
 import { textWidth } from "./text.js";
@@ -19,6 +20,9 @@ interface DockButton {
 export interface DockCard {
   readonly title: string;
   readonly rows: readonly string[];
+  // The tone of a row, by its index in `rows`; a row left out (or undefined) is drawn in the text tone. Only the rail
+  // reads it: the flat form is text.
+  readonly tones?: readonly (DashboardTone | undefined)[];
   readonly buttons?: readonly DockButton[];
 }
 
@@ -74,6 +78,8 @@ function fitTitle(card: DockCard): DockCard {
     ...card,
     title: card.title.slice(0, cut),
     rows: [card.title.slice(cut + 3), ...card.rows],
+    // The row that was moved in has no tone of its own; the others keep theirs.
+    ...(card.tones === undefined ? {} : { tones: [undefined, ...card.tones] }),
   };
 }
 
@@ -84,7 +90,9 @@ function drawCard(
   ascii: boolean,
   textHits: readonly (string | undefined)[] = [],
 ): RailRows {
-  const inner: string[] = card.rows.map((row) => textRow(row));
+  const inner: string[] = card.rows.map((row, index) =>
+    textRow(row, card.tones?.[index] ?? "text"),
+  );
   const innerHits: (string | undefined)[] = card.rows.map((_row, index) => textHits[index]);
   for (const { label, action } of card.buttons ?? []) {
     for (const row of button(label, { ascii })) {

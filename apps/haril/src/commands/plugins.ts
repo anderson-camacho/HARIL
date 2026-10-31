@@ -8,7 +8,7 @@ import { readConfigDocument, serializeConfig, writeConfigAtomically } from "./co
 // install, enable, unload or inspect Pi extensions: Pi's live inventory is not available here.
 const USAGE = [
   "usage: haril plugins list [--json]",
-  "       haril plugins show|hide <main|memory|docs> [--json]",
+  "       haril plugins show|hide <main|memory|docs|activity> [--json]",
   "       haril plugins move <id> up|down [--json]",
   "       haril plugins reset [--json]",
   "These settings control HARIL's visual dock; Pi extensions are not changed.",

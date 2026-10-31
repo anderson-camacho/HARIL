@@ -36,10 +36,13 @@ describe("HARIL dock shortcuts", () => {
     const numeric = createDockPicker(state.slots, "main", chosen);
     numeric.handleInput("3");
     expect(chosen).toHaveBeenLastCalledWith({ type: "open", id: "docs" });
-    // Only three slots exist: a fourth digit opens nothing.
+    const fourth = createDockPicker(state.slots, "main", chosen);
+    fourth.handleInput("4");
+    expect(chosen).toHaveBeenLastCalledWith({ type: "open", id: "activity" });
+    // Only four slots exist: a fifth digit opens nothing.
     const beyond = createDockPicker(state.slots, "main", chosen);
-    beyond.handleInput("4");
-    expect(chosen).toHaveBeenCalledTimes(2);
+    beyond.handleInput("5");
+    expect(chosen).toHaveBeenCalledTimes(3);
     const cancel = createDockPicker(state.slots, "main", chosen);
     cancel.handleInput("\u001b");
     expect(chosen).toHaveBeenLastCalledWith({ type: "cancel" });
@@ -58,10 +61,10 @@ describe("HARIL dock shortcuts", () => {
     picker.handleInput(up);
     expect(picker.render(48).map(stripAnsi).join("\n")).toContain("▸ 1. Principal");
     picker.handleInput(up);
-    expect(picker.render(48).map(stripAnsi).join("\n")).toContain("▸ 3. Documentación");
+    expect(picker.render(48).map(stripAnsi).join("\n")).toContain("▸ 4. Actividad");
     expect(tui.requestRender).toHaveBeenCalledTimes(3);
     picker.handleInput("\u001b[13u");
-    expect(selected).toHaveBeenCalledWith({ type: "open", id: "docs" });
+    expect(selected).toHaveBeenCalledWith({ type: "open", id: "activity" });
   });
 
   it("ignores unrelated shortcuts and accepts Kitty Escape", () => {

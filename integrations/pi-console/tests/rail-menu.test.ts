@@ -235,6 +235,50 @@ describe("the native rail's rows", () => {
     expect(hints).toEqual(["Alt+K menú del panel · Alt+H áreas", "Alt+I panel · Alt+C comandos"]);
     for (const row of text.slice(-2)) expect(textWidth(row)).toBe(39);
   });
+
+  it("no longer list the recent events: they live in the ACT tab, and MAIN keeps only the two hint rows", () => {
+    const withEvents: DashboardFacts = {
+      ...facts(),
+      data: {
+        ...emptyDashboardData("fake-project"),
+        events: [
+          {
+            seq: 373,
+            time: "2026-10-30T20:00:00.000Z",
+            type: "workflow.failed",
+            aggregateType: "workflow",
+            aggregateId: "w1",
+            taskId: null,
+          },
+          {
+            seq: 374,
+            time: "2026-10-30T20:01:00.000Z",
+            type: "task.cancelled",
+            aggregateType: "task",
+            aggregateId: "t1",
+            taskId: "t1",
+          },
+        ],
+      },
+    };
+    for (const area of ["agents", "orchestration"] as const) {
+      const content = renderNativeRailContent(withEvents, area, 39, {});
+      const text = content.lines.map(stripAnsi).join(" | ");
+      expect(text, area).not.toContain("ACTIVIDAD RECIENTE");
+      expect(text, area).not.toContain("Sin eventos registrados");
+      expect(text, area).not.toContain("workflow.failed");
+      expect(text, area).not.toContain("#374");
+      // The two hint rows are the last two, after one blank row, and carry no action.
+      const rows = content.lines.map(stripAnsi);
+      expect(
+        rows.slice(-2).map((row) => row.trim()),
+        area,
+      ).toEqual(["Alt+K menú del panel · Alt+H áreas", "Alt+I panel · Alt+C comandos"]);
+      expect(rows.at(-3)?.trim(), area).toBe("");
+      expect(content.hits.slice(-3), area).toEqual([undefined, undefined, undefined]);
+      expect(content.hits).toHaveLength(content.lines.length);
+    }
+  });
 });
 
 const THEME: ConsoleTheme = { fg: (_tone, value) => value, bold: (value) => value };

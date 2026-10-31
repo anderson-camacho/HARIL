@@ -4,6 +4,7 @@
 // CLI on the project of the folder Pi opened in. Self-contained: node:* imports and local types only, so it bundles
 // into one file next to the bridge.
 
+import { createActivityPanel } from "./activity-panel.js";
 import { createChatLog } from "./chat-log.js";
 import { cliAvailable, NOT_LAUNCHED, runHaril, runHarilJson } from "./cli.js";
 import { commandCatalog } from "./command-catalog.js";
@@ -265,6 +266,27 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
     },
     options.tools?.checkDelayMs === undefined ? {} : { checkDelayMs: options.tools.checkDelayMs },
   );
+
+  // The ACT tab's range, its reads and its dialog (activity-panel.ts). Every command goes through the HARIL CLI, in the
+  // background, and none is waited for by the console.
+  const activityPanel = createActivityPanel({
+    run: (args, { timeoutMs }) => runHaril(args, { cwd: session?.cwd, timeoutMs }),
+    locale: () => session?.locale ?? DEFAULT_UI_LOCALE,
+    projectSlug: () => session?.project?.slug,
+    now: () => Date.now(),
+    ui: () =>
+      session === undefined || session.closed || !session.ctx.hasUI ? undefined : session.ctx.ui,
+    // Only the busy state changed: the tab is drawn again from the data it holds, with no command run.
+    repaint: () => {
+      const current = session;
+      if (current === undefined || current.closed || current.dock.detail?.id !== "activity") return;
+      if (current.dock.selected !== "activity") return;
+      const details = activityPanel.view();
+      if (details === undefined) return;
+      current.dock.detail = details;
+      current.nativePanes?.refresh();
+    },
+  });
 
   function runtimeState(current: Session): RuntimeState {
     if (current.runtimeAlive === true) return "running";
@@ -899,7 +921,9 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
     const details =
       id === "memory"
         ? await toolsPanel.load()
-        : await loadDockDetails(id, current.cwd, { locale: current.locale });
+        : id === "activity"
+          ? await activityPanel.load()
+          : await loadDockDetails(id, current.cwd, { locale: current.locale });
     if (current.closed || session !== current || current.dockLoadSeq !== seq) return;
     current.dock.detail = details;
     current.nativePanes?.refresh();
@@ -917,10 +941,15 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
   }
 
   // The rows a dock view declares (DockDetails.actions), by the tab they belong to. DOCS's rows connect, change and
-  // disconnect the documentation folder; MEM's check Engram, look the versions up and update gentle-ai.
+  // disconnect the documentation folder; MEM's check Engram, look the versions up and update gentle-ai; ACT's choose
+  // the range of the events.
   async function runDockAction(current: Session, id: string, action: string): Promise<void> {
     if (id === "memory") {
       await toolsPanel.act(action);
+      return;
+    }
+    if (id === "activity") {
+      await activityPanel.act(action);
       return;
     }
     if (id !== "docs") return;
@@ -1536,7 +1565,7 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
     },
   });
   pi.registerCommand("haril-plugin", {
-    description: "Open a HARIL dock view: /haril-plugin [main|memory|docs|1..3|details]",
+    description: "Open a HARIL dock view: /haril-plugin [main|memory|docs|activity|1..4|details]",
     handler: async (args, ctx) => {
       const current = session;
       if (current === undefined || !ctx.hasUI || ctx.mode !== "tui") return;
@@ -1552,7 +1581,7 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
             ? dockSlotAt(current.dock.slots, Number(word))?.id
             : DOCK_LABELS.find((slot) => slot.id === word)?.id;
       if (id === undefined) {
-        ctx.ui.notify("Uso: /haril-plugin [main|memory|docs|1..3|details]", "warning");
+        ctx.ui.notify("Uso: /haril-plugin [main|memory|docs|activity|1..4|details]", "warning");
         return;
       }
       if (word !== "details") await openDockSlot(current, id);
@@ -1760,6 +1789,8 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
     ended.nativePanes = undefined;
     // A check still waiting for its moment belongs to no session now; the next session asks for it again.
     toolsPanel.cancelCheck();
+    // The ACT tab's range is the session's: the next one starts on every event.
+    activityPanel.reset();
     followTimer(ended);
     ended.feed.close();
   }

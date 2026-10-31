@@ -494,7 +494,8 @@ describe("/haril-docs", () => {
     await withConsole(async (h) => {
       await h.command("haril-docs", vault);
       expect(h.notes()).toContain(vault);
-      expect(h.sidebar()).toContain("ACTIVIDAD");
+      // MAIN's own block is still on screen (the recent events moved to the ACT tab).
+      expect(h.sidebar()).toContain("ÁREAS");
       expect(h.sidebar()).toContain("[1:MAIN]");
     });
   });

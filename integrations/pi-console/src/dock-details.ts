@@ -1,3 +1,10 @@
+import { type ActivityRange, ALL_RANGE } from "./activity-range.js";
+import {
+  type ActivityData,
+  type ActivityOptions,
+  activityRows,
+  loadActivity,
+} from "./activity-view.js";
 import { cliAvailable, runHaril } from "./cli.js";
 import { type DocsScan, scanDocsFolder, tailFit } from "./docs-folder.js";
 import { localized, type UiLocale } from "./locale.js";
@@ -52,6 +59,14 @@ export interface DockSource {
   readonly docsPath?: () => Promise<string | undefined>;
   // What is in that folder (read only).
   readonly scanDocs?: (path: string) => Promise<DocsScan>;
+  // `haril events <args>`: the project's events, for the ACT tab.
+  readonly events?: (args: readonly string[]) => Promise<CommandAnswer>;
+  // The project of the folder the console is in, the range the ACT tab filters by and the clock it reads the time from.
+  readonly projectSlug?: string | undefined;
+  readonly activityRange?: ActivityRange;
+  readonly now?: () => number;
+  // The ACT tab is being loaded again: its buttons give way to a «Cargando…» row.
+  readonly activityBusy?: boolean;
   readonly locale?: UiLocale;
 }
 
@@ -237,6 +252,23 @@ export function memDetails(data: MemData, options: MemOptions): DockDetails {
   return view("memory", rows.status, rows.cards);
 }
 
+// The ACT tab from what was loaded; the console draws it again from the same data when only its busy state changes.
+export function activityDetails(data: ActivityData, options: ActivityOptions): DockDetails {
+  const rows = activityRows(data, options);
+  return view("activity", rows.status, rows.cards);
+}
+
+// The ACT tab's data: `haril events` for the project, inside the range, or why there is none.
+function loadActivityData(cwd: string, source: DockSource = {}): Promise<ActivityData> {
+  return loadActivity(
+    source.events ?? ((args) => runHaril(args, { cwd, timeoutMs: 8_000 })),
+    source.projectSlug,
+    source.activityRange ?? ALL_RANGE,
+    source.now ?? Date.now,
+    source.locale ?? "es",
+  );
+}
+
 export async function loadDockDetails(
   id: DockId,
   cwd: string,
@@ -258,6 +290,14 @@ export async function loadDockDetails(
       }
       case "docs":
         return await docsDetails(id, cwd, source);
+      case "activity": {
+        const data = await loadActivityData(cwd, source);
+        return activityDetails(data, {
+          locale: source.locale ?? "es",
+          range: source.activityRange ?? ALL_RANGE,
+          busy: source.activityBusy ?? false,
+        });
+      }
     }
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
