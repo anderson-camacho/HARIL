@@ -5,11 +5,23 @@ import { pathOps } from "./platform.js";
 import type { ExecPort, FetchPort, FsPort } from "./ports.js";
 import { resolveRuntimeRoot } from "./root.js";
 import { checkActiveRuntime, pidIsAlive } from "./runtime-lease.js";
+import {
+  installTerminalProfile,
+  removeTerminalProfile,
+  TERMINAL_PROFILE_GUID,
+} from "./terminal-profile.js";
+import {
+  isTerminalShaderName,
+  TERMINAL_SHADER_NAMES,
+  type TerminalShaderName,
+} from "./terminal-shader.js";
 
 // Command line of haril-bootstrap:
 //   install-runtime [--root <dir>] [--json]              Node and Pi (M2-T3)
 //   install [--root <dir>] [--from <repo dir>] [--json]  HARIL itself into <root>/app and <root>/bin (M3-T3)
 //   uninstall [--root <dir>] [--json]                    removes only what install recorded (M3-T3)
+//   terminal-profile [--root <dir>] [--shader crt|none] [--remove] [--json]
+//                                                        optional Windows Terminal profile running HARIL
 // Exit 0 when no step failed, 2 when uninstall refuses because a runtime is active (M3-T6b), 1 otherwise
 // (usage errors included).
 
@@ -34,6 +46,7 @@ const USAGE = [
   "usage: haril-bootstrap install-runtime [--root <dir>] [--json]",
   "       haril-bootstrap install [--root <dir>] [--from <repo dir>] [--json]",
   "       haril-bootstrap uninstall [--root <dir>] [--json]",
+  "       haril-bootstrap terminal-profile [--root <dir>] [--shader crt|none] [--remove] [--json]",
   "       haril-bootstrap --help",
   "root: --root, else HARIL_RUNTIME_DIR, else %LOCALAPPDATA%\\HARIL on win32, else XDG_DATA_HOME/haril",
 ];
@@ -47,6 +60,7 @@ export async function runCli(argv: readonly string[], io: CliIo, host: CliHost):
   if (command === "install-runtime") return installRuntimeCommand(rest, io, host);
   if (command === "install") return installCommand(rest, io, host);
   if (command === "uninstall") return uninstallCommand(rest, io, host);
+  if (command === "terminal-profile") return terminalProfileCommand(rest, io, host);
   for (const line of USAGE) io.err(line);
   return 1;
 }
@@ -205,5 +219,81 @@ async function uninstallCommand(
     }
   }
   if (result.refusal !== undefined) return 2;
+  return result.ok ? 0 : 1;
+}
+
+// --shader and --remove are taken out first; --root and --json go through the shared parser.
+async function terminalProfileCommand(
+  args: readonly string[],
+  io: CliIo,
+  host: CliHost,
+): Promise<number> {
+  let shader: TerminalShaderName | null = "crt";
+  let remove = false;
+  const shared: string[] = [];
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    if (arg === "--remove") {
+      remove = true;
+    } else if (arg === "--shader") {
+      const value = args[index + 1];
+      if (value === "none") shader = null;
+      else if (isTerminalShaderName(value)) shader = value;
+      else {
+        io.err(`--shader needs one of ${[...TERMINAL_SHADER_NAMES, "none"].join(", ")}`);
+        return 1;
+      }
+      index++;
+    } else if (arg !== undefined) {
+      shared.push(arg);
+    }
+  }
+  const options = parseOptions(shared, ["--root"]);
+  if (typeof options === "string") {
+    io.err(options);
+    return 1;
+  }
+
+  const deps = {
+    root: rootFrom(options, host),
+    platform: host.platform,
+    env: host.env,
+    homeDir: host.homeDir,
+    fs: host.fs,
+  };
+
+  if (remove) {
+    const removal = await removeTerminalProfile(deps);
+    if (options.json) {
+      io.out(JSON.stringify(removal));
+    } else if (removal.ok) {
+      io.out(removal.detail);
+      for (const path of removal.manual) {
+        io.out(`manual    remove the profile ${TERMINAL_PROFILE_GUID} from ${path} by hand`);
+      }
+    } else {
+      io.err(removal.detail);
+    }
+    return removal.ok ? 0 : 1;
+  }
+
+  const result = await installTerminalProfile(deps, shader);
+  if (options.json) {
+    io.out(JSON.stringify(result));
+  } else {
+    for (const step of result.steps) {
+      const line = `${step.name.padEnd(10)}${step.status.padEnd(9)}${step.detail}`;
+      if (step.status === "failed") io.err(line);
+      else io.out(line);
+    }
+    if (result.ok) {
+      io.out("next      open Windows Terminal and pick the HARIL profile from the new-tab menu");
+      if (result.shaderPath !== null) {
+        io.out(
+          "toggle    bind the toggleShaderEffects action in Windows Terminal to switch the effect",
+        );
+      }
+    }
+  }
   return result.ok ? 0 : 1;
 }

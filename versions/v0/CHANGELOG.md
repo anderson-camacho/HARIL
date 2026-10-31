@@ -4,7 +4,7 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
-## 0.23.16
+## 0.23.17
 
 - **Fecha:** 2026-10-31
 - **Estado:** `ACT` usa fichas compactas para el rango, «Rango» responde de forma visible con un solo cuadro y la pestaña `MEM` se llama `TOOLS`.
@@ -30,6 +30,34 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 - `vitest` de `integrations/pi-console`, `packages/contracts`, `plugins-cli` y `cli`: 1176 pruebas correctas, dos veces seguidas; `npm run check` correcto.
 - Dibujo con el código real de la consola sobre un Pi simulado, en Unicode y ASCII: ninguna fila distinta de 40 columnas.
 - No verificado: el Pi real (clic en las columnas de las fichas y el cuadro de «Rango» en una terminal), que en 0.23.15 no reaccionaba para el usuario. La causa se dedujo leyendo el código de Pi 1.2.0, sin ejecutarlo.
+
+---
+
+## 0.23.16
+
+- **Fecha:** 2026-10-31
+- **Estado:** perfil opcional de Windows Terminal para HARIL, con un efecto CRT suave. Solo Windows; no cambia nada si no se ejecuta el comando.
+
+### Añadido
+
+- `haril-bootstrap terminal-profile [--root <dir>] [--shader crt|none] [--remove] [--json]`. Escribe un *fragment* de Windows Terminal (`%LOCALAPPDATA%\Microsoft\Windows Terminal\Fragments\HARIL\haril.json`) con un perfil **HARIL** que abre `<raíz>\bin\haril.cmd`. El GUID del perfil es fijo: reinstalar actualiza el mismo perfil. Si `bin\haril.cmd` no existe, falla sin escribir nada.
+- Shader `haril-crt.hlsl` en `<raíz>\terminal\`: versión reducida de `crt.hlsl` (Hammster/windows-terminal-shaders, CC0) que solo conserva bloom (0,35) y scanlines (0,12). Las scanlines proceden de `Retro.hlsl` de Microsoft Terminal (MIT). No lee `Time`, así que Windows Terminal no redibuja cada fotograma.
+- `--shader none` deja el perfil sin efecto y borra el shader. `--remove` borra el fragment y el shader, y quita de `settings.json` la entrada que Windows Terminal añade al cargar el fragment, que nunca borra por su cuenta. Antes guarda el original como `settings.json.haril-backup`. Si el archivo tiene comentarios o HARIL es el perfil predeterminado, no lo toca e indica la edición manual.
+- Avisos de licencia del shader en `THIRD_PARTY_NOTICES.md` y nueva sección en el README.
+
+### Cambiado
+
+- Nada.
+
+### Corregido
+
+- Nada.
+
+### Verificación
+
+- `npm run check` completo (Biome, tipos, capas, pureza, prohibidos, knip, compat y versión) correcto.
+- Suite principal: 3849 pruebas aprobadas, 4 omitidas (9 nuevas en `apps/bootstrap/tests/terminal-profile.test.ts`). Scripts: 133 aprobadas. No se ejecutó `test:stop` (procesos), ajeno al cambio.
+- Manual en Windows 11 con Windows Terminal 1.24.12741.0 y la instalación real 0.23.15. Un fragment con `experimental.pixelShaderPath` aplica el shader: se comprobó con un shader de inversión y después con el real, cuyas filas alternan entre G=255 y G=224 (factor 0,12). El perfil abre la consola de HARIL. Tras borrar el fragment, la entrada huérfana de `settings.json` seguía abriendo `cmd.exe` con el nombre HARIL; `--remove` la quita y Windows Terminal no la vuelve a crear al recargar.
 
 ---
 
