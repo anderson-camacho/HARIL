@@ -4,6 +4,29 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.23.23
+
+- **Fecha:** 2026-10-31
+- **Estado:** la bienvenida del tema azul `future` ya no muestra la lluvia de caracteres: va directa al logo con `SYSTEM ONLINE`. El tema `matrix` conserva su lluvia.
+
+### Añadido
+
+- Nada.
+
+### Cambiado
+
+- Con la paleta `future`, `playHarilStartup` no ejecuta TerminalTextEffects ni la lluvia interna.
+
+### Corregido
+
+- Nada.
+
+### Verificación
+
+- `apps/haril/tests/startup-visual.test.ts`: prueba nueva, en rojo antes del cambio y en verde después. Build, tipos, biome, knip, pruebas y `check:version`. No verificado: el resultado en una terminal real.
+
+---
+
 ## 0.23.22
 
 - **Fecha:** 2026-10-31

@@ -96,10 +96,9 @@ describe("palette-aware welcome", () => {
       platform: "linux",
       palette: "future",
       keepScreen: true,
-      runExternalMatrix: async () => {
+      wait: async () => {
         throw new Error("no effect");
       },
-      wait: async () => undefined,
     });
     expect(writes.join("")).toContain(`${ESC}[?25h${ESC}[?1049l`);
   });
