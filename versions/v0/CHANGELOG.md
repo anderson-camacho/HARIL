@@ -14,13 +14,13 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 - `Alt+G` o `/haril-factory` abre la fábrica a pantalla completa, con siete pestañas: Avance, Actividades, Tablero, Agentes, Conexiones, Modelos y Sistema.
 - Teclas: `←`/`→` o `Tab` cambian de pestaña, `1`-`7` saltan a una, `Esc` sale de un detalle y luego cierra. El pie lista solo las teclas que funcionan en ese momento. Con el ratón, un clic en una pestaña la abre.
 - Kit visual de la fábrica: la paleta exacta de las piezas de referencia, cajas redondeadas con título, barra de progreso y punto de estado. Respeta `PI_TRUE_COLOR=0`, `NO_COLOR`, `TERM=dumb` y `HARIL_CONSOLE_ASCII`, y no pinta fondos.
-- Prueba que documenta por qué una delegación parece atascada: con la parada por defecto `after_plan` el flujo espera a la persona y sus hijos quedan en cola; nada falló. La causa solo aparece en el registro de eventos.
+- Prueba que documenta por qué una delegación parece atascada: con la parada por defecto `after_plan` el flujo espera a la persona y sus hijos quedan en cola; nada falló.
+- Cada tarea explica ahora por qué está donde está: qué pasa, por qué, qué hace el sistema, si te necesita y hasta cuándo. Cubre todos los motivos de bloqueo y estados, y el compilador rechaza uno nuevo sin explicación. Se escribe con datos guardados, nunca con un modelo.
+- `haril workflow show` y `watch` añaden `stopReason` y `explanation` al flujo y a cada nodo, sin cambiar la versión del formato. Con `after_plan` dicen qué ejecutar: `haril workflow continue <id>`, o pulsar `c` en la fábrica.
 
 ### Limitaciones
 
-- Ninguna pestaña tiene datos todavía: cada una lo dice con «Sin datos conectados todavía» y no muestra nada más. Por eso `↑`/`↓` y `Enter` aún no aparecen en el pie.
 - El atajo es `Alt+G` y no `Alt+F`, que es de Pi (`tui.editor.cursorWordRight`): la consola no sobrescribe atajos propios de Pi.
-- La explicación de la espera sigue pendiente: esta versión no cambia lo que el flujo muestra al detenerse.
 
 ### Verificación
 

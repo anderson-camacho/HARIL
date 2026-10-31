@@ -4,6 +4,7 @@ export * from "./archetypes.js";
 export * from "./check-delegation.js";
 export * from "./checkpoints.js";
 export * from "./choose-model.js";
+export * from "./explain-wait.js";
 export * from "./globs.js";
 export * from "./limits.js";
 export * from "./liveness.js";

@@ -468,9 +468,9 @@ describe("a three-layer workflow through the runtime", () => {
     expect(onlyWorkflow(store).workflow.state).toBe("completed");
   });
 
-  // Feature haril-factory, F0: the "the plan ran and now it just sits there" report. This documents today's behavior,
-  // it does not endorse it: the default stop is reached on purpose, and nothing failed.
-  it("documents the stuck look: the default after_plan stop parks the plan's children and only the event log names it", async () => {
+  // Feature haril-factory, F0 and F2: the "the plan ran and now it just sits there" report. The default stop is reached
+  // on purpose and nothing failed; the snapshot says so and names the way out.
+  it("explains the stuck look: the default after_plan stop parks the plan's children and says how to continue", async () => {
     const store = open();
     startWorkflow(store, "Careful work [fake:parts=2] [fake:steps=1]", {
       mode: DEFAULT_AUTONOMY.mode,
@@ -501,15 +501,28 @@ describe("a three-layer workflow through the runtime", () => {
       ["d2", "queued", "waits until the workflow continues"],
     ]);
 
-    // The gap: the stop reached is only an event line. The workflow header lists the stops it may reach, not the one it
-    // reached, and no node names the stop or the way out (haril workflow continue). F2 (explainWait) closes this.
+    // The snapshot now names the stop and the way out, on the workflow and on each queued node.
     expect(snapshot.events.at(-1)).toMatchObject({
       type: "workflow.awaiting_human",
       text: "reason=after_plan",
     });
-    expect(snapshot.workflow).not.toHaveProperty("stopReason");
-    expect(JSON.stringify(snapshot.nodes)).not.toContain("after_plan");
-    expect(JSON.stringify(snapshot)).not.toContain("haril workflow continue");
+    expect(snapshot.workflow.stopReason).toBe("after_plan");
+    expect(snapshot.workflow.explanation).toMatchObject({
+      code: "workflow_stop",
+      needsHuman: true,
+    });
+    expect(snapshot.workflow.explanation?.why).toContain("after_plan");
+    const continueHere = `haril workflow continue ${workflow.workflowId}`;
+    expect(snapshot.workflow.explanation?.systemAction).toContain(continueHere);
+    for (const node of snapshot.nodes) {
+      expect(node.explanation?.needsHuman, node.id).toBe(true);
+      expect(node.explanation?.systemAction, node.id).toContain(continueHere);
+    }
+    expect(snapshot.nodes.map((node) => node.explanation?.code)).toEqual([
+      "pending_stopped",
+      "ready_stopped",
+      "ready_stopped",
+    ]);
   });
 
   it("continues after a crash in the middle of the workflow with no work done twice and its rework counts kept", async () => {
