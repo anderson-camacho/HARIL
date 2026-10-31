@@ -4,6 +4,36 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.23.16
+
+- **Fecha:** 2026-10-31
+- **Estado:** la segunda línea de la barra completa de la consola (carpeta, rama de git y estados de extensiones) se dibuja como segmentos powerline, tomando como referencia el tema `craver` de Oh My Posh: un bloque de color para la carpeta y otro para la rama con los cambios del árbol de trabajo (`+n` en el índice, `~n` modificados, `?n` sin seguimiento). La primera línea (HARIL, `MODE`, modelo y nivel, `STOP ALL`) y la barra compacta no cambian. `HARIL_POWERLINE=off` devuelve la línea de texto plano de siempre. Necesita una fuente con los glifos de Powerline (una Nerd Font). No verificado: el dibujo en un Pi real y en Windows Terminal con una Nerd Font; solo se ejercitó el código de la consola con un Pi simulado.
+
+### Añadido
+
+- `git-summary.ts`: las cuentas del segmento de git (staged, modificados y sin seguimiento) salen de `git status --porcelain=v1 -z --untracked-files=normal --no-renames`, lanzado sin shell, con `--no-optional-locks`, `core.fsmonitor` apagado, un límite de 3 s y de 1 MiB de salida y sin las variables de entorno que apuntan git a otro repositorio. `parseGitStatus` lee la columna del índice (staged), la del árbol de trabajo (modificado) y `??` (sin seguimiento); una ruta sin fusionar cuenta una vez como modificada y las ignoradas no cuentan. `createGitSummaryCache` guarda la respuesta por carpeta durante 5 s: `peek` devuelve al instante lo que sabe y, si está caducada, inicia la lectura desde una microtarea (nunca dentro del dibujo), una sola lectura a la vez por carpeta, y avisa para repintar solo cuando las cuentas cambian. Un fallo de git (sin git, no es un repositorio, tiempo agotado) es «sin cuentas», nunca una excepción en el dibujo.
+- `powerline.ts`: `powerlineHead` dibuja el segmento de la carpeta (`~/ruta`, con el principio acortado si no cabe) y el de git (rama y cuentas) con los glifos Powerline `U+E0B0` (flecha), `U+E0A0` (rama) y `U+F07B` (carpeta). Los colores son fichas del tema: la carpeta usa `accent`; git, `success` sin cambios, `warning` con cambios y `muted` mientras no se conocen. Cada bloque va en vídeo inverso sobre `theme.fg(...)`, y la flecha entre dos bloques lleva el color del primero sobre el del segundo, que se obtiene de la propia secuencia de primer plano del tema (código 38 pasado a 48), sin colores propios; si el tema no da una secuencia legible, la flecha queda sobre el fondo de la terminal. `powerlineEnabled` lee `HARIL_POWERLINE` (`off`, `0` o `false` lo apagan).
+- `BarFacts.powerline` (`{ git }`) y `ConsoleOptions.git.read`, para que las pruebas respondan las cuentas sin ejecutar git.
+
+### Cambiado
+
+- La línea de la carpeta de la barra completa: con segmentos (por defecto) o, con `HARIL_POWERLINE=off`, exactamente el texto de antes. Los estados de otras extensiones siguen detrás, como texto atenuado, en el hueco que dejan los segmentos. Con poco ancho cede primero las cuentas, luego el nombre de la rama (primero cortado con `…`, después solo el icono), luego el segmento de git y por último acorta la carpeta por el principio; donde no cabe ni un bloque dibuja la línea plana. Ninguna línea excede el ancho (medido con `textWidth` sobre el texto sin secuencias de escape).
+- El pie de la consola crea una caché de cuentas por pie y la pide solo cuando dibuja la línea con segmentos (barra completa, no compacta, `HARIL_POWERLINE` sin apagar) y Pi conoce una rama; un cambio de rama la invalida y pide repintar. `HARIL_POWERLINE` se lee en cada dibujo, así que el cambio se nota sin reiniciar.
+- `README.md` describe la línea, la fuente necesaria y el modo `off`.
+
+### Corregido
+
+- Sin correcciones.
+
+### Verificación
+
+- Las pruebas se escribieron antes del código. Rojo observado: `git-summary.test.ts` y `powerline.test.ts` no cargaban (el módulo no existía), `view.test.ts` fallaba en 4 de 14 pruebas (las 10 restantes, entre ellas la línea plana de siempre con un tema que etiqueta cada color, pasaban con el código anterior, lo que confirma que `off` produce los mismos bytes) y `console.test.ts` fallaba en 7 de 11. Verde después: 20 (`git-summary`: parseo, un repositorio real de git en una carpeta temporal, caché con TTL, lectura única, fallos, invalidación, descarte), 18 (`powerline`: glifos, colores de un tema de color verdadero, de 256 y de 16 colores, anchos de 0 a 260 columnas con varias entradas, orden en que cede, texto hostil), 14 (`view`) y 11 (`console`: dibujo sin esperar a git, repintado al responder, cambio de rama, fallo de git, fuera de un repositorio, `off`, barra compacta).
+- `integrations/pi-console` (`vitest run`): 56 archivos, 952 pruebas, 951 correctas y 1 fallida: `native-panes-console.test.ts`, «is the full bar, with the folder line, as soon as another tab is selected, and compact again on MAIN», comprueba el texto plano antiguo `(main)` de la línea de la carpeta (línea 256). Con `main` en su lugar pasa (comprobado en una copia temporal, 7 de 7 pruebas del archivo); la aserción debe cambiarse.
+- Suite principal sin las cuatro pruebas de procesos (`vitest run --exclude` de `test`): 281 archivos, 3907 pruebas, 3900 correctas, 4 omitidas y 3 fallidas: la de arriba y dos que fallaron solo bajo carga y pasan solas (`stop-all-console.test.ts`, «Alt+X aborts the chat turn…», y `tools-mem-console.test.ts`, «loads the MEM tab again when it ends…», esta por el tiempo de 15 s). `npm run test:scripts`: 133 correctas. `npm run test:stop` no se ejecutó.
+- `npm run check` (Biome, tipos de todos los proyectos, capas/pureza/prohibidos, knip, compatibilidad —omitida: `docs/COMPATIBILITY.md` no existe en este árbol— y versión) correcto en la versión 0.23.16, y `apps/haril/tests/version.test.ts` correcto.
+
+---
+
 ## 0.23.15
 
 - **Fecha:** 2026-10-30
