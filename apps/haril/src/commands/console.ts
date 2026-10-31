@@ -10,7 +10,9 @@ import { VERSION } from "../version.js";
 import { dataDirFor } from "./common.js";
 import { readConfigDocument } from "./config-file.js";
 import { ensureManagedPiTheme } from "./future-pi-theme.js";
-import { playHarilStartup } from "./startup-visual.js";
+import { ensureQuietStartup } from "./pi-settings.js";
+import { playHarilStartup, type WelcomePalette } from "./startup-visual.js";
+import { terminalColorsApply, withTerminalSession } from "./terminal-colors.js";
 
 // `haril console` (PS-T3), and a bare `haril` in a terminal: opens Pi, the Node and the Pi that HARIL installed
 // (runtime/manifest.json), in the current folder with the HARIL extension (integrations/pi-console), the way Gentle
@@ -39,7 +41,10 @@ export interface ConsolePorts {
     cwd: string;
     platform: string;
     env: NodeJS.ProcessEnv;
-  }) => Promise<void>;
+    palette: WelcomePalette;
+    keepScreen: boolean;
+    // Whether the welcome left its full-screen buffer open for Pi.
+  }) => Promise<boolean>;
 }
 
 function defaultConsolePorts(): ConsolePorts {
@@ -108,6 +113,13 @@ export async function consoleCommand(
     const detail = error instanceof Error ? error.message : String(error);
     io.err(`haril: HARIL theme could not be prepared (${detail}); using Pi default`);
   }
+  // Pi's own startup listing stays out of the chat; the panel and /haril-status carry it.
+  try {
+    ensureQuietStartup(agentDir);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    io.err(`haril: Pi's quiet startup could not be set (${detail})`);
+  }
   const dataDir = lastValue(parsed, "--data-dir");
   const harilHome = nonEmpty(host.env?.HARIL_HOME);
   const config = nonEmpty(host.env?.HARIL_CONFIG);
@@ -127,23 +139,36 @@ export async function consoleCommand(
       : { HARIL_HOME: resolve(cwd, dataDirFor(host, dataDir)) }),
     ...(config === undefined ? {} : { HARIL_CONFIG: resolve(cwd, config) }),
   };
-  await ports.playStartup?.({ cwd, platform: host.platform, env });
-  // Pi 1.2.0 captures normalized mouse input in fullscreen mode; passing the mode explicitly overrides a saved
-  // per-user setting for this HARIL process only and does not edit that setting.
-  return runPi(
-    runtime.node.path,
-    [
-      runtime.pi.cliPath,
-      "--tui-mode",
-      "fullscreen",
-      ...(piTheme === undefined ? [] : ["--theme", piTheme.path, "--use-theme", piTheme.name]),
-      "-e",
-      extension,
-    ],
+  const nodePath = runtime.node.path;
+  const piCli = runtime.pi.cliPath;
+  // The colours are set before the welcome and restored after Pi, whichever way this ends: nothing between them flashes.
+  return withTerminalSession(
     {
-      cwd,
-      env,
-      io,
+      colors: terminalColorsApply({ isTTY: ports.stdoutIsTTY, theme: piTheme?.name, env }),
+    },
+    async (session) => {
+      const kept = await ports.playStartup?.({
+        cwd,
+        platform: host.platform,
+        env,
+        palette: piTheme?.name === "haril-future" ? "future" : "matrix",
+        keepScreen: true,
+      });
+      if (kept === true) session.screenKept();
+      // Pi 1.2.0 captures normalized mouse input in fullscreen mode; passing the mode explicitly overrides a saved
+      // per-user setting for this HARIL process only and does not edit that setting.
+      return runPi(
+        nodePath,
+        [
+          piCli,
+          "--tui-mode",
+          "fullscreen",
+          ...(piTheme === undefined ? [] : ["--theme", piTheme.path, "--use-theme", piTheme.name]),
+          "-e",
+          extension,
+        ],
+        { cwd, env, io },
+      );
     },
   );
 }
