@@ -28,6 +28,7 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 ### Corregido
 
 - El adaptador de Engram se ajusta al Engram 3.6.0 publicado: la búsqueda devuelve una lista simple, el recuerdo usa `/observations/recent`, la sonda de salud busca entre todos los proyectos y un guardado confirmado como `saved` o `committed` se registra como `stored`.
+- `haril tools ensure` también escribe la sección `memory` y registra la entrada MCP de Pi cuando la copia propia de Engram ya está verificada pero `haril.json` no tiene `memory` (antes quedaba en `null` para siempre y decía «instalada y al día»); una sección `memory` existente, `provider: "null"` incluido, o un `memory.binary` propio nunca se tocan, y la segunda ejecución no cambia nada. La ficha `MEM` indica que «Comprobar e instalar Engram» añade la sección si falta.
 
 ### Verificación
 

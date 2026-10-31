@@ -339,7 +339,9 @@ function hasEngramEntry(document: Document): boolean {
 }
 
 // Brings haril.json and the Pi MCP entry in line with the verified copy, leaving anything that is the user's alone.
-function syncSettings(ctx: Context, settings: Settings, installed: boolean): Synced {
+// `adopt`: the copy was just installed, or it is verified and haril.json has no memory section, so the section is
+// written and the MCP entry is registered; otherwise only what is already there is brought forward.
+function syncSettings(ctx: Context, settings: Settings, adopt: boolean): Synced {
   const { deps, input } = ctx;
   const notes: string[] = [];
   if (settings.document === undefined) {
@@ -350,7 +352,7 @@ function syncSettings(ctx: Context, settings: Settings, installed: boolean): Syn
 
   let current = settings.document;
   let from: string | undefined;
-  const plan = planMemory(current, ctx.memory, installed);
+  const plan = planMemory(current, ctx.memory, adopt);
   if (plan.kind === "write" || plan.kind === "update") {
     try {
       writeJsonAtomic(input.configPath, plan.document, deps.fs, deps.makeId());
@@ -369,7 +371,7 @@ function syncSettings(ctx: Context, settings: Settings, installed: boolean): Syn
   const memory = current.memory;
   const provider =
     typeof memory === "object" && memory !== null ? (memory as Document).provider : undefined;
-  const mode = installed && provider === "engram" ? "register" : "refresh";
+  const mode = adopt && provider === "engram" ? "register" : "refresh";
   const mcp = readJsonObject(ctx.agentMcpPath, deps.fs);
   if (!mcp.ok) {
     notes.push(
@@ -388,7 +390,7 @@ function syncSettings(ctx: Context, settings: Settings, installed: boolean): Syn
     } catch (error) {
       notes.push(`could not update agent/mcp.json: ${errorText(error)}`);
     }
-  } else if (installed && mode === "refresh" && !hasEngramEntry(mcp.value)) {
+  } else if (adopt && mode === "refresh" && !hasEngramEntry(mcp.value)) {
     notes.push("memory.provider is not engram, so the Pi MCP tools for Engram were not registered");
   }
   return synced();
@@ -430,7 +432,12 @@ async function ensureLocked(
   const copy = engram?.installs.find((install) => install.origins.includes("haril"));
   const copyOk = copy?.version === input.pin;
 
-  if (copyOk && !settings.stale) {
+  // A verified copy that haril.json has no memory section for would stay unused for good, so it is adopted the way a
+  // fresh install is. A memory section of any kind, provider null included, is the user's and is never touched here.
+  const unconfigured =
+    copyOk && settings.document !== undefined && settings.document.memory === undefined;
+
+  if (copyOk && !settings.stale && !unconfigured) {
     const message = `Engram ${input.pin} is installed and current`;
     return {
       engram: { action: "none", path: ctx.pinBinary, message, ...withNotes(carried) },
@@ -439,14 +446,24 @@ async function ensureLocked(
   }
 
   if (copyOk) {
-    // The copy is fine; only haril.json still names an older managed version.
-    const synced = syncSettings(ctx, settings, false);
+    // The copy is fine; haril.json either names an older managed version or does not use it yet.
+    const synced = syncSettings(ctx, settings, unconfigured);
+    if (unconfigured && synced.document?.memory === undefined) {
+      // The section could not be written, so nothing changed and the notes say why.
+      const message = `Engram ${input.pin} is installed, but haril.json could not be set to use it`;
+      return {
+        engram: { action: "none", path: ctx.pinBinary, message, ...withNotes(synced.notes) },
+        report: status,
+      };
+    }
     return finish(ctx, "never", synced.document, {
       action: "updated",
       ...(synced.from === undefined ? {} : { from: synced.from }),
       to: input.pin,
       path: ctx.pinBinary,
-      message: "haril.json now points at the current copy",
+      message: unconfigured
+        ? "haril.json now uses the verified Engram copy (memory.provider = engram)"
+        : "haril.json now points at the current copy",
       ...withNotes(synced.notes),
     });
   }

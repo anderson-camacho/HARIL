@@ -35,16 +35,13 @@ function olderThan(version: string | undefined, pin: string): version is string 
   );
 }
 
-// What to do with the memory section of haril.json. With no section a verified install adds one (the user opted out of
+// What to do with the memory section of haril.json. With no section a verified copy adds one (the user opted out of
 // nothing); a section that exists is the user's, except for the values HARIL itself wrote for an older managed version.
-export function planMemory(
-  document: Document,
-  ctx: MemoryContext,
-  afterInstall: boolean,
-): MemoryPlan {
+// `verified`: the copy at `ctx.pinBinary` runs as the pin, because it was just installed or was checked as it was.
+export function planMemory(document: Document, ctx: MemoryContext, verified: boolean): MemoryPlan {
   const section = document.memory;
   if (section === undefined) {
-    if (!afterInstall) return { kind: "keep" };
+    if (!verified) return { kind: "keep" };
     const memory = { provider: "engram", binary: ctx.pinBinary, version: ctx.pin };
     return { kind: "write", document: { ...document, memory } };
   }

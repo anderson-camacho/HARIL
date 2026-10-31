@@ -381,10 +381,15 @@ describe("the memory process in the MEM view", () => {
     const body = text(es).replace(/\s+/g, " ");
     expect(body).toContain("Engram está listo: reinicia el runtime para que lo use");
     expect(body).toContain("memory.provider = engram");
+    expect(body).toContain("«Comprobar e instalar Engram» lo añade si falta");
     expect(body).not.toContain("Para activar Engram");
     expectRowsToFit(es);
     const en = await mem(source(statusJson([engram(), gentle()]), nullMemory, { locale: "en" }));
     expect(text(en).replace(/\s+/g, " ")).toContain("Engram is ready: restart the runtime");
+    expect(text(en).replace(/\s+/g, " ")).toContain(
+      '"Check and install Engram" adds it when missing',
+    );
+    expectRowsToFit(en);
   });
 
   it("keeps the install advice while the tools could not be read", async () => {

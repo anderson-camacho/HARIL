@@ -43,6 +43,8 @@ interface RigOptions {
   // Other files under vendor/engram, by relative path.
   vendor?: Record<string, string>;
   config?: unknown;
+  // haril.json already uses HARIL's copy at the pin, as a finished install leaves it.
+  managed?: boolean;
   rawConfig?: string;
   mcp?: unknown;
   rawMcp?: string;
@@ -99,6 +101,10 @@ function rig(options: RigOptions = {}): Rig {
   mkdirSync(home, { recursive: true });
   if (options.copy !== undefined) write(copy, options.copy);
   for (const [path, text] of Object.entries(options.vendor ?? {})) write(join(vendor, path), text);
+  if (options.managed === true) {
+    const memory = { provider: "engram", binary: copy, version: PIN };
+    write(configPath, JSON.stringify({ memory }));
+  }
   if (options.config !== undefined) write(configPath, JSON.stringify(options.config));
   if (options.rawConfig !== undefined) write(configPath, options.rawConfig);
   if (options.mcp !== undefined) write(mcpPath, JSON.stringify(options.mcp));
@@ -241,7 +247,8 @@ afterEach(() => {
 
 describe("ensure engram: nothing to do", () => {
   it("does nothing when HARIL's copy runs and is the pin", async () => {
-    const r = rig({ copy: `engram ${PIN}` });
+    const r = rig({ copy: `engram ${PIN}`, managed: true });
+    const before = readFileSync(r.configPath, "utf8");
     const outcome = await run(r);
     expect(outcome.engram).toMatchObject({ action: "none", path: r.copy });
     expect(r.urls).toEqual([]);
@@ -249,11 +256,12 @@ describe("ensure engram: nothing to do", () => {
     expect(engramOf(outcome)).toMatchObject({ state: "ok", active: { version: PIN } });
     expect(existsSync(lockPath(r))).toBe(false);
     expect(tmpEntries(r)).toEqual([]);
-    expect(existsSync(r.configPath)).toBe(false);
+    expect(readFileSync(r.configPath, "utf8")).toBe(before);
+    expect(existsSync(r.mcpPath)).toBe(false);
   });
 
   it("refreshes the latest-version cache when it is due, before deciding", async () => {
-    const r = rig({ copy: `engram ${PIN}` });
+    const r = rig({ copy: `engram ${PIN}`, managed: true });
     await run(r);
     expect(r.latestUrls.sort()).toEqual([
       "https://github.com/Gentleman-Programming/engram/releases/latest",
@@ -270,13 +278,13 @@ describe("ensure engram: nothing to do", () => {
         "gentle-ai": { latest: "4.3.1", latestCheckedAt: iso(NOW - 2 * HOUR) },
       },
     };
-    const r = rig({ copy: `engram ${PIN}`, state: fresh });
+    const r = rig({ copy: `engram ${PIN}`, managed: true, state: fresh });
     await run(r);
     expect(r.latestUrls).toEqual([]);
   });
 
   it("only reports a newer upstream Engram, and installs nothing", async () => {
-    const r = rig({ copy: `engram ${PIN}`, tag: "v3.7.0" });
+    const r = rig({ copy: `engram ${PIN}`, managed: true, tag: "v3.7.0" });
     const outcome = await run(r);
     expect(outcome.engram.action).toBe("none");
     expect(r.urls).toEqual([]);
@@ -555,7 +563,7 @@ describe("ensure engram: the cooldown after a failure", () => {
   });
 
   it("does not hold back a copy that is already fine", async () => {
-    const r = rig({ copy: `engram ${PIN}`, state: failedAgo(MINUTE) });
+    const r = rig({ copy: `engram ${PIN}`, managed: true, state: failedAgo(MINUTE) });
     const outcome = await run(r);
     expect(outcome.engram.action).toBe("none");
   });
@@ -734,6 +742,131 @@ describe("ensure engram: haril.json", () => {
     expect(outcome.engram.action).toBe("updated");
     expect(readJson(r.configPath)).toEqual(config);
     expect(readdirSync(r.vendor).sort()).toEqual(["3.3.0", "3.5.0", PIN]);
+  });
+});
+
+describe("ensure engram: a verified copy that haril.json does not use yet", () => {
+  const managed = (r: Rig) => ({ provider: "engram", binary: r.copy, version: PIN });
+
+  it("writes the memory section and registers the MCP entry, and says it updated", async () => {
+    const r = rig({
+      copy: `engram ${PIN}`,
+      config: { providers: { a: 1 }, ui: { theme: "x" } },
+      mcp: { mcpServers: { other: { command: "x" } } },
+    });
+    const outcome = await run(r);
+    expect(outcome.engram).toMatchObject({ action: "updated", to: PIN, path: r.copy });
+    expect(outcome.engram.from).toBeUndefined();
+    expect(outcome.engram.message).toContain("memory.provider = engram");
+    expect(readJson(r.configPath)).toEqual({
+      providers: { a: 1 },
+      ui: { theme: "x" },
+      memory: managed(r),
+    });
+    const mcp = readMcp(r.mcpPath);
+    expect(mcp.mcpServers.other).toEqual({ command: "x" });
+    expect(mcp.mcpServers.engram).toMatchObject({
+      command: r.copy,
+      args: ["mcp", "--tools=agent"],
+      env: { ENGRAM_DATA_DIR: join(r.dataDir, "memory", "engram") },
+    });
+    expect(r.urls).toEqual([]);
+    expect(r.events).toEqual([]);
+    expect(readFileSync(r.copy, "utf8")).toBe(`engram ${PIN}`);
+  });
+
+  it("creates haril.json when there is none, as a fresh install does", async () => {
+    const r = rig({ copy: `engram ${PIN}` });
+    const outcome = await run(r);
+    expect(outcome.engram.action).toBe("updated");
+    expect(readJson(r.configPath)).toEqual({ memory: managed(r) });
+    expect(readMcp(r.mcpPath).mcpServers.engram?.command).toBe(r.copy);
+  });
+
+  it("reports the copy again as current on the next run and changes nothing", async () => {
+    const r = rig({ copy: `engram ${PIN}`, config: { ui: 1 } });
+    await run(r);
+    const config = readFileSync(r.configPath, "utf8");
+    const mcp = readFileSync(r.mcpPath, "utf8");
+    const second = await run(r);
+    expect(second.engram).toMatchObject({ action: "none", path: r.copy });
+    expect(readFileSync(r.configPath, "utf8")).toBe(config);
+    expect(readFileSync(r.mcpPath, "utf8")).toBe(mcp);
+    expect(readdirSync(dirname(r.configPath))).toEqual(["haril.json"]);
+  });
+
+  it("never overrides provider null, and registers nothing", async () => {
+    const config = { memory: { provider: "null" }, other: 1 };
+    const r = rig({ copy: `engram ${PIN}`, config });
+    const outcome = await run(r);
+    expect(outcome.engram.action).toBe("none");
+    expect(readJson(r.configPath)).toEqual(config);
+    expect(existsSync(r.mcpPath)).toBe(false);
+  });
+
+  it("never touches a memory.binary that is the user's own, even next to a good copy", async () => {
+    const mine = join(tmpdir(), "my-engram", BINARY);
+    const config = { memory: { provider: "engram", binary: mine, version: PIN } };
+    const r = rig({ copy: `engram ${PIN}`, config });
+    const outcome = await run(r);
+    expect(outcome.engram).toMatchObject({ action: "skipped", path: mine });
+    expect(readJson(r.configPath)).toEqual(config);
+    expect(existsSync(r.mcpPath)).toBe(false);
+  });
+
+  it("leaves a haril.json it cannot parse alone and says why", async () => {
+    const r = rig({ copy: `engram ${PIN}`, rawConfig: "{ this is not json" });
+    const outcome = await run(r);
+    expect(outcome.engram.action).toBe("none");
+    expect(readFileSync(r.configPath, "utf8")).toBe("{ this is not json");
+    expect(outcome.engram.notes?.join("\n")).toContain("haril.json");
+    expect(existsSync(r.mcpPath)).toBe(false);
+  });
+
+  it("leaves a memory section that is not an object alone and says why", async () => {
+    const config = { memory: "engram" };
+    const r = rig({ copy: `engram ${PIN}`, config });
+    const outcome = await run(r);
+    expect(outcome.engram.action).toBe("none");
+    expect(readJson(r.configPath)).toEqual(config);
+    expect(outcome.engram.notes?.join("\n")).toContain("memory");
+    expect(existsSync(r.mcpPath)).toBe(false);
+  });
+
+  it("adds a note and no more when haril.json cannot be written", async () => {
+    const config = { ui: 1 };
+    const r = rig({
+      copy: `engram ${PIN}`,
+      config,
+      fs: {
+        rename: (from, to) => {
+          if (to.endsWith("haril.json")) throw new Error("EPERM: operation not permitted");
+          nodeEnsureFs.rename(from, to);
+        },
+      },
+    });
+    const outcome = await run(r);
+    expect(outcome.engram.action).toBe("none");
+    expect(outcome.engram.notes?.join("\n")).toContain("could not update haril.json");
+    expect(readJson(r.configPath)).toEqual(config);
+    expect(readdirSync(dirname(r.configPath))).toEqual(["haril.json"]);
+  });
+
+  it("keeps the memory section and notes an mcp.json it cannot parse", async () => {
+    const r = rig({ copy: `engram ${PIN}`, config: { ui: 1 }, rawMcp: "nope" });
+    const outcome = await run(r);
+    expect(outcome.engram.action).toBe("updated");
+    expect(readJson(r.configPath)).toEqual({ ui: 1, memory: managed(r) });
+    expect(readFileSync(r.mcpPath, "utf8")).toBe("nope");
+    expect(outcome.engram.notes?.join("\n")).toContain("mcp.json");
+  });
+
+  it("does not start a download or leave a lock behind", async () => {
+    const r = rig({ copy: `engram ${PIN}`, config: { ui: 1 } });
+    await run(r);
+    expect(r.urls).toEqual([]);
+    expect(existsSync(lockPath(r))).toBe(false);
+    expect(tmpEntries(r)).toEqual([]);
   });
 });
 

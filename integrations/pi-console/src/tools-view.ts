@@ -325,8 +325,8 @@ function memoryLines(memory: MemoryView, engramReady: boolean, say: Say): string
       ...sentence(
         engramReady
           ? say(
-              "Engram is ready: restart the runtime so it uses it (haril.json: memory.provider = engram).",
-              "Engram está listo: reinicia el runtime para que lo use (haril.json: memory.provider = engram).",
+              'Engram is ready: restart the runtime so it uses it (haril.json: memory.provider = engram; "Check and install Engram" adds it when missing).',
+              "Engram está listo: reinicia el runtime para que lo use (haril.json: memory.provider = engram; «Comprobar e instalar Engram» lo añade si falta).",
             )
           : say(
               'To turn Engram on: "Check and install Engram" (or haril tools ensure), then restart the runtime.',
