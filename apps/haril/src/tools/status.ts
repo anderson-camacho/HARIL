@@ -1,9 +1,10 @@
 import { compareVersions } from "../version-compare.js";
 import { type DetectDeps, detectInstalls } from "./detect.js";
 import { LATEST_TTL_MS, type LatestFetch, lookupDue, lookupLatest } from "./latest.js";
-import type { ToolRecord, ToolsState } from "./state.js";
+import { INSTALL_COOLDOWN_MS, type ToolRecord, type ToolsState } from "./state.js";
 import {
   type Install,
+  type InstallFailure,
   TOOL_IDS,
   type ToolId,
   type ToolState,
@@ -14,8 +15,14 @@ import {
 // Joins detection (always recomputed, cheap) with the latest published version (cached, asked for on demand) into the
 // status of each tool. Engram is judged against the version HARIL is qualified for; gentle-ai against the latest one.
 
-const GENTLE_AI_INSTALL =
-  "go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@latest";
+const GENTLE_AI_MODULE = "github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai";
+
+// What installs or updates gentle-ai is `haril tools update gentle-ai`; the go command it runs names the exact release
+// tag, never @latest, and is quoted so the person sees what happens (it builds from source: it needs Go).
+function gentleAiUpdateHint(latest: string | null): string {
+  const tag = latest === null ? "<latest>" : latest;
+  return `haril tools update gentle-ai (it runs: go install ${GENTLE_AI_MODULE}@v${tag}; needs Go)`;
+}
 
 export interface ToolsInput {
   readonly platform: string;
@@ -108,7 +115,7 @@ function gentleAiVerdict(active: Install | null, view: LatestView): Verdict {
   const notes: string[] = [];
   if (active === null) {
     notes.push(
-      `gentle-ai was not found on PATH or in Go's bin directories; install it with: ${GENTLE_AI_INSTALL} (needs Go)`,
+      `gentle-ai was not found on PATH or in Go's bin directories; install it with: ${gentleAiUpdateHint(view.latest)}`,
     );
     return { state: "missing", notes, newerUpstream: false };
   }
@@ -122,7 +129,7 @@ function gentleAiVerdict(active: Install | null, view: LatestView): Verdict {
   if (view.latest === null) return { state: "unknown", notes, newerUpstream: false };
   if (compareVersions(active.version, view.latest) < 0) {
     notes.push(
-      `gentle-ai ${view.latest} is available (installed ${active.version}); update it with: ${GENTLE_AI_INSTALL} (needs Go)`,
+      `gentle-ai ${view.latest} is available (installed ${active.version}); update it with: ${gentleAiUpdateHint(view.latest)}`,
     );
     return { state: "outdated", notes, newerUpstream: false };
   }
@@ -205,6 +212,22 @@ async function resolveLatest(
   return { view: { latest, checkedAt, notes }, record: next, changed: lookingUp };
 }
 
+// The failed Engram install on record, with the moment `haril tools ensure` tries again by itself: null once the cooldown
+// is over, and for a stamp in the future, which says nothing about how long ago it was.
+function installFailureView(
+  failure: NonNullable<ToolsState["engramInstall"]>,
+  now: number,
+): InstallFailure {
+  const failedAt = Date.parse(failure.failedAt);
+  const age = now - failedAt;
+  const waiting = age >= 0 && age < INSTALL_COOLDOWN_MS;
+  return {
+    failedAt: failure.failedAt,
+    message: failure.message,
+    retryAt: waiting ? new Date(failedAt + INSTALL_COOLDOWN_MS).toISOString() : null,
+  };
+}
+
 export async function collectToolsReport(
   input: ToolsInput,
   deps: ToolsDeps,
@@ -252,9 +275,13 @@ export async function collectToolsReport(
     ];
     return extra.length === 0 ? status : { ...status, notes: [...extra, ...status.notes] };
   });
+  const failure = state.engramInstall;
   return {
     schema: "haril.tools.status/1",
     generatedAt: new Date(deps.now()).toISOString(),
     tools: statuses,
+    ...(failure === undefined
+      ? {}
+      : { engramInstallFailure: installFailureView(failure, deps.now()) }),
   };
 }

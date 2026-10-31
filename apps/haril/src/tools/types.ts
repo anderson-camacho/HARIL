@@ -35,8 +35,18 @@ export interface ToolStatus {
   readonly notes: readonly string[];
 }
 
+// The last Engram install that failed, as the report shows it.
+export interface InstallFailure {
+  readonly failedAt: string;
+  readonly message: string;
+  // When `haril tools ensure` tries again by itself; null once the cooldown is over (a new attempt is allowed now).
+  readonly retryAt: string | null;
+}
+
 export interface ToolsReport {
   readonly schema: "haril.tools.status/1";
   readonly generatedAt: string;
   readonly tools: readonly ToolStatus[];
+  // Present only while a failed Engram install is on record, so a report without one keeps the shape it always had.
+  readonly engramInstallFailure?: InstallFailure;
 }

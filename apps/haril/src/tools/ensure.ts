@@ -16,6 +16,7 @@ import { acquireLock } from "./lock.js";
 import { pathOps, userEngramProblem } from "./paths.js";
 import { type EngramAsset, engramAsset, findChecksum, sha256Hex } from "./release.js";
 import type { SmokeFn } from "./smoke.js";
+import { INSTALL_COOLDOWN_MS } from "./state.js";
 import { collectToolsReport, type RefreshMode, type ToolsDeps, type ToolsInput } from "./status.js";
 import type { ExecFn } from "./system.js";
 import type { ToolsReport } from "./types.js";
@@ -27,7 +28,6 @@ import { readInstallVersion } from "./version.js";
 // downloaded from GitHub's own hosts, matched its published SHA-256, reported the pin and passed a real health check,
 // and it is activated with one rename; any failure before that changes nothing.
 
-const COOLDOWN_MS = 6 * 3_600_000;
 const CHECKSUMS_TIMEOUT_MS = 15_000;
 const ARCHIVE_TIMEOUT_MS = 120_000;
 const VERSION_TIMEOUT_MS = 10_000;
@@ -170,8 +170,8 @@ function cooldownMessage(ctx: Context): string | undefined {
   const failedAt = Date.parse(failure.failedAt);
   const age = ctx.deps.now() - failedAt;
   // A failure stamped in the future says nothing about how long ago it was.
-  if (age < 0 || age >= COOLDOWN_MS) return undefined;
-  const retryAt = new Date(failedAt + COOLDOWN_MS).toISOString();
+  if (age < 0 || age >= INSTALL_COOLDOWN_MS) return undefined;
+  const retryAt = new Date(failedAt + INSTALL_COOLDOWN_MS).toISOString();
   return `the last install failed at ${failure.failedAt}: ${failure.message}; not retrying until ${retryAt} (run with --force to retry now)`;
 }
 

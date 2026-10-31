@@ -176,6 +176,29 @@ describe("haril tools status", () => {
     expect(report.tools[1]).toMatchObject({ state: "outdated", latest: "4.3.1" });
   });
 
+  it("carries the last Engram install failure in --json and in the text", async () => {
+    const state: ToolsState = {
+      version: 1,
+      tools: {},
+      engramInstall: {
+        failedAt: "2026-10-30T09:00:00.000Z",
+        message: "network error: fetch failed",
+      },
+    };
+    const svc = () => services({ ...THIS_MACHINE }, { state });
+    const report = parseJson<ToolsReport>((await cli(["status", "--json"], svc())).out);
+    expect(report.engramInstallFailure).toEqual({
+      failedAt: "2026-10-30T09:00:00.000Z",
+      message: "network error: fetch failed",
+      retryAt: "2026-10-30T15:00:00.000Z",
+    });
+    const text = (await cli(["status"], svc())).out.join("\n");
+    expect(text).toContain(
+      "last install failed at 2026-10-30T09:00:00.000Z: network error: fetch failed",
+    );
+    expect(text).toContain("not retrying until 2026-10-30T15:00:00.000Z");
+  });
+
   it("answers --json for an unreadable haril.json with a note and the default Engram path", async () => {
     const dir = mkdtempSync(join(tmpdir(), "haril-tools-cli-"));
     try {

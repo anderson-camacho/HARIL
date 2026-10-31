@@ -246,13 +246,38 @@ describe("classifying gentle-ai", () => {
     expect(status.notes).toContain("installed in 2 places with different versions: 4.3.1, 4.0.0");
   });
 
-  it("says how to install it, with the Go requirement", () => {
+  it("points at `haril tools update gentle-ai` to install it, naming the go command that runs", () => {
     const { notes } = buildToolStatus("gentle-ai", [], latest("4.3.1"), ctx);
     const text = notes.join("\n");
+    expect(text).toContain("haril tools update gentle-ai");
     expect(text).toContain(
-      "go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@latest",
+      "go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.3.1",
     );
-    expect(text).toContain("Go");
+    expect(text).toContain("needs Go");
+    expect(text).not.toContain("@latest");
+  });
+
+  it("does not invent a tag for the install command when the latest version is unknown", () => {
+    const { notes } = buildToolStatus("gentle-ai", [], NO_LATEST, ctx);
+    const text = notes.join("\n");
+    expect(text).toContain("haril tools update gentle-ai");
+    expect(text).toContain("@v<latest>");
+    expect(text).not.toContain("@latest");
+  });
+
+  it("points at `haril tools update gentle-ai` when it is outdated, with the exact tag", () => {
+    const status = buildToolStatus(
+      "gentle-ai",
+      [install("/usr/bin/gentle-ai", "4.0.0", true)],
+      latest("4.3.1"),
+      ctx,
+    );
+    const text = status.notes.join("\n");
+    expect(status.state).toBe("outdated");
+    expect(text).toContain("gentle-ai 4.3.1 is available (installed 4.0.0)");
+    expect(text).toContain("haril tools update gentle-ai");
+    expect(text).toContain("gentle-ai@v4.3.1");
+    expect(text).not.toContain("@latest");
   });
 
   it("warns when it is only in a Go bin dir that is not on PATH", () => {
@@ -508,6 +533,65 @@ describe("a whole tools report", () => {
       "haril.json is not valid JSON; using the default Engram path",
     );
     expect(byId(report, "gentle-ai")?.notes.join("\n")).not.toContain("haril.json");
+  });
+
+  describe("the last Engram install failure", () => {
+    const HOUR = 3_600_000;
+    const withFailure = (failedAt: number): ToolsState => ({
+      version: 1,
+      tools: {},
+      engramInstall: { failedAt: iso(failedAt), message: "network error: fetch failed" },
+    });
+
+    it("is absent from the report while no failure is on record", async () => {
+      const report = await collectToolsReport(INPUT, rig().deps, "never");
+      expect("engramInstallFailure" in report).toBe(false);
+      expect(Object.keys(report).sort()).toEqual(["generatedAt", "schema", "tools"]);
+    });
+
+    it("is exposed with the moment a new attempt is allowed while the cooldown runs", async () => {
+      const report = await collectToolsReport(
+        INPUT,
+        rig({ state: withFailure(NOW - HOUR) }).deps,
+        "never",
+      );
+      expect(report.engramInstallFailure).toEqual({
+        failedAt: iso(NOW - HOUR),
+        message: "network error: fetch failed",
+        retryAt: iso(NOW - HOUR + 6 * HOUR),
+      });
+    });
+
+    it("has no retry moment once the six hours passed: a new attempt is allowed", async () => {
+      const report = await collectToolsReport(
+        INPUT,
+        rig({ state: withFailure(NOW - 6 * HOUR - 1) }).deps,
+        "never",
+      );
+      expect(report.engramInstallFailure).toEqual({
+        failedAt: iso(NOW - 6 * HOUR - 1),
+        message: "network error: fetch failed",
+        retryAt: null,
+      });
+    });
+
+    it("has no retry moment for a failure stamped in the future", async () => {
+      const report = await collectToolsReport(
+        INPUT,
+        rig({ state: withFailure(NOW + HOUR) }).deps,
+        "never",
+      );
+      expect(report.engramInstallFailure?.retryAt).toBeNull();
+    });
+
+    it("survives a JSON round trip", async () => {
+      const report = await collectToolsReport(
+        INPUT,
+        rig({ state: withFailure(NOW - HOUR) }).deps,
+        "never",
+      );
+      expect(JSON.parse(JSON.stringify(report))).toEqual(report);
+    });
   });
 
   it("keeps the fields next to the tools when a refresh rewrites the state", async () => {

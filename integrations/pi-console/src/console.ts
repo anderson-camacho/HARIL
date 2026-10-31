@@ -86,6 +86,7 @@ import { buildRailMenu, runRailHit } from "./rail-actions.js";
 import { type PendingApproval, readStatus } from "./status.js";
 import { createTabPicker, type TabPickerResult } from "./tab-picker.js";
 import { clipText, plainText, truncate } from "./text.js";
+import { createToolsPanel, type ToolsHost } from "./tools-panel.js";
 import {
   type BarFacts,
   type BarLayout,
@@ -192,7 +193,16 @@ function safely<T>(read: () => T, fallback: T): T {
   }
 }
 
-export default function harilConsole(pi: ConsolePi): void {
+// What a test may replace so that no real command runs: the way the MEM tab's check and actions reach the HARIL CLI, and
+// how long the check waits after the console opens. Pi calls the console with the extension API alone.
+export interface ConsoleOptions {
+  readonly tools?: {
+    readonly run?: ToolsHost["run"];
+    readonly checkDelayMs?: number;
+  };
+}
+
+export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}): void {
   let session: Session | undefined;
 
   const redraw = (): void => session?.tui?.requestRender();
@@ -222,6 +232,39 @@ export default function harilConsole(pi: ConsolePi): void {
     sessionId: () => session?.ctx.sessionManager.getSessionId(),
     onChange: redraw,
   });
+
+  // The MEM tab's data, its actions and the check that runs when the console opens (tools-panel.ts). Every command goes
+  // through the HARIL CLI, in the background, and none is waited for by the console.
+  const toolsPanel = createToolsPanel(
+    {
+      run:
+        options.tools?.run ??
+        ((args, { timeoutMs }) => runHaril(args, { cwd: session?.cwd, timeoutMs })),
+      env: () => process.env,
+      locale: () => session?.locale ?? DEFAULT_UI_LOCALE,
+      ui: () =>
+        session === undefined || session.closed || !session.ctx.hasUI ? undefined : session.ctx.ui,
+      memoryOpen: () =>
+        session !== undefined && !session.closed && session.dock.selected === "memory",
+      // Only the busy state changed: the tab is drawn again from the data it holds, with no command run.
+      repaint: () => {
+        const current = session;
+        if (current === undefined || current.closed || current.dock.detail?.id !== "memory") return;
+        if (current.dock.selected !== "memory") return;
+        const details = toolsPanel.view();
+        if (details === undefined) return;
+        current.dock.detail = details;
+        current.nativePanes?.refresh();
+      },
+      reload: () => {
+        const current = session;
+        if (current !== undefined && !current.closed && current.dock.selected === "memory") {
+          void openDockSlot(current, "memory");
+        }
+      },
+    },
+    options.tools?.checkDelayMs === undefined ? {} : { checkDelayMs: options.tools.checkDelayMs },
+  );
 
   function runtimeState(current: Session): RuntimeState {
     if (current.runtimeAlive === true) return "running";
@@ -852,7 +895,10 @@ export default function harilConsole(pi: ConsolePi): void {
     current.dock.selected = id;
     current.dock.detail = undefined;
     redraw();
-    const details = await loadDockDetails(id, current.cwd, { locale: current.locale });
+    const details =
+      id === "memory"
+        ? await toolsPanel.load()
+        : await loadDockDetails(id, current.cwd, { locale: current.locale });
     if (current.closed || session !== current || current.dockLoadSeq !== seq) return;
     current.dock.detail = details;
     current.nativePanes?.refresh();
@@ -869,9 +915,13 @@ export default function harilConsole(pi: ConsolePi): void {
     await openDockSlot(current, result.id);
   }
 
-  // The rows a dock view declares (DockDetails.actions), by the tab they belong to. Only DOCS has any: its rows connect,
-  // change and disconnect the documentation folder.
+  // The rows a dock view declares (DockDetails.actions), by the tab they belong to. DOCS's rows connect, change and
+  // disconnect the documentation folder; MEM's check Engram, look the versions up and update gentle-ai.
   async function runDockAction(current: Session, id: string, action: string): Promise<void> {
+    if (id === "memory") {
+      await toolsPanel.act(action);
+      return;
+    }
     if (id !== "docs") return;
     if (action === "docs:set") await connectDocsFolder(current, current.ctx);
     else if (action === "docs:clear") await disconnectDocsFolder(current, current.ctx);
@@ -1318,13 +1368,39 @@ export default function harilConsole(pi: ConsolePi): void {
     const current = session;
     if (current === undefined || !ctx.hasUI || ctx.mode !== "tui") return;
     const entries = buildRailMenu(railContent(current, RAIL_MENU_WIDTH), current.locale);
-    const choice = await ctx.ui.select(
-      localized(current.locale, "Right panel", "Panel derecho"),
-      entries.map((entry) => entry.label),
-    );
+    const rows = viewMenuRows(current);
+    const choice = await ctx.ui.select(localized(current.locale, "Right panel", "Panel derecho"), [
+      ...rows.map((row) => row.label),
+      ...entries.map((entry) => entry.label),
+    ]);
     if (choice === undefined || session !== current || current.closed) return;
+    const row = rows.find((item) => item.label === choice);
+    if (row !== undefined) {
+      // Not awaited: an install can take minutes, and the menu has done its part.
+      void runDockAction(current, row.dock, row.action);
+      return;
+    }
     const entry = entries.find((item) => item.label === choice);
     if (entry !== undefined) runRail(current, entry.hit);
+  }
+
+  // The rows the tab on screen declared (DockDetails.actions), as menu choices: "MEM · Comprobar e instalar Engram".
+  // They come first, since they are what the user is looking at. A tab with no rows, or one that is busy, adds none.
+  function viewMenuRows(current: Session): { label: string; dock: string; action: string }[] {
+    const detail = current.dock.detail;
+    if (
+      detail === undefined ||
+      detail.id !== current.dock.selected ||
+      detail.actions === undefined
+    ) {
+      return [];
+    }
+    const tab = DOCK_LABELS.find((slot) => slot.id === detail.id)?.tab ?? detail.id;
+    return detail.actions.flatMap(({ line, action }) => {
+      const text = detail.lines[line];
+      if (text === undefined) return [];
+      return [{ label: `${tab} · ${text.replace(/^▸\s*/u, "").trim()}`, dock: detail.id, action }];
+    });
   }
 
   async function changeTheme(current: Session, requested: string): Promise<void> {
@@ -1680,6 +1756,8 @@ export default function harilConsole(pi: ConsolePi): void {
     ended.closed = true;
     ended.nativePanes?.close();
     ended.nativePanes = undefined;
+    // A check still waiting for its moment belongs to no session now; the next session asks for it again.
+    toolsPanel.cancelCheck();
     followTimer(ended);
     ended.feed.close();
   }
@@ -1695,6 +1773,8 @@ export default function harilConsole(pi: ConsolePi): void {
     installUi(current);
     current.openArea("agents");
     void openDockSlot(current, current.dock.selected);
+    // Engram and gentle-ai are checked in the background, once per process (HARIL_TOOLS_CHECK=off skips it).
+    if (cliAvailable() || options.tools?.run !== undefined) toolsPanel.scheduleCheck();
     if (!cliAvailable()) return;
     void reloadDockSlots(current);
     // The project, the HARIL state and the models arrive after the first frame: the bar shows the folder until then.

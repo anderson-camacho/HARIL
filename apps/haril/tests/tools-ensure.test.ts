@@ -359,8 +359,9 @@ describe("ensure engram: installing and updating", () => {
         engramInstall: { failedAt: iso(NOW - 7 * HOUR), message: "network error" },
       },
     });
-    await run(r);
+    const outcome = await run(r);
     expect(r.state.engramInstall).toBeUndefined();
+    expect("engramInstallFailure" in outcome.report).toBe(false);
   });
 });
 
@@ -511,6 +512,16 @@ describe("ensure engram: going offline", () => {
     const r = rig({ download: offline });
     await run(r);
     expect(r.state.tools.engram?.latest).toBe(PIN);
+  });
+
+  it("carries the failure, and when a new attempt is allowed, in the report it returns", async () => {
+    const r = rig({ download: offline });
+    const outcome = await run(r);
+    expect(outcome.report.engramInstallFailure).toEqual({
+      failedAt: iso(NOW),
+      message: "could not download checksums.txt: network error: fetch failed",
+      retryAt: iso(NOW + 6 * HOUR),
+    });
   });
 });
 

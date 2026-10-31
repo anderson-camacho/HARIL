@@ -31,6 +31,9 @@ export interface ToolsState {
 
 const MAX_FAILURE_LENGTH = 200;
 
+// How long `haril tools ensure` waits after a failed Engram install before it tries again by itself.
+export const INSTALL_COOLDOWN_MS = 6 * 3_600_000;
+
 export function emptyToolsState(): ToolsState {
   return { version: 1, tools: {} };
 }

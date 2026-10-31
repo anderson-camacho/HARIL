@@ -24,7 +24,7 @@ import {
   type ToolsInput,
 } from "../tools/status.js";
 import { type InstallFn, runCapped, runTail, SYSTEM_DETECT_DEPS } from "../tools/system.js";
-import type { Install, ToolState, ToolStatus } from "../tools/types.js";
+import type { Install, InstallFailure, ToolState, ToolStatus } from "../tools/types.js";
 import {
   type GentleAiUpdateResult,
   type UpdatePlan,
@@ -137,7 +137,7 @@ async function toolsStatus(
   const report = await collectToolsReport(toolsInputFor(host), toolsDepsFor(host, services), mode);
 
   if (parsed.flags.has("--json")) io.out(JSON.stringify(report));
-  else printText(io, report.tools, "tools status");
+  else printText(io, report.tools, "tools status", report.engramInstallFailure);
   return EXIT_OK;
 }
 
@@ -219,7 +219,7 @@ async function toolsEnsure(
   } else {
     io.out(`haril ${VERSION} tools ensure`);
     printEnsure(io, outcome.engram);
-    printText(io, outcome.report.tools);
+    printText(io, outcome.report.tools, undefined, outcome.report.engramInstallFailure);
   }
   return outcome.engram.action === "failed" ? EXIT_FAILED : EXIT_OK;
 }
@@ -371,7 +371,12 @@ const STATE_WORDS: Record<ToolState, string> = {
   unknown: "unknown",
 };
 
-function printText(io: CliIo, statuses: readonly ToolStatus[], title?: string): void {
+function printText(
+  io: CliIo,
+  statuses: readonly ToolStatus[],
+  title?: string,
+  failure?: InstallFailure,
+): void {
   if (title !== undefined) io.out(`haril ${VERSION} ${title}`);
   for (const status of statuses) {
     io.out(`${status.id}: ${STATE_WORDS[status.state]}`);
@@ -383,6 +388,15 @@ function printText(io: CliIo, statuses: readonly ToolStatus[], title?: string): 
       io.out(`  other       ${installText(install, why)}`);
     }
     for (const note of status.notes) io.out(`  note        ${note}`);
+    if (status.id === "engram" && failure !== undefined) {
+      const retry =
+        failure.retryAt === null
+          ? "a new attempt is allowed now"
+          : `not retrying until ${failure.retryAt} (run haril tools ensure --force to retry now)`;
+      io.out(
+        `  note        last install failed at ${failure.failedAt}: ${failure.message}; ${retry}`,
+      );
+    }
   }
 }
 

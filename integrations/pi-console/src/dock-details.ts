@@ -3,6 +3,14 @@ import { type DocsScan, scanDocsFolder, tailFit } from "./docs-folder.js";
 import { localized, type UiLocale } from "./locale.js";
 import { DOCK_LABELS, type DockId } from "./native-panes.js";
 import { plainText, textWidth, wrap } from "./text.js";
+import { type MemoryView, parseMemoryStatus, parseToolsStatus } from "./tools-model.js";
+import {
+  type BusyKind,
+  type Loaded,
+  type MemData,
+  type MemOptions,
+  memRows,
+} from "./tools-view.js";
 
 const MAX_LINES = 140;
 // Columns a row of the right panel has for its text: the panel is 40 wide, less its border and the margin of each row.
@@ -19,12 +27,21 @@ export interface DockDetails {
   readonly actions?: readonly { line: number; action: string }[];
 }
 
+// What a command printed.
+interface CommandAnswer {
+  readonly ok: boolean;
+  readonly stdout: string;
+  readonly stderr: string;
+}
+
 export interface DockSource {
-  readonly memory?: () => Promise<{
-    readonly ok: boolean;
-    readonly stdout: string;
-    readonly stderr: string;
-  }>;
+  // `haril memory status --json`: the memory process, for the MEM tab.
+  readonly memory?: () => Promise<CommandAnswer>;
+  // `haril tools status --json`: Engram and gentle-ai, for the MEM tab.
+  readonly tools?: () => Promise<CommandAnswer>;
+  // What the console is doing for the MEM tab now, and why the check it ran at start-up gave no answer.
+  readonly busy?: BusyKind | undefined;
+  readonly checkError?: string | undefined;
   // The documentation folder the user connected: its path, or undefined when none is. Rejects with the reason when
   // haril.json cannot be read.
   readonly docsPath?: () => Promise<string | undefined>;
@@ -153,6 +170,59 @@ async function docsDetails(id: DockId, cwd: string, source: DockSource): Promise
   return view(id, status, lines, actions);
 }
 
+// One of the two commands of the MEM tab: its answer parsed, or the reason there is none. The exit code does not decide
+// (a command that printed its document and then exited non-zero still answered); a rejection is a failed part, never
+// a failed tab.
+async function readPart<T>(
+  read: () => Promise<CommandAnswer>,
+  parse: (text: string) => T | undefined,
+  invalid: string,
+): Promise<Loaded<T>> {
+  let answer: CommandAnswer;
+  try {
+    answer = await read();
+  } catch (error) {
+    return { ok: false, reason: plainText(error instanceof Error ? error.message : String(error)) };
+  }
+  const parsed = answer.stdout.trim() === "" ? undefined : parse(answer.stdout);
+  if (parsed !== undefined) return { ok: true, value: parsed };
+  const reason = plainText(answer.stderr).trim();
+  return { ok: false, reason: !answer.ok && reason !== "" ? reason : invalid };
+}
+
+// Both commands of the MEM tab, asked at the same time: one that fails must not blank the other.
+export async function loadMemData(cwd: string, source: DockSource = {}): Promise<MemData> {
+  const invalid = localized(
+    source.locale ?? "es",
+    "Invalid answer from haril.",
+    "Respuesta no válida de haril.",
+  );
+  const [tools, memory] = await Promise.all([
+    readPart(
+      source.tools ?? (() => runHaril(["tools", "status", "--json"], { cwd, timeoutMs: 8_000 })),
+      parseToolsStatus,
+      invalid,
+    ),
+    readPart<MemoryView>(
+      source.memory ?? (() => runHaril(["memory", "status", "--json"], { cwd, timeoutMs: 8_000 })),
+      parseMemoryStatus,
+      invalid,
+    ),
+  ]);
+  return { tools, memory };
+}
+
+// The MEM tab from what was loaded; the console draws it again from the same data when only its busy state changes.
+export function memDetails(data: MemData, options: MemOptions): DockDetails {
+  const rows = memRows(data, options);
+  return view(
+    "memory",
+    rows.status,
+    rows.lines,
+    rows.actions.length === 0 ? undefined : rows.actions,
+  );
+}
+
 export async function loadDockDetails(
   id: DockId,
   cwd: string,
@@ -165,20 +235,12 @@ export async function loadDockDetails(
       case "main":
         return view(id, "", []);
       case "memory": {
-        const status = await (
-          source.memory ?? (() => runHaril(["memory", "status"], { cwd, timeoutMs: 8_000 }))
-        )();
-        if (!status.ok)
-          return view(
-            id,
-            en ? "Memory unavailable" : "Memoria no disponible",
-            linesOf(status.stderr || "HARIL memory status falló"),
-          );
-        return view(
-          id,
-          en ? "HARIL memory status" : "Estado de memoria HARIL",
-          linesOf(status.stdout),
-        );
+        const data = await loadMemData(cwd, source);
+        return memDetails(data, {
+          locale: source.locale ?? "es",
+          busy: source.busy,
+          checkError: source.checkError,
+        });
       }
       case "docs":
         return await docsDetails(id, cwd, source);
