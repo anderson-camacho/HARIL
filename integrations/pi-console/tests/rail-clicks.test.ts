@@ -89,7 +89,9 @@ function setup(
   const railAction = vi.fn();
   const select = vi.fn();
   const content = (width: number) =>
-    renderNativeRailContent(facts(options.warnings), options.area ?? "agents", width, expanded);
+    renderNativeRailContent(facts(options.warnings), options.area ?? "agents", width, expanded, {
+      cards: true,
+    });
   attachNativePanes(tui, state, {
     project: () => "repo",
     right: content,
@@ -186,7 +188,7 @@ describe("a click on the right rail body", () => {
   });
 
   it("shows the project and the model once, even with the session section open", () => {
-    const text = renderNativeRailContent(facts(), "agents", 39, { status: true })
+    const text = renderNativeRailContent(facts(), "agents", 39, { status: true }, { cards: true })
       .lines.map(stripAnsi)
       .join("\n");
     expect(text.match(/Proyecto:/g)).toHaveLength(1);
@@ -194,9 +196,13 @@ describe("a click on the right rail body", () => {
     // The session section keeps what the top rows do not say.
     expect(text).toContain("Runtime: idle");
     expect(text).toContain("Memoria: not loaded");
-    const english = renderNativeRailContent({ ...facts(), locale: "en" }, "agents", 39, {
-      status: true,
-    })
+    const english = renderNativeRailContent(
+      { ...facts(), locale: "en" },
+      "agents",
+      39,
+      { status: true },
+      { cards: true },
+    )
       .lines.map(stripAnsi)
       .join("\n");
     expect(english.match(/Project:/g)).toHaveLength(1);
@@ -216,7 +222,7 @@ describe("a click on the right rail body", () => {
   it("leaves a row without a hit alone and reports it unhandled", () => {
     const pane = setup();
     const rendersBefore = pane.tui.requestRender.mock.calls.length;
-    const content = renderNativeRailContent(facts(), "agents", 39, {});
+    const content = renderNativeRailContent(facts(), "agents", 39, {}, { cards: true });
     for (const needle of ["Proyecto: fake-project", "Modelo: fake-model", "Alt+K menú del panel"]) {
       const y = pane.rows().findIndex((row) => row.includes(needle));
       expect(y).toBeGreaterThan(0);

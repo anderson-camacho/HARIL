@@ -28,6 +28,13 @@ export interface RailGlyphs {
   readonly open: string;
   readonly closed: string;
   readonly docked: string;
+  // The MAIN cards' markers: the eye in front of the status card's title, the open and the other areas, a listed item
+  // and the arrow of a row that opens something.
+  readonly eye: string;
+  readonly selected: string;
+  readonly unselected: string;
+  readonly bullet: string;
+  readonly external: string;
 }
 
 const UNICODE_GLYPHS: RailGlyphs = {
@@ -41,6 +48,11 @@ const UNICODE_GLYPHS: RailGlyphs = {
   open: "▼",
   closed: "▶",
   docked: "▣",
+  eye: "◉",
+  selected: "●",
+  unselected: "○",
+  bullet: "•",
+  external: "↗",
 };
 
 const ASCII_GLYPHS: RailGlyphs = {
@@ -54,6 +66,11 @@ const ASCII_GLYPHS: RailGlyphs = {
   open: "v",
   closed: ">",
   docked: "#",
+  eye: "@",
+  selected: "*",
+  unselected: "o",
+  bullet: "-",
+  external: "->",
 };
 
 export function railGlyphs(ascii: boolean | undefined): RailGlyphs {
@@ -63,18 +80,35 @@ export function railGlyphs(ascii: boolean | undefined): RailGlyphs {
 const BORDER_TONE: DashboardTone = "teal";
 const TITLE_TONE: DashboardTone = "cyan";
 
+// A mark in front of a card's title, in a tone of its own (the status card's eye).
+export interface TitleLead {
+  readonly text: string;
+  readonly tone: DashboardTone;
+}
+
 export interface BoxOptions {
   // ASCII borders and markers.
   readonly ascii?: boolean;
   // The box's outer width; a card's by default, a button's for `button`.
   readonly width?: number;
+  // The tone of the title; cyan by default.
+  readonly titleTone?: DashboardTone;
+  // A mark before the title, which goes with it: a title that does not fit takes the mark's room too.
+  readonly lead?: TitleLead;
 }
 
 // The top edge of a box: `╭─ Title ───╮` (the title in its own tone), or a plain `╭──────╮` when there is none or it
 // does not fit.
-function topEdge(title: string, width: number, glyphs: RailGlyphs): string {
+function topEdge(
+  title: string,
+  width: number,
+  glyphs: RailGlyphs,
+  titleTone: DashboardTone = TITLE_TONE,
+  lead?: TitleLead,
+): string {
   if (width < 2) return "";
-  const room = width - 6;
+  const leadWidth = lead === undefined ? 0 : textWidth(plainText(lead.text)) + 1;
+  const room = width - 6 - leadWidth;
   const shown = room >= 1 ? truncate(plainText(title).trim(), room) : "";
   if (shown === "") {
     return visualText(
@@ -83,10 +117,14 @@ function topEdge(title: string, width: number, glyphs: RailGlyphs): string {
       "panel",
     );
   }
-  const rest = width - 5 - textWidth(shown);
+  const rest = width - 5 - leadWidth - textWidth(shown);
   return (
     visualText(`${glyphs.topLeft}${glyphs.horizontal} `, BORDER_TONE, "panel") +
-    visualText(shown, TITLE_TONE, "panel") +
+    (lead === undefined
+      ? ""
+      : visualText(plainText(lead.text), lead.tone, "panel") +
+        visualText(" ", BORDER_TONE, "panel")) +
+    visualText(shown, titleTone, "panel") +
     visualText(` ${glyphs.horizontal.repeat(rest)}${glyphs.topRight}`, BORDER_TONE, "panel")
   );
 }
@@ -128,7 +166,7 @@ export function boxFrame(
   const glyphs = railGlyphs(options.ascii);
   const width = options.width ?? CARD_WIDTH;
   return [
-    topEdge(title, width, glyphs),
+    topEdge(title, width, glyphs, options.titleTone, options.lead),
     ...inner.map((row) => sideRow(row, glyphs)),
     bottomEdge(width, glyphs),
   ];

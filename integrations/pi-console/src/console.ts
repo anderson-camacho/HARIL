@@ -867,12 +867,13 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
     });
   }
 
-  // The right rail's rows and the action of each: the native pane draws them and the keyboard menu lists them. The
-  // actions of the chosen area are the ACC tab's, so only the keyboard menu asks for them here.
+  // The right rail's rows and the action of each: the native pane draws them (as cards) and the keyboard menu lists
+  // them (from the flat rows its labels are read from). The actions of the chosen area are the ACC tab's, so only the
+  // keyboard menu asks for them here.
   function railContent(
     current: Session,
     width: number,
-    options: { readonly actions?: boolean } = {},
+    options: { readonly actions?: boolean; readonly cards?: boolean } = {},
   ): NativeRailContent {
     return renderNativeRailContent(
       dashboardFacts(current),
@@ -899,7 +900,7 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
       effortLevel: () => modelLevelOf(current).level,
       locale: () => current.locale,
       ascii: () => orchestrationGlyphs() === ASCII_GLYPHS,
-      right: (width) => railContent(current, width),
+      right: (width) => railContent(current, width, { cards: true }),
       select(id) {
         void openDockSlot(current, id);
       },
@@ -911,7 +912,11 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
       // ACC follows the area chosen in MAIN's list, so it is made again before every frame and every click.
       live: (id) => (id === "actions" ? actionsDetails(actionsInput(current)) : undefined),
     });
-    if (mounted.attached) current.nativePanes = mounted;
+    if (mounted.attached) {
+      current.nativePanes = mounted;
+      // The footer keeps this up to date; the panes need it before the first footer frame (the keyboard menu asks).
+      current.tui = tui;
+    }
   }
 
   async function reloadDockSlots(current: Session): Promise<void> {
@@ -1429,9 +1434,14 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
   async function openRailMenu(ctx: ConsoleContext): Promise<void> {
     const current = session;
     if (current === undefined || !ctx.hasUI || ctx.mode !== "tui") return;
+    // The section of the actions is drawn by the classic header only: the native panes leave the actions to the ACC tab,
+    // so an entry that opens or closes it would change nothing on screen. The actions themselves stay in the menu.
+    const panesDrawn = current.tui !== undefined && paneLayout(current, current.tui).panesShown;
     const entries = buildRailMenu(
       railContent(current, RAIL_MENU_WIDTH, { actions: true }),
       current.locale,
+    ).filter(
+      (entry) => !(panesDrawn && entry.hit.action === "toggle" && entry.hit.section === "actions"),
     );
     const rows = viewMenuRows(current);
     const choice = await ctx.ui.select(localized(current.locale, "Right panel", "Panel derecho"), [

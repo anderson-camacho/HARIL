@@ -49,7 +49,7 @@ export function panesShown(input: {
   return panesFit(input) && (input.leftVisible || input.rightVisible);
 }
 
-// True when the status of the console (the block with the folder, the mode, the warnings and the actions) is on
+// True when the status of the console (the cards with the folder, the mode, the areas and the warnings) is on
 // screen in the right sidebar: the panes are drawn, the right one is visible and MAIN is the selected tab. When it
 // is not, the status lives in the bottom bar.
 export function statusInSidebar(input: {
@@ -214,8 +214,9 @@ const NO_BLOCK: NativeRailContent = { lines: [], hits: [] };
 
 // In single-rail mode, the right rail hosts the active space (tabs and, under them, its view) directly under the
 // "Espacio" section, freeing the left side entirely for the Pi chat. The header is a box (the space, the tabs); the
-// status block (status, mode, sections and actions; the recent activity is the ACT tab's) is MAIN's own view, drawn only when MAIN is the
-// selected tab; any other tab shows its view as cards.
+// status block (MAIN's cards: status, areas, warnings, extensions and session; the actions are the ACC tab's and the
+// recent activity the ACT tab's) is MAIN's own view, drawn only when MAIN is the selected tab; any other tab shows its
+// view as cards.
 function renderRightRailContent(
   state: PaneSettings,
   dashboardLines: readonly string[],

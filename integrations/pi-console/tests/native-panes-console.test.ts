@@ -296,7 +296,10 @@ describe("the bottom bar beside the native dock", () => {
       await withDock(
         async ({ fake, ctx, lines, sidebar }) => {
           await fake.fire("input", { text: "hello", source: "interactive" }, ctx);
-          await vi.waitFor(() => expect(sidebar()).toContain("Activity log: 1 failed record(s)"));
+          // The warning and its "! " are 34 columns, one more than a row of a card holds: it goes on in the next row.
+          await vi.waitFor(() =>
+            expect(sidebar()).toMatch(/! Activity log: 1 failed[^\n]*\n[^\n]*\s{2}record\(s\)/u),
+          );
           const listed = Number(/AVISOS · (\d+)/.exec(sidebar())?.[1]);
           expect(listed).toBeGreaterThan(0);
           // Compact: the sidebar holds the warnings, so the bar does not count them.

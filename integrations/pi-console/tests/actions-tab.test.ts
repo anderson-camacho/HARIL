@@ -682,7 +682,6 @@ describe("the ACC tab in the console", () => {
         expect.arrayContaining([
           "Cambiar modo",
           "Abrir vista de orquestación",
-          "Cerrar sección acciones · AGENTS (4)",
           "Registrar esta carpeta",
           "Ver detalles completos",
           "Elegir modelo de Pi",
@@ -690,6 +689,9 @@ describe("the ACC tab in the console", () => {
           "Abrir menú completo /haril",
         ]),
       );
+      // The section of the actions is the classic header's: the native panes draw no such section, so the menu does not
+      // offer to open or close it (the actions themselves are listed above).
+      expect(onMain?.options.some((option) => /sección acciones/.test(option))).toBe(false);
       await h.command("haril-plugin", "actions");
       await waitFor(() => expect(h.text()).toContain("[5:ACC]"));
       h.fake.shortcuts.get("alt+k")?.(h.ctx);
