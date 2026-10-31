@@ -47,6 +47,7 @@ import {
   dockSlotAt,
 } from "./dock-navigation.js";
 import { stopAll } from "./emergency.js";
+import { createGitSummaryCache, type GitSummary } from "./git-summary.js";
 import { DEFAULT_UI_LOCALE, localized, readConsoleLocale, type UiLocale } from "./locale.js";
 import { installModes } from "./mode-controller.js";
 import { levelLabel } from "./model-levels.js";
@@ -90,6 +91,7 @@ import type {
   PiModel,
   SessionEntry,
 } from "./pi-types.js";
+import { powerlineEnabled } from "./powerline.js";
 import { type BoundProject, findProject, folderName } from "./project.js";
 import { buildRailMenu, runRailHit } from "./rail-actions.js";
 import { type PendingApproval, readStatus } from "./status.js";
@@ -211,6 +213,10 @@ export interface ConsoleOptions {
     readonly run?: ToolsHost["run"];
     readonly checkDelayMs?: number;
   };
+  // The git counts of the bar's powerline folder line: how a test answers them without running git.
+  readonly git?: {
+    readonly read?: (cwd: string) => Promise<GitSummary | undefined>;
+  };
 }
 
 export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}): void {
@@ -305,12 +311,14 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
     return "idle";
   }
 
-  // `compact`: the status of the console is in the right sidebar, so the bar leaves it out (view.ts).
+  // `compact`: the status of the console is in the right sidebar, so the bar leaves it out (view.ts). `powerline`: the
+  // folder line is drawn as segments with these git counts; absent, it is the plain line.
   function facts(
     current: Session,
     statuses: readonly string[],
     branch: string | null,
     compact: boolean,
+    powerline?: BarFacts["powerline"],
   ): BarFacts {
     const model = current.model;
     const usage =
@@ -336,6 +344,7 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
         logFailures,
       }).length,
       compact,
+      powerline,
     };
   }
 
@@ -823,7 +832,16 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
     ctx.ui.setFooter((tui, theme, footerData) => {
       current.tui = tui;
       mountNativePanes(current, tui);
-      const unsubscribe = footerData.onBranchChange(() => tui.requestRender());
+      // The git counts of the folder line come from a cache that reads in the background: the render below only asks it,
+      // and a read that ends with new counts asks Pi to draw the footer again. A new branch makes the counts old.
+      const gitSummary = createGitSummaryCache({
+        ...(options.git?.read === undefined ? {} : { read: options.git.read }),
+        onChange: () => tui.requestRender(),
+      });
+      const unsubscribeBranch = footerData.onBranchChange(() => {
+        gitSummary.invalidate();
+        tui.requestRender();
+      });
       let navigation = renderFooterNavigation(80, current.area, theme);
       let bar: BarLayout = { lines: [], hits: [] };
       return {
@@ -834,8 +852,20 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
           // One line when the sidebar holds the status (open, on MAIN), the full bar anywhere else. Nothing here is
           // cached: Alt+I and a tab change both ask Pi for a new frame, and this runs again with the new state.
           const compact = paneLayout(current, tui).statusInSidebar;
+          const branch = current.branch;
+          // Git is asked about only when the folder line is drawn as segments (not compact, not HARIL_POWERLINE=off) and
+          // the folder is a repository (Pi knows a branch).
+          const powerline = !compact && powerlineEnabled();
           bar = renderBarLayout(
-            facts(current, statuses, footerData.getGitBranch(), compact),
+            facts(
+              current,
+              statuses,
+              branch,
+              compact,
+              powerline
+                ? { git: branch === null ? undefined : gitSummary.peek(current.cwd) }
+                : undefined,
+            ),
             width,
             theme,
           );
@@ -864,7 +894,10 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
           return { handled: true, render: true };
         },
         invalidate() {},
-        dispose: unsubscribe,
+        dispose() {
+          unsubscribeBranch();
+          gitSummary.dispose();
+        },
       };
     });
     // A zero-row widget gives access to Pi's live TUI after its layout root is ready. It does not push the editor,
