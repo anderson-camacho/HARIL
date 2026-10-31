@@ -86,13 +86,18 @@ export const MATRIX_PI_THEME = {
   },
 } as const;
 
-export function ensureMatrixPiTheme(agentDir: string): string {
+// Writes a managed theme under agent/themes, repairing a stale or broken copy. Nothing else there is touched.
+export function writeManagedPiTheme(agentDir: string, theme: { readonly name: string }): string {
   const themes = join(agentDir, "themes");
   mkdirSync(themes, { recursive: true });
-  const path = join(themes, "haril-matrix.json");
-  const expected = `${JSON.stringify(MATRIX_PI_THEME, null, 2)}\n`;
+  const path = join(themes, `${theme.name}.json`);
+  const expected = `${JSON.stringify(theme, null, 2)}\n`;
   if (!existsSync(path) || readFileSync(path, "utf8") !== expected) {
     writeFileSync(path, expected, "utf8");
   }
   return path;
+}
+
+export function ensureMatrixPiTheme(agentDir: string): string {
+  return writeManagedPiTheme(agentDir, MATRIX_PI_THEME);
 }

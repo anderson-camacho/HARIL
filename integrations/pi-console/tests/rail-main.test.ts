@@ -10,6 +10,7 @@ import {
   renderNativeRailContent,
 } from "../src/dashboard.js";
 import { emptyDashboardData } from "../src/dashboard-data.js";
+import { setHarilPalette } from "../src/dashboard-theme.js";
 import type { UiLocale } from "../src/locale.js";
 import { attachNativePanes, initialPaneSettings, type PaneSettings } from "../src/native-panes.js";
 import { initialOrchestrationState, type OrchestrationState } from "../src/orchestration-state.js";
@@ -311,6 +312,7 @@ describe("a warning in the rail", () => {
     try {
       const line = (content: NativeRailContent, needle: string) =>
         content.lines.find((candidate) => stripAnsi(candidate).includes(needle)) ?? "";
+      setHarilPalette("matrix");
       const warned = cards();
       const idle = cards({ providerWarnings: [] });
       // Truecolor foregrounds of the matrix palette.

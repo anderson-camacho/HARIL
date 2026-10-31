@@ -2,7 +2,13 @@
 // install only when its layoutRoot implements the @earendil-works/pi-tui layout-node contract. Never replace Pi's
 // editor, scrollback or chat; reuse its original layout node as the centre of the three-column stack.
 import type { NativeRailContent, RailHitAction } from "./dashboard.js";
-import { aiEyeTone, paddedCell, visualText } from "./dashboard-theme.js";
+import {
+  aiEyeTone,
+  type DashboardTone,
+  lineTone,
+  paddedCell,
+  visualText,
+} from "./dashboard-theme.js";
 import type { DockDetails } from "./dock-details.js";
 import {
   type DockId,
@@ -122,17 +128,13 @@ export function renderLeftDock(
   if (width < 3 || height < 1) return [];
   const inside = width - 1;
   const rows: string[] = [];
-  const line = (
-    value: string,
-    tone: "yellow" | "cyan" | "teal" | "muted" | "text" = "text",
-    selected = false,
-  ) =>
-    `${paddedCell(value, inside, tone, selected ? "selected" : "panel")}${visualText("│", "cyan", "base")}`;
+  const line = (value: string, tone: DashboardTone = "text", selected = false) =>
+    `${paddedCell(value, inside, tone, selected ? "selected" : "panel")}${visualText("│", lineTone("cyan"), "base")}`;
   rows.push(
-    `${paddedCell(" ", 1, "yellow", "panel")}${visualText("◉", aiEyeTone(effortLevel), "panel")}${paddedCell(" HARIL · Many minds.", inside - 2, "yellow", "panel")}${visualText("│", "cyan", "base")}`,
+    `${paddedCell(" ", 1, "yellow", "panel")}${visualText("◉", aiEyeTone(effortLevel), "panel")}${paddedCell(" HARIL · Many minds.", inside - 2, "yellow", "panel")}${visualText("│", lineTone("cyan"), "base")}`,
   );
   rows.push(line(` 📁 ${plainText(project)}`, "teal"));
-  rows.push(line(" ────────────────────", "muted"));
+  rows.push(line(" ────────────────────", lineTone("muted")));
   rows.push(line(locale === "es" ? " VISTAS · Alt+L" : " VIEWS · Alt+L", "cyan"));
   for (const tab of dockTabs(state, Math.max(1, inside - 1))) {
     rows.push(
@@ -142,7 +144,7 @@ export function renderLeftDock(
       ),
     );
   }
-  rows.push(line(" ────────────────────", "muted"));
+  rows.push(line(" ────────────────────", lineTone("muted")));
   const module = dockDefinition(state.selected);
   const selection = (locale === "es" ? module?.label : module?.labelEn) ?? state.selected;
   rows.push(line(` ${selection.toUpperCase()}`, "cyan"));
@@ -164,7 +166,7 @@ export function renderLeftDock(
   const detail = !pointsRight && state.detail?.id === state.selected ? state.detail.lines : [];
   const budget = Math.max(0, height - rows.length - 2);
   for (const item of detail.slice(detailOffset, detailOffset + budget)) rows.push(line(` ${item}`));
-  rows.push(line(" ────────────────────", "muted"));
+  rows.push(line(" ────────────────────", lineTone("muted")));
   rows.push(
     line(
       detailOffset + budget < detail.length
@@ -188,7 +190,7 @@ export function renderRightDock(
 ): string[] {
   if (width < 3 || height < 1) return [];
   return Array.from({ length: height }, (_value, index) => {
-    const separator = visualText(railGlyphs(ascii).vertical, "cyan", "base");
+    const separator = visualText(railGlyphs(ascii).vertical, lineTone("cyan"), "base");
     const row = content[index] ?? paddedCell("", width - 1, "text", "panel");
     return `${separator}${row}`;
   });

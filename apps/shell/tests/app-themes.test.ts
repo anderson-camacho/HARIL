@@ -81,6 +81,7 @@ describe("choose a theme (TUI-D14)", () => {
     mounted.terminal.send("8");
     mounted.terminal.send(DOWN);
     mounted.terminal.send(DOWN);
+    mounted.terminal.send(DOWN);
     mounted.terminal.send(ENTER);
     expect(frame(mounted)).toContain("theme haril-light saved");
     expect(frame(mounted)).toContain("theme in use: haril-light");
@@ -96,6 +97,7 @@ describe("choose a theme (TUI-D14)", () => {
     const mounted = mount();
     mounted.app.start();
     mounted.terminal.send("8");
+    mounted.terminal.send(DOWN);
     mounted.terminal.send(DOWN);
     mounted.terminal.send(DOWN);
     mounted.terminal.send(ENTER);
@@ -119,11 +121,11 @@ describe("choose a theme (TUI-D14)", () => {
     const mounted = mount();
     mounted.app.start();
     mounted.terminal.send("8");
-    // The five built-in themes come first, then the user's.
-    for (const _ of [1, 2, 3, 4, 5]) mounted.terminal.send(DOWN);
+    // The six built-in themes come first, then the user's.
+    for (const _ of [1, 2, 3, 4, 5, 6]) mounted.terminal.send(DOWN);
     mounted.terminal.send(ENTER);
     expect(frame(mounted)).toContain("is not valid JSON");
-    expect(frame(mounted)).toContain("using haril-matrix");
+    expect(frame(mounted)).toContain("using haril-future");
     expect(frame(mounted)).not.toContain("saved");
     expect(existsSync(configPath)).toBe(false);
     mounted.terminal.send("q");

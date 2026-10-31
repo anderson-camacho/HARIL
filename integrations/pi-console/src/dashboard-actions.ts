@@ -11,7 +11,7 @@ import {
   readMethodologyDefinition,
   summarizeApproval,
 } from "./dashboard-data.js";
-import { paddedCell, visualText } from "./dashboard-theme.js";
+import { lineTone, paddedCell, visualText } from "./dashboard-theme.js";
 import { openDelegationSettings } from "./delegation-panel.js";
 import { DEFAULT_UI_LOCALE, localized, type UiLocale } from "./locale.js";
 import { chooseLevel, chooseModel, type LevelMemory, openModelAndLevel } from "./model-picker.js";
@@ -127,9 +127,17 @@ export async function showInlineDetails(
           const pageSize = Math.min(14, Math.max(3, wrapped.length));
           offset = Math.max(0, Math.min(offset, wrapped.length - pageSize));
           const shown = wrapped.slice(offset, offset + pageSize);
-          const side = visualText("│", "teal", "panel");
-          const borderTop = visualText(`╭${"─".repeat(inside)}╮`, "teal", "panel");
-          const borderBottom = visualText(`╰${"─".repeat(inside)}╯`, "teal", "panel");
+          const side = visualText("│", lineTone("teal", "accent"), "panel");
+          const borderTop = visualText(
+            `╭${"─".repeat(inside)}╮`,
+            lineTone("teal", "accent"),
+            "panel",
+          );
+          const borderBottom = visualText(
+            `╰${"─".repeat(inside)}╯`,
+            lineTone("teal", "accent"),
+            "panel",
+          );
           const cell = (label: string, tone: "yellow" | "text" | "muted"): string =>
             `${side}${paddedCell(` ${label}`, inside, tone, "panel")}${side}`;
           return [

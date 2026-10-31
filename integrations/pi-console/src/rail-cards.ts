@@ -3,7 +3,7 @@
 // and a body are separate calls whose results are concatenated here. Every row a helper returns is exactly as wide as
 // the box it draws, whatever the text it was given: text that does not fit is cut with an ellipsis, never allowed to
 // push a border out of its column.
-import { type DashboardTone, paddedCell, visualText } from "./dashboard-theme.js";
+import { type DashboardTone, lineTone, paddedCell, visualText } from "./dashboard-theme.js";
 import {
   BUTTON_LABEL_WIDTH,
   BUTTON_WIDTH,
@@ -78,7 +78,6 @@ export function railGlyphs(ascii: boolean | undefined): RailGlyphs {
   return ascii === true ? ASCII_GLYPHS : UNICODE_GLYPHS;
 }
 
-const BORDER_TONE: DashboardTone = "teal";
 const TITLE_TONE: DashboardTone = "cyan";
 
 // A mark in front of a card's title, in a tone of its own (the status card's eye).
@@ -114,19 +113,19 @@ function topEdge(
   if (shown === "") {
     return visualText(
       `${glyphs.topLeft}${glyphs.horizontal.repeat(width - 2)}${glyphs.topRight}`,
-      BORDER_TONE,
+      lineTone("teal"),
       "panel",
     );
   }
   const rest = width - 5 - leadWidth - textWidth(shown);
   return (
-    visualText(`${glyphs.topLeft}${glyphs.horizontal} `, BORDER_TONE, "panel") +
+    visualText(`${glyphs.topLeft}${glyphs.horizontal} `, lineTone("teal"), "panel") +
     (lead === undefined
       ? ""
       : visualText(plainText(lead.text), lead.tone, "panel") +
-        visualText(" ", BORDER_TONE, "panel")) +
+        visualText(" ", lineTone("teal"), "panel")) +
     visualText(shown, titleTone, "panel") +
-    visualText(` ${glyphs.horizontal.repeat(rest)}${glyphs.topRight}`, BORDER_TONE, "panel")
+    visualText(` ${glyphs.horizontal.repeat(rest)}${glyphs.topRight}`, lineTone("teal"), "panel")
   );
 }
 
@@ -134,7 +133,7 @@ function bottomEdge(width: number, glyphs: RailGlyphs): string {
   if (width < 2) return "";
   return visualText(
     `${glyphs.bottomLeft}${glyphs.horizontal.repeat(width - 2)}${glyphs.bottomRight}`,
-    BORDER_TONE,
+    lineTone("teal"),
     "panel",
   );
 }
@@ -143,9 +142,9 @@ function bottomEdge(width: number, glyphs: RailGlyphs): string {
 // exactly `width - 4` columns wide.
 function sideRow(inner: string, glyphs: RailGlyphs): string {
   return (
-    visualText(`${glyphs.vertical} `, BORDER_TONE, "panel") +
+    visualText(`${glyphs.vertical} `, lineTone("teal"), "panel") +
     inner +
-    visualText(` ${glyphs.vertical}`, BORDER_TONE, "panel")
+    visualText(` ${glyphs.vertical}`, lineTone("teal"), "panel")
   );
 }
 
@@ -274,7 +273,7 @@ export function chipRow(
   for (const [index, labelWidth] of widths.entries()) {
     const chip = chips[index];
     const width = labelWidth + CHIP_CHROME;
-    const border = chip?.active === true ? ACTIVE_TONE : BORDER_TONE;
+    const border = chip?.active === true ? ACTIVE_TONE : lineTone("teal");
     const text = chip?.active === true ? ACTIVE_TONE : "text";
     if (index > 0) {
       const gap = visualText(" ".repeat(CHIP_GAP), "text", "panel");

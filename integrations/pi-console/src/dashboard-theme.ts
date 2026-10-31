@@ -1,18 +1,38 @@
 import { plainText, textWidth, truncate } from "./text.js";
 
-export type DashboardTone = "cyan" | "teal" | "yellow" | "text" | "muted" | "dim" | "error";
+type BaseTone = "cyan" | "teal" | "yellow" | "text" | "muted" | "dim" | "error";
+// The tones of borders and separators in a palette that gives them a color of their own. Choose them with lineTone.
+type LineColorTone = "line" | "lineAccent";
+export type DashboardTone = BaseTone | LineColorTone;
 
 const RESET = "\u001b[0m";
-export const HARIL_PALETTES = ["matrix", "violet", "rose", "amber", "obsidian"] as const;
+export const HARIL_PALETTES = ["future", "matrix", "violet", "rose", "amber", "obsidian"] as const;
 export type HarilPalette = (typeof HARIL_PALETTES)[number];
 type Color = readonly [number, number, number];
 type BackgroundTone = "base" | "panel" | "selected";
 interface Palette {
-  readonly foreground: Record<DashboardTone, Color>;
+  readonly foreground: Record<BaseTone, Color>;
   readonly background: Record<BackgroundTone, Color>;
+  // Without it, each line keeps the tone its call site names.
+  readonly lines?: Record<LineColorTone, Color>;
 }
 
+const DEFAULT_PALETTE: HarilPalette = "future";
+
 const PALETTES: Record<HarilPalette, Palette> = {
+  future: {
+    foreground: {
+      cyan: [94, 194, 255],
+      teal: [125, 248, 213],
+      yellow: [244, 211, 94],
+      text: [196, 233, 255],
+      muted: [127, 163, 199],
+      dim: [86, 120, 156],
+      error: [255, 101, 118],
+    },
+    background: { base: [7, 23, 44], panel: [12, 34, 64], selected: [22, 54, 92] },
+    lines: { line: [184, 110, 46], lineAccent: [255, 159, 69] },
+  },
   matrix: {
     foreground: {
       cyan: [38, 238, 104],
@@ -75,15 +95,28 @@ const PALETTES: Record<HarilPalette, Palette> = {
   },
 };
 
-let activePalette: HarilPalette = "matrix";
+let activePalette: HarilPalette = DEFAULT_PALETTE;
 
 export function setHarilPalette(candidate: unknown): HarilPalette {
-  activePalette = HARIL_PALETTES.find((item) => item === candidate) ?? "matrix";
+  activePalette = HARIL_PALETTES.find((item) => item === candidate) ?? DEFAULT_PALETTE;
   return activePalette;
 }
 
 export function getHarilPalette(): HarilPalette {
   return activePalette;
+}
+
+// The tone of a border or separator: the active palette's own line color when it has one, otherwise `legacy`, the
+// tone that line has always had. An "accent" line is one of a floating box; an ordinary one frames or separates.
+export function lineTone(legacy: BaseTone, kind: "border" | "accent" = "border"): DashboardTone {
+  if (PALETTES[activePalette].lines === undefined) return legacy;
+  return kind === "accent" ? "lineAccent" : "line";
+}
+
+function foregroundColor(palette: Palette, tone: DashboardTone): Color {
+  if (tone === "line" || tone === "lineAccent")
+    return palette.lines?.[tone] ?? palette.foreground.dim;
+  return palette.foreground[tone];
 }
 
 // A one-cell AI eye. Higher reasoning levels are signaled red without resizing the header.
@@ -125,7 +158,7 @@ export function visualText(
   const mode = colorMode();
   if (!mode.enabled) return safe;
   const palette = PALETTES[activePalette];
-  const fg = sequence(palette.foreground[tone], false, mode.trueColor);
+  const fg = sequence(foregroundColor(palette, tone), false, mode.trueColor);
   const bg =
     background === undefined ? "" : sequence(palette.background[background], true, mode.trueColor);
   return `${bg}${fg}${safe}${RESET}`;
@@ -148,5 +181,5 @@ export function paddedCell(
 }
 
 export function frameGlyph(text: string): string {
-  return visualText(text, "cyan", "base");
+  return visualText(text, lineTone("cyan"), "base");
 }

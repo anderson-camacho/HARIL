@@ -4,10 +4,12 @@ import { dirname, join, posix, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_USAGE, type HostInfo } from "../context.js";
+import { harilConfigPath } from "../providers.js";
 import { findPayloadFile, readRuntime, runtimeRootFor } from "../runtime.js";
 import { VERSION } from "../version.js";
 import { dataDirFor } from "./common.js";
-import { ensureMatrixPiTheme } from "./matrix-pi-theme.js";
+import { readConfigDocument } from "./config-file.js";
+import { ensureManagedPiTheme } from "./future-pi-theme.js";
 import { playHarilStartup } from "./startup-visual.js";
 
 // `haril console` (PS-T3), and a bare `haril` in a terminal: opens Pi, the Node and the Pi that HARIL installed
@@ -94,15 +96,17 @@ export async function consoleCommand(
     io.err(`haril: could not create Pi's agent directory ${agentDir}: ${reason}`);
     return EXIT_USAGE;
   }
-  // Pi is started with the same black/green Matrix theme as the HARIL dock.
-  // Only our own agent/themes/haril-matrix.json is repaired; user themes and
-  // settings.json are not replaced.
-  let piTheme: string | undefined;
+  // Pi is started with the managed theme for ui.theme: Future when nothing was chosen, Matrix for any other choice.
+  // Only our own agent/themes/<name>.json is repaired; user themes and settings.json are not replaced.
+  let piTheme: { readonly name: string; readonly path: string } | undefined;
   try {
-    piTheme = ensureMatrixPiTheme(agentDir);
+    const stored = readConfigDocument(harilConfigPath(host).path);
+    const ui = stored.ok ? stored.document.ui : undefined;
+    const chosen = typeof ui === "object" && ui !== null && "theme" in ui ? ui.theme : undefined;
+    piTheme = ensureManagedPiTheme(agentDir, chosen);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    io.err(`haril: Matrix theme could not be prepared (${detail}); using Pi default`);
+    io.err(`haril: HARIL theme could not be prepared (${detail}); using Pi default`);
   }
   const dataDir = lastValue(parsed, "--data-dir");
   const harilHome = nonEmpty(host.env?.HARIL_HOME);
@@ -132,7 +136,7 @@ export async function consoleCommand(
       runtime.pi.cliPath,
       "--tui-mode",
       "fullscreen",
-      ...(piTheme === undefined ? [] : ["--theme", piTheme, "--use-theme", "haril-matrix"]),
+      ...(piTheme === undefined ? [] : ["--theme", piTheme.path, "--use-theme", piTheme.name]),
       "-e",
       extension,
     ],

@@ -1,4 +1,4 @@
-import { paddedCell, visualText } from "./dashboard-theme.js";
+import { lineTone, paddedCell, visualText } from "./dashboard-theme.js";
 import type { UiLocale } from "./locale.js";
 import { DOCK_LABELS, type DockId, type DockSlot } from "./native-panes.js";
 import { keyOf } from "./orchestration-state.js";
@@ -51,9 +51,9 @@ export function createDockPicker(
       if (span < 12) return ["HARIL".slice(0, span)];
       const inner = span - 2;
       const line = (label: string, tone: "yellow" | "cyan" | "muted" | "text", active = false) =>
-        `${visualText("│", "cyan", "panel")}${paddedCell(` ${label}`, inner, tone, active ? "selected" : "panel")}${visualText("│", "cyan", "panel")}`;
+        `${visualText("│", lineTone("cyan", "accent"), "panel")}${paddedCell(` ${label}`, inner, tone, active ? "selected" : "panel")}${visualText("│", lineTone("cyan", "accent"), "panel")}`;
       return [
-        visualText(`╭${"─".repeat(inner)}╮`, "teal", "panel"),
+        visualText(`╭${"─".repeat(inner)}╮`, lineTone("teal", "accent"), "panel"),
         line(
           locale === "es" ? "HARIL ◉ · Seleccionar plugin" : "HARIL ◉ · Select plugin",
           "yellow",
@@ -74,7 +74,7 @@ export function createDockPicker(
             : "Visible slots only · Pi unchanged",
           "muted",
         ),
-        visualText(`╰${"─".repeat(inner)}╯`, "teal", "panel"),
+        visualText(`╰${"─".repeat(inner)}╯`, lineTone("teal", "accent"), "panel"),
       ];
     },
     handleInput(input: string): void {
