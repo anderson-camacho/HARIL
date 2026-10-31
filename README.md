@@ -317,6 +317,7 @@ Con `--agent orchestrator` los agentes son reales: cada turno es un proceso de P
 | `haril difficulty calibrate` | El disparador manual de la tabla: recalcula las tasas de éxito con las ejecuciones reales que un auditor juzgó (nunca las simuladas), muestra el cambio y lo escribe solo con `--yes` |
 | `haril config get [<ruta>]` | Un valor o un grupo de `haril.json` (por defecto toda la sección `delegation`), cada valor con su origen: `haril.json` o el valor por defecto. Con `--json`, cada campo trae además su valor por defecto, su rango válido y cuándo surte efecto |
 | `haril config set <ruta> <valor>` | Cambia un valor de la delegación: lo lee según su campo (`400000`, una lista, un nivel, `null`), comprueba el archivo entero con las mismas reglas que todo lector, conserva las demás claves, la sangría y los finales de línea, y escribe en un archivo temporal que renombra sobre `haril.json`. `--reset` lo devuelve a su valor por defecto. Cambia la sección `delegation`, `ui.locale`, `ui.theme` y `docs.path` (la carpeta de documentación; ver [Carpeta de documentación](#carpeta-de-documentación-docspath)) y nunca escribe una clave |
+| `haril theme list|preview|apply|status` | El catálogo de perfiles de terminal (`aliens-cyberpunk`, `agnoster-matrix`, `agnosterplus-future`) y la selección. `apply` solo la guarda en `<raíz>/config/terminal.json` con las preferencias de sus opciones (motor de prompt, animaciones, intensidad, shaders, movimiento reducido, arranque): la integración con la terminal aún no existe, así que no cambia Windows Terminal, `$PROFILE` ni las fuentes |
 | `haril usage log` | Una línea por orden o por intento, como `haril events`: `--since 2h` o `--from`/`--to`, `--kind order\|chat\|agent_run`, `--model`, `--workflow`, `--layer`, `--mode`, `--difficulty`, `--limit`, `--json` |
 | `haril usage summary` | Tokens, tokens no reportados, tiempo, reintentos y veredictos por día, modelo, capa, dificultad, workflow, modo o rol (`--by`). `log` y `summary` dejan fuera las filas de corridas simuladas salvo `--include-simulated` |
 | `haril usage verify` | Recorre la cadena de hashes de las órdenes y del consumo; sale con 1 y nombra la primera fila si alguien la alteró o la borró a mano |
@@ -1069,7 +1070,7 @@ Los dossiers de `docs/research/` se leen solo bajo demanda, cuando un documento 
 
 ## Versiones
 
-Versión actual: **0.23.17**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
+Versión actual: **0.23.18**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
 
 ## Licencia
 

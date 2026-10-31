@@ -4,6 +4,32 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.23.18
+
+- **Fecha:** 2026-10-31
+- **Estado:** nace el catálogo de perfiles de terminal y `haril theme list|preview|apply|status`. `apply` solo guarda la selección en `<raíz>/config/terminal.json`: no cambia Windows Terminal, `$PROFILE` ni las fuentes, ni instala nada, y lo dice al terminar.
+
+### Añadido
+
+- Tres perfiles de terminal como datos (`themes/catalog.ts`): `aliens-cyberpunk`, `agnoster-matrix` y `agnosterplus-future`, cada uno con su paleta, sus fuentes y un GUID fijo de Windows Terminal para entregas posteriores. Symbols Nerd Font es siempre la fuente de símbolos, nunca la principal.
+- `haril theme list` (marca el perfil activo), `haril theme preview <id>` (paleta y fuentes; sin color fuera de una terminal o con `NO_COLOR`; no escribe nada), `haril theme apply <id>` y `haril theme status`. Con `--json` imprimen `haril.theme.list/1`, `haril.theme.preview/1`, `haril.theme.apply/1` y `haril.theme.status/1`.
+- Preferencias de `apply`: `--prompt-engine oh-my-posh|starship` (un solo valor, así que nunca hay dos motores activos), `--animations on|off`, `--intensity low|medium|high`, `--shaders on|off`, `--reduced-motion on|off` y `--startup banner|minimal|none`.
+- `<raíz>/config/terminal.json`, junto a `haril.json` (sigue a `HARIL_RUNTIME_DIR` y a `HARIL_CONFIG`) y fuera de la carpeta versionada, por lo que sobrevive a las actualizaciones. No es una sección de `haril.json` porque las versiones anteriores rechazan ese archivo entero si tiene una clave desconocida, y volver atrás dejaría sin proveedores. `apply` escribe de forma atómica y conserva las claves que no conoce.
+- Un archivo dañado o un valor inválido se sustituye por su valor por defecto con un aviso en stderr; el archivo no cambia salvo con un `apply` explícito.
+
+### Cambiado
+
+- Nada.
+
+### Corregido
+
+- Nada.
+
+### Verificación
+
+- `apps/haril/tests/theme.test.ts`: 39 pruebas nuevas, en rojo antes de la implementación y en verde después. La suite de `apps/haril` pasa, igual que build, tipos, biome, knip y `check:version`. Ejecución manual de `list`, `preview`, `apply` y `status` con la CLI compilada y `HARIL_RUNTIME_DIR` en una carpeta temporal.
+- No verificado: el color de `preview` en una terminal real (solo se comprobaron sus secuencias en las pruebas).
+
 ## 0.23.17
 
 - **Fecha:** 2026-10-31
