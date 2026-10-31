@@ -75,10 +75,8 @@ describe("native dock integration with the HARIL Pi extension", () => {
       if (!middle || !rightPane) throw new Error("Expected Pi panes");
       expect(middle.component.render(60)).toEqual(["Pi chat"]);
 
-      const newHeader = header?.(tui, THEME).render(96).map(stripAnsi).join("\n");
-      expect(newHeader).toContain("HARIL");
-      expect(newHeader).not.toContain("██████");
-      expect(newHeader?.split("\n")).toHaveLength(1);
+      // With the panes drawn the header takes no row at all: the status is in the right pane.
+      expect(header?.(tui, THEME).render(96)).toEqual([]);
       // The console opens on MAIN: the tabs and, under them, the status block.
       const right = rightPane.component.render(40).map(stripAnsi).join("\n");
       expect(right).toContain("ÁREAS");
@@ -121,8 +119,8 @@ describe("native dock integration with the HARIL Pi extension", () => {
   });
 });
 
-// The bottom bar follows where the status is: one line when the sidebar holds it, the full bar with the folder line
-// and the warnings count when it does not. The clickable areas line sits right under whichever bar is drawn.
+// The bottom bar follows where the status is: nothing when the sidebar holds it, one line with the folder and the
+// warnings count when it does not (a second one when the folder or a status has no room). The areas are clicks in it.
 describe("the bottom bar beside the native dock", () => {
   type FooterComponent = {
     render(width: number): string[];
@@ -232,59 +230,54 @@ describe("the bottom bar beside the native dock", () => {
     }
   }
 
-  it("is the bar and the areas line, with no folder line, while MAIN shows the status in the sidebar", async () => {
+  it("draws no bar while MAIN shows the status in the sidebar", async () => {
     await withDock(async ({ lines }) => {
-      const drawn = lines();
-      expect(drawn).toHaveLength(2);
-      expect(drawn[0]).toContain("◆ HARIL");
-      expect(drawn[0]).toContain("■ STOP ALL");
-      expect(drawn.join("\n")).not.toContain("fake-cwd");
-      expect(drawn[1]).toContain("[1 AGENTS]");
+      expect(lines()).toEqual([]);
     });
   });
 
-  it("is the full bar, with the folder line, as soon as another tab is selected, and compact again on MAIN", async () => {
+  it("draws the bar, with the folder, as soon as another tab is selected, and nothing again on MAIN", async () => {
     await withDock(async ({ lines, plugin, requestRender }) => {
-      expect(lines()).toHaveLength(2);
+      expect(lines()).toEqual([]);
       const before = requestRender.mock.calls.length;
       await plugin("memory");
       // The footer is drawn again on the request that selecting a tab makes.
       expect(requestRender.mock.calls.length).toBeGreaterThan(before);
       const full = lines();
-      expect(full).toHaveLength(3);
-      expect(full[1]).toContain("fake-cwd");
-      expect(full[1]).toContain("main");
-      expect(full[2]).toContain("[1 AGENTS]");
+      expect(full).toHaveLength(1);
+      expect(full[0]).toContain("◆ HARIL");
+      expect(full[0]).toContain("■ STOP ALL");
+      expect(full[0]).toContain("fake-cwd  main");
       await plugin("docs");
-      expect(lines()).toHaveLength(3);
+      expect(lines()).toHaveLength(1);
       await plugin("main");
-      expect(lines()).toHaveLength(2);
+      expect(lines()).toEqual([]);
     });
   });
 
-  it("follows Alt+I: the full bar when the sidebar is closed, compact when it opens again", async () => {
+  it("follows Alt+I: the bar when the sidebar is closed, nothing when it opens again", async () => {
     await withDock(async ({ fake, ctx, lines, requestRender }) => {
       const alt = fake.shortcuts.get("alt+i");
-      expect(lines()).toHaveLength(2);
+      expect(lines()).toEqual([]);
       const before = requestRender.mock.calls.length;
       alt?.(ctx);
       expect(requestRender.mock.calls.length).toBeGreaterThan(before);
-      expect(lines()).toHaveLength(3);
-      expect(lines()[1]).toContain("fake-cwd");
+      expect(lines()).toHaveLength(1);
+      expect(lines()[0]).toContain("fake-cwd");
       alt?.(ctx);
-      expect(lines()).toHaveLength(2);
+      expect(lines()).toEqual([]);
     });
   });
 
-  it("is the full bar when the terminal is too small to draw the sidebar, on MAIN too", async () => {
+  it("is the bar when the terminal is too small to draw the sidebar, on MAIN too", async () => {
     await withDock(async ({ tui, lines }) => {
       tui.terminal.columns = 120;
-      expect(lines()).toHaveLength(3);
+      expect(lines()).toHaveLength(2);
       tui.terminal.columns = 160;
       tui.terminal.rows = 20;
-      expect(lines()).toHaveLength(3);
+      expect(lines()).toHaveLength(1);
       tui.terminal.rows = 45;
-      expect(lines()).toHaveLength(2);
+      expect(lines()).toEqual([]);
     });
   });
 
@@ -317,21 +310,16 @@ describe("the bottom bar beside the native dock", () => {
     }
   });
 
-  it("puts the clickable areas right under whichever bar is drawn", async () => {
+  it("makes the areas in the bar a click each, on the bar's own line", async () => {
     await withDock(async ({ lines, click, plugin }) => {
-      const areaX = (row: string, label: string) => row.indexOf(label) + 1;
-      // Compact: the areas line is row 1, so a click on row 2 (where the old fixed offset put it) opens nothing.
-      let areas = lines()[1] ?? "";
-      expect(click(areaX(areas, "[2 ORCHESTRATION]"), 2)).toBeUndefined();
-      expect(click(areaX(areas, "[2 ORCHESTRATION]"), 1)).toEqual({ handled: true, render: true });
-      expect(lines()[1]).toContain("▶[2 ORCHESTRATION]");
-
-      // Full: the bar takes two lines, the areas line is row 2, and row 1 (the folder line) opens nothing.
       await plugin("memory");
-      areas = lines()[2] ?? "";
-      expect(click(areaX(areas, "[3 AUTOMATION]"), 1)).toBeUndefined();
-      expect(click(areaX(areas, "[3 AUTOMATION]"), 2)).toEqual({ handled: true, render: true });
-      expect(lines()[2]).toContain("▶[3 AUTOMATION]");
+      const bar = lines()[0] ?? "";
+      // The open area is named, the others are numbers; only the bar's own row takes the click.
+      expect(bar).toContain("1 AGENTS 2 3 4 5");
+      const column = bar.indexOf(" 2 ") + 1;
+      expect(click(column, 1)).toBeUndefined();
+      expect(click(column, 0)).toEqual({ handled: true, render: true });
+      expect(lines()[0]).toContain("1 2 ORCHESTRATION 3 4 5");
     });
   });
 });

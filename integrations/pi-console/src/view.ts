@@ -2,12 +2,12 @@ import { homedir } from "node:os";
 import { sep } from "node:path";
 import type { GitSummary } from "./git-summary.js";
 import type { ConsoleTheme, ThemeColor } from "./pi-types.js";
-import { powerlineHead } from "./powerline.js";
+import { block, blockArrow, powerlineHead } from "./powerline.js";
 import { plainText, stripAnsi, textWidth, truncate, wrap } from "./text.js";
 
 // What the console draws: the HARIL bar (Pi's footer), the startup header and the output of a HARIL command (a widget
-// above the editor). Everything is yellow, the theme's warning token, with the separators dimmed. Each line is fitted
-// to the width Pi renders it at.
+// above the editor). The bar exists only while the panel does not show the status, and then holds all of it. Each line
+// is fitted to the width Pi renders it at, less a margin at the right end.
 
 export type RuntimeState = "running" | "starting" | "idle" | "unknown";
 
@@ -32,10 +32,15 @@ export interface BarFacts {
   // How many warnings the right sidebar would list under AVISOS (provider warnings, data errors, a failing log);
   // 0 or absent shows nothing. Only the full bar counts them.
   readonly warnings?: number;
-  // The status of the console is in the right sidebar (it is open on MAIN): the bar is one line, with the session
-  // and the model, and leaves out what the sidebar already says (the folder, the branch, the statuses, the warnings).
-  // Absent or false is the full bar: two lines, with the folder line and the warnings count.
+  // The status of the console is in the right sidebar (it is open on MAIN), STOP ALL included: the bar draws nothing.
+  // Absent or false is the bar: one line, and a second with the folder only when the folder does not fit on the first.
   readonly compact?: boolean;
+  // The areas, drawn in the bar with a click on each; the open one by name, the others by number.
+  readonly areas?: readonly {
+    readonly id: string;
+    readonly label: string;
+    readonly active: boolean;
+  }[];
   // The folder line is drawn as powerline segments (powerline.ts) with these git counts, undefined while unknown.
   // Absent is the plain dim line, which is also what HARIL_POWERLINE=off asks for.
   readonly powerline?: { readonly git: GitSummary | undefined } | undefined;
@@ -43,7 +48,7 @@ export interface BarFacts {
 
 // The parts of the bar a click acts on: the model opens the model selector, the level the level selector, the mode the
 // mode selector, and the STOP ALL button the emergency stop.
-type BarTarget = "model" | "level" | "mode" | "stop";
+type BarTarget = "model" | "level" | "mode" | "stop" | "area";
 
 export interface BarLayout {
   readonly lines: string[];
@@ -52,6 +57,7 @@ export interface BarLayout {
     readonly start: number;
     readonly end: number;
     readonly target: BarTarget;
+    readonly area?: string;
   }[];
 }
 
@@ -60,15 +66,21 @@ interface Part {
   readonly tone: ThemeColor;
   readonly bold?: boolean;
   readonly target?: BarTarget;
+  readonly area?: string;
+  // Drawn as a block of colour followed by its arrow (the arrow's column is the part's last one).
+  readonly block?: { readonly next?: ThemeColor };
 }
 
-const MAIN: ThemeColor = "warning";
+const MAIN: ThemeColor = "accent";
+const QUIET: ThemeColor = "muted";
+// Columns left free at the right end: the last ones of a pane can be taken by Pi's layout, which clipped STOP ALL.
+const BAR_MARGIN = 2;
 const SEPARATOR: Part = { text: " ◇ ", tone: "dim" };
 const GAUGE_CELLS = 8;
 // The emergency button (3.14.6, P20): pinned at the right end of the bar in every mode, never dropped for room.
 const STOP_PART: Part = { text: "■ STOP ALL", tone: "error", bold: true, target: "stop" };
 // The right side gives way from its least needed part: the log note first, the context gauge last.
-const DROP_ORDER = ["log", "cost", "runtime", "warnings", "pending", "context"] as const;
+const DROP_ORDER = ["hint", "log", "cost", "runtime", "warnings", "pending", "context"] as const;
 const OUTPUT_MAX_LINES = 30;
 
 type RightPart = (typeof DROP_ORDER)[number];
@@ -80,6 +92,10 @@ function widthOf(parts: readonly Part[]): number {
 function paint(parts: readonly Part[], theme: ConsoleTheme): string {
   return parts
     .map((part) => {
+      if (part.block !== undefined) {
+        const body = part.text.slice(0, -1);
+        return block(theme, part.tone, body) + blockArrow(theme, part.tone, part.block.next);
+      }
       const colored = theme.fg(part.tone, part.text);
       return part.bold === true ? theme.bold(colored) : colored;
     })
@@ -112,7 +128,7 @@ function gauge(percent: number | null): Part[] {
   const filled = Math.round((known / 100) * GAUGE_CELLS);
   const tone: ThemeColor = known >= 90 ? "error" : MAIN;
   return [
-    { text: "ctx ", tone: MAIN },
+    { text: "ctx ", tone: QUIET },
     { text: "▰".repeat(filled), tone },
     { text: "▱".repeat(GAUGE_CELLS - filled), tone: "dim" },
     { text: percent === null ? " ?%" : ` ${Math.round(known)}%`, tone },
@@ -122,20 +138,15 @@ function gauge(percent: number | null): Part[] {
 function rightParts(facts: BarFacts): Map<RightPart, Part[]> {
   const parts = new Map<RightPart, Part[]>();
   if (facts.contextPercent !== undefined) parts.set("context", gauge(facts.contextPercent));
-  parts.set("cost", [{ text: `$${facts.cost.toFixed(3)}`, tone: MAIN }]);
+  parts.set("cost", [{ text: `$${facts.cost.toFixed(3)}`, tone: QUIET }]);
   if (facts.pending === undefined) parts.set("pending", [{ text: "approvals ?", tone: "warning" }]);
   else if (facts.pending > 0)
-    parts.set("pending", [{ text: `${facts.pending} pending`, tone: MAIN }]);
+    parts.set("pending", [{ text: `${facts.pending} pending`, tone: "warning" }]);
   parts.set("runtime", [
-    { text: "runtime ", tone: MAIN },
-    { text: facts.runtime, tone: facts.runtime === "running" ? "success" : MAIN },
+    { text: "runtime ", tone: QUIET },
+    { text: facts.runtime, tone: facts.runtime === "running" ? "success" : QUIET },
   ]);
-  if (facts.compact === true) {
-    // The sidebar lists the warnings and the failing log; the bar keeps only what it does not show. A count of
-    // approvals that wait stays, since a human has to act on it, but "approvals ?" (not known yet) is the sidebar's.
-    if (facts.pending === undefined) parts.delete("pending");
-    return parts;
-  }
+  parts.set("hint", [{ text: "Alt+C", tone: "dim" }]);
   const warnings = facts.warnings ?? 0;
   if (warnings > 0) {
     parts.set("warnings", [
@@ -155,6 +166,7 @@ const RIGHT_ORDER: readonly RightPart[] = [
   "warnings",
   "runtime",
   "log",
+  "hint",
 ];
 
 // The columns of the parts a click acts on, in the parts as drawn from column `from`.
@@ -164,7 +176,14 @@ function hitsOf(parts: readonly Part[], from = 0): BarLayout["hits"][number][] {
   for (const part of parts) {
     const size = textWidth(part.text);
     if (part.target !== undefined && size > 0)
-      hits.push({ row: 0, start: column, end: column + size, target: part.target });
+      hits.push({
+        row: 0,
+        start: column,
+        // The arrow of a block is not part of what is clicked.
+        end: column + size - (part.block === undefined ? 0 : 1),
+        target: part.target,
+        ...(part.area === undefined ? {} : { area: part.area }),
+      });
     column += size;
   }
   return hits;
@@ -172,34 +191,65 @@ function hitsOf(parts: readonly Part[], from = 0): BarLayout["hits"][number][] {
 
 function modelParts(facts: BarFacts): Part[] {
   if (facts.model === undefined) return [{ text: "no model", tone: MAIN, target: "model" }];
-  const model: Part = { text: plainText(facts.model), tone: MAIN, target: "model" };
+  const model: Part = { text: plainText(facts.model), tone: "text", target: "model" };
   if (facts.level === undefined) return [model];
   return [
     model,
-    { text: " · ", tone: MAIN },
+    { text: " · ", tone: "dim" },
     { text: plainText(facts.level), tone: MAIN, target: "level" },
   ];
 }
 
+// The start of the bar: HARIL and the mode as blocks (with `powerline`), the model, the areas.
+function barLeft(facts: BarFacts): Part[] {
+  const mode = `MODE: ${plainText(facts.mode)}`;
+  const areas: Part[] = (facts.areas ?? []).flatMap((area, index) => [
+    ...(index === 0 ? [] : [{ text: " ", tone: "dim" as const }]),
+    {
+      text: area.label,
+      tone: area.active ? MAIN : QUIET,
+      bold: area.active,
+      target: "area" as const,
+      area: area.id,
+    },
+  ]);
+  const rest = [modelParts(facts), ...(areas.length === 0 ? [] : [areas])];
+  if (facts.powerline === undefined) {
+    return joined([
+      [{ text: "◆ HARIL", tone: MAIN, bold: true }],
+      [{ text: mode, tone: MAIN, bold: true, target: "mode" }],
+      ...rest,
+    ]);
+  }
+  return [
+    { text: " ◆ HARIL  ", tone: MAIN, block: { next: "success" } },
+    { text: ` ${mode}  `, tone: "success", target: "mode", block: {} },
+    { text: " ", tone: "dim" },
+    ...joined(rest),
+  ];
+}
+
+// The first line of the bar. With `place`, the folder goes in the middle if all of the session still fits; `placed` says
+// whether it did, and otherwise the caller draws the line without it and the folder under it.
 function barLine(
   facts: BarFacts,
   width: number,
   theme: ConsoleTheme,
-): { line: string; hits: BarLayout["hits"][number][] } {
+  place?: readonly Part[],
+): { line: string; hits: BarLayout["hits"][number][]; placed?: boolean } {
   const stopWidth = textWidth(STOP_PART.text);
   if (width <= stopWidth + 1) {
     const fitted = fit([STOP_PART], width);
     return { line: paint(fitted, theme), hits: hitsOf(fitted) };
   }
-  // The button keeps its place at the right end, after one space; the rest of the bar fits in what is left.
-  const room = width - stopWidth - 1;
-  const stop = { line: ` ${paint([STOP_PART], theme)}`, hits: hitsOf([STOP_PART], room + 1) };
-  const left = joined([
-    [{ text: "◆ HARIL", tone: MAIN, bold: true }],
-    [{ text: `MODE: ${plainText(facts.mode)}`, tone: MAIN, bold: true, target: "mode" }],
-    ...(facts.compact === true ? [] : [[{ text: plainText(facts.place), tone: MAIN }]]),
-    modelParts(facts),
-  ]);
+  // The button keeps its place at the right end, after one space and the margin; the rest fits in what is left.
+  const margin = width > stopWidth + 1 + BAR_MARGIN ? BAR_MARGIN : 0;
+  const room = width - stopWidth - 1 - margin;
+  const stop = {
+    line: ` ${paint([STOP_PART], theme)}`,
+    hits: hitsOf([STOP_PART], room + 1),
+  };
+  const left = barLeft(facts);
   const right = rightParts(facts);
   const shown = (): Part[] =>
     joined(
@@ -208,6 +258,21 @@ function barLine(
         return group === undefined ? [] : [group];
       }),
     );
+  if (place !== undefined) {
+    const inMiddle = joined([left, place]);
+    const size = widthOf(inMiddle);
+    const whole = shown();
+    if (size + 2 + widthOf(whole) > room) return { line: "", hits: [], placed: false };
+    return {
+      line:
+        paint(inMiddle, theme) +
+        " ".repeat(room - size - widthOf(whole)) +
+        paint(whole, theme) +
+        stop.line,
+      hits: [...hitsOf(left), ...stop.hits],
+      placed: true,
+    };
+  }
   const leftWidth = widthOf(left);
   for (const name of DROP_ORDER) {
     if (leftWidth + 2 + widthOf(shown()) <= room) break;
@@ -252,6 +317,17 @@ function statusParts(statuses: readonly string[]): Part[] {
   return parts;
 }
 
+// The folder and the branch as they read inside the bar's line, in one quiet tone.
+function plainPlace(facts: BarFacts): Part[] {
+  const git = facts.powerline?.git;
+  const changes = git === undefined ? 0 : git.staged + git.modified + git.untracked;
+  const branch =
+    facts.branch === null ? "" : `  ${plainText(facts.branch)}${changes > 0 ? ` ~${changes}` : ""}`;
+  // The name alone: the whole path is one click away in /haril-status, and on the line of its own when this does not fit.
+  const name = plainText(facts.cwd).replace(/[/]+$/, "").split(/[/]/).pop() ?? "";
+  return [{ text: `${name}${branch}`, tone: "dim" }];
+}
+
 function placeLine(facts: BarFacts, width: number, theme: ConsoleTheme): string {
   const statuses = statusParts(facts.statuses);
   if (facts.powerline !== undefined) {
@@ -268,17 +344,18 @@ function placeLine(facts: BarFacts, width: number, theme: ConsoleTheme): string 
   return paint(fit([...parts, ...statuses], width), theme);
 }
 
-// The full bar is two lines: HARIL, the mode, the place and `model · level` on the left, the session, the runtime and the
-// warnings count on the right, and the STOP ALL button at the right end; below, the folder, its git branch and the
-// statuses other extensions set (the folder and the branch are powerline segments with the git counts when the bar
-// asks for them, `powerline` in BarFacts). The compact bar (the status is in the sidebar) is the first line without
-// the place, the warnings and the folder line. The hit-boxes are the mode, the model, the level and the button on the
-// first line.
+// The bar: HARIL, the mode, `model · level` and the areas on the left, the session in the middle and the STOP ALL
+// button at the right end, its hit-boxes on the first line. Under it, only when anything is left to say that the line
+// has no room for, the folder and its git state (powerline segments when the bar asks for them) and the statuses other
+// extensions set. With `compact` the sidebar says all of it and the bar draws nothing.
 export function renderBarLayout(facts: BarFacts, width: number, theme: ConsoleTheme): BarLayout {
-  if (width <= 0) return { lines: [], hits: [] };
+  if (width <= 0 || facts.compact === true) return { lines: [], hits: [] };
+  const inline = facts.statuses.length === 0 ? plainPlace(facts) : undefined;
+  const withPlace = inline === undefined ? undefined : barLine(facts, width, theme, inline);
+  if (withPlace !== undefined && withPlace.placed)
+    return { lines: [withPlace.line], hits: withPlace.hits };
   const first = barLine(facts, width, theme);
-  if (facts.compact === true) return { lines: [first.line], hits: first.hits };
-  return { lines: [first.line, placeLine(facts, width, theme)], hits: first.hits };
+  return { lines: [first.line, placeLine(facts, width - BAR_MARGIN, theme)], hits: first.hits };
 }
 
 // A command's output: its title, then its lines wrapped to the width, at most OUTPUT_MAX_LINES of them.

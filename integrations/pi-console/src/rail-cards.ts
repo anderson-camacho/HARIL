@@ -95,6 +95,29 @@ export interface BoxOptions {
   readonly titleTone?: DashboardTone;
   // A mark before the title, which goes with it: a title that does not fit takes the mark's room too.
   readonly lead?: TitleLead;
+  // No borders: the section is its title on a thin line (MAIN's cards, so the status reads as one column, not a stack).
+  readonly calm?: boolean;
+}
+
+// A section without a box: the title and a thin line where the top border was, the rows on the same columns, and a blank
+// row in place of the bottom border. Same rows and columns as a box, so a click lands on the same row.
+function calmTop(
+  title: string,
+  width: number,
+  glyphs: RailGlyphs,
+  titleTone: DashboardTone = TITLE_TONE,
+  lead?: TitleLead,
+): string {
+  const leadText = lead === undefined ? "" : `${plainText(lead.text)} `;
+  const room = width - textWidth(leadText) - 3;
+  const shown = room >= 1 ? truncate(plainText(title).trim(), room) : "";
+  if (shown === "") return visualText(glyphs.horizontal.repeat(width), lineTone("teal"), "panel");
+  const rest = width - textWidth(leadText) - textWidth(shown) - 1;
+  return (
+    (lead === undefined ? "" : visualText(leadText, lead.tone, "panel")) +
+    visualText(shown, titleTone, "panel") +
+    visualText(` ${glyphs.horizontal.repeat(Math.max(0, rest))}`, lineTone("teal"), "panel")
+  );
 }
 
 // The top edge of a box: `╭─ Title ───╮` (the title in its own tone), or a plain `╭──────╮` when there is none or it
@@ -165,6 +188,14 @@ export function boxFrame(
 ): string[] {
   const glyphs = railGlyphs(options.ascii);
   const width = options.width ?? CARD_WIDTH;
+  if (options.calm === true) {
+    const margin = visualText("  ", "text", "panel");
+    return [
+      calmTop(title, width, glyphs, options.titleTone, options.lead),
+      ...inner.map((row) => `${margin}${row}${margin}`),
+      paddedCell("", width, "text", "panel"),
+    ];
+  }
   return [
     topEdge(title, width, glyphs, options.titleTone, options.lead),
     ...inner.map((row) => sideRow(row, glyphs)),

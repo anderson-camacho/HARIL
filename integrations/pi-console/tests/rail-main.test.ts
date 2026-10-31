@@ -23,9 +23,10 @@ import {
 } from "../src/rail-metrics.js";
 import { stripAnsi, textWidth } from "../src/text.js";
 
-// The MAIN tab of the native right rail as cards: a status card, ÁREAS, AVISOS, EXTENSIONES and SESIÓN, each a rounded
-// box with its title in the top border. These tests render the real rail content (and the real pane around it) and
-// check what the user sees (the rows, their widths, the glyph set) and what a click on each row asks for (the hits).
+// The MAIN tab of the native right rail as calm cards: a status card, ÁREAS, AVISOS (only with a warning) and SESIÓN,
+// each its title on a thin line with the rows two columns in and a blank row under them, no borders. These tests render
+// the real rail content (and the real pane around it) and check what the user sees (the rows, their widths, the glyph
+// set) and what a click on each row asks for (the hits). The extensions are in the TOOLS tab, not here.
 // The classic header and the keyboard menu are not cards; the last block pins their text.
 
 function facts(over: Partial<DashboardFacts> = {}): DashboardFacts {
@@ -74,21 +75,26 @@ const text = (content: NativeRailContent): string[] => content.lines.map(stripAn
 const margin = (row: string): string => ` ${row} `;
 const top = (title: string, lead?: string): string => {
   const head = lead === undefined ? title : `${lead} ${title}`;
-  return margin(`╭─ ${head} ${"─".repeat(CARD_WIDTH - 5 - textWidth(head))}╮`);
+  return margin(`${head} ${"─".repeat(CARD_WIDTH - 1 - textWidth(head))}`);
 };
-const body = (value: string): string => margin(`│ ${value.padEnd(CARD_CONTENT_WIDTH)} │`);
-const bottom = margin(`╰${"─".repeat(CARD_WIDTH - 2)}╯`);
-const blank = " ".repeat(RAIL_BODY_WIDTH);
+const body = (value: string): string => margin(`  ${value.padEnd(CARD_CONTENT_WIDTH)}  `);
+// Where the bottom border was: a blank row, so a click lands on the same rows as it did with a box.
+const bottom = " ".repeat(RAIL_BODY_WIDTH);
+const blank = bottom;
 
 describe("the MAIN rail as cards", () => {
-  it("draws the status, the areas, the warnings, the extensions and the session as five cards", () => {
+  it("draws the status, the areas, the warnings and the session as four sections without borders", () => {
     const content = cards();
     expect(text(content)).toEqual([
       top("HARIL · AGENTS", "◉"),
       body("Estoy en: fake-cwd"),
       body("Modo: ACTION  ·  cambiar ↗"),
       body("Proyecto: fake-project"),
-      body("Modelo: fake-model · no reasoning"),
+      body("Modelo: fake-model ↗"),
+      body("Nivel: no reasoning ↗"),
+      body("ctx unavailable  $0.000"),
+      body("Runtime: idle"),
+      body("■ STOP ALL  ·  Alt+X"),
       bottom,
       top("ÁREAS"),
       body("● AGENTS"),
@@ -101,39 +107,64 @@ describe("the MAIN rail as cards", () => {
       top("▼ AVISOS · 1"),
       body("! Provider offline"),
       bottom,
-      top("▶ EXTENSIONES · 1"),
-      bottom,
-      top("▶ SESIÓN"),
+      // SESIÓN is open by default, and holds the memory (and the version and context files when there are any).
+      top("▼ SESIÓN"),
+      body("Memoria: not loaded"),
       bottom,
       blank,
       margin("Alt+K menú del panel · Alt+H áreas".padEnd(CARD_WIDTH)),
       margin("Alt+I panel · Alt+C comandos".padEnd(CARD_WIDTH)),
     ]);
     // A literal, to guard against the helpers above drifting along with the code.
-    expect(text(content)[0]).toBe(" ╭─ ◉ HARIL · AGENTS ────────────────╮ ");
-    expect(text(content)[7]).toBe(" │ ● AGENTS                          │ ");
+    expect(text(content)[0]).toBe(" ◉ HARIL · AGENTS ──────────────────── ");
+    expect(text(content)[11]).toBe("   ● AGENTS                            ");
+    expect(text(content).join("\n")).not.toMatch(/[╭╮╰╯│]/u);
+    // The extensions moved to the TOOLS tab.
+    expect(text(content).join("\n")).not.toContain("EXTENSIONES");
   });
 
-  it("gives a click only to the rows that have an action: the border rows carry none but a toggle's", () => {
+  it("shows AVISOS only while there is a warning, and the version and context files under SESIÓN", () => {
+    const quiet = text(cards({ providerWarnings: [] })).join("\n");
+    expect(quiet).not.toContain("AVISOS");
+    const rows = text(
+      cards({
+        version: "0.23.15",
+        contextFiles: ["C:\\proyecto\\AGENTS.md", "/home/u/CLAUDE.md"],
+      }),
+    );
+    const at = rows.indexOf(top("▼ SESIÓN"));
+    expect(rows.slice(at, at + 5)).toEqual([
+      top("▼ SESIÓN"),
+      body("HARIL 0.23.15"),
+      body("Memoria: not loaded"),
+      body("Contexto: AGENTS.md"),
+      body("Contexto: CLAUDE.md"),
+    ]);
+  });
+
+  it("gives a click only to the rows that have an action: the blank rows carry none, the title of a card a toggle", () => {
     const content = cards();
     expect(content.hits).toEqual([
-      undefined, // ╭─ ◉ HARIL · AGENTS
+      undefined, // ◉ HARIL · AGENTS
       { action: "focus" }, // Estoy en
       { action: "mode" }, // Modo · cambiar
       undefined, // Proyecto
-      undefined, // Modelo
-      undefined, // ╰
-      undefined, // ╭─ ÁREAS
+      { action: "model" }, // Modelo
+      { action: "level" }, // Nivel
+      undefined, // ctx and cost
+      undefined, // Runtime
+      { action: "stop" }, // ■ STOP ALL
+      undefined, // blank
+      undefined, // ÁREAS
       ...DASHBOARD_AREAS.map((area) => ({ action: "area", area })),
       { action: "run", control: "orchestration-view" },
-      undefined, // ╰
+      undefined, // blank
       { action: "toggle", section: "warnings" }, // the title row of a card that opens and closes
       { action: "details" },
-      undefined, // ╰
-      { action: "toggle", section: "extensions" },
-      undefined, // ╰ of a closed card
+      undefined, // blank
       { action: "toggle", section: "status" },
-      undefined, // ╰ of a closed card
+      undefined, // Memoria
+      undefined, // blank
       undefined, // blank
       undefined, // hint
       undefined, // hint
@@ -151,40 +182,43 @@ describe("the MAIN rail as cards", () => {
     }
   });
 
-  it("opens a closed card with its rows, and closes an open one down to its two border rows", () => {
-    const open = text(cards({}, { extensions: true, status: true, warnings: false }));
-    expect(open).toContain(body("• pi-extension ready"));
+  it("opens a closed card with its rows, and closes an open one down to its title row and a blank", () => {
+    const open = text(cards({}, { warnings: true, status: true }));
+    expect(open).toContain(body("! Provider offline"));
     expect(open).toContain(body("Runtime: idle"));
     expect(open).toContain(body("Memoria: not loaded"));
-    expect(open).toContain(top("▶ AVISOS · 1"));
-    expect(open).not.toContain(body("! Provider offline"));
-    const closed = text(cards({}, { warnings: false }));
-    const at = closed.indexOf(top("▶ AVISOS · 1"));
+    const closedWarnings = text(cards({}, { warnings: false }));
+    const at = closedWarnings.indexOf(top("▶ AVISOS · 1"));
     expect(at).toBeGreaterThan(0);
-    // A closed card is its top border (the title row, the one that is clicked) and its bottom border, nothing between.
-    expect(closed[at + 1]).toBe(bottom);
-    expect(closed[at + 2]).toBe(top("▶ EXTENSIONES · 1"));
+    expect(closedWarnings).not.toContain(body("! Provider offline"));
+    // A closed card is its title row (the one that is clicked) and a blank row, nothing between.
+    expect(closedWarnings[at + 1]).toBe(bottom);
+    expect(closedWarnings[at + 2]).toBe(top("▼ SESIÓN"));
+    const closedSession = text(cards({}, { status: false }));
+    const session = closedSession.indexOf(top("▶ SESIÓN"));
+    expect(session).toBeGreaterThan(0);
+    expect(closedSession).not.toContain(body("Memoria: not loaded"));
+    expect(closedSession[session + 1]).toBe(bottom);
   });
 
   it("puts the toggle on the title row of the cards that open and close, whichever state they are in", () => {
-    for (const expanded of [{}, { warnings: false, extensions: true, status: true }]) {
+    for (const expanded of [{}, { warnings: false, status: false }]) {
       const content = cards({}, expanded);
       const rows = text(content);
       for (const [title, section] of [
         ["AVISOS", "warnings"],
-        ["EXTENSIONES", "extensions"],
         ["SESIÓN", "status"],
       ] as const) {
         const index = rows.findIndex((row) => row.includes(title));
-        expect(rows[index], title).toMatch(/^ ╭─ [▼▶] /u);
+        expect(rows[index], title).toMatch(/^ [▼▶] /u);
         expect(content.hits[index], title).toEqual({ action: "toggle", section });
-        // Not the row under it, and not the card's bottom border.
+        // Not the row under it, and not the blank row that closes the card.
         expect(content.hits[index + 1], title).not.toEqual({ action: "toggle", section });
       }
     }
   });
 
-  it("lists the orchestration card between the extensions and the session only for that area", () => {
+  it("lists the orchestration card between the warnings and the session only for that area", () => {
     const running = {
       ...initialOrchestrationState(),
       snapshot: {
@@ -198,24 +232,26 @@ describe("the MAIN rail as cards", () => {
     const content = cards({ orchestration: running }, {}, "orchestration");
     const rows = text(content);
     const at = rows.indexOf(top("▼ ORQUESTACIÓN"));
-    expect(at).toBeGreaterThan(rows.indexOf(top("▶ EXTENSIONES · 1")));
+    expect(at).toBeGreaterThan(rows.indexOf(top("▼ AVISOS · 1")));
     expect(rows[at + 1]).toBe(body("Estado: running"));
     expect(rows[at + 2]).toBe(body("Agentes: 3/6 · cola: 1"));
     expect(content.hits[at]).toEqual({ action: "toggle", section: "orchestration" });
-    expect(rows.indexOf(top("▶ SESIÓN"))).toBeGreaterThan(at);
+    expect(rows.indexOf(top("▼ SESIÓN"))).toBeGreaterThan(at);
     const none = text(cards({}, {}, "orchestration"));
     expect(none).toContain(body("Sin workflow seleccionado"));
   });
 
   it("speaks English when the console does", () => {
-    const rows = text(cards({ locale: "en" }, { extensions: true }));
+    const rows = text(cards({ locale: "en" }));
     expect(rows).toContain(body("I am in: fake-cwd"));
     expect(rows).toContain(body("Mode: ACTION  ·  change ↗"));
     expect(rows).toContain(body("Project: fake-project"));
-    expect(rows).toContain(body("Model: fake-model · no reasoning"));
+    expect(rows).toContain(body("Model: fake-model ↗"));
+    expect(rows).toContain(body("Level: no reasoning ↗"));
     expect(rows).toContain(top("AREAS"));
     expect(rows).toContain(top("▼ WARNINGS · 1"));
-    expect(rows).toContain(top("▶ SESSION"));
+    expect(rows).toContain(top("▼ SESSION"));
+    expect(rows).toContain(body("Memory: not loaded"));
     expect(rows).toContain(body("Open orchestration view"));
     expect(rows).toContain(margin("Alt+K panel menu · Alt+H areas".padEnd(CARD_WIDTH)));
     const joined = rows.join("\n");
@@ -262,7 +298,7 @@ describe("a warning in the rail", () => {
   it("takes three rows at most, and the third ends with an ellipsis", () => {
     const { rows, content, start } = rowsOf([`Provider ${"z".repeat(150)}`]);
     expect(rows).toHaveLength(3);
-    expect(rows[2]).toMatch(/…\s*│ $/u);
+    expect(rows[2]).toMatch(/…\s*$/u);
     expect(rows[2]?.includes("…")).toBe(true);
     for (let index = 0; index < rows.length; index++)
       expect(content.hits[start + index]).toEqual({ action: "details" });
@@ -301,11 +337,13 @@ describe("a warning in the rail", () => {
       const title = text(renderNativeRailContent(fresh, "agents", 39, {}, { cards: true })).find(
         (row) => row.includes("AVISOS"),
       );
-      expect(title).toContain(`AVISOS · ${railWarnings(fresh).length}`);
+      // With no warning there is no card at all.
+      if (railWarnings(fresh).length === 0) expect(title).toBeUndefined();
+      else expect(title).toContain(`AVISOS · ${railWarnings(fresh).length}`);
     }
   });
 
-  it("keeps the tones it had: the warning red, the title yellow only while there is something to say", () => {
+  it("keeps the tones it had: the warning red, its title yellow, and no title at all without a warning", () => {
     const saved = { noColor: process.env.NO_COLOR, term: process.env.TERM };
     delete process.env.NO_COLOR;
     process.env.TERM = "xterm-256color";
@@ -322,20 +360,21 @@ describe("a warning in the rail", () => {
       const TEAL = "38;2;119;255;165m";
       const TEXT = "38;2;198;244;210m";
       expect(line(warned, "AVISOS")).toContain(`${YELLOW}▼ AVISOS · 1`);
-      expect(line(idle, "AVISOS")).toContain(`${CYAN}▼ AVISOS · 0`);
+      expect(line(idle, "AVISOS")).toBe("");
       expect(line(warned, "! Provider offline")).toContain(`${ERROR}! Provider offline`);
-      // The selected area is yellow, the others plain; the heading of the status card keeps the yellow it had.
+      // The selected area is yellow, the others plain; the heading of the status card is cyan, like the other titles.
       expect(line(warned, "● AGENTS")).toContain(`${YELLOW}● AGENTS`);
       expect(line(warned, "○ TOOLS")).toContain(`${TEXT}○ TOOLS`);
-      expect(line(warned, "HARIL · AGENTS")).toContain(`${YELLOW}HARIL · AGENTS`);
+      expect(line(warned, "HARIL · AGENTS")).toContain(`${CYAN}HARIL · AGENTS`);
       expect(line(warned, "ÁREAS")).toContain(`${CYAN}ÁREAS`);
       expect(line(warned, "Abrir vista")).toContain(`${TEAL}Abrir vista de orquestación`);
       // The eye follows the context and the workers, as it did: teal at rest, red when the context is nearly full.
       expect(line(warned, "HARIL · AGENTS")).toContain(`${TEAL}◉`);
       expect(line(cards({ context: "90%" }), "HARIL · AGENTS")).toContain(`${ERROR}◉`);
       expect(line(cards({ runtime: "running" }), "HARIL · AGENTS")).toContain(`${YELLOW}◉`);
-      // The borders are teal, with the panel's background under them.
-      expect(line(warned, "ÁREAS")).toContain(`${TEAL}╭─ `);
+      // The thin line after a title is teal, with the panel's background under it and no corner or side.
+      expect(line(warned, "ÁREAS")).toContain(`${TEAL} ─`);
+      expect(stripAnsi(line(warned, "ÁREAS"))).not.toMatch(/[╭╮│]/u);
     } finally {
       if (saved.noColor !== undefined) process.env.NO_COLOR = saved.noColor;
       if (saved.term === undefined) delete process.env.TERM;
@@ -360,7 +399,7 @@ describe("the values of the status card", () => {
       ["Modelo: ", find("Modelo: ")],
     ] as const) {
       expect(row, label).toContain(`${label}`);
-      expect(row, label).toMatch(/…\s*│ $/u);
+      expect(row, label).toMatch(/…\s*$/u);
       expect(textWidth(row), label).toBe(RAIL_BODY_WIDTH);
     }
   });
@@ -417,7 +456,7 @@ describe("every row of the MAIN cards is as wide as the rail", () => {
                 if (ascii) {
                   const drawn = text(content).join("\n");
                   expect(drawn, label).not.toMatch(/[╭╮╰╯─│▸▼▶▣●○◉↗•]/u);
-                  expect(drawn, label).toContain("+-");
+                  expect(drawn, label).toContain("------");
                 }
               }
             }
@@ -427,16 +466,18 @@ describe("every row of the MAIN cards is as wide as the rail", () => {
     }
   }
 
-  it("draws the glyphs of the ASCII set: + - | corners, * and o for the areas, v and > for the cards", () => {
-    const rows = text(cards({ asciiGlyphs: true }, { extensions: true }));
-    expect(rows[0]).toBe(` +- @ HARIL · AGENTS ${"-".repeat(16)}+ `);
-    expect(rows[1]).toBe(` | ${"Estoy en: fake-cwd".padEnd(CARD_CONTENT_WIDTH)} | `);
-    expect(rows).toContain(` | ${"Modo: ACTION  ·  cambiar ->".padEnd(CARD_CONTENT_WIDTH)} | `);
-    expect(rows).toContain(` | ${"* AGENTS".padEnd(CARD_CONTENT_WIDTH)} | `);
-    expect(rows).toContain(` | ${"o TOOLS".padEnd(CARD_CONTENT_WIDTH)} | `);
-    expect(rows.some((row) => row.startsWith(" +- v AVISOS · 1 "))).toBe(true);
-    expect(rows.some((row) => row.startsWith(" +- > SESIÓN "))).toBe(true);
-    expect(rows).toContain(` | ${"- pi-extension ready".padEnd(CARD_CONTENT_WIDTH)} | `);
+  it("draws the glyphs of the ASCII set: - for the thin line, * and o for the areas, v for the cards", () => {
+    const rows = text(cards({ asciiGlyphs: true }));
+    expect(rows[0]).toBe(` @ HARIL · AGENTS ${"-".repeat(20)} `);
+    expect(rows[1]).toBe(body("Estoy en: fake-cwd"));
+    expect(rows).toContain(body("Modo: ACTION  ·  cambiar ->"));
+    expect(rows).toContain(body("Modelo: fake-model ->"));
+    expect(rows).toContain(body("* AGENTS"));
+    expect(rows).toContain(body("o TOOLS"));
+    expect(rows.some((row) => row.startsWith(" v AVISOS · 1 -"))).toBe(true);
+    expect(rows.some((row) => row.startsWith(" v SESIÓN -"))).toBe(true);
+    expect(rows.join("\n")).not.toContain("+-");
+    expect(rows.join("\n")).not.toContain("|");
   });
 });
 
@@ -482,6 +523,9 @@ describe("the MAIN cards in the real pane", () => {
       redraw: () => calls.push("redraw"),
       runControl: (control) => calls.push(`run:${control}`),
       chooseMode: () => calls.push("mode"),
+      chooseModel: () => undefined,
+      chooseLevel: () => undefined,
+      stopAll: () => undefined,
       openMenu: () => calls.push("menu"),
       focus: () => calls.push("focus"),
       openArea: (next) => {
@@ -518,11 +562,11 @@ describe("the MAIN cards in the real pane", () => {
       const drawn = rows();
       expect(drawn).toHaveLength(60);
       for (const row of drawn) expect([row, textWidth(row)]).toEqual([row, RAIL_WIDTH]);
-      expect(drawn.join("\n")).toContain(ascii ? "+- @ HARIL" : "╭─ ◉ HARIL");
+      expect(drawn.join("\n")).toContain(ascii ? " @ HARIL" : " ◉ HARIL");
     }
   });
 
-  it("closes and opens AVISOS, EXTENSIONES and SESIÓN from the click on their title row", () => {
+  it("closes and opens AVISOS and SESIÓN from the click on their title row", () => {
     const { rows, y, click, expanded, calls } = mount();
     expect(rows()[y("AVISOS")]).toContain("▼ AVISOS · 1");
     expect(rows().some((row) => row.includes("! Provider offline"))).toBe(true);
@@ -534,29 +578,27 @@ describe("the MAIN cards in the real pane", () => {
     expect(rows()[y("AVISOS")]).toContain("▼ AVISOS · 1");
     expect(rows().some((row) => row.includes("! Provider offline"))).toBe(true);
 
-    expect(rows().some((row) => row.includes("pi-extension ready"))).toBe(false);
-    click(y("EXTENSIONES"));
-    expect(rows().some((row) => row.includes("• pi-extension ready"))).toBe(true);
-    click(y("EXTENSIONES"));
+    // The extensions are not on MAIN any more.
+    expect(rows().some((row) => row.includes("EXTENSIONES"))).toBe(false);
     expect(rows().some((row) => row.includes("pi-extension ready"))).toBe(false);
 
-    expect(rows().some((row) => row.includes("Runtime:"))).toBe(false);
+    // SESIÓN is open by default.
+    expect(rows().some((row) => row.includes("Memoria: not loaded"))).toBe(true);
     click(y("SESIÓN"));
-    expect(rows().some((row) => row.includes("Runtime: idle"))).toBe(true);
+    expect(rows()[y("SESIÓN")]).toContain("▶ SESIÓN");
+    expect(rows().some((row) => row.includes("Memoria:"))).toBe(false);
     click(y("SESIÓN"));
-    expect(rows().some((row) => row.includes("Runtime:"))).toBe(false);
+    expect(rows().some((row) => row.includes("Memoria: not loaded"))).toBe(true);
     expect(calls.filter((call) => call !== "redraw")).toEqual([]);
   });
 
-  it("does nothing on the border under a title, the bottom of a closed card or the text of a card", () => {
+  it("does nothing on the blank row under a card, the text of a card or the title of a card without a toggle", () => {
     const { rows, y, click, expanded, tui } = mount();
     const before = tui.requestRender.mock.calls.length;
     const title = y("AVISOS");
-    for (const row of [title + 2, y("EXTENSIONES") + 1, y("SESIÓN") + 1, y("Proyecto:")]) {
+    for (const row of [title + 2, y("SESIÓN") + 1, y("Proyecto:"), y("STOP ALL") + 1]) {
       expect([row, rows()[row], click(row)]).toEqual([row, rows()[row], undefined]);
     }
-    // The bottom border of the status card and the top of the areas card carry no action either.
-    expect(click(y("Modelo:") + 1)).toBeUndefined();
     expect(click(y("ÁREAS"))).toBeUndefined();
     expect(expanded).toEqual({});
     expect(tui.requestRender.mock.calls).toHaveLength(before);
@@ -579,21 +621,20 @@ describe("the MAIN cards in the real pane", () => {
     const { pane, rows, y, click, calls } = mount({
       rows: 24,
       over: { providerWarnings: ["one", "two", "three", "four"] },
-      expanded: { extensions: true, status: true },
+      expanded: { status: true },
     });
     // Two rows of tabs: the cards start below the header box and the blank row, not where a single row of tabs would.
     expect(rows()[3]).toContain("5:ACC");
-    expect(rows()[6]).toContain("╭─ ◉ HARIL");
+    expect(rows()[6]).toContain(" ◉ HARIL");
     expect(y("Estoy en")).toBe(7);
     click(y("cambiar"));
     expect(calls).toEqual(["mode"]);
     pane.handleMouse?.({ type: "wheel", button: "none", x: 8, y: 5, wheelDelta: 9 });
-    expect(rows().some((row) => row.includes("╭─ ◉ HARIL"))).toBe(false);
+    expect(rows().some((row) => row.includes("◉ HARIL"))).toBe(false);
     // Each click is looked up after the one before changed the rows (a closed card is shorter than an open one).
     const expected: [string, string[]][] = [
       ["○ EVERYWHERE", ["area:everywhere"]],
       ["! three", ["run:details"]],
-      ["EXTENSIONES", ["redraw"]],
       ["SESIÓN", ["redraw"]],
       ["AVISOS", ["redraw"]],
     ];
@@ -627,7 +668,7 @@ describe("the classic header and the keyboard menu keep their text", () => {
     );
     // The rail is the right part of each row, after the separator at column 110 and before the closing frame.
     const rail = header.lines.map(stripAnsi).map((line) => line.slice(111, 159).trimEnd());
-    expect(rail.slice(2, 22)).toEqual([
+    expect(rail.slice(2, 24)).toEqual([
       "◉ HARIL · TOOLS · panel",
       " Estoy en: fake-cwd",
       " Modo: ACTION  ·  cambiar ↗",
@@ -637,7 +678,9 @@ describe("the classic header and the keyboard menu keep their text", () => {
       " ! Provider offline",
       " ! HARIL provider cliproxy: unreachable",
       " ▶ EXTENSIONES · 2",
-      " ▶ SESIÓN",
+      " ▼ SESIÓN",
+      " Runtime: idle",
+      " Memoria: not loaded",
       " ▼ ACCIONES · TOOLS · 8",
       " [D] Ver detalles completos",
       " [M] Modelo y nivel",
@@ -659,16 +702,16 @@ describe("the classic header and the keyboard menu keep their text", () => {
       [9, "details", undefined, undefined],
       [10, "toggle", "extensions", undefined],
       [11, "toggle", "status", undefined],
-      [12, "toggle", "actions", undefined],
-      [13, "run", undefined, "details"],
-      [14, "run", undefined, "model-level"],
-      [15, "run", undefined, "delegation"],
-      [16, "run", undefined, "toggle-tools"],
-      [17, "run", undefined, "methodologies"],
-      [18, "run", undefined, "commands"],
-      [19, "run", undefined, "usage-log"],
-      [20, "run", undefined, "refresh"],
-      [21, "menu", undefined, undefined],
+      [14, "toggle", "actions", undefined],
+      [15, "run", undefined, "details"],
+      [16, "run", undefined, "model-level"],
+      [17, "run", undefined, "delegation"],
+      [18, "run", undefined, "toggle-tools"],
+      [19, "run", undefined, "methodologies"],
+      [20, "run", undefined, "commands"],
+      [21, "run", undefined, "usage-log"],
+      [22, "run", undefined, "refresh"],
+      [23, "menu", undefined, undefined],
     ]);
   });
 
@@ -700,7 +743,7 @@ describe("the classic header and the keyboard menu keep their text", () => {
       "Cerrar sección avisos (2)",
       "Ver detalles completos",
       "Abrir sección extensiones (2)",
-      "Abrir sección sesión",
+      "Cerrar sección sesión",
       "Cerrar sección acciones · AGENTS (4)",
       "Elegir modelo de Pi",
       "Tareas por agente observado",

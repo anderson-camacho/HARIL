@@ -148,14 +148,24 @@ interface ConsoleUi {
   ): void;
 }
 
+interface ConsoleSourceInfo {
+  readonly path?: string;
+  readonly source?: string;
+}
+
 interface ConsoleToolInfo {
   readonly name: string;
   readonly description: string;
   readonly exposure: string;
+  readonly sourceInfo?: ConsoleSourceInfo;
 }
 
+// source: "extension", "prompt" or "skill". Pi's own commands are not reported here.
 interface ConsoleCommandInfo {
   readonly name: string;
+  readonly description?: string;
+  readonly source?: string;
+  readonly sourceInfo?: ConsoleSourceInfo;
 }
 
 interface ConsoleMcpServer {
@@ -185,6 +195,8 @@ export interface ConsoleContext {
     getSessionId(): string;
   };
   getContextUsage(): ContextUsage | undefined;
+  // Offered to command handlers; the loaded context files are in it. Only the paths are read.
+  getSystemPromptOptions?(): { readonly contextFiles?: readonly { readonly path: string }[] };
   // Whether the agent is idle (not streaming).
   isIdle(): boolean;
   // Aborts the current agent operation (the chat turn); nothing happens while idle.

@@ -1,13 +1,15 @@
 import { spawn } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import { extname, isAbsolute, posix, resolve, win32 } from "node:path";
+import { VERSION } from "../version.js";
+import { isCi } from "./terminal-colors.js";
 
 // Half-width katakana retain one terminal cell on Windows Terminal, unlike full-width kana.
 // The mix of kana, digits and symbols follows the green rain seen in TTE's Matrix effect.
 const MATRIX_GLYPHS = "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ012345789+-*/:;";
 const FRAMES = 32;
 const INTERVAL_MS = 55;
-const LOADED_HOLD_MS = 3_000;
+const LOADED_HOLD_MS = 1_600;
 const MORPH_FRAMES = 14;
 const MORPH_INTERVAL_MS = 75;
 
@@ -27,6 +29,54 @@ const LARGE_FONT: Record<string, readonly string[]> = {
   T: ["#####", "  #  ", "  #  ", "  #  ", "  #  "],
 };
 
+// What the welcome paints with. `future` is blue with thin orange lines over the deep navy; `matrix` (and every palette
+// that keeps the Matrix Pi theme) is green on the terminal's own background.
+export type WelcomePalette = "future" | "matrix";
+
+interface WelcomeTones {
+  readonly background: string;
+  readonly head: string;
+  readonly bright: string;
+  readonly middle: string;
+  readonly faint: string;
+  readonly logo: string;
+  readonly shadow: string;
+  readonly online: string;
+  readonly muted: string;
+  readonly line: string;
+}
+
+const rgb = (red: number, green: number, blue: number): string =>
+  `\u001b[22;38;2;${red};${green};${blue}m`;
+
+const WELCOME_TONES: Record<WelcomePalette, WelcomeTones> = {
+  future: {
+    // The terminal's default background: the navy of OSC 11, or the user's background image through it.
+    background: "",
+    head: rgb(196, 233, 255),
+    bright: rgb(94, 194, 255),
+    middle: rgb(47, 127, 192),
+    faint: rgb(22, 58, 96),
+    logo: "\u001b[1;38;2;94;194;255m",
+    shadow: rgb(27, 74, 120),
+    online: rgb(125, 248, 213),
+    muted: rgb(127, 163, 199),
+    line: rgb(184, 110, 46),
+  },
+  matrix: {
+    background: "",
+    head: "\u001b[22;97m",
+    bright: "\u001b[22;92m",
+    middle: "\u001b[22;32m",
+    faint: "\u001b[22;38;5;22m",
+    logo: "\u001b[1;92m",
+    shadow: "\u001b[22;38;5;22m",
+    online: "\u001b[22;92m",
+    muted: "\u001b[22;32m",
+    line: "\u001b[22;32m",
+  },
+};
+
 export interface StartupOutput {
   readonly columns?: number;
   readonly rows?: number;
@@ -43,7 +93,7 @@ export function startupSettings(
   env: Readonly<Record<string, string | undefined>>,
 ): StartupSettings {
   return {
-    enabled: env.HARIL_STARTUP_ANIMATION !== "off" && env.CI !== "true",
+    enabled: env.HARIL_STARTUP_ANIMATION !== "off" && !isCi(env),
     engine:
       env.HARIL_STARTUP_MATRIX_ENGINE === "built-in"
         ? "built-in"
@@ -82,9 +132,57 @@ function terminalSize(out: StartupOutput): { width: number; height: number } {
   };
 }
 
+// One frame of rain or dissolve as positioned, coloured rows. Every row ends by clearing to its end in the frame's
+// background, so the last column (never printed: it can scroll) matches the rest.
+function paintedFrame(
+  lines: readonly string[],
+  frame: number,
+  palette: WelcomePalette,
+): readonly string[] {
+  const tones = WELCOME_TONES[palette];
+  return lines.map((row, rowIndex) => {
+    let colored = tones.background;
+    let previousTone = "";
+    for (const [columnIndex, character] of Array.from(row).entries()) {
+      const distance = (((rowIndex + columnIndex * 7 - frame * 2) % 16) + 16) % 16;
+      const tone =
+        character === "█"
+          ? tones.logo
+          : distance === 0
+            ? tones.head
+            : distance < 3
+              ? tones.bright
+              : distance < 7
+                ? tones.middle
+                : tones.faint;
+      if (character !== " " && tone !== previousTone) {
+        colored += tone;
+        previousTone = tone;
+      }
+      colored += character;
+    }
+    return `${colored}\u001b[K\u001b[0m`;
+  });
+}
+
+// A frame of the dissolve (step 1 to MORPH_FRAMES), as rows, for the given window.
+export function welcomeMorph(
+  step: number,
+  width: number,
+  height: number,
+  palette: WelcomePalette,
+): readonly string[] {
+  return paintedFrame(matrixMorphFrame(step, width, height), FRAMES + step - 1, palette);
+}
+
+function writeRows(out: StartupOutput, rows: readonly string[]): void {
+  out.write(rows.map((row, index) => `\u001b[${index + 1};1H${row}`).join(""));
+}
+
 async function matrixBuiltIn(
   out: StartupOutput,
   wait: (ms: number) => Promise<void>,
+  palette: WelcomePalette,
 ): Promise<void> {
   const { width, height } = terminalSize(out);
   // Rain dissolves into the same large HARIL, without clearing the canvas.
@@ -93,31 +191,7 @@ async function matrixBuiltIn(
     const lines = resolving
       ? matrixMorphFrame(frame - FRAMES + 1, width, height)
       : matrixFrame(frame, width, height);
-    let screen = "";
-    for (const [rowIndex, row] of lines.entries()) {
-      let colored = "";
-      let previousTone = "";
-      for (const [columnIndex, character] of Array.from(row).entries()) {
-        const distance = (((rowIndex + columnIndex * 7 - frame * 2) % 16) + 16) % 16;
-        const tone =
-          character === "█"
-            ? "\u001b[1;92m"
-            : distance === 0
-              ? "\u001b[97m"
-              : distance < 3
-                ? "\u001b[92m"
-                : distance < 7
-                  ? "\u001b[32m"
-                  : "\u001b[38;5;22m";
-        if (character !== " " && tone !== previousTone) {
-          colored += tone;
-          previousTone = tone;
-        }
-        colored += character;
-      }
-      screen += `\u001b[${rowIndex + 1};1H${colored}\u001b[0m`;
-    }
-    out.write(screen);
+    writeRows(out, paintedFrame(lines, frame, palette));
     await wait(resolving ? MORPH_INTERVAL_MS : INTERVAL_MS);
   }
 }
@@ -158,6 +232,75 @@ function harilMask(width: number, height: number): readonly string[] {
     rows[top + i] = " ".repeat(left) + clipped + " ".repeat(width - left - clipped.length);
   }
   return rows;
+}
+
+function spaced(text: string): string {
+  return Array.from(text).join(" ");
+}
+
+// The last frame: the logo where the dissolve left it, its shadow one cell down and right, the line that says it is
+// ready and, as room allows, the label above, the thin lines and the footer. The cursor stands after the ready line.
+export function welcomeFinal(
+  width: number,
+  height: number,
+  palette: WelcomePalette,
+): { readonly rows: readonly string[]; readonly cursor?: { row: number; column: number } } {
+  const tones = WELCOME_TONES[palette];
+  const mask = harilMask(width, height);
+  const first = mask.findIndex((row) => row.trim() !== "");
+  const count = mask.filter((row) => row.trim() !== "").length;
+  const solid = mask.some((row) => row.includes("█"));
+  const bottom = first + count + (solid ? 1 : 0);
+  const logoRow = (y: number): string => {
+    const here = mask[y] ?? "";
+    const above = solid ? (mask[y - 1] ?? "") : "";
+    let row = "";
+    let tone = "";
+    for (let x = 0; x < width; x++) {
+      const cell = here[x] ?? " ";
+      const shade = cell === " " && x > 0 && above[x - 1] === "█";
+      const next = cell !== " " ? tones.logo : shade ? tones.shadow : tone;
+      if (next !== tone) {
+        row += next;
+        tone = next;
+      }
+      row += shade ? "█" : cell;
+    }
+    return row.trimEnd();
+  };
+  const centered = (text: string, tone: string): string => {
+    const size = Math.min(Array.from(text).length, width);
+    const shown = Array.from(text).slice(0, size).join("");
+    return `${" ".repeat(Math.floor((width - size) / 2))}${tone}${shown}`;
+  };
+  const texts = new Map<number, string>();
+  const logoWidth = (mask[first] ?? "").trim().length;
+  const rule = "─".repeat(Math.min(width, Math.max(logoWidth, 20)));
+  const ready = width >= 34 ? "✓ SYSTEM ONLINE _ READY FOR INPUT" : "✓ ONLINE";
+  const readyRow = bottom + 1 < height ? bottom + 1 : bottom < height ? bottom : -1;
+  if (readyRow >= 0) texts.set(readyRow, centered(ready, tones.online));
+  if (readyRow + 1 < height && readyRow === bottom + 1)
+    texts.set(readyRow + 1, centered(rule, tones.line));
+  if (first >= 2) {
+    const label = "INITIALIZING WORKSPACE...";
+    const spacedLabel = `▸ ${spaced(label)}`;
+    texts.set(
+      first - 2,
+      centered(Array.from(spacedLabel).length <= width ? spacedLabel : `▸ ${label}`, tones.muted),
+    );
+  }
+  if (first >= 3) texts.set(first - 3, centered(rule, tones.line));
+  const footerRow = height - 1;
+  if (footerRow > readyRow + 2 && width >= 40) {
+    texts.set(footerRow, centered(`HARIL ${VERSION}  ·  /haril  ·  Alt+C comandos`, tones.muted));
+  }
+  const rows = Array.from({ length: height }, (_row, y) => {
+    const body = texts.get(y) ?? logoRow(y);
+    return `${tones.background}${body}\u001b[K\u001b[0m`;
+  });
+  if (readyRow < 0) return { rows };
+  const column = Math.floor((width - Array.from(ready).length) / 2) + Array.from(ready).length + 2;
+  return { rows, cursor: { row: readyRow + 1, column: Math.min(column, width) } };
 }
 
 export function matrixMorphFrame(step: number, width = 80, height = 24): readonly string[] {
@@ -201,6 +344,24 @@ export const TTE_MATRIX_ARGS = [
   "2",
 ] as const;
 
+// The same effect in the blue of the Future palette; the Matrix palette keeps TTE's own green rain.
+export function tteMatrixArgs(palette: WelcomePalette): readonly string[] {
+  if (palette === "matrix") return TTE_MATRIX_ARGS;
+  const stops = TTE_MATRIX_ARGS.indexOf("--final-gradient-stops");
+  return [
+    ...TTE_MATRIX_ARGS.slice(0, stops),
+    "--highlight-color",
+    "c4e9ff",
+    "--rain-color-gradient",
+    "163a60",
+    "5ec2ff",
+    "--final-gradient-stops",
+    "5ec2ff",
+    "2f7fc0",
+    ...TTE_MATRIX_ARGS.slice(stops + 3),
+  ];
+}
+
 const TTE_MAX_MS = 12_000;
 
 // The updater owns this binary under HARIL_RUNTIME_DIR: users don't need uv,
@@ -223,10 +384,11 @@ async function matrixTte(
   out: StartupOutput,
   env: NodeJS.ProcessEnv,
   platform: string,
+  palette: WelcomePalette,
 ): Promise<boolean> {
   return new Promise<boolean>((done) => {
     let finished = false;
-    const child = spawn(matrixExecutable(env, platform), TTE_MATRIX_ARGS, {
+    const child = spawn(matrixExecutable(env, platform), tteMatrixArgs(palette), {
       stdio: ["pipe", "inherit", "ignore"],
       windowsHide: true,
     });
@@ -296,28 +458,47 @@ export async function playHarilStartup(options: {
   readonly platform: string;
   readonly wait?: (ms: number) => Promise<void>;
   readonly runExternalMatrix?: () => Promise<boolean>;
-}): Promise<void> {
+  // Blue for Future, green otherwise. Absent is the green the welcome has always had.
+  readonly palette?: WelcomePalette;
+  // Stays in the full-screen buffer with the cursor hidden, so Pi takes over with no flash of the shell's screen. The
+  // caller then owes the way back (terminal-colors.ts screenKept). A welcome that fails leaves the screen itself.
+  readonly keepScreen?: boolean;
+}): Promise<boolean> {
   const settings = startupSettings(options.env);
-  if (!settings.enabled) return;
+  if (!settings.enabled) return false;
   playSound(settings.soundFile, options.cwd, options.platform, options.env, options.out);
   const wait = options.wait ?? delay;
+  const palette = options.palette ?? "matrix";
+  let kept = false;
   try {
     // Enter the alternate full-screen buffer BEFORE starting TTE. Otherwise the
     // external rain paints the main console while our logo uses another buffer.
-    options.out.write("\u001b[?1049h\u001b[?25l\u001b[2J\u001b[H");
+    const background = WELCOME_TONES[palette].background;
+    options.out.write(`\u001b[?1049h\u001b[?25l${background}\u001b[2J\u001b[H`);
     try {
       const playedExternal =
         settings.engine !== "built-in" &&
         (await (
-          options.runExternalMatrix ?? (() => matrixTte(options.out, options.env, options.platform))
+          options.runExternalMatrix ??
+          (() => matrixTte(options.out, options.env, options.platform, palette))
         )());
-      if (!playedExternal) await matrixBuiltIn(options.out, wait);
-      // Both engines hold their last logo frame; no erase-and-redraw flash.
+      if (!playedExternal) await matrixBuiltIn(options.out, wait, palette);
+      // Whole rows over the last frame of either engine: the logo stays, nothing is erased first.
+      const { width, height } = terminalSize(options.out);
+      const final = welcomeFinal(width, height, palette);
+      writeRows(options.out, final.rows);
+      if (final.cursor !== undefined) {
+        options.out.write(
+          `\u001b[${final.cursor.row};${final.cursor.column}H\u001b[1 q\u001b[?25h`,
+        );
+      }
       await wait(LOADED_HOLD_MS);
+      kept = options.keepScreen === true;
     } finally {
-      options.out.write("\u001b[0m\u001b[?25h\u001b[?1049l");
+      options.out.write(kept ? "\u001b[?25l\u001b[0m" : "\u001b[0m\u001b[?25h\u001b[?1049l");
     }
   } catch {
     // A decorative startup is not allowed to block the core shell.
   }
+  return kept;
 }

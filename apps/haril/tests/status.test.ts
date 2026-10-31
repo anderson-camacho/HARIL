@@ -161,7 +161,7 @@ describe("haril status", () => {
       runtime: _runtime,
       ...expected
     } = parseJson<Record<string, unknown>>(memory.out);
-    expect(parseJson<StatusJson>(json.out).memory).toEqual(expected);
+    expect(parseJson<StatusJson>(json.out).memory).toEqual({ ...expected, configured: null });
     expect(parseJson<StatusJson>(json.out).memory).toMatchObject({
       provider: "null",
       providerSource: "recorded",

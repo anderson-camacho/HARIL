@@ -13,6 +13,9 @@ type BackgroundTone = "base" | "panel" | "selected";
 interface Palette {
   readonly foreground: Record<BaseTone, Color>;
   readonly background: Record<BackgroundTone, Color>;
+  // The base and panel surfaces stay the terminal's own default background: a background image the terminal draws shows
+  // through them (it is covered by any cell with an explicit colour). Only "selected" paints.
+  readonly unpaintedSurfaces?: boolean;
   // Without it, each line keeps the tone its call site names.
   readonly lines?: Record<LineColorTone, Color>;
 }
@@ -21,6 +24,7 @@ const DEFAULT_PALETTE: HarilPalette = "future";
 
 const PALETTES: Record<HarilPalette, Palette> = {
   future: {
+    unpaintedSurfaces: true,
     foreground: {
       cyan: [94, 194, 255],
       teal: [125, 248, 213],
@@ -159,8 +163,11 @@ export function visualText(
   if (!mode.enabled) return safe;
   const palette = PALETTES[activePalette];
   const fg = sequence(foregroundColor(palette, tone), false, mode.trueColor);
+  const painted = background === "selected" || palette.unpaintedSurfaces !== true;
   const bg =
-    background === undefined ? "" : sequence(palette.background[background], true, mode.trueColor);
+    background === undefined || !painted
+      ? ""
+      : sequence(palette.background[background], true, mode.trueColor);
   return `${bg}${fg}${safe}${RESET}`;
 }
 

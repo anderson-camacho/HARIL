@@ -8,7 +8,12 @@ import { actionHit } from "./actions-view.js";
 import { createActivityPanel } from "./activity-panel.js";
 import { createChatLog } from "./chat-log.js";
 import { cliAvailable, NOT_LAUNCHED, runHaril, runHarilJson } from "./cli.js";
-import { commandCatalog } from "./command-catalog.js";
+import {
+  type CatalogEntry,
+  catalogEntries,
+  createCommandPicker,
+  statusCommandDescription,
+} from "./command-catalog.js";
 import {
   type CommandHost,
   chooseMode,
@@ -17,6 +22,8 @@ import {
   registerCommands,
 } from "./commands.js";
 import {
+  barAreas,
+  DASHBOARD_AREAS,
   type DashboardArea,
   type DashboardFacts,
   type NativeRailContent,
@@ -25,7 +32,6 @@ import {
   railArea,
   railControls,
   railWarnings,
-  renderFooterNavigation,
   renderHeaderLayout,
   renderNativeRailContent,
 } from "./dashboard.js";
@@ -36,7 +42,7 @@ import {
 } from "./dashboard-actions.js";
 import type { DashboardAction } from "./dashboard-controls.js";
 import { type DashboardData, emptyDashboardData, loadDashboardData } from "./dashboard-data.js";
-import { aiEyeTone, HARIL_PALETTES, setHarilPalette, visualText } from "./dashboard-theme.js";
+import { HARIL_PALETTES, setHarilPalette } from "./dashboard-theme.js";
 import { delegateFromChat } from "./delegation.js";
 import { effectText, sourceText, valueText } from "./delegation-settings.js";
 import { actionsDetails, loadDockDetails, readDocsPath } from "./dock-details.js";
@@ -66,6 +72,7 @@ import {
   MAIN_DOCK_ID,
   type NativePanes,
   type PaneSettings,
+  panesFit,
   panesShown,
   readDockSlots,
   statusInSidebar,
@@ -95,8 +102,19 @@ import { powerlineEnabled } from "./powerline.js";
 import { type BoundProject, findProject, folderName } from "./project.js";
 import { buildRailMenu, runRailHit } from "./rail-actions.js";
 import { type PendingApproval, readStatus } from "./status.js";
+import {
+  contextFiles,
+  declaredPackages,
+  type ExtensionEntry,
+  extensionInventory,
+  npmLatest,
+  packageUpdates,
+  readAgentSettings,
+  statusLines,
+  updateWarning,
+} from "./status-info.js";
 import { createTabPicker, type TabPickerResult } from "./tab-picker.js";
-import { clipText, plainText, truncate } from "./text.js";
+import { clipText, plainText } from "./text.js";
 import { createToolsPanel, type ToolsHost } from "./tools-panel.js";
 import {
   type BarFacts,
@@ -129,6 +147,8 @@ interface Session extends CommandHost {
   branch: string | null | undefined;
   extensionStatuses: readonly string[];
   providerWarnings: readonly string[];
+  // npm packages with a newer version (status-info.ts); empty until the background check answers.
+  packageUpdates: readonly string[];
   railVisible: boolean;
   railExpanded: Partial<Record<RailSection, boolean>>;
   model: PiModel | undefined;
@@ -213,6 +233,8 @@ export interface ConsoleOptions {
     readonly run?: ToolsHost["run"];
     readonly checkDelayMs?: number;
   };
+  // How the latest version of an npm package is read; null never asks. Tests set it.
+  readonly packageLatest?: ((name: string) => Promise<string | undefined>) | null;
   // The git counts of the bar's powerline folder line: how a test answers them without running git.
   readonly git?: {
     readonly read?: (cwd: string) => Promise<GitSummary | undefined>;
@@ -220,6 +242,23 @@ export interface ConsoleOptions {
 }
 
 export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}): void {
+  // The shortcuts as they are registered, so the command list and /haril-status read them instead of a copy.
+  const shortcuts: {
+    readonly key: string;
+    readonly description: string;
+    readonly handler: (ctx: ConsoleContext) => void;
+  }[] = [];
+  const registerShortcut = (
+    key: string,
+    shortcut: { description?: string; handler(ctx: ConsoleContext): void },
+  ): void => {
+    shortcuts.push({
+      key,
+      description: shortcut.description ?? "",
+      handler: (ctx) => shortcut.handler(ctx),
+    });
+    pi.registerShortcut(key, shortcut);
+  };
   let session: Session | undefined;
 
   const redraw = (): void => session?.tui?.requestRender();
@@ -259,6 +298,7 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
         ((args, { timeoutMs }) => runHaril(args, { cwd: session?.cwd, timeoutMs })),
       env: () => process.env,
       locale: () => session?.locale ?? DEFAULT_UI_LOCALE,
+      extensions: () => loadedExtensions(),
       ui: () =>
         session === undefined || session.closed || !session.ctx.hasUI ? undefined : session.ctx.ui,
       memoryOpen: () =>
@@ -340,11 +380,13 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
       // The same list the sidebar shows under AVISOS, so the count in the bar is the number written there.
       warnings: railWarnings({
         providerWarnings: current.providerWarnings,
+        packageWarnings: updateWarning(current.packageUpdates, current.locale),
         data: current.dashboardData,
         logFailures,
       }).length,
       compact,
       powerline,
+      areas: barAreas(current.area),
     };
   }
 
@@ -382,6 +424,21 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
       level,
       text: model === undefined ? "no model selected" : `${model.id} · ${level ?? "unknown"}`,
     };
+  }
+
+  function loadedContextFiles(current: Session): readonly string[] {
+    return contextFiles(
+      safely(() => current.ctx.getSystemPromptOptions?.().contextFiles, undefined),
+      current.cwd,
+      process.env.PI_CODING_AGENT_DIR,
+    );
+  }
+
+  function loadedExtensions(): ExtensionEntry[] {
+    return extensionInventory(
+      [...safely(() => pi.getCommands(), []), ...safely(() => pi.getAllTools(), [])],
+      declaredPackages(readAgentSettings(process.env.PI_CODING_AGENT_DIR)),
+    );
   }
 
   function dashboardFacts(current: Session): DashboardFacts {
@@ -425,6 +482,9 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
       mode: modeLabel(modes.mode()),
       logFailures: chatLog.status().failed,
       memory: current.dashboardData.memorySummary,
+      version: process.env[VERSION_ENV],
+      contextFiles: loadedContextFiles(current),
+      packageWarnings: updateWarning(current.packageUpdates, current.locale),
       data: current.dashboardData,
       loading: current.dashboardLoading,
       orchestration: current.orchestration,
@@ -539,6 +599,7 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
       branch: undefined,
       extensionStatuses: [],
       providerWarnings: [],
+      packageUpdates: [],
       railVisible: true,
       railExpanded: {},
       model: ctx.model,
@@ -786,18 +847,16 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
     let headerLayout: ReturnType<typeof renderHeaderLayout> = { lines: [], tabHits: [] };
     ctx.ui.setHeader((tui, theme) => ({
       render(width) {
-        // Full-height sidebars own the panels; repeat neither the giant logo nor the old header rail above Pi chat.
-        if (paneLayout(current, tui).panesShown) {
+        // With the panes available the panel or the bar says everything: the chat starts clean, panel open or closed.
+        if (
+          panesFit({
+            attached: current.nativePanes?.attached === true,
+            columns: tui.terminal.columns,
+            rows: tui.terminal.rows,
+          })
+        ) {
           headerLayout = { lines: [], tabHits: [] };
-          return [
-            `${visualText(" ◉", aiEyeTone(modelLevelOf(current).level))}${theme.fg(
-              "warning",
-              truncate(
-                ` HARIL ${version ?? ""}  ·  Estoy en: ${plainText(current.cwd)}  ·  Alt+H áreas  ·  /haril`,
-                Math.max(1, width - 2),
-              ),
-            )}`,
-          ];
+          return [];
         }
         headerLayout = renderHeaderLayout(
           version === "" ? undefined : version,
@@ -842,15 +901,14 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
         gitSummary.invalidate();
         tui.requestRender();
       });
-      let navigation = renderFooterNavigation(80, current.area, theme);
       let bar: BarLayout = { lines: [], hits: [] };
       return {
         render(width) {
           const statuses = [...footerData.getExtensionStatuses().values()];
           current.branch = footerData.getGitBranch();
           current.extensionStatuses = statuses;
-          // One line when the sidebar holds the status (open, on MAIN), the full bar anywhere else. Nothing here is
-          // cached: Alt+I and a tab change both ask Pi for a new frame, and this runs again with the new state.
+          // Nothing when the sidebar holds the status (open, on MAIN), the bar anywhere else. Nothing here is cached:
+          // Alt+I and a tab change both ask Pi for a new frame, and this runs again with the new state.
           const compact = paneLayout(current, tui).statusInSidebar;
           const branch = current.branch;
           // Git is asked about only when the folder line is drawn as segments (not compact, not HARIL_POWERLINE=off) and
@@ -869,9 +927,7 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
             width,
             theme,
           );
-          // The areas line sits right under the bar, so its click rows start after however many lines the bar took.
-          navigation = renderFooterNavigation(width, current.area, theme, bar.lines.length);
-          return [...bar.lines, ...navigation.lines];
+          return bar.lines;
         },
         handleMouse(event: ConsoleMouseEvent) {
           if (event.type !== "click" || event.button !== "left") return undefined;
@@ -883,15 +939,13 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
             if (barHit.target === "model") void chooseModel(current.ctx, pi);
             else if (barHit.target === "mode") void chooseMode(current, current.ctx);
             else if (barHit.target === "stop") void runStopAll(current.ctx);
-            else void chooseLevel(current.ctx, pi, current.levels);
+            else if (barHit.target === "area") {
+              const area = DASHBOARD_AREAS.find((item) => item === barHit.area);
+              if (area !== undefined) current.openArea(area);
+            } else void chooseLevel(current.ctx, pi, current.levels);
             return { handled: true, render: true };
           }
-          const hit = navigation.tabHits.find(
-            (item) => item.row === event.y && event.x >= item.start && event.x < item.end,
-          );
-          if (hit === undefined) return undefined;
-          current.openArea(hit.area);
-          return { handled: true, render: true };
+          return undefined;
         },
         invalidate() {},
         dispose() {
@@ -1466,6 +1520,9 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
         redraw,
         runControl: (control) => openDashboardAction(current, control),
         chooseMode: () => void chooseMode(current, current.ctx),
+        chooseModel: () => void chooseModel(current.ctx, pi),
+        chooseLevel: () => void chooseLevel(current.ctx, pi, current.levels),
+        stopAll: () => void runStopAll(current.ctx),
         openMenu: () => void current.openActions(current.ctx),
         focus: () => focusRightRail(current),
         openArea: (area) => current.openArea(area),
@@ -1487,7 +1544,15 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
       railContent(current, RAIL_MENU_WIDTH, { actions: true }),
       current.locale,
     ).filter(
-      (entry) => !(panesDrawn && entry.hit.action === "toggle" && entry.hit.section === "actions"),
+      (entry) =>
+        !(
+          panesDrawn &&
+          entry.hit.action === "toggle" &&
+          (entry.hit.section === "actions" ||
+            entry.hit.section === "extensions" ||
+            (entry.hit.section === "warnings" &&
+              railWarnings(dashboardFacts(current)).length === 0))
+        ),
     );
     const rows = viewMenuRows(current);
     const choice = await ctx.ui.select(localized(current.locale, "Right panel", "Panel derecho"), [
@@ -1638,23 +1703,68 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
   });
 
   registerCommands(pi, () => session);
+  // Every command this session has and every shortcut, searched as the user types. Enter puts a command in the editor
+  // (the extension API cannot run another extension's command) and runs a shortcut.
   async function showCommandCatalog(ctx: ConsoleContext): Promise<void> {
-    if (session === undefined || !ctx.hasUI || ctx.mode !== "tui") return;
-    const names = safely(() => pi.getCommands().map(({ name }) => name), []);
-    await showInlineDetails(
-      ctx,
-      "Comandos disponibles",
-      commandCatalog(names, harilCommandDescriptions()),
+    if (!ctx.hasUI || ctx.mode !== "tui") return;
+    const entries = catalogEntries(
+      safely(() => pi.getCommands(), []),
+      harilCommandDescriptions(),
+      shortcuts.map(({ key, description, handler }) => ({
+        key,
+        description,
+        run: () => void handler(ctx),
+      })),
     );
+    const chosen = await ctx.ui.custom<CatalogEntry | undefined>(
+      (tui, _theme, _keybindings, done) => createCommandPicker(entries, done, tui),
+      { overlay: true, overlayOptions: { width: "80%", maxHeight: "80%" } },
+    );
+    if (chosen === undefined) return;
+    if (chosen.kind === "shortcut") chosen.run?.();
+    else ctx.ui.setEditorText(`/${chosen.name} `);
   }
   pi.registerCommand("haril-commands", {
-    description: "List the HARIL and third-party extension commands available in this Pi session",
+    description: "Search every command and shortcut / buscar todos los comandos y atajos",
     handler: async (_args, ctx) => showCommandCatalog(ctx),
   });
-  pi.registerShortcut("alt+c", {
-    description: "Show available HARIL / extension commands",
+  registerShortcut("alt+c", {
+    description: "Search every command and shortcut",
     handler: (ctx) => {
       void showCommandCatalog(ctx);
+    },
+  });
+  // What the panel says, with the panel closed.
+  pi.registerCommand("haril-status", {
+    description: statusCommandDescription(),
+    handler: async (_args, ctx) => {
+      const current = session;
+      if (current === undefined || !ctx.hasUI || ctx.mode !== "tui") return;
+      const facts = dashboardFacts(current);
+      await showInlineDetails(
+        ctx,
+        "HARIL · status",
+        statusLines({
+          locale: current.locale,
+          version: facts.version,
+          cwd: facts.cwd,
+          project: facts.project,
+          mode: facts.mode,
+          modelLevel: facts.modelLevel,
+          context: facts.context,
+          cost: facts.cost,
+          runtime: facts.runtime,
+          memory: facts.memory,
+          warnings: railWarnings(facts),
+          extensions: loadedExtensions(),
+          contextFiles: contextFiles(
+            safely(() => ctx.getSystemPromptOptions?.().contextFiles, undefined),
+            current.cwd,
+            process.env.PI_CODING_AGENT_DIR,
+          ),
+          shortcuts,
+        }),
+      );
     },
   });
   pi.registerCommand("haril-plugin", {
@@ -1725,7 +1835,7 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
     },
   });
   // Pi's default bindings leave Alt+L / Alt+I free. Alt+Z is Pi's undo shortcut on WSL.
-  pi.registerShortcut("alt+l", {
+  registerShortcut("alt+l", {
     description: "Open HARIL's plugin list (then press 1..3, arrows, Enter or Esc)",
     handler: (ctx) => {
       const current = session;
@@ -1796,7 +1906,7 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
   });
   // Alt+H is absent from Pi 1.2.0's default keybindings; Alt+O/X/M are already used by this extension and are
   // documented as working on Windows, so this follows the same terminal-compatible shortcut contract.
-  pi.registerShortcut("alt+h", {
+  registerShortcut("alt+h", {
     description: "Choose a HARIL dashboard area",
     handler: (ctx) => {
       const current = session;
@@ -1813,7 +1923,7 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
         });
     },
   });
-  pi.registerShortcut("alt+i", {
+  registerShortcut("alt+i", {
     description: "Show or hide the HARIL right rail (focus on narrow terminals)",
     handler: (ctx) => {
       const current = session;
@@ -1833,7 +1943,7 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
   });
   // Alt+K is absent from Pi 1.2.0's default keybindings (pi-tui and pi-coding-agent), like Alt+H and Alt+I. The slash
   // command always reaches the editor, even where a terminal swallows Alt chords.
-  pi.registerShortcut("alt+k", {
+  registerShortcut("alt+k", {
     description: "Open the HARIL right-panel menu (arrows, Enter or Esc)",
     handler: (ctx) => {
       void openRailMenu(ctx);
@@ -1854,7 +1964,7 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
   });
 
   // Alt+O is free in Pi 1.2.0's default keybindings (docs/keybindings.md and the pi-tui/coding-agent defaults).
-  pi.registerShortcut("alt+o", {
+  registerShortcut("alt+o", {
     description: "Open the HARIL orchestration view",
     handler: (ctx) => {
       if (session === undefined) return;
@@ -1864,7 +1974,7 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
   });
 
   // Alt+X and Alt+M are free in Pi 1.2.0's default keybindings (docs/keybindings.md), on Windows too.
-  pi.registerShortcut("alt+x", {
+  registerShortcut("alt+x", {
     description:
       "■ STOP ALL: abort the chat turn and stop every HARIL agent now (haril stop --now)",
     handler: (ctx) => {
@@ -1872,7 +1982,7 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
     },
   });
 
-  pi.registerShortcut("alt+m", {
+  registerShortcut("alt+m", {
     description: "Cycle the HARIL console mode (ACTION, CONSULT, PLAN, DELEGATION)",
     handler: (ctx) => {
       modes.cycle(ctx);
@@ -1892,6 +2002,24 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
     ended.feed.close();
   }
 
+  // What Pi's own update notice says, for the panel. It never blocks the start and a failure says nothing.
+  function checkPackageUpdates(current: Session): void {
+    const agentDir = process.env.PI_CODING_AGENT_DIR;
+    if (agentDir === undefined || options.packageLatest === null) return;
+    void packageUpdates({
+      packages: declaredPackages(readAgentSettings(agentDir)),
+      agentDir,
+      offline: process.env.PI_OFFLINE !== undefined && process.env.PI_OFFLINE !== "",
+      latest: options.packageLatest ?? npmLatest,
+    }).then(
+      (names) => {
+        current.packageUpdates = names;
+        if (names.length > 0) redraw();
+      },
+      () => undefined,
+    );
+  }
+
   pi.on("session_start", (event, ctx) => {
     // Pi may start a session again without shutting the last one down (/new, /resume, a reload): the last one's
     // children end first, so none outlives the session that started it.
@@ -1901,6 +2029,7 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
     // The mode kept in the session comes back (resume, reload); a new session starts in ACTION.
     modes.restore(ctx);
     installUi(current);
+    checkPackageUpdates(current);
     current.openArea("agents");
     void openDockSlot(current, current.dock.selected);
     // Engram and gentle-ai are checked in the background, once per process (HARIL_TOOLS_CHECK=off skips it).

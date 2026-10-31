@@ -107,6 +107,18 @@ function backgroundOf(theme: ConsoleTheme, tone: ThemeColor): string | undefined
   return code.startsWith("38;") ? `48;${code.slice(3)}` : String(Number(code) + 10);
 }
 
+// The arrow that closes a block of `tone`, over the block of `next` that follows (or the terminal's background).
+export function blockArrow(theme: ConsoleTheme, tone: ThemeColor, next?: ThemeColor): string {
+  const arrow = theme.fg(tone, ARROW);
+  const background = next === undefined ? undefined : backgroundOf(theme, next);
+  return background === undefined ? arrow : `${ESC}[${background}m${arrow}${BACKGROUND_DEFAULT}`;
+}
+
+// A block of colour: the tone is the block and the terminal's background the letters.
+export function block(theme: ConsoleTheme, tone: ThemeColor, text: string): string {
+  return `${REVERSE_ON}${theme.fg(tone, text)}${REVERSE_OFF}`;
+}
+
 function render(segments: readonly Segment[], theme: ConsoleTheme): string {
   let line = "";
   segments.forEach((segment, index) => {

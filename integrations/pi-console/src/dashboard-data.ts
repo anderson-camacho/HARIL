@@ -51,6 +51,34 @@ export interface DashboardData {
   readonly delegationError?: string;
 }
 
+// The memory line of the panel. "null" is the name of the provider that keeps nothing, and the runtime records the one in
+// use only when it runs: until then the store says "null" even with Engram configured, so what haril.json sets decides
+// what is said. Neither a null provider nor "not_checked" reaches the screen as those words.
+export function memoryText(
+  memory: Readonly<Record<string, unknown>>,
+  outbox: Readonly<Record<string, unknown>> | undefined,
+): string {
+  const recorded = typeof memory.provider === "string" ? memory.provider : undefined;
+  const configured = typeof memory.configured === "string" ? memory.configured : undefined;
+  const provider =
+    recorded !== undefined && recorded !== "null"
+      ? recorded
+      : configured !== undefined && configured !== "null"
+        ? `${configured} (configured)`
+        : "no provider";
+  const health =
+    memory.health === "not_checked" || typeof memory.health !== "string"
+      ? "not checked yet"
+      : memory.health;
+  const depth = typeof outbox?.depth === "number" ? outbox.depth : 0;
+  return [
+    provider,
+    health,
+    ...(memory.degraded === true ? ["degraded"] : []),
+    ...(depth > 0 ? [`outbox ${depth}`] : []),
+  ].join(" · ");
+}
+
 export const emptyDashboardData = (projectSlug?: string): DashboardData => ({
   projectSlug,
   initialized: undefined,
@@ -215,9 +243,7 @@ export async function loadDashboardData(projectSlug: string | undefined): Promis
     methodologyEntries: methodList ?? [],
     methodologiesAvailable: methodsResult.error === undefined && methodList !== undefined,
     memorySummary:
-      memory === undefined
-        ? "unavailable from HARIL status"
-        : `${String(memory.provider ?? "provider unknown")} · ${String(memory.health ?? "health unknown")} · degraded ${String(memory.degraded ?? "unknown")} · outbox ${String(outbox?.depth ?? "unknown")}`,
+      memory === undefined ? "unavailable from HARIL status" : memoryText(memory, outbox),
     errors,
     loadedAt: Date.now(),
     ...(await delegationPromise),

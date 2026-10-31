@@ -50,6 +50,10 @@ export interface DashboardFacts {
   readonly logFailures?: number;
   readonly providerWarnings?: readonly string[];
   readonly memory: string;
+  // What Pi lists at startup and HARIL keeps out of the chat (status-info.ts).
+  readonly version?: string | undefined;
+  readonly contextFiles?: readonly string[];
+  readonly packageWarnings?: readonly string[];
   readonly data: DashboardData;
   readonly loading: boolean;
   // The ORCHESTRATION view's state (shared with its full-view overlay) and the glyph set it draws with.
@@ -66,7 +70,17 @@ export interface HeaderLayout {
     readonly row: number;
     readonly start: number;
     readonly end: number;
-    readonly action: "focus" | "details" | "toggle" | "run" | "mode" | "menu" | "area";
+    readonly action:
+      | "focus"
+      | "details"
+      | "toggle"
+      | "run"
+      | "mode"
+      | "menu"
+      | "area"
+      | "model"
+      | "level"
+      | "stop";
     readonly section?: RailSection;
     readonly control?: DashboardAction;
     // Which area an "area" row opens.
@@ -95,11 +109,6 @@ export interface DashboardLayout {
     readonly end: number;
     readonly target: OrchestrationTarget;
   }[];
-}
-
-export interface FooterNavigationLayout {
-  readonly lines: string[];
-  readonly tabHits: HeaderLayout["tabHits"];
 }
 
 const LABELS: Readonly<Record<DashboardArea, string>> = {
@@ -238,13 +247,14 @@ const RIGHT_RAIL_MIN_ROWS = 40;
 // What the rail lists under AVISOS: the provider warnings, the data errors and a failing activity log. The bottom bar
 // counts the same list, so the number there is the one the sidebar shows.
 export function railWarnings(
-  facts: Pick<DashboardFacts, "providerWarnings" | "logFailures"> & {
+  facts: Pick<DashboardFacts, "providerWarnings" | "logFailures" | "packageWarnings"> & {
     readonly data: Pick<DashboardData, "errors">;
   },
 ): string[] {
   return [
     ...new Set([
       ...(facts.providerWarnings ?? []),
+      ...(facts.packageWarnings ?? []),
       ...facts.data.errors,
       ...((facts.logFailures ?? 0) > 0
         ? [`Activity log: ${facts.logFailures} failed record(s)`]
@@ -268,7 +278,12 @@ export interface NativeRailContent {
 }
 
 // Sections open by default; a user toggle (rail-actions.ts) overrides it.
-const SECTIONS_OPEN_BY_DEFAULT: readonly RailSection[] = ["actions", "warnings", "orchestration"];
+const SECTIONS_OPEN_BY_DEFAULT: readonly RailSection[] = [
+  "actions",
+  "warnings",
+  "orchestration",
+  "status",
+];
 
 export function railSectionOpen(
   expanded: Readonly<Partial<Record<RailSection, boolean>>>,
@@ -431,6 +446,40 @@ const LONG_TEXT_ROWS = 3;
 // The most of each list the rail names; the rest are counted in one row that opens the details.
 const LISTED = 3;
 
+function baseName(path: string): string {
+  return (
+    path
+      .replace(/[\\/]+$/, "")
+      .split(/[\\/]/)
+      .pop() ?? path
+  );
+}
+
+// "<model> · <level>" as its two parts; a model without a level has only the first.
+function splitModelLevel(text: string): [string, string | undefined] {
+  const cut = text.lastIndexOf(" · ");
+  return cut <= 0 ? [text, undefined] : [text.slice(0, cut), text.slice(cut + 3)];
+}
+
+// "ctx ▰▰▱▱▱▱ 12%" from the percent the facts carry; the text itself when no percent is known.
+function contextGauge(context: string, ascii: boolean): string {
+  const percent = /^(\d+)%$/.exec(context)?.[1];
+  if (percent === undefined) return `ctx ${context}`;
+  const cells = 6;
+  const filled = Math.round((Math.min(100, Number(percent)) / 100) * cells);
+  const [full, empty] = ascii ? ["#", "-"] : ["▰", "▱"];
+  return `ctx ${full.repeat(filled)}${empty.repeat(cells - filled)} ${percent}%`;
+}
+
+// The areas as the bar draws them: the open one by name, the others by number, each a click.
+export function barAreas(selected: DashboardArea | undefined) {
+  return DASHBOARD_AREAS.map((area, index) => ({
+    id: area,
+    label: selected === area ? `${index + 1} ${LABELS[area]}` : String(index + 1),
+    active: selected === area,
+  }));
+}
+
 // The MAIN tab of the native rail as cards: the status, the areas and the sections that open and close. It says in words
 // what rightRailContent says, in a box each; the row texts a long value could cut (the folder, the project, the model)
 // keep their label whole, and a warning or a status that does not fit goes on in the rows under it (rail-main.ts).
@@ -472,10 +521,11 @@ function railCards(
     ...(items.length > LISTED ? [more(rest(items.length - LISTED))] : []),
   ];
 
+  const [modelName, modelLevel] = splitModelLevel(facts.modelLevel);
   const cards: MainCard<RailHitAction>[] = [
     {
       title: `HARIL · ${LABELS[currentArea]}`,
-      titleTone: "yellow",
+      titleTone: "cyan",
       lead: { text: glyphs.eye, tone: eyeTone(facts) },
       rows: [
         {
@@ -485,11 +535,30 @@ function railCards(
         },
         {
           text: `${tr("Mode", "Modo")}: ${facts.mode ?? "unknown"}  ·  ${tr("change", "cambiar")} ${glyphs.external}`,
-          tone: "yellow",
+          tone: "teal",
           hit: { action: "mode" },
         },
         { text: `${tr("Project", "Proyecto")}: ${facts.project}`, tone: "muted" },
-        { text: `${tr("Model", "Modelo")}: ${facts.modelLevel}`, tone: "text" },
+        {
+          text: `${tr("Model", "Modelo")}: ${modelName} ${glyphs.external}`,
+          tone: "text",
+          hit: { action: "model" },
+        },
+        ...(modelLevel === undefined
+          ? []
+          : [
+              {
+                text: `${tr("Level", "Nivel")}: ${modelLevel} ${glyphs.external}`,
+                tone: "text" as const,
+                hit: { action: "level" as const },
+              },
+            ]),
+        { text: `${contextGauge(facts.context, facts.asciiGlyphs)}  ${facts.cost}`, tone: "text" },
+        {
+          text: `Runtime: ${facts.runtime}${(facts.pending ?? 0) > 0 ? ` · ${facts.pending} ${tr("pending", "pendientes")}` : ""}`,
+          tone: "muted",
+        },
+        { text: "■ STOP ALL  ·  Alt+X", tone: "error", hit: { action: "stop" } },
       ],
     },
     {
@@ -509,33 +578,18 @@ function railCards(
         },
       ],
     },
-    {
-      title: `${tr("WARNINGS", "AVISOS")} · ${warnings.length}`,
-      ...(warnings.length > 0 ? { titleTone: "yellow" as const } : {}),
-      toggle: toggle("warnings"),
-      rows:
-        warnings.length === 0
-          ? [{ text: tr("No known warnings", "Sin alertas conocidas"), tone: "muted" }]
-          : listed(warnings, "! ", "error", (count) =>
-              tr(`+ ${count} more · click to see all`, `+ ${count} avisos · clic para ver todos`),
-            ),
-    },
-    {
-      title: `${tr("EXTENSIONS", "EXTENSIONES")} · ${facts.extensionStatuses.length}`,
-      toggle: toggle("extensions"),
-      rows:
-        facts.extensionStatuses.length === 0
-          ? [
-              {
-                text: tr("Pi exposes no full inventory", "Pi no expone inventario completo"),
-                tone: "muted",
-              },
-            ]
-          : listed(facts.extensionStatuses, `${glyphs.bullet} `, "text", (count) =>
-              tr(`+ ${count} more · see details`, `+ ${count} estados · ver detalles`),
-            ),
-    },
   ];
+  // A section with nothing to say takes no room. The extensions are in the TOOLS tab and /haril-status.
+  if (warnings.length > 0) {
+    cards.push({
+      title: `${tr("WARNINGS", "AVISOS")} · ${warnings.length}`,
+      titleTone: "yellow",
+      toggle: toggle("warnings"),
+      rows: listed(warnings, "! ", "error", (count) =>
+        tr(`+ ${count} more · click to see all`, `+ ${count} avisos · clic para ver todos`),
+      ),
+    });
+  }
   if (currentArea === "orchestration") {
     const snapshot = facts.orchestration.snapshot;
     cards.push({
@@ -563,12 +617,19 @@ function railCards(
     });
   }
   cards.push({
-    // The project and the model are in the status card; the session adds what they do not say.
+    // The version and what was loaded: what Pi's startup listing said, out of the chat.
     title: tr("SESSION", "SESIÓN"),
+    titleTone: "muted",
     toggle: toggle("status"),
     rows: [
-      { text: `Runtime: ${facts.runtime}` },
-      { text: `${tr("Memory", "Memoria")}: ${facts.memory}` },
+      ...(facts.version === undefined
+        ? []
+        : [{ text: `HARIL ${facts.version}`, tone: "muted" as const }]),
+      { text: `${tr("Memory", "Memoria")}: ${facts.memory}`, tone: "muted" },
+      ...(facts.contextFiles ?? []).slice(0, LISTED).map((file) => ({
+        text: `${tr("Context", "Contexto")}: ${baseName(file)}`,
+        tone: "muted" as const,
+      })),
     ],
   });
 
@@ -743,24 +804,6 @@ export function renderHeaderLayout(
 
 // The clickable areas line under the bar. `barLines` is how many lines the bar above it takes (two when it is the full
 // bar, one when it is compact), because the hit rows are counted from the top of the footer.
-export function renderFooterNavigation(
-  width: number,
-  selected: DashboardArea | undefined,
-  _theme: ConsoleTheme,
-  barLines = 2,
-): FooterNavigationLayout {
-  const layout = tabs(width, selected);
-  return {
-    lines: layout.lines,
-    tabHits: layout.hits.map((hit) => ({
-      ...hit,
-      row: hit.row + barLines,
-      start: Math.max(0, hit.start - 1),
-      end: hit.end - 1,
-    })),
-  };
-}
-
 function linesFor(area: DashboardArea, facts: DashboardFacts): string[] {
   const data = facts.data;
   const observed = new Map<string, number>();

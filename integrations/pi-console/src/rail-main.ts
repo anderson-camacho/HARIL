@@ -98,6 +98,7 @@ export function drawMainCards<Hit>(
         : `${open ? glyphs.open : glyphs.closed} ${card.title}`;
     const framed = boxFrame(title, inner, {
       ascii,
+      calm: true,
       width: cardWidth,
       ...(card.titleTone === undefined ? {} : { titleTone: card.titleTone }),
       ...(card.lead === undefined ? {} : { lead: card.lead }),

@@ -51,7 +51,7 @@ describe("the folder line without powerline", () => {
     expect(renderBarLayout(bar({ branch: null }), 140, TAGGED).lines[1]).toBe(
       "{dim:fake-cwd}{dim:  indexer ready}",
     );
-    expect(renderBarLayout(bar(), 14, TAGGED).lines[1]).toBe("{dim:fake-cwd}{dim: (mai…}");
+    expect(renderBarLayout(bar(), 14, TAGGED).lines[1]).toBe("{dim:fake-cwd}{dim: (m…}");
   });
 
   it("is the same bar when the powerline fact is explicitly undefined", () => {
@@ -70,13 +70,23 @@ describe("the folder line as powerline segments", () => {
     );
   });
 
-  it("keeps the first line exactly as it is", () => {
+  it("draws HARIL and the mode as blocks on the first line, and leaves the button where it was", () => {
     for (const width of [20, 40, 80, 200]) {
       const plain = renderBarLayout(bar(), width, TRUECOLOR);
       const segments = renderBarLayout(bar({ powerline: { git: SOME } }), width, TRUECOLOR);
-      expect(segments.lines[0]).toBe(plain.lines[0]);
-      expect(segments.hits).toEqual(plain.hits);
+      expect(segments.hits.find((hit) => hit.target === "stop")).toEqual(
+        plain.hits.find((hit) => hit.target === "stop"),
+      );
+      expect(textWidth(stripAnsi(segments.lines[0] ?? ""))).toBe(
+        textWidth(stripAnsi(plain.lines[0] ?? "")),
+      );
     }
+    const wide = renderBarLayout(bar({ powerline: { git: SOME } }), 200, TRUECOLOR);
+    expect(wide.lines[0]).not.toBe(renderBarLayout(bar(), 200, TRUECOLOR).lines[0]);
+    expect(stripAnsi(wide.lines[0] ?? "")).toContain(" ◆ HARIL ");
+    const mode = wide.hits.find((hit) => hit.target === "mode");
+    // The arrow that closes the block is not part of what is clicked.
+    expect(stripAnsi(wide.lines[0] ?? "").slice(mode?.start, mode?.end)).toBe(" MODE: ACTION ");
   });
 
   it("has no git segment outside a repository, and still shows the statuses", () => {
@@ -159,8 +169,8 @@ describe("the folder line as powerline segments", () => {
     expect(stripAnsi(line)).not.toContain(String.fromCodePoint(0x202e));
   });
 
-  it("does not add the folder line to the compact bar", () => {
+  it("draws no bar at all, folder line included, when compact", () => {
     const layout = renderBarLayout(bar({ compact: true, powerline: { git: SOME } }), 140, TAGGED);
-    expect(layout.lines).toHaveLength(1);
+    expect(layout).toEqual({ lines: [], hits: [] });
   });
 });

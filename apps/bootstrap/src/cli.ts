@@ -6,6 +6,9 @@ import type { ExecPort, FetchPort, FsPort } from "./ports.js";
 import { resolveRuntimeRoot } from "./root.js";
 import { checkActiveRuntime, pidIsAlive } from "./runtime-lease.js";
 import {
+  BACKGROUND_STRETCH_MODES,
+  backgroundProblem,
+  DEFAULT_BACKGROUND,
   installTerminalProfile,
   removeTerminalProfile,
   TERMINAL_PROFILE_GUID,
@@ -20,7 +23,7 @@ import {
 //   install-runtime [--root <dir>] [--json]              Node and Pi (M2-T3)
 //   install [--root <dir>] [--from <repo dir>] [--json]  HARIL itself into <root>/app and <root>/bin (M3-T3)
 //   uninstall [--root <dir>] [--json]                    removes only what install recorded (M3-T3)
-//   terminal-profile [--root <dir>] [--shader crt|none] [--remove] [--json]
+//   terminal-profile [--root <dir>] [--shader crt|none] [--background-image <path>|none [--background-opacity <0-1>] [--background-stretch none|fill|uniform|uniformToFill]] [--remove] [--json]
 //                                                        optional Windows Terminal profile running HARIL
 // Exit 0 when no step failed, 2 when uninstall refuses because a runtime is active (M3-T6b), 1 otherwise
 // (usage errors included).
@@ -46,7 +49,7 @@ const USAGE = [
   "usage: haril-bootstrap install-runtime [--root <dir>] [--json]",
   "       haril-bootstrap install [--root <dir>] [--from <repo dir>] [--json]",
   "       haril-bootstrap uninstall [--root <dir>] [--json]",
-  "       haril-bootstrap terminal-profile [--root <dir>] [--shader crt|none] [--remove] [--json]",
+  "       haril-bootstrap terminal-profile [--root <dir>] [--shader crt|none] [--background-image <path>|none [--background-opacity <0-1>] [--background-stretch none|fill|uniform|uniformToFill]] [--remove] [--json]",
   "       haril-bootstrap --help",
   "root: --root, else HARIL_RUNTIME_DIR, else %LOCALAPPDATA%\\HARIL on win32, else XDG_DATA_HOME/haril",
 ];
@@ -229,12 +232,37 @@ async function terminalProfileCommand(
   host: CliHost,
 ): Promise<number> {
   let shader: TerminalShaderName | null = "crt";
+  let backgroundImage: string | undefined;
+  let backgroundOpacity = DEFAULT_BACKGROUND.opacity;
+  let backgroundStretch = DEFAULT_BACKGROUND.stretch;
   let remove = false;
   const shared: string[] = [];
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
     if (arg === "--remove") {
       remove = true;
+    } else if (arg === "--background-image") {
+      const value = args[++index];
+      if (value === undefined) {
+        io.err("--background-image needs the path of a local image, or none");
+        return 2;
+      }
+      backgroundImage = value;
+    } else if (arg === "--background-opacity") {
+      const value = Number(args[++index]);
+      if (!Number.isFinite(value) || value < 0 || value > 1) {
+        io.err("--background-opacity needs a number from 0 to 1");
+        return 2;
+      }
+      backgroundOpacity = value;
+    } else if (arg === "--background-stretch") {
+      const value = BACKGROUND_STRETCH_MODES.find((mode) => mode === args[index + 1]);
+      index++;
+      if (value === undefined) {
+        io.err(`--background-stretch needs one of ${BACKGROUND_STRETCH_MODES.join(", ")}`);
+        return 2;
+      }
+      backgroundStretch = value;
     } else if (arg === "--shader") {
       const value = args[index + 1];
       if (value === "none") shader = null;
@@ -277,7 +305,19 @@ async function terminalProfileCommand(
     return removal.ok ? 0 : 1;
   }
 
-  const result = await installTerminalProfile(deps, shader);
+  // A picture that cannot be used keeps the default one: the profile still installs, and the warning says why.
+  if (backgroundImage !== undefined && backgroundImage !== "none") {
+    const problem = await backgroundProblem(deps.fs, backgroundImage);
+    if (problem !== undefined) {
+      io.err(`warning: --background-image: ${problem}; keeping the default image`);
+      backgroundImage = undefined;
+    }
+  }
+  const result = await installTerminalProfile(deps, shader, {
+    image: backgroundImage ?? DEFAULT_BACKGROUND.image,
+    opacity: backgroundOpacity,
+    stretch: backgroundStretch,
+  });
   if (options.json) {
     io.out(JSON.stringify(result));
   } else {

@@ -84,7 +84,7 @@ describe("full-terminal Matrix startup", () => {
     expect(combined).toContain("\u001b[?1049h");
     expect(combined).toContain("\u001b[?1049l");
     expect(combined).toContain("\u001b[?25h");
-    expect(delays).toEqual([...Array(32).fill(55), ...Array(14).fill(75), 3_000]);
+    expect(delays).toEqual([...Array(32).fill(55), ...Array(14).fill(75), 1_600]);
   });
 
   it("uses TTE's own rain when present and still shows HARIL for three seconds", async () => {
@@ -103,7 +103,7 @@ describe("full-terminal Matrix startup", () => {
         delays.push(ms);
       },
     });
-    expect(delays).toEqual([3_000]);
+    expect(delays).toEqual([1_600]);
     expect(output.join("")).not.toContain("SISTEMA CARGADO");
     // The real TTE itself leaves the final large logo on-screen; there is no
     // second clear + external replacement with a different logo size.
