@@ -39,10 +39,10 @@ function ids(out: readonly string[]): string[] {
 }
 
 describe("haril plugins (dock preferences, not Pi extension control)", () => {
-  it("lists the default four slots without creating config and explains the scope", async () => {
+  it("lists the default five slots without creating config and explains the scope", async () => {
     const list = await cli("list", "--json");
     expect(list.code).toBe(0);
-    expect(ids(list.out)).toEqual(["main", "memory", "docs", "activity"]);
+    expect(ids(list.out)).toEqual(["main", "memory", "docs", "activity", "actions"]);
     expect(parseJson(list.out)).toMatchObject({ scope: "dock-preferences-only" });
     expect(readdirSync(root)).toEqual([]);
   });
@@ -52,7 +52,7 @@ describe("haril plugins (dock preferences, not Pi extension control)", () => {
     expect((await cli("hide", "docs")).code).toBe(0);
     const moved = await cli("move", "docs", "up", "--json");
     expect(moved.code).toBe(0);
-    expect(ids(moved.out)).toEqual(["main", "docs", "memory", "activity"]);
+    expect(ids(moved.out)).toEqual(["main", "docs", "memory", "activity", "actions"]);
     const hidden = parseJson<{ plugins: { id: string; visible: boolean }[] }>(moved.out);
     expect(hidden.plugins.find((plugin) => plugin.id === "docs")?.visible).toBe(false);
     expect((await cli("show", "docs")).code).toBe(0);
@@ -65,7 +65,13 @@ describe("haril plugins (dock preferences, not Pi extension control)", () => {
     expect(readdirSync(root)).toEqual(["haril.json"]);
 
     expect((await cli("reset")).code).toBe(0);
-    expect(ids((await cli("list", "--json")).out)).toEqual(["main", "memory", "docs", "activity"]);
+    expect(ids((await cli("list", "--json")).out)).toEqual([
+      "main",
+      "memory",
+      "docs",
+      "activity",
+      "actions",
+    ]);
   });
 
   it("hides, shows and moves the activity slot like any other", async () => {
@@ -78,12 +84,19 @@ describe("haril plugins (dock preferences, not Pi extension control)", () => {
       { id: "memory", visible: true },
       { id: "docs", visible: true },
       { id: "activity", visible: false },
+      { id: "actions", visible: true },
     ]);
     const moved = await cli("move", "activity", "up", "--json");
     expect(moved.code).toBe(0);
-    expect(ids(moved.out)).toEqual(["main", "memory", "activity", "docs"]);
+    expect(ids(moved.out)).toEqual(["main", "memory", "activity", "docs", "actions"]);
     expect((await cli("move", "activity", "up")).code).toBe(0);
-    expect(ids((await cli("list", "--json")).out)).toEqual(["main", "activity", "memory", "docs"]);
+    expect(ids((await cli("list", "--json")).out)).toEqual([
+      "main",
+      "activity",
+      "memory",
+      "docs",
+      "actions",
+    ]);
     // The first slot below main is as far up as a slot goes.
     const refused = await cli("move", "activity", "up");
     expect(refused.code).toBe(2);
@@ -97,10 +110,46 @@ describe("haril plugins (dock preferences, not Pi extension control)", () => {
     ).toBe(true);
   });
 
-  it("names the activity slot in its usage text", async () => {
+  it("hides, shows and moves the actions slot like any other", async () => {
+    const hidden = await cli("hide", "actions", "--json");
+    expect(hidden.code).toBe(0);
+    const slots = parseJson<{ plugins: { id: string; visible: boolean }[] }>(hidden.out).plugins;
+    expect(slots.find((plugin) => plugin.id === "actions")?.visible).toBe(false);
+    expect(JSON.parse(readFileSync(path, "utf8")).ui.plugins).toEqual([
+      { id: "main", visible: true },
+      { id: "memory", visible: true },
+      { id: "docs", visible: true },
+      { id: "activity", visible: true },
+      { id: "actions", visible: false },
+    ]);
+    const moved = await cli("move", "actions", "up", "--json");
+    expect(moved.code).toBe(0);
+    expect(ids(moved.out)).toEqual(["main", "memory", "docs", "actions", "activity"]);
+    for (let step = 0; step < 2; step++) expect((await cli("move", "actions", "up")).code).toBe(0);
+    expect(ids((await cli("list", "--json")).out)).toEqual([
+      "main",
+      "actions",
+      "memory",
+      "docs",
+      "activity",
+    ]);
+    // The first slot below main is as far up as a slot goes.
+    const refused = await cli("move", "actions", "up");
+    expect(refused.code).toBe(2);
+    expect(refused.err.join("\n")).toContain("main");
+    const shown = await cli("show", "actions", "--json");
+    expect(shown.code).toBe(0);
+    expect(
+      parseJson<{ plugins: { id: string; visible: boolean }[] }>(shown.out).plugins.find(
+        (plugin) => plugin.id === "actions",
+      )?.visible,
+    ).toBe(true);
+  });
+
+  it("names the activity and actions slots in its usage text", async () => {
     const result = await cli("hide", "nope");
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toContain("<main|memory|docs|activity>");
+    expect(result.err.join("\n")).toContain("<main|memory|docs|activity|actions>");
   });
 
   it("does not overwrite malformed configuration or duplicate slots", async () => {
@@ -133,10 +182,22 @@ describe("haril plugins (dock preferences, not Pi extension control)", () => {
   });
 
   it("does not move outside the last position", async () => {
-    expect((await cli("move", "activity", "down")).code).toBe(0);
-    expect(ids((await cli("list", "--json")).out)).toEqual(["main", "memory", "docs", "activity"]);
+    expect((await cli("move", "actions", "down")).code).toBe(0);
+    expect(ids((await cli("list", "--json")).out)).toEqual([
+      "main",
+      "memory",
+      "docs",
+      "activity",
+      "actions",
+    ]);
     expect((await cli("move", "docs", "down")).code).toBe(0);
-    expect(ids((await cli("list", "--json")).out)).toEqual(["main", "memory", "activity", "docs"]);
+    expect(ids((await cli("list", "--json")).out)).toEqual([
+      "main",
+      "memory",
+      "activity",
+      "docs",
+      "actions",
+    ]);
   });
 
   describe("main is always the first slot and always visible", () => {
@@ -164,7 +225,7 @@ describe("haril plugins (dock preferences, not Pi extension control)", () => {
     it("lets main be shown, which changes nothing", async () => {
       const shown = await cli("show", "main", "--json");
       expect(shown.code).toBe(0);
-      expect(ids(shown.out)).toEqual(["main", "memory", "docs", "activity"]);
+      expect(ids(shown.out)).toEqual(["main", "memory", "docs", "activity", "actions"]);
     });
 
     it("rejects a stored list that hides main instead of rewriting it", async () => {
@@ -211,16 +272,17 @@ describe("haril plugins (dock preferences, not Pi extension control)", () => {
       },
     });
 
-    it("lists main, memory, docs and activity, keeping what memory had, without rewriting the file", async () => {
+    it("lists every slot of the registry, keeping what memory had, without rewriting the file", async () => {
       writeFileSync(path, legacy);
       const list = await cli("list", "--json");
       expect(list.code).toBe(0);
-      expect(ids(list.out)).toEqual(["main", "memory", "docs", "activity"]);
+      expect(ids(list.out)).toEqual(["main", "memory", "docs", "activity", "actions"]);
       const plugins = parseJson<{ plugins: { id: string; visible: boolean }[] }>(list.out).plugins;
       expect(plugins.find((plugin) => plugin.id === "memory")?.visible).toBe(false);
       expect(plugins.find((plugin) => plugin.id === "main")?.visible).toBe(true);
       expect(plugins.find((plugin) => plugin.id === "docs")?.visible).toBe(true);
       expect(plugins.find((plugin) => plugin.id === "activity")?.visible).toBe(true);
+      expect(plugins.find((plugin) => plugin.id === "actions")?.visible).toBe(true);
       expect(readFileSync(path, "utf8")).toBe(legacy);
     });
 
@@ -228,15 +290,15 @@ describe("haril plugins (dock preferences, not Pi extension control)", () => {
       writeFileSync(path, fourSlots);
       const list = await cli("list", "--json");
       expect(list.code).toBe(0);
-      expect(ids(list.out)).toEqual(["main", "memory", "docs", "activity"]);
+      expect(ids(list.out)).toEqual(["main", "memory", "docs", "activity", "actions"]);
       expect(readFileSync(path, "utf8")).toBe(fourSlots);
     });
 
-    it("writes the new four-entry list on the next change and keeps the other settings", async () => {
+    it("writes the new five-entry list on the next change and keeps the other settings", async () => {
       writeFileSync(path, legacy);
       const hidden = await cli("hide", "docs", "--json");
       expect(hidden.code).toBe(0);
-      expect(ids(hidden.out)).toEqual(["main", "memory", "docs", "activity"]);
+      expect(ids(hidden.out)).toEqual(["main", "memory", "docs", "activity", "actions"]);
       const document = JSON.parse(readFileSync(path, "utf8"));
       expect(document.ui.theme).toBe("haril-blossom");
       expect(document.ui.plugins).toEqual([
@@ -244,6 +306,7 @@ describe("haril plugins (dock preferences, not Pi extension control)", () => {
         { id: "memory", visible: false },
         { id: "docs", visible: false },
         { id: "activity", visible: true },
+        { id: "actions", visible: true },
       ]);
     });
 
@@ -263,8 +326,8 @@ describe("haril plugins (dock preferences, not Pi extension control)", () => {
     });
   });
 
-  // The release before ACT wrote MAIN, MEM and DOCS only. Reading it appends ACT, visible, and does not touch the file;
-  // the next write stores the four slots.
+  // The release before ACT wrote MAIN, MEM and DOCS only. Reading it appends ACT and ACC, visible, and does not touch
+  // the file; the next write stores the five slots.
   describe("a haril.json written with the three slots of the previous release", () => {
     const threeSlots = JSON.stringify({
       ui: {
@@ -277,17 +340,17 @@ describe("haril plugins (dock preferences, not Pi extension control)", () => {
       },
     });
 
-    it("lists ACT last and visible, keeping the others, and leaves the file as it was", async () => {
+    it("lists ACT and ACC last and visible, keeping the others, and leaves the file as it was", async () => {
       writeFileSync(path, threeSlots);
       const list = await cli("list", "--json");
       expect(list.code, list.err.join("\n")).toBe(0);
-      expect(ids(list.out)).toEqual(["main", "docs", "memory", "activity"]);
+      expect(ids(list.out)).toEqual(["main", "docs", "memory", "activity", "actions"]);
       const plugins = parseJson<{ plugins: { id: string; visible: boolean }[] }>(list.out).plugins;
-      expect(plugins.map((plugin) => plugin.visible)).toEqual([true, false, true, true]);
+      expect(plugins.map((plugin) => plugin.visible)).toEqual([true, false, true, true, true]);
       expect(readFileSync(path, "utf8")).toBe(threeSlots);
     });
 
-    it("writes the four slots on the next change, so ACT is stored from then on", async () => {
+    it("writes the five slots on the next change, so ACT and ACC are stored from then on", async () => {
       writeFileSync(path, threeSlots);
       expect((await cli("hide", "memory")).code).toBe(0);
       const document = JSON.parse(readFileSync(path, "utf8"));
@@ -297,6 +360,7 @@ describe("haril plugins (dock preferences, not Pi extension control)", () => {
         { id: "docs", visible: false },
         { id: "memory", visible: false },
         { id: "activity", visible: true },
+        { id: "actions", visible: true },
       ]);
     });
 
@@ -305,6 +369,46 @@ describe("haril plugins (dock preferences, not Pi extension control)", () => {
       const h = harness();
       const code = await run(["config", "get", "ui.locale", "--json"], h.io, host());
       expect(code, h.err.join("\n")).toBe(0);
+    });
+  });
+
+  // The release before ACC wrote MAIN, MEM, DOCS and ACT. Reading it appends ACC, visible, and does not touch the
+  // file; the next write stores the five slots, and ACC can be hidden, shown and moved from then on.
+  describe("a haril.json written with the four slots of the previous release", () => {
+    const fourSlots = JSON.stringify({
+      ui: {
+        theme: "haril-blossom",
+        plugins: [
+          { id: "main", visible: true },
+          { id: "activity", visible: false },
+          { id: "memory", visible: true },
+          { id: "docs", visible: true },
+        ],
+      },
+    });
+
+    it("lists ACC last and visible, keeping the others, and leaves the file as it was", async () => {
+      writeFileSync(path, fourSlots);
+      const list = await cli("list", "--json");
+      expect(list.code, list.err.join("\n")).toBe(0);
+      expect(ids(list.out)).toEqual(["main", "activity", "memory", "docs", "actions"]);
+      const plugins = parseJson<{ plugins: { id: string; visible: boolean }[] }>(list.out).plugins;
+      expect(plugins.map((plugin) => plugin.visible)).toEqual([true, false, true, true, true]);
+      expect(readFileSync(path, "utf8")).toBe(fourSlots);
+    });
+
+    it("writes the five slots when ACC is hidden, and keeps the other settings", async () => {
+      writeFileSync(path, fourSlots);
+      expect((await cli("hide", "actions")).code).toBe(0);
+      const document = JSON.parse(readFileSync(path, "utf8"));
+      expect(document.ui.theme).toBe("haril-blossom");
+      expect(document.ui.plugins).toEqual([
+        { id: "main", visible: true },
+        { id: "activity", visible: false },
+        { id: "memory", visible: true },
+        { id: "docs", visible: true },
+        { id: "actions", visible: false },
+      ]);
     });
   });
 });

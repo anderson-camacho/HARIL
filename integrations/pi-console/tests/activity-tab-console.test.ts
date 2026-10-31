@@ -220,7 +220,7 @@ describe("the ACT tab", () => {
     });
   });
 
-  it("opens with /haril-plugin 4 as well, and names ACT in the usage text", async () => {
+  it("opens with /haril-plugin 4 as well, and names ACT and ACC in the usage text", async () => {
     installProject();
     await withConsole(async (h) => {
       await h.shows("Proyecto: demo");
@@ -228,7 +228,7 @@ describe("the ACT tab", () => {
       await h.shows("╭─ Actividad · 3 ");
       await h.command("haril-plugin", "9");
       expect(h.ctx.notes.at(-1)?.[0]).toBe(
-        "Uso: /haril-plugin [main|memory|docs|activity|1..4|details]",
+        "Uso: /haril-plugin [main|memory|docs|activity|actions|1..5|details]",
       );
     });
   });

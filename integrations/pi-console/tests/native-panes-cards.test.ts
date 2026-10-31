@@ -51,7 +51,7 @@ function mount(state: PaneSettings, ascii: boolean, locale: "es" | "en" = "es") 
 }
 
 function paneFor(
-  selected: "main" | "memory" | "docs",
+  selected: PaneSettings["selected"],
   detail: DockDetails | undefined,
   ascii = false,
   locale: "es" | "en" = "es",
@@ -187,10 +187,12 @@ describe("every row of the right rail is exactly RAIL_WIDTH columns wide", () =>
 describe("the header box", () => {
   it("holds the space and the tabs, and closes the header with its own border", () => {
     const { rows } = paneFor("main", undefined);
-    expect(rows().slice(0, 5)).toEqual([
+    // Five tabs: four fill the first row exactly, the fifth goes on a second one.
+    expect(rows().slice(0, 6)).toEqual([
       `│ ╭${"─".repeat(35)}╮ `,
       `│ │ ${"▼ Espacio: Principal · Alt+L".padEnd(33)} │ `,
       `│ │ ${"[1:MAIN]  2:MEM   3:DOCS   4:ACT".padEnd(33)} │ `,
+      `│ │ ${" 5:ACC".padEnd(33)} │ `,
       `│ ╰${"─".repeat(35)}╯ `,
       `│${" ".repeat(39)}`,
     ]);
@@ -198,10 +200,11 @@ describe("the header box", () => {
 
   it("uses > and + - | in ASCII mode, and still says where the user is", () => {
     const { rows } = paneFor("memory", undefined, true);
-    expect(rows().slice(0, 4)).toEqual([
+    expect(rows().slice(0, 5)).toEqual([
       `| +${"-".repeat(35)}+ `,
       `| | ${"v Espacio: Memoria · Alt+L".padEnd(33)} | `,
       `| | ${" 1:MAIN  [2:MEM]  3:DOCS   4:ACT".padEnd(33)} | `,
+      `| | ${" 5:ACC".padEnd(33)} | `,
       `| +${"-".repeat(35)}+ `,
     ]);
   });
@@ -230,9 +233,30 @@ describe("the header box", () => {
     expect(click(2, CARD_TEXT_X + 10)).toEqual({ handled: true, render: true });
     expect(select).toHaveBeenCalledWith("memory");
     expect(state.dockExpanded).toBe(true);
-    expect(click(3)).toBeUndefined();
+    // The second row of tabs selects the fifth one, on the columns it is drawn on, and only there.
+    expect(click(3, CARD_TEXT_X + 2)).toEqual({ handled: true, render: true });
+    expect(select).toHaveBeenLastCalledWith("actions");
+    select.mockClear();
+    expect(click(3, CARD_TEXT_X + 9)).toBeUndefined();
+    expect(select).not.toHaveBeenCalled();
+    // The bottom border of the box is the one row that does nothing.
+    expect(click(4)).toBeUndefined();
     expect(click(1)).toEqual({ handled: true, render: true });
     expect(state.dockExpanded).toBe(false);
+  });
+
+  it("wraps its tabs the same way whichever one is selected, always on two rows for five tabs", () => {
+    for (const selected of ["main", "memory", "docs", "activity", "actions"] as const) {
+      for (const ascii of [false, true]) {
+        const { rows } = paneFor(selected, undefined, ascii);
+        const text = rows().slice(2, 4);
+        expect(text.join("\n"), selected).toMatch(/1:MAIN.*2:MEM.*3:DOCS.*4:ACT/su);
+        expect(text[1], selected).toContain("5:ACC");
+        // The selected tab is the one in brackets (or the one the ASCII mode brackets too), and only one is.
+        expect(text.join("").match(/\[\d:[A-Z]+\]/gu), selected).toHaveLength(1);
+        for (const row of rows()) expect(textWidth(row)).toBe(RAIL_WIDTH);
+      }
+    }
   });
 });
 
@@ -263,7 +287,8 @@ describe("the buttons of the MEM tab", () => {
     for (let y = 0; y <= actionsTop; y++) {
       for (const x of [2, 8, 30]) {
         const result = pane.handleMouse?.({ type: "click", button: "left", y, x });
-        if (y > 2) expect([y, x, result]).toEqual([y, x, undefined]);
+        // The header box takes the rows above (its two tab rows select a tab).
+        if (y > 3) expect([y, x, result]).toEqual([y, x, undefined]);
       }
     }
     expect(activate).not.toHaveBeenCalled();

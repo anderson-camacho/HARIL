@@ -121,12 +121,31 @@ describe("a button", () => {
     ]);
   });
 
-  it("cuts a label that does not fit, and never widens", () => {
+  it("goes on to a second row when the label does not fit one, and cuts only after that", () => {
+    // 27 columns of label after the pointer: this one needs two rows, indented under the first word.
+    expect(plain(button("Activar o desactivar herramientas de Pi"))).toEqual([
+      `╭${"─".repeat(BUTTON_WIDTH - 2)}╮`,
+      `│ ${"▸ Activar o desactivar".padEnd(BUTTON_LABEL_WIDTH)} │`,
+      `│ ${"  herramientas de Pi".padEnd(BUTTON_LABEL_WIDTH)} │`,
+      `╰${"─".repeat(BUTTON_WIDTH - 2)}╯`,
+    ]);
+    // A label of exactly the room of one row stays a three-row button.
+    expect(button("x".repeat(BUTTON_LABEL_WIDTH - 2))).toHaveLength(3);
+    expect(button("x".repeat(BUTTON_LABEL_WIDTH - 1))).toHaveLength(4);
+  });
+
+  it("cuts a label that does not fit even two rows, and never widens", () => {
     for (const label of ["x".repeat(100), "日本語".repeat(20), "", "🧠".repeat(30)]) {
       const rows = button(label);
       expect(new Set(widths(rows))).toEqual(new Set([BUTTON_WIDTH]));
+      // Never more than two rows of label: the button is four rows at the most.
+      expect(rows.length).toBeLessThanOrEqual(4);
     }
-    expect(plain(button("x".repeat(100)))[1]).toMatch(/… │$/u);
+    const long = plain(button("x".repeat(100)));
+    expect(long).toHaveLength(4);
+    expect(long[1]).toMatch(/▸ x+ │$/u);
+    expect(long[2]).toMatch(/… │$/u);
+    expect(plain(button("x".repeat(100), { ascii: true }))[2]).toMatch(/… \|$/u);
   });
 
   it("fits inside a card, which keeps its own borders around it", () => {

@@ -11,7 +11,7 @@ import {
   RAIL_BODY_WIDTH,
   RAIL_MARGIN,
 } from "./rail-metrics.js";
-import { plainText, textWidth, truncate } from "./text.js";
+import { plainText, textWidth, truncate, wrap } from "./text.js";
 
 // The glyphs a row of the rail draws: rounded corners and the rail's own markers, or their ASCII forms for a terminal
 // font without them (HARIL_CONSOLE_ASCII). The middle dot and the ellipsis stay in both, as in the rest of the console.
@@ -144,14 +144,28 @@ export function card(title: string, rows: readonly string[], options: BoxOptions
   );
 }
 
-// One action as a small bordered button of three rows. Its label is `▸ label`, cut when it is too long.
+// One action as a small bordered button: three rows for a label of one row, which is nearly every label. Its label is
+// `▸ label`. One that is too long for a row goes on, indented under the first word, on a second row (so the long
+// actions of an area read whole) and is cut with an ellipsis only after that.
 export function button(label: string, options: BoxOptions = {}): string[] {
   const glyphs = railGlyphs(options.ascii);
   const width = options.width ?? BUTTON_WIDTH;
-  return boxFrame("", [textRow(`${glyphs.pointer} ${label}`, "text", width - 4)], {
-    ...options,
-    width,
-  });
+  const indent = textWidth(glyphs.pointer) + 1;
+  const room = width - 4 - indent;
+  const lines = room >= 1 ? wrap(plainText(label).trim(), room) : [];
+  const [first = "", ...rest] = lines;
+  const rows =
+    room < 1
+      ? [`${glyphs.pointer} ${label}`]
+      : [
+          `${glyphs.pointer} ${first}`,
+          ...(rest.length === 0 ? [] : [`${" ".repeat(indent)}${truncate(rest.join(" "), room)}`]),
+        ];
+  return boxFrame(
+    "",
+    rows.map((row) => textRow(row, "text", width - 4)),
+    { ...options, width },
+  );
 }
 
 // A row of a titleless box: text and the tone it is drawn in (the header's selected row is yellow).

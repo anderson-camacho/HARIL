@@ -1,5 +1,5 @@
 import { renderBrandArt, renderBrandMark } from "./dashboard-art.js";
-import { controlsFor, type DashboardAction } from "./dashboard-controls.js";
+import { controlsFor, type DashboardAction, type DashboardControl } from "./dashboard-controls.js";
 import type { DashboardData } from "./dashboard-data.js";
 import { frameGlyph, paddedCell, visualText } from "./dashboard-theme.js";
 import { delegationSummary } from "./delegation-settings.js";
@@ -108,6 +108,37 @@ const LABELS: Readonly<Record<DashboardArea, string>> = {
   everywhere: "EVERYWHERE",
 };
 const YELLOW: ThemeColor = "warning";
+
+// The name an area goes by in the rail ("AGENTS").
+export function areaName(area: DashboardArea): string {
+  return LABELS[area];
+}
+
+// The area the rail shows its actions for: the one chosen in the list of areas, and TOOLS before any is chosen.
+export function railArea(area: DashboardArea | undefined): DashboardArea {
+  return area ?? "tools";
+}
+
+// The controls of the chosen area, as the MAIN rail's old ACCIONES group, the classic header, the keyboard menu and the
+// ACC tab all list them: one definition, so the four cannot drift apart.
+export function railControls(
+  facts: Pick<DashboardFacts, "data" | "runtime" | "runtimeAvailable" | "orchestration" | "locale">,
+  area: DashboardArea | undefined,
+): DashboardControl[] {
+  return controlsFor(
+    railArea(area),
+    facts.data,
+    facts.runtime,
+    facts.runtimeAvailable,
+    facts.orchestration.demo,
+    facts.locale ?? DEFAULT_UI_LOCALE,
+  );
+}
+
+// The words of the row (and of the ACC button) that opens the complete /haril menu.
+export function openMenuLabel(locale: UiLocale): string {
+  return locale === "es" ? "Abrir menú completo /haril" : "Open full /haril menu";
+}
 
 function fit(text: string, width: number): string {
   return truncate(plainText(text), Math.max(0, width));
@@ -265,6 +296,9 @@ interface RailOptions {
   // `areas` adds the clickable list of areas and the orchestration view. The classic header has its own row of area
   // tabs and a bounded height, so it leaves the list out.
   readonly areas: boolean;
+  // `actions` adds the group with the chosen area's controls. The classic header and the keyboard menu list them; the
+  // native rail leaves them to the ACC tab.
+  readonly actions: boolean;
 }
 
 function rightRailContent(
@@ -277,17 +311,9 @@ function rightRailContent(
   const rows: RailRow[] = [];
   const warnings = railWarnings(facts);
   const mode = facts.mode ?? "unknown";
-  const currentArea = area ?? "tools";
+  const currentArea = railArea(area);
   const lang = facts.locale ?? DEFAULT_UI_LOCALE;
   const tr = (english: string, spanish: string): string => (lang === "es" ? spanish : english);
-  const controls = controlsFor(
-    currentArea,
-    facts.data,
-    facts.runtime,
-    facts.runtimeAvailable,
-    facts.orchestration.demo,
-    facts.locale ?? DEFAULT_UI_LOCALE,
-  );
   const isExpanded = (section: RailSection): boolean => railSectionOpen(expanded, section);
   const add = (
     content: string,
@@ -381,15 +407,18 @@ function rightRailContent(
     add(`Runtime: ${facts.runtime}`, "text");
     add(`${tr("Memory", "Memoria")}: ${facts.memory}`, "text");
   }
-  section(`${tr("ACTIONS", "ACCIONES")} · ${LABELS[currentArea]}`, "actions", controls.length);
-  if (isExpanded("actions")) {
-    for (const control of controls) {
-      add(options.showKeys ? `[${control.hint}] ${control.label}` : control.label, "teal", {
-        action: "run",
-        control: control.action,
-      });
+  if (options.actions) {
+    const controls = railControls(facts, area);
+    section(`${tr("ACTIONS", "ACCIONES")} · ${LABELS[currentArea]}`, "actions", controls.length);
+    if (isExpanded("actions")) {
+      for (const control of controls) {
+        add(options.showKeys ? `[${control.hint}] ${control.label}` : control.label, "teal", {
+          action: "run",
+          control: control.action,
+        });
+      }
+      add(`↗ ${openMenuLabel(lang)}`, "muted", { action: "menu" });
     }
-    add(tr("↗ Open full /haril menu", "↗ Abrir menú completo /haril"), "muted", { action: "menu" });
   }
 
   return rows;
@@ -402,9 +431,15 @@ export function renderNativeRailContent(
   area: DashboardArea | undefined,
   width: number,
   expanded: Readonly<Partial<Record<RailSection, boolean>>>,
+  options: { readonly actions?: boolean } = {},
 ): NativeRailContent {
   const safeWidth = Math.max(1, width);
-  const body = rightRailContent(facts, area, safeWidth, expanded, { showKeys: false, areas: true });
+  // The ACC tab holds the actions, so the MAIN rail leaves them out; the keyboard menu is built with them.
+  const body = rightRailContent(facts, area, safeWidth, expanded, {
+    showKeys: false,
+    areas: true,
+    actions: options.actions ?? false,
+  });
   const rows = body.map((item) => item.line);
   // Only the rail body is clickable; the key hints below it carry no action. The recent events are the ACT tab's.
   const hits: (RailHitAction | undefined)[] = body.map((item) => item.hit);
@@ -443,6 +478,7 @@ function wideHeader(
   const right = rightRailContent(facts, selected, railWidth, expanded, {
     showKeys: true,
     areas: false,
+    actions: true,
   });
   const budget = Math.max(10, Math.min(24, height - 18));
   const clipped = right.length > budget;

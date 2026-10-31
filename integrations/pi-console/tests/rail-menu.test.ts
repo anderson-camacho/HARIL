@@ -21,7 +21,8 @@ import { fakeContext, fakePi } from "./fake-pi.js";
 
 // The right rail cannot take keyboard focus (Pi hands extension shortcuts to the editor only), so Alt+K and
 // /haril-panel open a menu that offers what a click on the rail offers. These tests build that menu from the real
-// output of renderNativeRailContent and drive the console's entry points with a fake Pi.
+// output of renderNativeRailContent and drive the console's entry points with a fake Pi. The menu is built with the
+// actions of the chosen area (the group the MAIN rail leaves to the ACC tab), so it lists what it always listed.
 
 // Wide enough for every label to come out whole: the pane's own 39 columns would cut the long ones with an ellipsis.
 const MENU_WIDTH = 120;
@@ -59,7 +60,9 @@ function menuOf(
   expanded: Partial<Record<RailSection, boolean>> = {},
   locale: UiLocale = "es",
 ) {
-  const content = renderNativeRailContent(facts(locale), area, MENU_WIDTH, expanded);
+  const content = renderNativeRailContent(facts(locale), area, MENU_WIDTH, expanded, {
+    actions: true,
+  });
   return { content, menu: buildRailMenu(content, locale) };
 }
 
@@ -217,15 +220,64 @@ describe("buildRailMenu", () => {
 });
 
 describe("the native rail's rows", () => {
-  const rows = (area: "agents" | "orchestration") =>
-    renderNativeRailContent(facts(), area, 39, {}).lines.map(stripAnsi);
+  const rows = (area: "agents" | "orchestration", actions = false) =>
+    renderNativeRailContent(facts(), area, 39, {}, { actions }).lines.map(stripAnsi);
 
   it("do not look like keys: the actions carry no [D]-style prefix, since the rail takes no key presses", () => {
     for (const area of ["agents", "orchestration"] as const) {
-      const text = rows(area);
+      const text = rows(area, true);
       expect(text.filter((row) => /[[A-Z]]/.test(row))).toEqual([]);
       expect(text.some((row) => row.includes("Ver detalles completos"))).toBe(true);
       expect(text.some((row) => row.includes("Actualizar datos"))).toBe(true);
+    }
+  });
+
+  it("leave the actions group to the ACC tab: the rail is the rail with the group minus exactly that group", () => {
+    for (const area of ["agents", "orchestration"] as const) {
+      for (const expanded of [{}, { actions: false }, { status: true, extensions: true }]) {
+        const without = renderNativeRailContent(facts(), area, 39, expanded);
+        const withGroup = renderNativeRailContent(facts(), area, 39, expanded, { actions: true });
+        const text = without.lines.map(stripAnsi).join("\n");
+        expect(text, area).not.toContain("ACCIONES");
+        expect(text, area).not.toContain("Abrir menú completo");
+        const from = withGroup.lines.findIndex((line) => stripAnsi(line).includes("ACCIONES"));
+        expect(from, area).toBeGreaterThan(0);
+        // The group is the section row and, when open, the controls and the row of the full menu; the blank row and the
+        // two hint rows follow it in both.
+        const tail = 3;
+        const length = withGroup.lines.length - without.lines.length;
+        expect(length, area).toBeGreaterThanOrEqual(1);
+        expect(without.lines, area).toEqual([
+          ...withGroup.lines.slice(0, from),
+          ...withGroup.lines.slice(from + length),
+        ]);
+        expect(without.hits, area).toEqual([
+          ...withGroup.hits.slice(0, from),
+          ...withGroup.hits.slice(from + length),
+        ]);
+        expect(without.lines.slice(-tail).map((line) => stripAnsi(line).trim())).toEqual([
+          "",
+          "Alt+K menú del panel · Alt+H áreas",
+          "Alt+I panel · Alt+C comandos",
+        ]);
+      }
+    }
+  });
+
+  it("keep listing the area's actions in the menu whichever area is open, with the labels and hits they always had", () => {
+    for (const area of ["agents", "orchestration", "automation", "tools", "everywhere"] as const) {
+      const content = renderNativeRailContent(facts(), area, MENU_WIDTH, {}, { actions: true });
+      const menu = buildRailMenu(content, "es");
+      const runs = menu.filter((entry) => entry.hit.action === "run");
+      expect(runs.length, area).toBeGreaterThan(1);
+      expect(
+        menu.some(
+          (entry) => entry.hit.action === "menu" && entry.label === "Abrir menú completo /haril",
+        ),
+        area,
+      ).toBe(true);
+      // Every entry is a row of the rail with that very hit.
+      for (const entry of menu) expect(content.hits, area).toContainEqual(entry.hit);
     }
   });
 

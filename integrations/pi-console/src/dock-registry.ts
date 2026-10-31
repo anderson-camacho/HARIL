@@ -9,6 +9,7 @@ export const DOCK_LABELS = [
   { id: "memory", label: "Memoria", labelEn: "Memory", tab: "MEM", readOnly: true },
   { id: "docs", label: "Documentación", labelEn: "Docs", tab: "DOCS", readOnly: true },
   { id: "activity", label: "Actividad", labelEn: "Activity", tab: "ACT", readOnly: true },
+  { id: "actions", label: "Acciones", labelEn: "Actions", tab: "ACC", readOnly: true },
 ] as const;
 
 export type DockId = (typeof DOCK_LABELS)[number]["id"];

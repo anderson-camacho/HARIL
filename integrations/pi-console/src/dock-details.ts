@@ -1,3 +1,4 @@
+import { type ActionsInput, actionsRows } from "./actions-view.js";
 import { type ActivityRange, ALL_RANGE } from "./activity-range.js";
 import {
   type ActivityData,
@@ -67,6 +68,8 @@ export interface DockSource {
   readonly now?: () => number;
   // The ACT tab is being loaded again: its buttons give way to a «Cargando…» row.
   readonly activityBusy?: boolean;
+  // The area chosen in MAIN and its controls, for the ACC tab: it reads nothing, it is made of this.
+  readonly actions?: ActionsInput;
   readonly locale?: UiLocale;
 }
 
@@ -258,6 +261,13 @@ export function activityDetails(data: ActivityData, options: ActivityOptions): D
   return view("activity", rows.status, rows.cards);
 }
 
+// The ACC tab: the actions of the area chosen in MAIN. It is built from live state (the console asks again on every
+// frame), so it follows the area and the dashboard's data without a load of its own.
+export function actionsDetails(input: ActionsInput): DockDetails {
+  const rows = actionsRows(input);
+  return view("actions", rows.status, rows.cards);
+}
+
 // The ACT tab's data: `haril events` for the project, inside the range, or why there is none.
 function loadActivityData(cwd: string, source: DockSource = {}): Promise<ActivityData> {
   return loadActivity(
@@ -298,6 +308,9 @@ export async function loadDockDetails(
           busy: source.activityBusy ?? false,
         });
       }
+      // ACC has nothing to load either: the console hands in the area and its controls.
+      case "actions":
+        return source.actions === undefined ? view(id, "", []) : actionsDetails(source.actions);
     }
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);

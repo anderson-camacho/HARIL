@@ -124,7 +124,7 @@ describe("Pi's native split-pane adapter", () => {
     });
     // A stored "explorer" (the retired TREE slot) or "git" is not a registered view, so it never reaches the dock.
     // MAIN is first and visible whatever the stored list says.
-    expect(slots.map((slot) => slot.id)).toEqual(["main", "docs", "memory", "activity"]);
+    expect(slots.map((slot) => slot.id)).toEqual(["main", "docs", "memory", "activity", "actions"]);
     expect(slots[0]).toEqual({ id: "main", visible: true });
     const state = { ...initialPaneSettings(), slots, selected: "docs" as const };
     const lines = renderLeftDock(23, 25, state, "code").map(stripAnsi);
@@ -135,7 +135,7 @@ describe("Pi's native split-pane adapter", () => {
     expect(text).not.toContain("MEM");
     expect(
       readDockSlots({ value: [{ id: "explorer", visible: true }] }).map((slot) => slot.id),
-    ).toEqual(["main", "memory", "docs", "activity"]);
+    ).toEqual(["main", "memory", "docs", "activity", "actions"]);
     const oldSettings = readDockSlots({
       value: [
         { id: "memory", visible: false },
@@ -145,7 +145,13 @@ describe("Pi's native split-pane adapter", () => {
     });
     expect(oldSettings[1]).toEqual({ id: "memory", visible: false });
     expect(oldSettings[2]).toEqual({ id: "docs", visible: true });
-    expect(oldSettings.map((slot) => slot.id)).toEqual(["main", "memory", "docs", "activity"]);
+    expect(oldSettings.map((slot) => slot.id)).toEqual([
+      "main",
+      "memory",
+      "docs",
+      "activity",
+      "actions",
+    ]);
     expect(renderRightDock(20, 4, [" ".repeat(19)]).map(stripAnsi)).toHaveLength(4);
     const english = renderLeftDock(23, 25, state, "code", 0, "high", "en")
       .map(stripAnsi)
@@ -345,10 +351,12 @@ describe("the status block belongs to the MAIN tab", () => {
     expect(lines[0]).toContain("╭");
     expect(lines[1]).toContain("▼ Espacio: Principal · Alt+L");
     expect(lines[2]).toContain("[1:MAIN]");
-    expect(lines[3]).toContain("╰");
-    expect(lines[4]?.trim()).toBe("│");
-    expect(lines[5]).toContain("DASH ROW 0");
-    expect(lines[6]).toContain("DASH ROW 1");
+    // Five tabs do not fit one row of the box: the fifth goes on a second row.
+    expect(lines[3]).toContain("5:ACC");
+    expect(lines[4]).toContain("╰");
+    expect(lines[5]?.trim()).toBe("│");
+    expect(lines[6]).toContain("DASH ROW 0");
+    expect(lines[7]).toContain("DASH ROW 1");
     const text = lines.join("\n");
     expect(text).not.toContain("Cargando vista");
     expect(text).not.toContain("Ready");
@@ -380,10 +388,10 @@ describe("the status block belongs to the MAIN tab", () => {
     for (let y = 0; y < tui.terminal.rows; y++) {
       for (const x of [2, 8, 30]) {
         const result = right.handleMouse?.({ type: "click", button: "left", y, x });
-        // The header box toggles the block (its first two rows), a tab selects and a view row without actions is
-        // left alone: no rail hit.
+        // The header box toggles the block (its first two rows), a tab selects (the tabs take two rows) and a view
+        // row without actions is left alone: no rail hit.
         expect(railAction, `y=${y} x=${x}`).not.toHaveBeenCalled();
-        if (y > 2) expect(result, `y=${y} x=${x}`).toBeUndefined();
+        if (y > 3) expect(result, `y=${y} x=${x}`).toBeUndefined();
       }
     }
     right.handleMouse?.({ type: "wheel", button: "none", y: 3, x: 6, wheelDelta: 1 });

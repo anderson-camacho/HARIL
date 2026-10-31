@@ -348,6 +348,10 @@ export function attachNativePanes(
     readonly activate?: (id: DockId, action: string) => void;
     // Runs the action of a clicked rail row (section toggle, dashboard action, mode, menu...).
     readonly railAction?: (hit: RailHitAction) => void;
+    // The view of a tab that is made of live state instead of loaded once (ACC: it follows the area chosen in MAIN), or
+    // undefined for a tab that is not. It is asked before every frame and every click, so the view on screen is never
+    // older than the state it comes from.
+    readonly live?: (id: DockId) => DockDetails | undefined;
   },
 ): NativePanes {
   const host = tui as PaneTui;
@@ -358,10 +362,20 @@ export function attachNativePanes(
   const original = root[LAYOUT_NODE] as LayoutFn;
   let alive = true;
   let detailOffset = 0;
+  // A live view replaces the detail in the state only when it changed, so everything that keys on the detail (the
+  // scroll position, the menus) sees a new view when there is one and the same object when there is not.
+  const syncLive = (): void => {
+    const fresh = options.live?.(state.selected);
+    if (fresh === undefined) return;
+    if (state.detail?.id === fresh.id && JSON.stringify(state.detail) === JSON.stringify(fresh))
+      return;
+    state.detail = fresh;
+  };
   let displayedDetail = state.detail;
   let displayedSlot = state.selected;
   const left = {
     render(width: number) {
+      syncLive();
       if (state.detail !== displayedDetail || state.selected !== displayedSlot) {
         detailOffset = 0;
         displayedDetail = state.detail;
@@ -378,6 +392,7 @@ export function attachNativePanes(
       );
     },
     handleMouse(event: ConsoleMouseEvent) {
+      if (event.type === "wheel" || (event.type === "click" && event.button === "left")) syncLive();
       if (event.type === "wheel") {
         const headerRows = 7 + dockTabs(state, Math.max(1, 22)).length;
         const max = Math.max(
@@ -415,6 +430,7 @@ export function attachNativePanes(
   let rightDisplayedSlot = state.selected;
   const right = {
     render(width: number) {
+      syncLive();
       if (state.detail !== rightDisplayedDetail || state.selected !== rightDisplayedSlot) {
         rightDisplayedDetail = state.detail;
         rightDisplayedSlot = state.selected;
@@ -442,6 +458,7 @@ export function attachNativePanes(
       // model facts) is built, since only a left click and the wheel have anything to do.
       const click = event.type === "click" && event.button === "left";
       if (!click && event.type !== "wheel") return undefined;
+      syncLive();
       const dashboard = state.selected === MAIN_DOCK_ID ? options.right(RAIL_BODY_WIDTH) : NO_BLOCK;
       const structure = renderRightRailContent(
         state,

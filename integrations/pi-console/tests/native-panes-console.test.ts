@@ -106,7 +106,7 @@ describe("native dock integration with the HARIL Pi extension", () => {
       ctx.notes.length = 0;
       await fake.commands.get("haril-plugin")?.handler("youtube", ctx);
       expect(ctx.notes.at(-1)?.[0]).toBe(
-        "Uso: /haril-plugin [main|memory|docs|activity|1..4|details]",
+        "Uso: /haril-plugin [main|memory|docs|activity|actions|1..5|details]",
       );
       expect(rightPane.component.render(40).map(stripAnsi).join("\n")).toContain("ÁREAS");
 
