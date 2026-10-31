@@ -81,7 +81,10 @@ describe("native dock integration with the HARIL Pi extension", () => {
       expect(newHeader?.split("\n")).toHaveLength(1);
       // The console opens on MAIN: the tabs and, under them, the status block.
       const right = rightPane.component.render(40).map(stripAnsi).join("\n");
-      expect(right).toContain("ACTIVIDAD");
+      expect(right).toContain("ÁREAS");
+      expect(right).toContain("Alt+K menú del panel");
+      // The recent events are the ACT tab's, not MAIN's.
+      expect(right).not.toContain("ACTIVIDAD");
       expect(right).toContain("Espacio: Principal");
       expect(right).toContain("[1:MAIN]");
       expect(right).not.toContain("GIT");
@@ -92,18 +95,20 @@ describe("native dock integration with the HARIL Pi extension", () => {
       expect(docs).toContain("Espacio: Documentación");
       expect(docs).toContain("Sin carpeta conectada.");
       expect(docs).toContain("Definir carpeta…");
-      expect(docs).not.toContain("ACTIVIDAD");
+      expect(docs).not.toContain("ÁREAS");
       expect(docs).not.toContain("Estoy en");
       await fake.commands.get("haril-plugin")?.handler("main", ctx);
       const main = rightPane.component.render(40).map(stripAnsi).join("\n");
-      expect(main).toContain("ACTIVIDAD");
+      expect(main).toContain("ÁREAS");
       expect(main).toContain("Estoy en");
 
       // The views that were removed are no longer a target of the command, and it says what is.
       ctx.notes.length = 0;
       await fake.commands.get("haril-plugin")?.handler("youtube", ctx);
-      expect(ctx.notes.at(-1)?.[0]).toBe("Uso: /haril-plugin [main|memory|docs|1..3|details]");
-      expect(rightPane.component.render(40).map(stripAnsi).join("\n")).toContain("ACTIVIDAD");
+      expect(ctx.notes.at(-1)?.[0]).toBe(
+        "Uso: /haril-plugin [main|memory|docs|activity|actions|1..5|details]",
+      );
+      expect(rightPane.component.render(40).map(stripAnsi).join("\n")).toContain("ÁREAS");
 
       await fake.fire("session_shutdown", {}, ctx);
       expect(root[LAYOUT_NODE]).toBe(original);
@@ -291,7 +296,10 @@ describe("the bottom bar beside the native dock", () => {
       await withDock(
         async ({ fake, ctx, lines, sidebar }) => {
           await fake.fire("input", { text: "hello", source: "interactive" }, ctx);
-          await vi.waitFor(() => expect(sidebar()).toContain("Activity log: 1 failed record(s)"));
+          // The warning and its "! " are 34 columns, one more than a row of a card holds: it goes on in the next row.
+          await vi.waitFor(() =>
+            expect(sidebar()).toMatch(/! Activity log: 1 failed[^\n]*\n[^\n]*\s{2}record\(s\)/u),
+          );
           const listed = Number(/AVISOS · (\d+)/.exec(sidebar())?.[1]);
           expect(listed).toBeGreaterThan(0);
           // Compact: the sidebar holds the warnings, so the bar does not count them.

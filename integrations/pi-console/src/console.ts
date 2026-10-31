@@ -4,6 +4,8 @@
 // CLI on the project of the folder Pi opened in. Self-contained: node:* imports and local types only, so it bundles
 // into one file next to the bridge.
 
+import { actionHit } from "./actions-view.js";
+import { createActivityPanel } from "./activity-panel.js";
 import { createChatLog } from "./chat-log.js";
 import { cliAvailable, NOT_LAUNCHED, runHaril, runHarilJson } from "./cli.js";
 import { commandCatalog } from "./command-catalog.js";
@@ -20,6 +22,8 @@ import {
   type NativeRailContent,
   type RailHitAction,
   type RailSection,
+  railArea,
+  railControls,
   railWarnings,
   renderFooterNavigation,
   renderHeaderLayout,
@@ -35,7 +39,7 @@ import { type DashboardData, emptyDashboardData, loadDashboardData } from "./das
 import { aiEyeTone, HARIL_PALETTES, setHarilPalette, visualText } from "./dashboard-theme.js";
 import { delegateFromChat } from "./delegation.js";
 import { effectText, sourceText, valueText } from "./delegation-settings.js";
-import { loadDockDetails, readDocsPath } from "./dock-details.js";
+import { actionsDetails, loadDockDetails, readDocsPath } from "./dock-details.js";
 import { createDockPicker, type DockPickerResult, dockSlotAt } from "./dock-navigation.js";
 import { stopAll } from "./emergency.js";
 import { DEFAULT_UI_LOCALE, localized, readConsoleLocale, type UiLocale } from "./locale.js";
@@ -112,6 +116,8 @@ interface Session extends CommandHost {
   nativePanes: NativePanes | undefined;
   dock: PaneSettings;
   dockLoadSeq: number;
+  // The tab being read right now: reloading the list of tabs must not start a second read of it.
+  dockLoading: PaneSettings["selected"] | undefined;
   area: DashboardArea | undefined;
   branch: string | null | undefined;
   extensionStatuses: readonly string[];
@@ -265,6 +271,27 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
     },
     options.tools?.checkDelayMs === undefined ? {} : { checkDelayMs: options.tools.checkDelayMs },
   );
+
+  // The ACT tab's range, its reads and its dialog (activity-panel.ts). Every command goes through the HARIL CLI, in the
+  // background, and none is waited for by the console.
+  const activityPanel = createActivityPanel({
+    run: (args, { timeoutMs }) => runHaril(args, { cwd: session?.cwd, timeoutMs }),
+    locale: () => session?.locale ?? DEFAULT_UI_LOCALE,
+    projectSlug: () => session?.project?.slug,
+    now: () => Date.now(),
+    ui: () =>
+      session === undefined || session.closed || !session.ctx.hasUI ? undefined : session.ctx.ui,
+    // Only the busy state changed: the tab is drawn again from the data it holds, with no command run.
+    repaint: () => {
+      const current = session;
+      if (current === undefined || current.closed || current.dock.detail?.id !== "activity") return;
+      if (current.dock.selected !== "activity") return;
+      const details = activityPanel.view();
+      if (details === undefined) return;
+      current.dock.detail = details;
+      current.nativePanes?.refresh();
+    },
+  });
 
   function runtimeState(current: Session): RuntimeState {
     if (current.runtimeAlive === true) return "running";
@@ -493,6 +520,7 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
       nativePanes: undefined,
       dock: initialPaneSettings(),
       dockLoadSeq: 0,
+      dockLoading: undefined,
       area: undefined,
       branch: undefined,
       extensionStatuses: [],
@@ -842,14 +870,30 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
     });
   }
 
-  // The right rail's rows and the action of each: the native pane draws them and the keyboard menu lists them.
-  function railContent(current: Session, width: number): NativeRailContent {
+  // The right rail's rows and the action of each: the native pane draws them (as cards) and the keyboard menu lists
+  // them (from the flat rows its labels are read from). The actions of the chosen area are the ACC tab's, so only the
+  // keyboard menu asks for them here.
+  function railContent(
+    current: Session,
+    width: number,
+    options: { readonly actions?: boolean; readonly cards?: boolean } = {},
+  ): NativeRailContent {
     return renderNativeRailContent(
       dashboardFacts(current),
       current.area,
       width,
       current.railExpanded,
+      options,
     );
+  }
+
+  // What the ACC tab is made of: the area chosen in MAIN and its controls, read from the same facts MAIN draws.
+  function actionsInput(current: Session) {
+    return {
+      area: railArea(current.area),
+      controls: railControls(dashboardFacts(current), current.area),
+      locale: current.locale,
+    };
   }
 
   function mountNativePanes(current: Session, tui: ConsoleTui): void {
@@ -858,7 +902,8 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
       project: () => current.cwd,
       effortLevel: () => modelLevelOf(current).level,
       locale: () => current.locale,
-      right: (width) => railContent(current, width),
+      ascii: () => orchestrationGlyphs() === ASCII_GLYPHS,
+      right: (width) => railContent(current, width, { cards: true }),
       select(id) {
         void openDockSlot(current, id);
       },
@@ -867,8 +912,14 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
         void runDockAction(current, id, action);
       },
       railAction: (hit) => runRail(current, hit),
+      // ACC follows the area chosen in MAIN's list, so it is made again before every frame and every click.
+      live: (id) => (id === "actions" ? actionsDetails(actionsInput(current)) : undefined),
     });
-    if (mounted.attached) current.nativePanes = mounted;
+    if (mounted.attached) {
+      current.nativePanes = mounted;
+      // The footer keeps this up to date; the panes need it before the first footer frame (the keyboard menu asks).
+      current.tui = tui;
+    }
   }
 
   async function reloadDockSlots(current: Session): Promise<void> {
@@ -881,7 +932,10 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
     if (!current.dock.slots.some((slot) => slot.visible && slot.id === current.dock.selected)) {
       current.dock.selected = current.dock.slots.find((slot) => slot.visible)?.id ?? MAIN_DOCK_ID;
     }
-    if (current.dock.detail?.id !== current.dock.selected)
+    if (
+      current.dock.detail?.id !== current.dock.selected &&
+      current.dockLoading !== current.dock.selected
+    )
       void openDockSlot(current, current.dock.selected);
     current.nativePanes?.refresh();
   }
@@ -892,13 +946,20 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
       return;
     }
     const seq = ++current.dockLoadSeq;
+    current.dockLoading = id;
     current.dock.selected = id;
     current.dock.detail = undefined;
     redraw();
     const details =
       id === "memory"
         ? await toolsPanel.load()
-        : await loadDockDetails(id, current.cwd, { locale: current.locale });
+        : id === "activity"
+          ? await activityPanel.load()
+          : await loadDockDetails(id, current.cwd, {
+              locale: current.locale,
+              ...(id === "actions" ? { actions: actionsInput(current) } : {}),
+            });
+    if (current.dockLoadSeq === seq) current.dockLoading = undefined;
     if (current.closed || session !== current || current.dockLoadSeq !== seq) return;
     current.dock.detail = details;
     current.nativePanes?.refresh();
@@ -916,10 +977,24 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
   }
 
   // The rows a dock view declares (DockDetails.actions), by the tab they belong to. DOCS's rows connect, change and
-  // disconnect the documentation folder; MEM's check Engram, look the versions up and update gentle-ai.
+  // disconnect the documentation folder; MEM's check Engram, look the versions up and update gentle-ai; ACT's choose
+  // the range of the events; ACC's are the controls of the area chosen in MAIN, which run through the rail's own path.
   async function runDockAction(current: Session, id: string, action: string): Promise<void> {
     if (id === "memory") {
       await toolsPanel.act(action);
+      return;
+    }
+    if (id === "activity") {
+      await activityPanel.act(action);
+      return;
+    }
+    if (id === "actions") {
+      // The button's id is read back against the controls of the area as it is now: a click that arrives after the area
+      // changed, on a control the new area lacks, runs nothing.
+      const hit = actionHit(action, actionsInput(current).controls);
+      if (hit === undefined || current.closed) return;
+      runRail(current, hit);
+      redraw();
       return;
     }
     if (id !== "docs") return;
@@ -1367,7 +1442,15 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
   async function openRailMenu(ctx: ConsoleContext): Promise<void> {
     const current = session;
     if (current === undefined || !ctx.hasUI || ctx.mode !== "tui") return;
-    const entries = buildRailMenu(railContent(current, RAIL_MENU_WIDTH), current.locale);
+    // The section of the actions is drawn by the classic header only: the native panes leave the actions to the ACC tab,
+    // so an entry that opens or closes it would change nothing on screen. The actions themselves stay in the menu.
+    const panesDrawn = current.tui !== undefined && paneLayout(current, current.tui).panesShown;
+    const entries = buildRailMenu(
+      railContent(current, RAIL_MENU_WIDTH, { actions: true }),
+      current.locale,
+    ).filter(
+      (entry) => !(panesDrawn && entry.hit.action === "toggle" && entry.hit.section === "actions"),
+    );
     const rows = viewMenuRows(current);
     const choice = await ctx.ui.select(localized(current.locale, "Right panel", "Panel derecho"), [
       ...rows.map((row) => row.label),
@@ -1386,20 +1469,23 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
 
   // The rows the tab on screen declared (DockDetails.actions), as menu choices: "MEM · Comprobar e instalar Engram".
   // They come first, since they are what the user is looking at. A tab with no rows, or one that is busy, adds none.
+  // ACC adds none either: its buttons are the rail entries the menu lists below them anyway.
   function viewMenuRows(current: Session): { label: string; dock: string; action: string }[] {
     const detail = current.dock.detail;
     if (
       detail === undefined ||
       detail.id !== current.dock.selected ||
+      detail.id === "actions" ||
       detail.actions === undefined
     ) {
       return [];
     }
     const tab = DOCK_LABELS.find((slot) => slot.id === detail.id)?.tab ?? detail.id;
-    return detail.actions.flatMap(({ line, action }) => {
-      const text = detail.lines[line];
-      if (text === undefined) return [];
-      return [{ label: `${tab} · ${text.replace(/^▸\s*/u, "").trim()}`, dock: detail.id, action }];
+    return detail.actions.flatMap(({ line, action, label }) => {
+      // The label is carried by the action; a view that declares only the line has its words read from that line.
+      const text = label ?? detail.lines[line]?.replace(/^▸\s*/u, "").trim();
+      if (text === undefined || text === "") return [];
+      return [{ label: `${tab} · ${text}`, dock: detail.id, action }];
     });
   }
 
@@ -1534,7 +1620,8 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
     },
   });
   pi.registerCommand("haril-plugin", {
-    description: "Open a HARIL dock view: /haril-plugin [main|memory|docs|1..3|details]",
+    description:
+      "Open a HARIL dock view: /haril-plugin [main|memory|docs|activity|actions|1..5|details]",
     handler: async (args, ctx) => {
       const current = session;
       if (current === undefined || !ctx.hasUI || ctx.mode !== "tui") return;
@@ -1550,7 +1637,10 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
             ? dockSlotAt(current.dock.slots, Number(word))?.id
             : DOCK_LABELS.find((slot) => slot.id === word)?.id;
       if (id === undefined) {
-        ctx.ui.notify("Uso: /haril-plugin [main|memory|docs|1..3|details]", "warning");
+        ctx.ui.notify(
+          "Uso: /haril-plugin [main|memory|docs|activity|actions|1..5|details]",
+          "warning",
+        );
         return;
       }
       if (word !== "details") await openDockSlot(current, id);
@@ -1758,6 +1848,8 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
     ended.nativePanes = undefined;
     // A check still waiting for its moment belongs to no session now; the next session asks for it again.
     toolsPanel.cancelCheck();
+    // The ACT tab's range is the session's: the next one starts on every event.
+    activityPanel.reset();
     followTimer(ended);
     ended.feed.close();
   }

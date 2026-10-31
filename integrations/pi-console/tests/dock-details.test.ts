@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadDockDetails } from "../src/dock-details.js";
+import { type DockDetails, loadDockDetails } from "../src/dock-details.js";
 import type { DocsScan } from "../src/docs-folder.js";
+import { CARD_CONTENT_WIDTH } from "../src/rail-metrics.js";
 import { textWidth } from "../src/text.js";
 import { type FakeCli, installFakeCli } from "./fake-cli.js";
 
@@ -61,8 +62,8 @@ describe("plugin views backed by read-only sources", () => {
 // DOCS shows the documentation folder the user connected (an Obsidian vault kept outside HARIL): the path, how many
 // notes it holds and the latest ones, and the rows that connect, change or disconnect it. HARIL only reads the folder.
 describe("the DOCS view", () => {
-  // The right panel is 40 columns wide: every row must fit in what is left after its border and margin.
-  const FITS = 38;
+  // A card gives a row CARD_CONTENT_WIDTH columns; the plain lines of the left dock indent a row by two more.
+  const FITS = CARD_CONTENT_WIDTH + 2;
 
   function scan(overrides: Partial<DocsScan> = {}): DocsScan {
     return {
@@ -77,8 +78,16 @@ describe("the DOCS view", () => {
 
   const noon = (day: number): number => new Date(2026, 9, day, 12).getTime();
 
-  function expectRowsToFit(lines: readonly string[]): void {
-    for (const line of lines) expect([line, textWidth(line) <= FITS]).toEqual([line, true]);
+  function expectRowsToFit(details: DockDetails): void {
+    for (const line of details.lines) expect([line, textWidth(line) <= FITS]).toEqual([line, true]);
+    for (const row of rows(details)) {
+      expect([row, textWidth(row) <= CARD_CONTENT_WIDTH]).toEqual([row, true]);
+    }
+  }
+
+  // The text rows of every card of the view, in order (the plain lines add each card's title and an indent).
+  function rows(details: DockDetails): string[] {
+    return details.cards?.flatMap((card) => [...card.rows]) ?? [];
   }
 
   // The row the action sits on, as the pane finds it for a click.
@@ -101,14 +110,18 @@ describe("the DOCS view", () => {
     });
     expect(docs.id).toBe("docs");
     expect(docs.status).toBe("Documentación · solo lectura");
-    expect(docs.lines[0]).toBe("Sin carpeta conectada.");
-    const text = docs.lines.join(" ").replace(/\s+/g, " ");
+    expect(docs.cards?.map((card) => card.title)).toEqual(["Carpeta", "Acciones"]);
+    expect(rows(docs)[0]).toBe("Sin carpeta conectada.");
+    const text = rows(docs).join(" ").replace(/\s+/g, " ");
     expect(text).toContain(
       "Conecta tu carpeta de documentación (por ejemplo la bóveda de Obsidian).",
     );
     expect(rowOf(docs, "docs:set")).toBe("▸ Definir carpeta…");
-    expect(docs.actions).toEqual([{ line: docs.lines.length - 1, action: "docs:set" }]);
-    expectRowsToFit(docs.lines);
+    expect(docs.actions).toEqual([
+      { line: docs.lines.length - 1, action: "docs:set", label: "Definir carpeta…" },
+    ]);
+    expect(docs.cards?.[1]?.buttons).toEqual([{ label: "Definir carpeta…", action: "docs:set" }]);
+    expectRowsToFit(docs);
     expect(scanned).toEqual([]);
 
     const english = await loadDockDetails("docs", ".", {
@@ -116,10 +129,11 @@ describe("the DOCS view", () => {
       docsPath: async () => undefined,
     });
     expect(english.status).toBe("Documentation · read-only");
-    expect(english.lines[0]).toBe("No folder connected.");
-    expect(english.lines.join(" ")).toContain("Obsidian vault");
+    expect(english.cards?.map((card) => card.title)).toEqual(["Folder", "Actions"]);
+    expect(rows(english)[0]).toBe("No folder connected.");
+    expect(rows(english).join(" ")).toContain("Obsidian vault");
     expect(rowOf(english, "docs:set")).toBe("▸ Set folder…");
-    expectRowsToFit(english.lines);
+    expectRowsToFit(english);
   });
 
   it("shows the connected folder, the number of notes and the latest ones", async () => {
@@ -139,17 +153,17 @@ describe("the DOCS view", () => {
     });
     expect(asked).toEqual(["D:\\Obsidian\\MiBoveda"]);
     expect(docs.status).toBe("Documentación · solo lectura");
-    expect(docs.lines[0]).toBe("D:\\Obsidian\\MiBoveda");
-    expect(docs.lines).toContain("3 notas .md");
-    expect(docs.lines).toContain("Últimas notas:");
-    const entries = docs.lines.filter((line) => /\.md$/.test(line) && !line.startsWith("3 "));
+    expect(docs.cards?.map((card) => card.title)).toEqual(["Carpeta", "Últimas notas", "Acciones"]);
+    expect(rows(docs)[0]).toBe("D:\\Obsidian\\MiBoveda");
+    expect(rows(docs)).toContain("3 notas .md");
+    const entries = docs.cards?.[1]?.rows ?? [];
     expect(entries).toHaveLength(2);
     expect(entries[0]).toMatch(/^\d{1,2} \p{L}+\.? proyectos\/b\.md$/u);
     expect(entries[1]).toMatch(/^\d{1,2} \p{L}+\.? a\.md$/u);
     expect(rowOf(docs, "docs:set")).toBe("▸ Cambiar carpeta…");
     expect(rowOf(docs, "docs:clear")).toBe("▸ Desconectar");
     expect(docs.actions).toHaveLength(2);
-    expectRowsToFit(docs.lines);
+    expectRowsToFit(docs);
 
     const english = await loadDockDetails("docs", ".", {
       locale: "en",
@@ -158,8 +172,8 @@ describe("the DOCS view", () => {
         scan({ noteCount: 1, latest: [{ rel: "a.md", mtimeMs: noon(2), title: "Alfa" }] }),
     });
     expect(english.status).toBe("Documentation · read-only");
-    expect(english.lines).toContain("1 .md note");
-    expect(english.lines).toContain("Latest notes:");
+    expect(rows(english)).toContain("1 .md note");
+    expect(english.cards?.[1]?.title).toBe("Latest notes");
     expect(english.lines.find((line) => line.endsWith(" a.md"))).toMatch(/[A-Za-z]/);
     expect(rowOf(english, "docs:set")).toBe("▸ Change folder…");
     expect(rowOf(english, "docs:clear")).toBe("▸ Disconnect");
@@ -170,19 +184,19 @@ describe("the DOCS view", () => {
       docsPath: async () => "/v",
       scanDocs: async () => scan({ noteCount: 2000, truncated: true }),
     });
-    expect(capped.lines).toContain("2000+ notas .md");
+    expect(rows(capped)).toContain("2000+ notas .md");
     const cappedEnglish = await loadDockDetails("docs", ".", {
       locale: "en",
       docsPath: async () => "/v",
       scanDocs: async () => scan({ noteCount: 2000, truncated: true }),
     });
-    expect(cappedEnglish.lines).toContain("2000+ .md notes");
+    expect(rows(cappedEnglish)).toContain("2000+ .md notes");
     const empty = await loadDockDetails("docs", ".", {
       docsPath: async () => "/v",
       scanDocs: async () => scan(),
     });
-    expect(empty.lines).toContain("0 notas .md");
-    expect(empty.lines).toContain("Sin notas .md todavía.");
+    expect(rows(empty)).toContain("0 notas .md");
+    expect(rows(empty)).toContain("Sin notas .md todavía.");
     expect(empty.actions?.map((item) => item.action)).toEqual(["docs:set", "docs:clear"]);
   });
 
@@ -195,45 +209,45 @@ describe("the DOCS view", () => {
           noteCount: 1,
           latest: [
             {
-              rel: "area/proyectos/clientes/acme/reuniones/2026/acta-de-la-reunion-larga.md",
+              rel: "area/proyectos/clientes/acme/reuniones/2026/acta-de-reunion-larga.md",
               mtimeMs: noon(30),
             },
           ],
         }),
     });
-    expect(docs.lines[0]?.startsWith("…")).toBe(true);
-    expect(docs.lines[0]?.endsWith("Trabajo\\MiBoveda")).toBe(true);
-    expect(docs.lines.find((line) => line.endsWith("acta-de-la-reunion-larga.md"))).toMatch(/^\d/);
-    expectRowsToFit(docs.lines);
+    expect(rows(docs)[0]?.startsWith("…")).toBe(true);
+    expect(rows(docs)[0]?.endsWith("Trabajo\\MiBoveda")).toBe(true);
+    expect(rows(docs).find((row) => row.endsWith("acta-de-reunion-larga.md"))).toMatch(/^\d/);
+    expectRowsToFit(docs);
   });
 
   it("says the folder was not found, with the rows to change or disconnect it", async () => {
     const missing = await loadDockDetails("docs", ".", {
-      docsPath: async () => "E:\\Vaults\\Notas",
+      docsPath: async () => "E:\\Notas",
       scanDocs: async () => scan({ exists: false, isDirectory: false }),
     });
     expect(missing.status).toBe("Documentación · solo lectura");
-    expect(missing.lines[0]).toBe("Carpeta no encontrada: E:\\Vaults\\Notas");
+    expect(rows(missing)[0]).toBe("Carpeta no encontrada: E:\\Notas");
     expect(missing.lines.join("\n")).not.toContain("Últimas notas");
     expect(rowOf(missing, "docs:set")).toBe("▸ Cambiar carpeta…");
     expect(rowOf(missing, "docs:clear")).toBe("▸ Desconectar");
-    expectRowsToFit(missing.lines);
+    expectRowsToFit(missing);
 
     const file = await loadDockDetails("docs", ".", {
       locale: "en",
       docsPath: async () => "/home/ana/nota.md",
       scanDocs: async () => scan({ isDirectory: false }),
     });
-    expect(file.lines[0]).toBe("Not a folder: /home/ana/nota.md");
+    expect(rows(file)[0]).toBe("Not a folder: /home/ana/nota.md");
 
     const longPath = "C:\\Users\\ana\\Documentos\\Obsidian\\Bovedas\\Trabajo\\MiBoveda";
     const long = await loadDockDetails("docs", ".", {
       docsPath: async () => longPath,
       scanDocs: async () => scan({ exists: false, isDirectory: false }),
     });
-    expect(long.lines[0]).toBe("Carpeta no encontrada:");
-    expect(long.lines[1]?.endsWith("Trabajo\\MiBoveda")).toBe(true);
-    expectRowsToFit(long.lines);
+    expect(rows(long)[0]).toBe("Carpeta no encontrada:");
+    expect(rows(long)[1]?.endsWith("Trabajo\\MiBoveda")).toBe(true);
+    expectRowsToFit(long);
   });
 
   it("shows why the folder could not be read instead of a wrong state", async () => {
@@ -243,7 +257,9 @@ describe("the DOCS view", () => {
       },
     });
     expect(failed.status).toBe("No se pudo leer");
-    expect(failed.lines).toEqual(["/docs/path: must be an absolute path"]);
+    expect(failed.cards?.map((card) => card.title)).toEqual(["Motivo"]);
+    expect(rows(failed).join(" ")).toBe("/docs/path: must be an absolute path");
+    expect(failed.lines).toEqual(["Motivo", "  /docs/path: must be an absolute", "  path"]);
     expect(failed.actions).toBeUndefined();
   });
 
@@ -268,7 +284,7 @@ describe("the DOCS view", () => {
         },
       });
       expect(asked).toEqual(["/home/ana/vault"]);
-      expect(docs.lines).toContain("4 notas .md");
+      expect(rows(docs)).toContain("4 notas .md");
       expect(cli.calls().map((call) => call.args)).toContainEqual([
         "config",
         "get",
@@ -282,7 +298,7 @@ describe("the DOCS view", () => {
         stdout: JSON.stringify({ path: "docs.path", value: null, source: "unset" }),
       });
       const docs = await loadDockDetails("docs", ".");
-      expect(docs.lines[0]).toBe("Sin carpeta conectada.");
+      expect(rows(docs)[0]).toBe("Sin carpeta conectada.");
     });
 
     it("shows the CLI's own message when haril.json has problems", async () => {
@@ -293,7 +309,116 @@ describe("the DOCS view", () => {
       });
       const docs = await loadDockDetails("docs", ".");
       expect(docs.status).toBe("No se pudo leer");
-      expect(docs.lines.join(" ")).toContain("haril.json has problems");
+      expect(rows(docs).join(" ")).toContain("haril.json has problems");
     });
+  });
+});
+
+// The ACT view: the project's recent events through `haril events`, in the range the console holds. The cards and every
+// state of them are covered in activity-view.test.ts; this is the plain fact that the view reads through the CLI and
+// that nothing that goes wrong reaches the console as an exception.
+describe("the ACT view", () => {
+  const NOW = Date.UTC(2026, 9, 30, 20, 15, 0);
+  const events = JSON.stringify([
+    { seq: 373, type: "workflow.failed", time: new Date(NOW - 9 * 60_000).toISOString() },
+    { seq: 375, type: "watchdog.closed", time: new Date(NOW - 3 * 60_000).toISOString() },
+  ]);
+
+  it("asks `haril events` for the project and the range, and shows the newest event first", async () => {
+    const calls: (readonly string[])[] = [];
+    const details = await loadDockDetails("activity", ".", {
+      projectSlug: "demo",
+      activityRange: { kind: "hour" },
+      now: () => NOW,
+      events: async (args) => {
+        calls.push(args);
+        return { ok: true, stdout: events, stderr: "" };
+      },
+    });
+    expect(calls).toEqual([
+      ["events", "--project", "demo", "--limit", "50", "--since", "1h", "--json"],
+    ]);
+    expect(details.id).toBe("activity");
+    expect(details.title).toBe("Actividad");
+    expect(details.status).toBe("Actividad reciente");
+    expect(details.lines).toContain("Actividad · 2");
+    expect(details.lines).toContain("  #375 watchdog.closed · hace 3 min");
+    expect(details.lines).toContain("  #373 workflow.failed · hace 9 min");
+    expect(details.lines.indexOf("  #375 watchdog.closed · hace 3 min")).toBeLessThan(
+      details.lines.indexOf("  #373 workflow.failed · hace 9 min"),
+    );
+    // The buttons come first and carry the words the keyboard menu reads.
+    expect(details.actions?.map((action) => action.label)).toEqual([
+      "Última hora",
+      "Último día",
+      "Rango…",
+      "Todo",
+      "Actualizar",
+    ]);
+    expect(details.cards?.map((card) => card.title)).toEqual([
+      "Filtro",
+      "Acciones",
+      "Actividad · 2",
+    ]);
+  });
+
+  it("defaults to every event, in the interface language", async () => {
+    const calls: (readonly string[])[] = [];
+    const details = await loadDockDetails("activity", ".", {
+      locale: "en",
+      projectSlug: "demo",
+      now: () => NOW,
+      events: async (args) => {
+        calls.push(args);
+        return { ok: true, stdout: events, stderr: "" };
+      },
+    });
+    expect(calls).toEqual([["events", "--project", "demo", "--limit", "50", "--json"]]);
+    expect(details.status).toBe("Recent activity");
+    expect(details.lines).toContain("  #375 watchdog.closed · 3 min ago");
+    expect(details.actions?.map((action) => action.label)).toContain("Last hour");
+  });
+
+  it("runs nothing for a folder that is no project", async () => {
+    let called = false;
+    const details = await loadDockDetails("activity", ".", {
+      events: async () => {
+        called = true;
+        return { ok: true, stdout: "[]", stderr: "" };
+      },
+    });
+    expect(called).toBe(false);
+    expect(details.lines.join("\n")).toContain("Sin proyecto registrado");
+  });
+
+  it("shows a command that fails or cannot run inside the card, and never throws", async () => {
+    const failed = await loadDockDetails("activity", ".", {
+      projectSlug: "demo",
+      events: async () => ({ ok: false, stdout: "", stderr: "haril: store not initialized" }),
+    });
+    expect(failed.lines).toContain("Actividad · no disponible");
+    expect(failed.lines.join("\n")).toContain("store not initialized");
+    const rejected = await loadDockDetails("activity", ".", {
+      projectSlug: "demo",
+      events: async () => {
+        throw new Error("spawn EPERM");
+      },
+    });
+    expect(rejected.lines.join("\n")).toContain("spawn EPERM");
+    expect(rejected.actions).toBeDefined();
+  });
+
+  it("reads through the HARIL CLI of the console when no source is given", async () => {
+    const cli = installFakeCli();
+    try {
+      cli.answer("events", { stdout: events });
+      const details = await loadDockDetails("activity", process.cwd(), { projectSlug: "demo" });
+      expect(cli.calls().map((call) => call.args)).toEqual([
+        ["events", "--project", "demo", "--limit", "50", "--json"],
+      ]);
+      expect(details.lines).toContain("Actividad · 2");
+    } finally {
+      cli.restore();
+    }
   });
 });

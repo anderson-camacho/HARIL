@@ -5,6 +5,7 @@ import { INSTALL_COOLDOWN_MS, type ToolRecord, type ToolsState } from "./state.j
 import {
   type Install,
   type InstallFailure,
+  type MemoryConfigView,
   TOOL_IDS,
   type ToolId,
   type ToolState,
@@ -35,6 +36,8 @@ export interface ToolsInput {
   readonly pin: string;
   // Problems found while reading the settings, shown with Engram.
   readonly notes?: readonly string[];
+  // The memory provider haril.json sets, carried into the report as it is.
+  readonly memoryConfig?: MemoryConfigView;
 }
 
 export interface ToolsDeps {
@@ -280,6 +283,7 @@ export async function collectToolsReport(
     schema: "haril.tools.status/1",
     generatedAt: new Date(deps.now()).toISOString(),
     tools: statuses,
+    ...(input.memoryConfig === undefined ? {} : { memoryConfig: input.memoryConfig }),
     ...(failure === undefined
       ? {}
       : { engramInstallFailure: installFailureView(failure, deps.now()) }),

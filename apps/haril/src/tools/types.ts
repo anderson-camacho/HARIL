@@ -43,10 +43,19 @@ export interface InstallFailure {
   readonly retryAt: string | null;
 }
 
+// What haril.json sets for the memory provider, apart from what the runtime recorded when it last ran. `provider` is
+// null when the file says nothing usable: no memory section, no file, or one that cannot be read.
+export interface MemoryConfigView {
+  readonly provider: "null" | "engram" | null;
+  readonly binary?: string;
+}
+
 export interface ToolsReport {
   readonly schema: "haril.tools.status/1";
   readonly generatedAt: string;
   readonly tools: readonly ToolStatus[];
+  // Present when the caller read the settings, so a report built without them keeps the shape it always had.
+  readonly memoryConfig?: MemoryConfigView;
   // Present only while a failed Engram install is on record, so a report without one keeps the shape it always had.
   readonly engramInstallFailure?: InstallFailure;
 }

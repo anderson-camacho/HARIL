@@ -232,6 +232,96 @@ describe("haril tools status", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // The MEM tab shows what haril.json says next to what the runtime recorded, so the report carries the configured
+  // provider: the runtime only records a provider once it has run, and before that `haril memory status` says null.
+  describe("the memory settings of haril.json in the report", () => {
+    async function configured(text: string | undefined | ((dir: string) => string)) {
+      const dir = mkdtempSync(join(tmpdir(), "haril-tools-cli-"));
+      try {
+        const config = join(dir, "haril.json");
+        if (text !== undefined)
+          writeFileSync(config, typeof text === "function" ? text(dir) : text);
+        const host = hostWith({ HARIL_CONFIG: config });
+        const svc = services({ [defaultEngramBinary(host)]: "3.6.0" });
+        const result = await cli(["status", "--json"], svc, host);
+        expect(result.code).toBe(0);
+        return parseJson<ToolsReport & { memoryConfig?: unknown }>(result.out);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+
+    it("names the provider the file sets, and the binary when it sets one", async () => {
+      expect(
+        (await configured(JSON.stringify({ memory: { provider: "engram" } }))).memoryConfig,
+      ).toEqual({
+        provider: "engram",
+      });
+      let binary = "";
+      const withBinary = await configured((dir) => {
+        binary = join(dir, "engram-custom");
+        return JSON.stringify({ memory: { provider: "engram", binary } });
+      });
+      expect(withBinary.memoryConfig).toEqual({ provider: "engram", binary });
+      expect(
+        (await configured(JSON.stringify({ memory: { provider: "null" } }))).memoryConfig,
+      ).toEqual({
+        provider: "null",
+      });
+    });
+
+    it("says null when the file has no memory section, or no file exists", async () => {
+      expect((await configured(JSON.stringify({ ui: { locale: "es" } }))).memoryConfig).toEqual({
+        provider: null,
+      });
+      expect((await configured(undefined)).memoryConfig).toEqual({ provider: null });
+    });
+
+    it("never throws: an unreadable or invalid file is a null provider, and the rest of the report stays", async () => {
+      for (const text of [
+        "{ nope",
+        "[]",
+        "42",
+        JSON.stringify({ memory: "engram" }),
+        // The runtime refuses these sections, so there is no provider to name: a section needs one of the two.
+        JSON.stringify({ memory: {} }),
+        JSON.stringify({ memory: { provider: "chroma" } }),
+        JSON.stringify({ memory: { provider: "engram", binary: "relative/engram" } }),
+      ]) {
+        const report = await configured(text);
+        expect(report.memoryConfig, text).toEqual({ provider: null });
+        expect(
+          report.tools.map((tool) => tool.id),
+          text,
+        ).toEqual(["engram", "gentle-ai"]);
+      }
+    });
+
+    it("is also in the status the ensure document carries", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "haril-tools-cli-"));
+      try {
+        const config = join(dir, "haril.json");
+        writeFileSync(config, JSON.stringify({ memory: { provider: "engram" } }));
+        const host = hostWith({ HARIL_CONFIG: config });
+        const svc = services({ [defaultEngramBinary(host)]: "3.6.0" });
+        const { out } = await cli(["ensure", "gentle-ai", "--json"], svc, host);
+        expect(
+          parseJson<{ status: ToolsReport & { memoryConfig?: unknown } }>(out).status.memoryConfig,
+        ).toEqual({
+          provider: "engram",
+        });
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("leaves the text report as it was", async () => {
+      const svc = services({ [COPY]: "3.6.0", ...THIS_MACHINE });
+      const text = (await cli(["status"], svc)).out.join("\n");
+      expect(text).not.toContain("memoryConfig");
+    });
+  });
 });
 
 describe("haril tools usage errors", () => {

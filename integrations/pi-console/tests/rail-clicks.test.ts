@@ -14,9 +14,10 @@ import { type RailActionTarget, runRailHit } from "../src/rail-actions.js";
 import { stripAnsi } from "../src/text.js";
 import { fakeContext, fakePi } from "./fake-pi.js";
 
-// The right rail's body (AVISOS, EXTENSIONES, SESIÓN, ACCIONES, the action rows and "cambiar") must answer a mouse
-// click. These tests drive the real pane with the real rail content: the row that is clicked is found by the text
-// the user sees, and the action it must run is read from the independent `hit` metadata of that same row.
+// The right rail's body (AVISOS, EXTENSIONES, SESIÓN, the areas and "cambiar") must answer a mouse click. These tests
+// drive the real pane with the real rail content: the row that is clicked is found by the text the user sees, and the
+// action it must run is read from the independent `hit` metadata of that same row. The actions of the chosen area are
+// the ACC tab's now (actions-tab.test.ts).
 
 const LAYOUT_NODE = Symbol.for("@earendil-works/pi-tui/layout-node");
 
@@ -31,7 +32,7 @@ interface RightPane {
   }): unknown;
 }
 
-function facts(): DashboardFacts {
+function facts(warnings = 1): DashboardFacts {
   return {
     project: "fake-project",
     cwd: "fake-cwd",
@@ -48,7 +49,9 @@ function facts(): DashboardFacts {
     commands: ["haril"],
     mcpServers: [],
     extensionStatuses: ["pi-extension ready"],
-    providerWarnings: ["Provider offline"],
+    providerWarnings: Array.from({ length: warnings }, (_unused, index) =>
+      index === 0 ? "Provider offline" : `Provider ${index} offline`,
+    ),
     mode: "ACTION",
     memory: "not loaded",
     data: emptyDashboardData("fake-project"),
@@ -64,6 +67,8 @@ function setup(
     readonly expanded?: Partial<Record<RailSection, boolean>>;
     readonly state?: Partial<PaneSettings>;
     readonly rows?: number;
+    // How many provider warnings the rail lists under AVISOS (three rows at most, then a «+ n avisos» row).
+    readonly warnings?: number;
     readonly withoutRailAction?: boolean;
   } = {},
 ) {
@@ -84,7 +89,9 @@ function setup(
   const railAction = vi.fn();
   const select = vi.fn();
   const content = (width: number) =>
-    renderNativeRailContent(facts(), options.area ?? "agents", width, expanded);
+    renderNativeRailContent(facts(options.warnings), options.area ?? "agents", width, expanded, {
+      cards: true,
+    });
   attachNativePanes(tui, state, {
     project: () => "repo",
     right: content,
@@ -111,14 +118,9 @@ describe("a click on the right rail body", () => {
     ["AVISOS", { action: "toggle", section: "warnings" }],
     ["EXTENSIONES", { action: "toggle", section: "extensions" }],
     ["SESIÓN", { action: "toggle", section: "status" }],
-    ["ACCIONES", { action: "toggle", section: "actions" }],
-    ["Ver detalles completos", { action: "run", control: "details" }],
-    ["Elegir modelo de Pi", { action: "run", control: "model" }],
-    ["Tareas por agente observado", { action: "run", control: "tasks" }],
-    ["Actualizar datos", { action: "run", control: "refresh" }],
     ["cambiar", { action: "mode" }],
-    ["Abrir menú completo", { action: "menu" }],
     ["! Provider offline", { action: "details" }],
+    ["• pi-extension ready", { action: "details" }],
     ["● AGENTS", { action: "area", area: "agents" }],
     ["○ ORCHESTRATION", { action: "area", area: "orchestration" }],
     ["○ AUTOMATION", { action: "area", area: "automation" }],
@@ -140,13 +142,38 @@ describe("a click on the right rail body", () => {
   it("resolves the row through the scroll offset, not the screen row", () => {
     const pane = setup({
       rows: 24,
-      expanded: { extensions: true, status: true, warnings: true, actions: true },
+      warnings: 6,
+      expanded: { extensions: true, status: true, warnings: true },
     });
+    // The session section is below the fold of a 24-row terminal until the wheel brings it up.
+    expect(pane.rows().some((row) => row.includes("SESIÓN"))).toBe(false);
     pane.right.handleMouse?.({ type: "wheel", button: "none", x: 8, y: 5, wheelDelta: 6 });
-    const { y, hit } = pane.find("Actualizar datos");
-    expect(hit).toEqual({ action: "run", control: "refresh" });
+    const { y, hit } = pane.find("SESIÓN");
+    expect(hit).toEqual({ action: "toggle", section: "status" });
     pane.click(y);
     expect(pane.railAction).toHaveBeenCalledWith(hit);
+  });
+
+  it("no longer lists the actions of the area: they are the ACC tab's, and MAIN keeps the rest", () => {
+    for (const area of ["agents", "orchestration", "automation", "tools", "everywhere"] as const) {
+      const pane = setup({ area, expanded: { extensions: true, status: true } });
+      const text = pane.rows().join("\n");
+      expect(text, area).not.toContain("ACCIONES");
+      expect(text, area).not.toContain("Abrir menú completo");
+      expect(text, area).not.toContain("Ver detalles completos");
+      expect(text, area).not.toContain("Actualizar datos");
+      for (const kept of [
+        "ÁREAS",
+        "Abrir vista de orquestación",
+        "AVISOS",
+        "EXTENSIONES",
+        "SESIÓN",
+      ]) {
+        expect(text, `${area} · ${kept}`).toContain(kept);
+      }
+      expect(text, area).toContain("Alt+K menú del panel · Alt+H áreas");
+      expect(text, area).toContain("Alt+I panel · Alt+C comandos");
+    }
   });
 
   it("marks the current area and draws the areas under a heading that is not a click target", () => {
@@ -161,7 +188,7 @@ describe("a click on the right rail body", () => {
   });
 
   it("shows the project and the model once, even with the session section open", () => {
-    const text = renderNativeRailContent(facts(), "agents", 39, { status: true })
+    const text = renderNativeRailContent(facts(), "agents", 39, { status: true }, { cards: true })
       .lines.map(stripAnsi)
       .join("\n");
     expect(text.match(/Proyecto:/g)).toHaveLength(1);
@@ -169,9 +196,13 @@ describe("a click on the right rail body", () => {
     // The session section keeps what the top rows do not say.
     expect(text).toContain("Runtime: idle");
     expect(text).toContain("Memoria: not loaded");
-    const english = renderNativeRailContent({ ...facts(), locale: "en" }, "agents", 39, {
-      status: true,
-    })
+    const english = renderNativeRailContent(
+      { ...facts(), locale: "en" },
+      "agents",
+      39,
+      { status: true },
+      { cards: true },
+    )
       .lines.map(stripAnsi)
       .join("\n");
     expect(english.match(/Project:/g)).toHaveLength(1);
@@ -183,7 +214,7 @@ describe("a click on the right rail body", () => {
 
   it("still reaches the rows when the Espacio block is collapsed", () => {
     const pane = setup({ state: { dockExpanded: false } });
-    const { y, hit } = pane.find("Ver detalles completos");
+    const { y, hit } = pane.find("cambiar");
     pane.click(y);
     expect(pane.railAction).toHaveBeenCalledWith(hit);
   });
@@ -191,12 +222,8 @@ describe("a click on the right rail body", () => {
   it("leaves a row without a hit alone and reports it unhandled", () => {
     const pane = setup();
     const rendersBefore = pane.tui.requestRender.mock.calls.length;
-    const content = renderNativeRailContent(facts(), "agents", 39, {});
-    for (const needle of [
-      "Proyecto: fake-project",
-      "Modelo: fake-model",
-      "Sin eventos registrados",
-    ]) {
+    const content = renderNativeRailContent(facts(), "agents", 39, {}, { cards: true });
+    for (const needle of ["Proyecto: fake-project", "Modelo: fake-model", "Alt+K menú del panel"]) {
       const y = pane.rows().findIndex((row) => row.includes(needle));
       expect(y).toBeGreaterThan(0);
       const index = content.lines.findIndex((line) => stripAnsi(line).includes(needle));
@@ -209,20 +236,31 @@ describe("a click on the right rail body", () => {
 
   it("does not swallow a click when nobody handles rail actions", () => {
     const pane = setup({ withoutRailAction: true });
-    const { y } = pane.find("Ver detalles completos");
+    const { y } = pane.find("cambiar");
     expect(pane.click(y)).toBeUndefined();
   });
 
   it("keeps the header and the tab row working as before", () => {
     const pane = setup();
-    const tabsRow = pane.rows()[1] ?? "";
+    // The header is a box: its first row is the border, then the space, then the tabs.
+    const tabsRow = pane.rows()[2] ?? "";
     expect(tabsRow).toContain("[1:MAIN]");
-    pane.click(1, tabsRow.indexOf("2:MEM"));
+    pane.click(2, tabsRow.indexOf("2:MEM"));
     expect(pane.select).toHaveBeenCalledWith("memory");
     expect(pane.railAction).not.toHaveBeenCalled();
     expect(pane.state.dockExpanded).toBe(true);
+    // Five tabs wrap onto a second row of the box, whose last tab (ACC) is hit on its own columns.
+    expect(pane.rows()[3]).toContain("5:ACC");
+    pane.select.mockClear();
+    pane.click(3, (pane.rows()[3] ?? "").indexOf("5:ACC"));
+    expect(pane.select).toHaveBeenCalledWith("actions");
+    // The border and the space row toggle the dock; the bottom border of the box does nothing.
+    expect(pane.click(4)).toBeUndefined();
+    expect(pane.state.dockExpanded).toBe(true);
     expect(pane.click(0)).toEqual({ handled: true, render: true });
     expect(pane.state.dockExpanded).toBe(false);
+    expect(pane.click(1)).toEqual({ handled: true, render: true });
+    expect(pane.state.dockExpanded).toBe(true);
   });
 });
 
@@ -368,8 +406,9 @@ describe("the console's rails", () => {
       expect(selects).toHaveLength(1);
       expect(selects[0]).toMatch(/^Console mode/);
 
-      click("Ver detalles completos");
-      expect(customs()).toBe(1);
+      // The actions are not on this tab: nothing opens a view from here.
+      expect(rows().some((row) => row.includes("Ver detalles completos"))).toBe(false);
+      expect(customs()).toBe(0);
     });
   });
 
@@ -400,8 +439,8 @@ describe("the console's rails", () => {
       expect(rows().some((row) => row.includes("● TOOLS"))).toBe(true);
       expect(rows().some((row) => row.includes("○ AGENTS"))).toBe(true);
       expect(rows().some((row) => row.includes("● AGENTS"))).toBe(false);
-      // The actions below follow the area that was opened.
-      expect(rows().some((row) => row.includes("ACCIONES · TOOLS"))).toBe(true);
+      // The actions of the area that was opened are the ACC tab's, not this tab's.
+      expect(rows().some((row) => row.includes("ACCIONES"))).toBe(false);
     });
   });
 
@@ -454,6 +493,8 @@ describe("the console's rails", () => {
       };
 
       expect(render().find((row) => row.includes("AVISOS"))).toContain("▼");
+      // The classic header keeps its own look: the cards and the header box belong to the native pane only.
+      expect(render().join("\n")).not.toMatch(/[╭╮╰╯]/u);
       expect(click("AVISOS")).toEqual({ handled: true, render: true });
       expect(render().find((row) => row.includes("AVISOS"))).toContain("▶");
       click("cambiar");

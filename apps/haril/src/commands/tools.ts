@@ -8,6 +8,7 @@ import { defaultEngramBinary, ENGRAM_VERSION, loadMemorySettings } from "../memo
 import { harilConfigPath } from "../providers.js";
 import { runtimeRootFor } from "../runtime.js";
 import { extractBinary } from "../tools/archive.js";
+import { readMemoryConfig } from "../tools/configured-memory.js";
 import {
   type EngramEnsureResult,
   type EnsureDeps,
@@ -116,6 +117,7 @@ function toolsInputFor(host: HostInfo): ToolsInput {
     runtimeBinary,
     pin: ENGRAM_VERSION,
     notes,
+    memoryConfig: readMemoryConfig(host),
   };
 }
 

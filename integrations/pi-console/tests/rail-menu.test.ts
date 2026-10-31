@@ -21,7 +21,8 @@ import { fakeContext, fakePi } from "./fake-pi.js";
 
 // The right rail cannot take keyboard focus (Pi hands extension shortcuts to the editor only), so Alt+K and
 // /haril-panel open a menu that offers what a click on the rail offers. These tests build that menu from the real
-// output of renderNativeRailContent and drive the console's entry points with a fake Pi.
+// output of renderNativeRailContent and drive the console's entry points with a fake Pi. The menu is built with the
+// actions of the chosen area (the group the MAIN rail leaves to the ACC tab), so it lists what it always listed.
 
 // Wide enough for every label to come out whole: the pane's own 39 columns would cut the long ones with an ellipsis.
 const MENU_WIDTH = 120;
@@ -59,7 +60,9 @@ function menuOf(
   expanded: Partial<Record<RailSection, boolean>> = {},
   locale: UiLocale = "es",
 ) {
-  const content = renderNativeRailContent(facts(locale), area, MENU_WIDTH, expanded);
+  const content = renderNativeRailContent(facts(locale), area, MENU_WIDTH, expanded, {
+    actions: true,
+  });
   return { content, menu: buildRailMenu(content, locale) };
 }
 
@@ -217,15 +220,64 @@ describe("buildRailMenu", () => {
 });
 
 describe("the native rail's rows", () => {
-  const rows = (area: "agents" | "orchestration") =>
-    renderNativeRailContent(facts(), area, 39, {}).lines.map(stripAnsi);
+  const rows = (area: "agents" | "orchestration", actions = false) =>
+    renderNativeRailContent(facts(), area, 39, {}, { actions }).lines.map(stripAnsi);
 
   it("do not look like keys: the actions carry no [D]-style prefix, since the rail takes no key presses", () => {
     for (const area of ["agents", "orchestration"] as const) {
-      const text = rows(area);
+      const text = rows(area, true);
       expect(text.filter((row) => /[[A-Z]]/.test(row))).toEqual([]);
       expect(text.some((row) => row.includes("Ver detalles completos"))).toBe(true);
       expect(text.some((row) => row.includes("Actualizar datos"))).toBe(true);
+    }
+  });
+
+  it("leave the actions group to the ACC tab: the rail is the rail with the group minus exactly that group", () => {
+    for (const area of ["agents", "orchestration"] as const) {
+      for (const expanded of [{}, { actions: false }, { status: true, extensions: true }]) {
+        const without = renderNativeRailContent(facts(), area, 39, expanded);
+        const withGroup = renderNativeRailContent(facts(), area, 39, expanded, { actions: true });
+        const text = without.lines.map(stripAnsi).join("\n");
+        expect(text, area).not.toContain("ACCIONES");
+        expect(text, area).not.toContain("Abrir menú completo");
+        const from = withGroup.lines.findIndex((line) => stripAnsi(line).includes("ACCIONES"));
+        expect(from, area).toBeGreaterThan(0);
+        // The group is the section row and, when open, the controls and the row of the full menu; the blank row and the
+        // two hint rows follow it in both.
+        const tail = 3;
+        const length = withGroup.lines.length - without.lines.length;
+        expect(length, area).toBeGreaterThanOrEqual(1);
+        expect(without.lines, area).toEqual([
+          ...withGroup.lines.slice(0, from),
+          ...withGroup.lines.slice(from + length),
+        ]);
+        expect(without.hits, area).toEqual([
+          ...withGroup.hits.slice(0, from),
+          ...withGroup.hits.slice(from + length),
+        ]);
+        expect(without.lines.slice(-tail).map((line) => stripAnsi(line).trim())).toEqual([
+          "",
+          "Alt+K menú del panel · Alt+H áreas",
+          "Alt+I panel · Alt+C comandos",
+        ]);
+      }
+    }
+  });
+
+  it("keep listing the area's actions in the menu whichever area is open, with the labels and hits they always had", () => {
+    for (const area of ["agents", "orchestration", "automation", "tools", "everywhere"] as const) {
+      const content = renderNativeRailContent(facts(), area, MENU_WIDTH, {}, { actions: true });
+      const menu = buildRailMenu(content, "es");
+      const runs = menu.filter((entry) => entry.hit.action === "run");
+      expect(runs.length, area).toBeGreaterThan(1);
+      expect(
+        menu.some(
+          (entry) => entry.hit.action === "menu" && entry.label === "Abrir menú completo /haril",
+        ),
+        area,
+      ).toBe(true);
+      // Every entry is a row of the rail with that very hit.
+      for (const entry of menu) expect(content.hits, area).toContainEqual(entry.hit);
     }
   });
 
@@ -234,6 +286,50 @@ describe("the native rail's rows", () => {
     const hints = text.slice(-2).map((row) => row.trim());
     expect(hints).toEqual(["Alt+K menú del panel · Alt+H áreas", "Alt+I panel · Alt+C comandos"]);
     for (const row of text.slice(-2)) expect(textWidth(row)).toBe(39);
+  });
+
+  it("no longer list the recent events: they live in the ACT tab, and MAIN keeps only the two hint rows", () => {
+    const withEvents: DashboardFacts = {
+      ...facts(),
+      data: {
+        ...emptyDashboardData("fake-project"),
+        events: [
+          {
+            seq: 373,
+            time: "2026-10-30T20:00:00.000Z",
+            type: "workflow.failed",
+            aggregateType: "workflow",
+            aggregateId: "w1",
+            taskId: null,
+          },
+          {
+            seq: 374,
+            time: "2026-10-30T20:01:00.000Z",
+            type: "task.cancelled",
+            aggregateType: "task",
+            aggregateId: "t1",
+            taskId: "t1",
+          },
+        ],
+      },
+    };
+    for (const area of ["agents", "orchestration"] as const) {
+      const content = renderNativeRailContent(withEvents, area, 39, {});
+      const text = content.lines.map(stripAnsi).join(" | ");
+      expect(text, area).not.toContain("ACTIVIDAD RECIENTE");
+      expect(text, area).not.toContain("Sin eventos registrados");
+      expect(text, area).not.toContain("workflow.failed");
+      expect(text, area).not.toContain("#374");
+      // The two hint rows are the last two, after one blank row, and carry no action.
+      const rows = content.lines.map(stripAnsi);
+      expect(
+        rows.slice(-2).map((row) => row.trim()),
+        area,
+      ).toEqual(["Alt+K menú del panel · Alt+H áreas", "Alt+I panel · Alt+C comandos"]);
+      expect(rows.at(-3)?.trim(), area).toBe("");
+      expect(content.hits.slice(-3), area).toEqual([undefined, undefined, undefined]);
+      expect(content.hits).toHaveLength(content.lines.length);
+    }
   });
 });
 
@@ -259,8 +355,18 @@ interface Harness {
   openWithCommand(): Promise<void>;
 }
 
+interface ConsoleOptions {
+  // False leaves the native panes unmounted: only the classic header could be on screen.
+  readonly panes?: boolean;
+  // The terminal's width: the panes are drawn from 132 columns.
+  readonly columns?: number;
+}
+
 // Starts the console on a fake Pi with no HARIL CLI and the native right pane mounted, so a test sees the pane change.
-async function withConsole(run: (harness: Harness) => Promise<void>): Promise<void> {
+async function withConsole(
+  run: (harness: Harness) => Promise<void>,
+  options: ConsoleOptions = {},
+): Promise<void> {
   const envNode = process.env.HARIL_NODE;
   const envCli = process.env.HARIL_CLI;
   delete process.env.HARIL_NODE;
@@ -309,16 +415,23 @@ async function withConsole(run: (harness: Harness) => Promise<void>): Promise<vo
     harilConsole(fake.pi);
     await fake.fire("session_start", { reason: "startup" }, ctx);
     if (!anchor) throw new Error("Expected the console to mount its native panes");
-    const root = {
-      render: () => ["Pi chat"],
-      invalidate: () => undefined,
-      [LAYOUT_NODE]: () => ({ type: "vstack", gap: 0, align: "stretch", entries: [] }),
-    };
-    const tui = { layoutRoot: root, terminal: { columns: 160, rows: 45 }, requestRender: vi.fn() };
-    anchor(tui, THEME);
-    const layout = (root[LAYOUT_NODE] as () => { entries: { component: ConsoleComponent }[] })();
-    right = layout.entries[1]?.component;
-    if (!right) throw new Error("Expected the right pane");
+    if (options.panes !== false) {
+      const root = {
+        render: () => ["Pi chat"],
+        invalidate: () => undefined,
+        [LAYOUT_NODE]: () => ({ type: "vstack", gap: 0, align: "stretch", entries: [] }),
+      };
+      const tui = {
+        layoutRoot: root,
+        terminal: { columns: options.columns ?? 160, rows: 45 },
+        requestRender: vi.fn(),
+      };
+      anchor(tui, THEME);
+      const layout = (root[LAYOUT_NODE] as () => { entries: { component: ConsoleComponent }[] })();
+      // Below 132 columns the layout is left as Pi made it: there is no pane to read.
+      right = layout.entries[1]?.component;
+      if (!right && (options.columns ?? 160) >= 132) throw new Error("Expected the right pane");
+    }
     await run(harness);
     await fake.fire("session_shutdown", {}, ctx);
     expect(fake.shortcuts.has("alt+k")).toBe(true);
@@ -399,6 +512,67 @@ describe.each([
       expect(harness.customs()).toBe(0);
       expect(harness.row("AVISOS")).toContain("▼");
     });
+  });
+});
+
+describe("the «acciones» section in the keyboard menu", () => {
+  // Only the classic header draws that section (the native panes leave the actions to the ACC tab), so a menu entry
+  // that opens or closes it would do nothing the user could see. Everything else in the menu is the same in both.
+  const ACTIONS = /sección acciones/;
+
+  it("is not offered while the native panes are on screen", async () => {
+    await withConsole(async (harness) => {
+      await harness.openWithShortcut();
+      const [menu] = harness.menus;
+      expect(menu?.options.filter((option) => ACTIONS.test(option))).toEqual([]);
+      // The actions themselves are still in the menu, and so is every section that is drawn.
+      expect(menu?.options).toEqual(
+        expect.arrayContaining([
+          "Elegir modelo de Pi",
+          "Abrir menú completo /haril",
+          expect.stringMatching(/^Cerrar sección avisos \(\d+\)$/),
+          expect.stringMatching(/^Abrir sección extensiones \(\d+\)$/),
+          "Abrir sección sesión",
+        ]),
+      );
+    });
+  });
+
+  it("is offered when the classic header is the one on screen", async () => {
+    await withConsole(
+      async (harness) => {
+        await harness.openWithShortcut();
+        const labels = harness.menus[0]?.options ?? [];
+        expect(labels.filter((option) => ACTIONS.test(option))).toEqual([
+          expect.stringMatching(/^Cerrar sección acciones · [A-Z]+ \(\d+\)$/),
+        ]);
+      },
+      { panes: false },
+    );
+  });
+
+  it("is offered on a terminal too narrow for the panes, where the header is drawn again", async () => {
+    await withConsole(
+      async (harness) => {
+        await harness.openWithShortcut();
+        const labels = harness.menus[0]?.options ?? [];
+        expect(labels.some((option) => ACTIONS.test(option))).toBe(true);
+      },
+      { columns: 120 },
+    );
+  });
+
+  it("keeps every other entry, label and order, in the panes and in the header", async () => {
+    const menus: string[][] = [];
+    for (const options of [{ panes: false }, {}]) {
+      await withConsole(async (harness) => {
+        await harness.openWithShortcut();
+        menus.push([...(harness.menus[0]?.options ?? [])]);
+      }, options);
+    }
+    const [classic = [], native = []] = menus;
+    expect(classic.filter((option) => !ACTIONS.test(option))).toEqual(native);
+    expect(classic.length - native.length).toBe(1);
   });
 });
 

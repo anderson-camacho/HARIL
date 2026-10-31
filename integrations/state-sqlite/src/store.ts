@@ -1864,6 +1864,7 @@ export class SqliteStore implements Store {
       .prepare(
         `SELECT ${EVENT_COLUMNS} FROM events
          WHERE (? IS NULL OR aggregate_id = ?) AND (? IS NULL OR project_id = ?) AND (? IS NULL OR task_id = ?)
+           AND (? IS NULL OR ts >= ?) AND (? IS NULL OR ts < ?)
          ORDER BY seq DESC LIMIT ?`,
       )
       .all(
@@ -1873,6 +1874,10 @@ export class SqliteStore implements Store {
         filter?.projectId ?? null,
         filter?.taskId ?? null,
         filter?.taskId ?? null,
+        filter?.from ?? null,
+        filter?.from ?? null,
+        filter?.to ?? null,
+        filter?.to ?? null,
         filter?.limit ?? -1,
       ) as unknown as EventRow[];
     return rows.map(toEventRecord).reverse();

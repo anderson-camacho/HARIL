@@ -529,7 +529,10 @@ export interface EventFilter {
   readonly aggregateId?: string;
   readonly projectId?: string;
   readonly taskId?: string;
-  // The newest `limit` events, returned oldest first.
+  // The time an event was written, in epoch milliseconds (as UsageFilter): `from` is inclusive and `to` exclusive.
+  readonly from?: number;
+  readonly to?: number;
+  // The newest `limit` events inside the range, returned oldest first.
   readonly limit?: number;
 }
 

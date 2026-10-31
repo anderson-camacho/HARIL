@@ -13,6 +13,9 @@ import {
 } from "./dock-registry.js";
 import type { UiLocale } from "./locale.js";
 import type { ConsoleMouseEvent, ConsoleTui } from "./pi-types.js";
+import { type BoxRow, blankRow, inset, plainBox, railGlyphs } from "./rail-cards.js";
+import { CARD_CONTENT_WIDTH, CARD_TEXT_X, RAIL_BODY_WIDTH, RAIL_WIDTH } from "./rail-metrics.js";
+import { railRows } from "./rail-view.js";
 import { plainText, wrap } from "./text.js";
 
 const LAYOUT_NODE = Symbol.for("@earendil-works/pi-tui/layout-node");
@@ -46,7 +49,7 @@ export function panesShown(input: {
   return panesFit(input) && (input.leftVisible || input.rightVisible);
 }
 
-// True when the status of the console (the block with the folder, the mode, the warnings and the actions) is on
+// True when the status of the console (the cards with the folder, the mode, the areas and the warnings) is on
 // screen in the right sidebar: the panes are drawn, the right one is visible and MAIN is the selected tab. When it
 // is not, the status lives in the bottom bar.
 export function statusInSidebar(input: {
@@ -181,10 +184,11 @@ export function renderRightDock(
   width: number,
   height: number,
   content: readonly string[],
+  ascii = false,
 ): string[] {
   if (width < 3 || height < 1) return [];
   return Array.from({ length: height }, (_value, index) => {
-    const separator = visualText("│", "cyan", "base");
+    const separator = visualText(railGlyphs(ascii).vertical, "cyan", "base");
     const row = content[index] ?? paddedCell("", width - 1, "text", "panel");
     return `${separator}${row}`;
   });
@@ -194,8 +198,12 @@ interface RightRailStructure {
   readonly lines: readonly string[];
   readonly tabRows: readonly DockTabRow[];
   readonly tabStart: number;
+  // How many rows from the top toggle the dock when clicked: the header box without its tabs.
+  readonly toggleRows: number;
   readonly detailStart: number;
   readonly detailCount: number;
+  // The action a click runs on each row of the view (aligned with it, from detailStart); undefined where there is none.
+  readonly detailHits: readonly (string | undefined)[];
   // First row of the status block (the dashboard lines), so a clicked row maps to the hit of its dashboard line; -1
   // when the block is not drawn, so no click is ever looked up in a block that is not there.
   readonly dashboardStart: number;
@@ -205,96 +213,101 @@ interface RightRailStructure {
 const NO_BLOCK: NativeRailContent = { lines: [], hits: [] };
 
 // In single-rail mode, the right rail hosts the active space (tabs and, under them, its view) directly under the
-// "Espacio" section, freeing the left side entirely for the Pi chat. The status block (status, mode, sections, actions
-// and recent activity) is MAIN's own view: it is drawn only when MAIN is the selected tab.
+// "Espacio" section, freeing the left side entirely for the Pi chat. The header is a box (the space, the tabs); the
+// status block (MAIN's cards: status, areas, warnings, extensions and session; the actions are the ACC tab's and the
+// recent activity the ACT tab's) is MAIN's own view, drawn only when MAIN is the selected tab; any other tab shows its
+// view as cards.
 function renderRightRailContent(
-  width: number,
   state: PaneSettings,
   dashboardLines: readonly string[],
   locale: UiLocale = "es",
+  ascii = false,
 ): RightRailStructure {
-  const inside = Math.max(1, width - 1);
+  const glyphs = railGlyphs(ascii);
   const rows: string[] = [];
   const module = dockDefinition(state.selected);
   const selection = (locale === "es" ? module?.label : module?.labelEn) ?? state.selected;
   const showBlock = state.selected === MAIN_DOCK_ID;
+  // A blank row, then the block: the box closes the header and the block starts after a margin.
   const appendBlock = (): number => {
     if (!showBlock) return -1;
+    rows.push(blankRow());
     const first = rows.length;
     for (const line of dashboardLines) rows.push(line);
     return first;
   };
+  const boxed = (entries: readonly BoxRow[]): string[] => plainBox(entries, { ascii }).map(inset);
+  const bare = {
+    tabRows: [] as DockTabRow[],
+    tabStart: -1,
+    detailStart: -1,
+    detailCount: 0,
+    detailHits: [] as (string | undefined)[],
+  };
 
   if (state.leftVisible) {
-    rows.push(paddedCell(` ▣ Espacio: ${selection}`, inside, "yellow", "panel"));
+    rows.push(...boxed([{ text: `${glyphs.docked} Espacio: ${selection}`, tone: "yellow" }]));
     const dashboardStart = appendBlock();
-    return {
-      lines: rows,
-      tabRows: [],
-      tabStart: -1,
-      detailStart: -1,
-      detailCount: 0,
-      dashboardStart,
-    };
+    return { lines: rows, ...bare, toggleRows: 0, dashboardStart };
   }
 
   const expanded = state.dockExpanded ?? true;
-  const icon = expanded ? "▼" : "▶";
-  rows.push(paddedCell(` ${icon} Espacio: ${selection} · Alt+L`, inside, "yellow", "panel"));
+  const heading: BoxRow = {
+    text: `${expanded ? glyphs.open : glyphs.closed} Espacio: ${selection} · Alt+L`,
+    tone: "yellow",
+  };
 
   if (!expanded) {
+    rows.push(...boxed([heading]));
+    // The whole box is the toggle: it holds nothing else.
+    const toggleRows = rows.length;
     const dashboardStart = appendBlock();
-    return {
-      lines: rows,
-      tabRows: [],
-      tabStart: -1,
-      detailStart: -1,
-      detailCount: 0,
-      dashboardStart,
-    };
+    return { lines: rows, ...bare, toggleRows, dashboardStart };
   }
 
-  const tabRows = dockTabs(state, Math.max(1, inside - 1));
-  const tabStart = rows.length;
-  for (const tab of tabRows) {
-    rows.push(
-      paddedCell(
-        ` ${tab.text}`,
-        inside,
-        tab.cells.some((cell) => cell.id === state.selected) ? "yellow" : "text",
-        "panel",
+  // The tabs wrap inside the box: a selected tab's row is yellow, as the selected row has always been.
+  const tabRows = dockTabs(state, CARD_CONTENT_WIDTH);
+  const tabStart = rows.length + 2;
+  rows.push(
+    ...boxed([
+      heading,
+      ...tabRows.map(
+        (tab): BoxRow => ({
+          text: tab.text,
+          tone: tab.cells.some((cell) => cell.id === state.selected) ? "yellow" : "text",
+        }),
       ),
-    );
-  }
+    ]),
+  );
 
   if (showBlock) {
-    // MAIN has no view of its own to load: the tabs, a separator and the block.
-    rows.push(paddedCell(" ────────────────────────────────────────", inside, "muted", "panel"));
+    // MAIN has no view of its own to load: the header box and the block.
     const dashboardStart = appendBlock();
-    return { lines: rows, tabRows, tabStart, detailStart: -1, detailCount: 0, dashboardStart };
+    return { lines: rows, ...bare, tabRows, tabStart, toggleRows: 2, dashboardStart };
   }
 
   rows.push(
     paddedCell(
       ` ${state.detail?.status ?? (locale === "es" ? "Cargando vista…" : "Loading view…")}`,
-      inside,
+      RAIL_BODY_WIDTH,
       "teal",
       "panel",
     ),
   );
 
-  const detail = state.detail?.id === state.selected ? state.detail.lines : [];
+  const detail =
+    state.detail?.id === state.selected ? railRows(state.detail, ascii) : { rows: [], hits: [] };
   const detailStart = rows.length;
-  for (const item of detail) {
-    rows.push(paddedCell(` ${item}`, inside, "text", "panel"));
-  }
+  rows.push(...detail.rows);
 
   return {
     lines: rows,
     tabRows,
     tabStart,
+    toggleRows: 2,
     detailStart,
-    detailCount: detail.length,
+    detailCount: detail.rows.length,
+    detailHits: detail.hits,
     dashboardStart: -1,
   };
 }
@@ -327,6 +340,8 @@ export function attachNativePanes(
     readonly project: () => string;
     readonly effortLevel?: () => string | undefined;
     readonly locale?: () => UiLocale;
+    // Draws the rail's borders and markers in ASCII (HARIL_CONSOLE_ASCII).
+    readonly ascii?: () => boolean;
     // The rail body: its rows and, aligned with them, the action a click on each row runs.
     readonly right: (width: number) => NativeRailContent;
     readonly select: (id: DockId) => void;
@@ -334,6 +349,10 @@ export function attachNativePanes(
     readonly activate?: (id: DockId, action: string) => void;
     // Runs the action of a clicked rail row (section toggle, dashboard action, mode, menu...).
     readonly railAction?: (hit: RailHitAction) => void;
+    // The view of a tab that is made of live state instead of loaded once (ACC: it follows the area chosen in MAIN), or
+    // undefined for a tab that is not. It is asked before every frame and every click, so the view on screen is never
+    // older than the state it comes from.
+    readonly live?: (id: DockId) => DockDetails | undefined;
   },
 ): NativePanes {
   const host = tui as PaneTui;
@@ -344,10 +363,20 @@ export function attachNativePanes(
   const original = root[LAYOUT_NODE] as LayoutFn;
   let alive = true;
   let detailOffset = 0;
+  // A live view replaces the detail in the state only when it changed, so everything that keys on the detail (the
+  // scroll position, the menus) sees a new view when there is one and the same object when there is not.
+  const syncLive = (): void => {
+    const fresh = options.live?.(state.selected);
+    if (fresh === undefined) return;
+    if (state.detail?.id === fresh.id && JSON.stringify(state.detail) === JSON.stringify(fresh))
+      return;
+    state.detail = fresh;
+  };
   let displayedDetail = state.detail;
   let displayedSlot = state.selected;
   const left = {
     render(width: number) {
+      syncLive();
       if (state.detail !== displayedDetail || state.selected !== displayedSlot) {
         detailOffset = 0;
         displayedDetail = state.detail;
@@ -364,6 +393,7 @@ export function attachNativePanes(
       );
     },
     handleMouse(event: ConsoleMouseEvent) {
+      if (event.type === "wheel" || (event.type === "click" && event.button === "left")) syncLive();
       if (event.type === "wheel") {
         const headerRows = 7 + dockTabs(state, Math.max(1, 22)).length;
         const max = Math.max(
@@ -401,6 +431,7 @@ export function attachNativePanes(
   let rightDisplayedSlot = state.selected;
   const right = {
     render(width: number) {
+      syncLive();
       if (state.detail !== rightDisplayedDetail || state.selected !== rightDisplayedSlot) {
         rightDisplayedDetail = state.detail;
         rightDisplayedSlot = state.selected;
@@ -410,25 +441,31 @@ export function attachNativePanes(
       // The block is built (it reads the tools, the commands and the model) only for the tab that draws it.
       const dashboard = state.selected === MAIN_DOCK_ID ? options.right(width - 1) : NO_BLOCK;
       const structure = renderRightRailContent(
-        width,
         state,
         dashboard.lines,
         options.locale?.() ?? "es",
+        options.ascii?.() ?? false,
       );
       scrollTop = Math.min(scrollTop, Math.max(0, structure.lines.length - height));
-      return renderRightDock(width, height, structure.lines.slice(scrollTop));
+      return renderRightDock(
+        width,
+        height,
+        structure.lines.slice(scrollTop),
+        options.ascii?.() ?? false,
+      );
     },
     handleMouse(event: ConsoleMouseEvent) {
       // Pointer moves, presses and other buttons arrive constantly: leave before the rail (tool, command, MCP and
       // model facts) is built, since only a left click and the wheel have anything to do.
       const click = event.type === "click" && event.button === "left";
       if (!click && event.type !== "wheel") return undefined;
-      const dashboard = state.selected === MAIN_DOCK_ID ? options.right(39) : NO_BLOCK;
+      syncLive();
+      const dashboard = state.selected === MAIN_DOCK_ID ? options.right(RAIL_BODY_WIDTH) : NO_BLOCK;
       const structure = renderRightRailContent(
-        40,
         state,
         dashboard.lines,
         options.locale?.() ?? "es",
+        options.ascii?.() ?? false,
       );
       if (event.type === "wheel") {
         const height = Math.max(1, tui.terminal.rows);
@@ -439,7 +476,8 @@ export function attachNativePanes(
       }
       const clickedRow = event.y + scrollTop;
       if (!state.leftVisible) {
-        if (clickedRow === 0) {
+        // The header box toggles the dock, except for the rows that are tabs.
+        if (clickedRow < structure.toggleRows) {
           state.dockExpanded = !(state.dockExpanded ?? true);
           tui.requestRender();
           return { handled: true, render: true };
@@ -452,9 +490,9 @@ export function attachNativePanes(
           ) {
             const tab = structure.tabRows[clickedRow - structure.tabStart];
             if (tab) {
-              // The row is drawn "│", a space, then the tab text: a tab starts two columns after its offset.
+              // The row is drawn "│", the margin, the box's border and padding, then the tab text.
               const clicked = tab.cells.find(
-                (cell) => event.x >= cell.start + 2 && event.x < cell.end + 2,
+                (cell) => event.x >= cell.start + CARD_TEXT_X && event.x < cell.end + CARD_TEXT_X,
               );
               if (clicked) {
                 scrollTop = 0;
@@ -468,11 +506,11 @@ export function attachNativePanes(
             clickedRow >= structure.detailStart &&
             clickedRow < structure.detailStart + structure.detailCount
           ) {
-            // The actions a view declares are its own, whichever tab it is: any detail row may be clickable.
-            const detailLine = clickedRow - structure.detailStart;
-            const action = state.detail?.actions?.find((item) => item.line === detailLine);
+            // The actions a view declares are its own, whichever tab it is: any row of it may be clickable (the
+            // three rows of a button run the same action).
+            const action = structure.detailHits[clickedRow - structure.detailStart];
             if (action !== undefined && state.detail?.id === state.selected) {
-              options.activate?.(state.selected, action.action);
+              options.activate?.(state.selected, action);
               return { handled: true, render: true };
             }
           }
@@ -520,7 +558,9 @@ export function attachNativePanes(
       entries: [
         ...(state.leftVisible ? [{ component: left, basis: 23, grow: 0, shrink: 0 }] : []),
         { component: main, basis: 0, grow: 1, shrink: 1, minSize: 54 },
-        ...(state.rightVisible ? [{ component: right, basis: 40, grow: 0, shrink: 0 }] : []),
+        ...(state.rightVisible
+          ? [{ component: right, basis: RAIL_WIDTH, grow: 0, shrink: 0 }]
+          : []),
       ],
     };
   };

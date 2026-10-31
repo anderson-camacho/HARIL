@@ -223,6 +223,63 @@ describe("events.list filters (M1-T6)", () => {
   });
 });
 
+describe("events.list time range", () => {
+  const MINUTE = 60_000;
+  const BASE = 1_800_000_000_000;
+
+  // Five events one minute apart, the first at BASE; returns their sequence numbers oldest first.
+  function seedMinutes(): number[] {
+    return [0, 1, 2, 3, 4].map(
+      (minute) =>
+        store.events.append({
+          aggregateType: "task",
+          aggregateId: `t-${minute}`,
+          type: minute % 2 === 0 ? "task.failed" : "task.completed",
+          actorKind: "system",
+          actorId: "test",
+          payload: {},
+          projectId,
+          ts: BASE + minute * MINUTE,
+        }).seq,
+    );
+  }
+
+  const seqs = (filter?: Parameters<Store["events"]["list"]>[0]) =>
+    store.events.list(filter).map((event) => event.seq);
+
+  it("keeps events with ts >= from: the lower bound is inclusive", () => {
+    const seeded = seedMinutes();
+    expect(seqs({ from: BASE + 2 * MINUTE })).toEqual(seeded.slice(2));
+    expect(seqs({ from: BASE + 2 * MINUTE + 1 })).toEqual(seeded.slice(3));
+  });
+
+  it("keeps events with ts < to: the upper bound is exclusive", () => {
+    const seeded = seedMinutes();
+    expect(seqs({ from: BASE, to: BASE + 3 * MINUTE })).toEqual(seeded.slice(0, 3));
+    expect(seqs({ from: BASE, to: BASE + 3 * MINUTE + 1 })).toEqual(seeded.slice(0, 4));
+    // The project registration was stamped by the clock far before BASE, so it is the only event before it.
+    expect(seqs({ to: BASE }).some((seq) => seeded.includes(seq))).toBe(false);
+    expect(seqs({ to: BASE }).length).toBe(seqs().length - seeded.length);
+  });
+
+  it("combines from and to, and an empty or reversed range returns nothing", () => {
+    const seeded = seedMinutes();
+    expect(seqs({ from: BASE + MINUTE, to: BASE + 4 * MINUTE })).toEqual(seeded.slice(1, 4));
+    expect(seqs({ from: BASE + MINUTE, to: BASE + MINUTE })).toEqual([]);
+    expect(seqs({ from: BASE + 4 * MINUTE, to: BASE + MINUTE })).toEqual([]);
+  });
+
+  it("applies the range together with the project, task and limit filters", () => {
+    const seeded = seedMinutes();
+    const range = { from: BASE + MINUTE, to: BASE + 5 * MINUTE };
+    expect(seqs({ ...range, projectId })).toEqual(seeded.slice(1, 5));
+    expect(seqs({ ...range, projectId: "nobody" })).toEqual([]);
+    expect(seqs({ ...range, aggregateId: "t-2" })).toEqual([seeded[2]]);
+    // `limit` keeps the newest events inside the range, still oldest first.
+    expect(seqs({ ...range, limit: 2 })).toEqual(seeded.slice(3, 5));
+  });
+});
+
 describe("metrics.snapshot (M1-T6)", () => {
   it("counts tasks by state and runs by outcome", () => {
     runScenario();

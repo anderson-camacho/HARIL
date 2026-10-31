@@ -12,7 +12,12 @@ describe("the dock registry of the console", () => {
 
   it("opens on MAIN: it is the first slot", () => {
     expect(DOCK_LABELS[0].id).toBe("main");
-    expect(DOCK_LABELS.map((slot) => slot.tab)).toEqual(["MAIN", "MEM", "DOCS"]);
+    expect(DOCK_LABELS.map((slot) => slot.tab)).toEqual(["MAIN", "MEM", "DOCS", "ACT", "ACC"]);
+    expect(DOCK_LABELS.at(-1)).toMatchObject({
+      id: "actions",
+      label: "Acciones",
+      labelEn: "Actions",
+    });
   });
 
   describe("readDockSlots", () => {
@@ -23,6 +28,8 @@ describe("the dock registry of the console", () => {
         { id: "main", visible: true },
         { id: "memory", visible: true },
         { id: "docs", visible: true },
+        { id: "activity", visible: true },
+        { id: "actions", visible: true },
       ];
       expect(readDockSlots(undefined)).toEqual(all);
       expect(readDockSlots({ value: "nope" })).toEqual(all);
@@ -41,6 +48,84 @@ describe("the dock registry of the console", () => {
         { id: "main", visible: true },
         { id: "docs", visible: true },
         { id: "memory", visible: false },
+        { id: "activity", visible: true },
+        { id: "actions", visible: true },
+      ]);
+    });
+
+    it("appends ACC, visible, to the four-entry list of the previous release and keeps the rest", () => {
+      expect(
+        readDockSlots({
+          value: [
+            { id: "main", visible: true },
+            { id: "memory", visible: true },
+            { id: "docs", visible: false },
+            { id: "activity", visible: true },
+          ],
+        }),
+      ).toEqual([
+        { id: "main", visible: true },
+        { id: "memory", visible: true },
+        { id: "docs", visible: false },
+        { id: "activity", visible: true },
+        { id: "actions", visible: true },
+      ]);
+    });
+
+    it("keeps a stored ACC where the user put it, hidden or not", () => {
+      expect(
+        readDockSlots({
+          value: [
+            { id: "main", visible: true },
+            { id: "actions", visible: false },
+            { id: "memory", visible: true },
+            { id: "docs", visible: true },
+            { id: "activity", visible: true },
+          ],
+        }),
+      ).toEqual([
+        { id: "main", visible: true },
+        { id: "actions", visible: false },
+        { id: "memory", visible: true },
+        { id: "docs", visible: true },
+        { id: "activity", visible: true },
+      ]);
+    });
+
+    it("appends ACT and ACC, visible, to the three-entry list of the release before and keeps the rest", () => {
+      expect(
+        readDockSlots({
+          value: [
+            { id: "main", visible: true },
+            { id: "docs", visible: false },
+            { id: "memory", visible: true },
+          ],
+        }),
+      ).toEqual([
+        { id: "main", visible: true },
+        { id: "docs", visible: false },
+        { id: "memory", visible: true },
+        { id: "activity", visible: true },
+        { id: "actions", visible: true },
+      ]);
+    });
+
+    it("keeps a stored ACT where the user put it, hidden or not", () => {
+      expect(
+        readDockSlots({
+          value: [
+            { id: "main", visible: true },
+            { id: "activity", visible: false },
+            { id: "memory", visible: true },
+            { id: "docs", visible: true },
+          ],
+        }),
+      ).toEqual([
+        { id: "main", visible: true },
+        { id: "activity", visible: false },
+        { id: "memory", visible: true },
+        { id: "docs", visible: true },
+        { id: "actions", visible: true },
       ]);
     });
 
@@ -59,6 +144,8 @@ describe("the dock registry of the console", () => {
         { id: "main", visible: true },
         { id: "memory", visible: false },
         { id: "docs", visible: true },
+        { id: "activity", visible: true },
+        { id: "actions", visible: true },
       ]);
     });
 
@@ -72,7 +159,7 @@ describe("the dock registry of the console", () => {
           "main",
           { id: "untrusted", visible: false },
         ]),
-      ).toEqual(["main", "memory", "docs"]);
+      ).toEqual(["main", "memory", "docs", "activity", "actions"]);
     });
   });
 });

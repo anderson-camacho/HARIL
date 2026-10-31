@@ -820,9 +820,9 @@ describe("the data the tab is drawn from", () => {
     await waitFor(() => expect(release).toBeDefined());
     const busy = r.panel.view();
     expect(busy?.actions).toBeUndefined();
-    expect(busy?.lines.some((line) => line.startsWith("… Comprobando e instalando Engram"))).toBe(
-      true,
-    );
+    expect(
+      busy?.lines.some((line) => line.trim().startsWith("… Comprobando e instalando Engram")),
+    ).toBe(true);
     expect(
       r.runs.filter((run) => run.args[0] === "tools" && run.args[1] === "status"),
     ).toHaveLength(1);

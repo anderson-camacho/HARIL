@@ -108,6 +108,8 @@ const HELP_LINES = [
   "  haril status [--project <slug>] [--json]   projects, tasks, queued commands and runtime",
   "  haril metrics [--project <slug>] [--json]   runs, retries and success rate from the event log",
   "  haril events [--project <slug>] [--task <id>] [--limit <n>] [--json]   the newest events, oldest first",
+  "    [--since <duration> | --from <time> --to <time>]   only events written in that range: a duration (90s, 15m, 2h,",
+  "    7d, 1w) counts back from now; a time is an ISO 8601 date or time, or epoch milliseconds; --from is inclusive",
   "  haril memory status [--json]     the memory provider, its health, whether memory is degraded and the outbox depth",
   "  haril tools status [--json] [--refresh]   where engram and gentle-ai are installed, their real versions and the",
   "    latest published ones (cached for 24 h; --refresh asks GitHub now); read-only",

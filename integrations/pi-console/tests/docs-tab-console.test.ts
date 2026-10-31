@@ -9,6 +9,7 @@ import type {
   ConsoleTheme,
   ConsoleTui,
 } from "../src/pi-types.js";
+import { CARD_CONTENT_WIDTH } from "../src/rail-metrics.js";
 import { stripAnsi } from "../src/text.js";
 import { type FakeCli, installFakeCli } from "./fake-cli.js";
 import { type FakeContext, type FakePi, fakeContext, fakePi } from "./fake-pi.js";
@@ -35,8 +36,11 @@ interface Harness {
   sidebar(): string;
   // Waits until the right pane shows `text`: the tab loads through the CLI, and so does the console at start.
   shows(text: string): Promise<void>;
-  // Clicks the row of the right pane that shows `needle`.
-  clickRow(needle: string): unknown;
+  // Clicks the row of the right pane that shows `needle`, or the one `offset` rows from it.
+  clickRow(needle: string, offset?: number): unknown;
+  // The choices of the menus the console opened (Alt+K), and the one to pick in the next.
+  readonly menus: { title: string; options: string[] }[];
+  choose: (menu: { title: string; options: string[] }) => string | undefined;
   command(name: string, args: string): Promise<void>;
   // The `haril config set|get docs.path ...` calls the console made, with their arguments.
   setCalls(): string[][];
@@ -87,9 +91,18 @@ async function withConsole(
   const input = vi.fn(async (title: string, placeholder?: string) =>
     options.input?.(title, placeholder),
   );
+  const menus: { title: string; options: string[] }[] = [];
+  const picker = {
+    choose: (_menu: { title: string; options: string[] }): string | undefined => undefined,
+  };
   let anchor: ((tui: ConsoleTui, theme: ConsoleTheme) => ConsoleComponent) | undefined;
   Object.assign(ctx.ui, {
     input,
+    select: async (title: string, choices: string[]) => {
+      const menu = { title, options: choices };
+      menus.push(menu);
+      return picker.choose(menu);
+    },
     setWidget(key: string, value: typeof anchor) {
       if (key === "haril-native-panes-anchor") anchor = value;
     },
@@ -124,10 +137,17 @@ async function withConsole(
       input,
       sidebar: () => rows().join("\n"),
       shows: (text) => waitFor(() => expect(rows().join("\n")).toContain(text)),
-      clickRow(needle) {
+      clickRow(needle, offset = 0) {
         const y = rows().findIndex((row) => row.includes(needle));
         if (y < 0) throw new Error(`Row not found: ${needle}\n${rows().join("\n")}`);
-        return pane.handleMouse?.({ type: "click", button: "left", x: 8, y });
+        return pane.handleMouse?.({ type: "click", button: "left", x: 8, y: y + offset });
+      },
+      menus,
+      get choose() {
+        return picker.choose;
+      },
+      set choose(value) {
+        picker.choose = value;
       },
       command: (name, args) =>
         fake.commands.get(name)?.handler(args, ctx as ConsoleContext) ?? Promise.resolve(),
@@ -143,6 +163,78 @@ async function withConsole(
 const open = async (h: Harness): Promise<void> => h.command("haril-plugin", "docs");
 
 describe("the DOCS tab with no folder connected", () => {
+  it("shows its sections as cards, the action as a bordered button, and Alt+K keeps its label", async () => {
+    cli.answer("config get docs.path", { stdout: connected(null) });
+    await withConsole(async (h) => {
+      await open(h);
+      await h.shows("Sin carpeta conectada.");
+      const view = h.sidebar();
+      expect(view).toContain("╭─ Carpeta ");
+      expect(view).toContain("╭─ Acciones ");
+      expect(view).toContain("▸ Definir carpeta…");
+      // The menu is built from the action's own label, not from the rows the pane drew around it.
+      h.choose = () => undefined;
+      h.fake.shortcuts.get("alt+k")?.(h.ctx as ConsoleContext);
+      await waitFor(() => expect(h.menus).toHaveLength(1));
+      expect(h.menus[0]?.options[0]).toBe("DOCS · Definir carpeta…");
+      expect(h.menus[0]?.options.some((option) => /[│╭╮╰╯]/u.test(option))).toBe(false);
+    });
+  });
+
+  it("falls back to ASCII borders and pointers with HARIL_CONSOLE_ASCII, and a click still runs the action", async () => {
+    const saved = process.env.HARIL_CONSOLE_ASCII;
+    process.env.HARIL_CONSOLE_ASCII = "1";
+    try {
+      cli.answer("config get docs.path", { stdout: connected(null) });
+      await withConsole(
+        async (h) => {
+          await open(h);
+          await h.shows("Sin carpeta conectada.");
+          const view = h.sidebar();
+          expect(view).toContain("+- Carpeta ");
+          expect(view).toContain("| > Definir carpeta…");
+          expect(view).toContain("v Espacio: Documentación");
+          expect(view).not.toMatch(/[╭╮╰╯─│▸▼▶▣]/u);
+          expect(h.clickRow("Definir carpeta…", -1)).toEqual({ handled: true, render: true });
+          await waitFor(() => expect(h.input).toHaveBeenCalledTimes(1));
+        },
+        { input: () => undefined },
+      );
+    } finally {
+      if (saved === undefined) delete process.env.HARIL_CONSOLE_ASCII;
+      else process.env.HARIL_CONSOLE_ASCII = saved;
+    }
+  });
+
+  it("runs the action from any of the three rows of its button, and from no other row", async () => {
+    const vault = makeVault();
+    cli.answer("config get docs.path", { stdout: connected(null) });
+    cli.answer("config set docs.path", { stdout: stored(vault) });
+    await withConsole(
+      async (h) => {
+        await open(h);
+        await h.shows("▸ Definir carpeta…");
+        // The text of the card above the button: nothing to run.
+        expect(h.clickRow("Sin carpeta conectada.")).toBeUndefined();
+        expect(h.input).not.toHaveBeenCalled();
+        // The border above the label, the label and the border under it.
+        for (const offset of [-1, 0, 1]) {
+          h.input.mockClear();
+          expect(h.clickRow("Definir carpeta…", offset), `offset ${offset}`).toEqual({
+            handled: true,
+            render: true,
+          });
+          await waitFor(() => expect(h.input).toHaveBeenCalledTimes(1));
+        }
+        // The card's own bottom border, one row further, is not the button.
+        h.input.mockClear();
+        expect(h.clickRow("Definir carpeta…", 2)).toBeUndefined();
+        expect(h.input).not.toHaveBeenCalled();
+      },
+      { input: () => undefined },
+    );
+  });
+
   it("invites to connect one, and /haril-docs is registered", async () => {
     cli.answer("config get docs.path", { stdout: connected(null) });
     await withConsole(async (h) => {
@@ -304,9 +396,9 @@ describe("the DOCS tab with a folder connected", () => {
     await withConsole(async (h) => {
       await open(h);
       await h.shows("Carpeta no encontrada:");
-      // 37 columns of the path's end, behind an ellipsis: the pane gives a row 38, and does not cut one of them.
-      const tail = `…${path.slice(-37)}`;
-      expect(h.sidebar()).toContain(`│ ${tail}`);
+      // The end of the path that fits a card's row, behind an ellipsis: the card does not cut one of them.
+      const tail = `…${path.slice(-(CARD_CONTENT_WIDTH - 1))}`;
+      expect(h.sidebar()).toContain(`│ ${tail} │`);
     });
   });
 
@@ -318,9 +410,13 @@ describe("the DOCS tab with a folder connected", () => {
     await withConsole(async (h) => {
       await open(h);
       await h.shows("No se pudo leer");
-      // The message wraps to the width of the panel; its words are all there.
-      expect(h.sidebar()).toContain("haril.json has problems;");
-      expect(h.sidebar()).toContain("fix them first");
+      // The message wraps to the width of the card; its words are all there, once the borders are left out.
+      const words = h
+        .sidebar()
+        .replace(/[│╭╮╰╯─]/g, " ")
+        .replace(/\s+/g, " ");
+      expect(words).toContain("haril.json has problems;");
+      expect(words).toContain("fix them first");
       expect(h.sidebar()).not.toContain("▸");
     });
   });
@@ -398,7 +494,8 @@ describe("/haril-docs", () => {
     await withConsole(async (h) => {
       await h.command("haril-docs", vault);
       expect(h.notes()).toContain(vault);
-      expect(h.sidebar()).toContain("ACTIVIDAD");
+      // MAIN's own block is still on screen (the recent events moved to the ACT tab).
+      expect(h.sidebar()).toContain("ÁREAS");
       expect(h.sidebar()).toContain("[1:MAIN]");
     });
   });

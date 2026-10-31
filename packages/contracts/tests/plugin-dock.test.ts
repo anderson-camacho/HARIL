@@ -10,6 +10,23 @@ const current = [
   { id: "main", visible: true },
   { id: "memory", visible: false },
   { id: "docs", visible: true },
+  { id: "activity", visible: true },
+  { id: "actions", visible: true },
+];
+
+// The list the release before ACT wrote: MAIN, MEM and DOCS.
+const threeSlots = [
+  { id: "main", visible: true },
+  { id: "memory", visible: false },
+  { id: "docs", visible: true },
+];
+
+// The list the previous release wrote: MAIN, MEM, DOCS and ACT, before the ACC slot existed.
+const fourCurrent = [
+  { id: "main", visible: true },
+  { id: "memory", visible: false },
+  { id: "docs", visible: true },
+  { id: "activity", visible: true },
 ];
 
 // Releases before the MAIN/MEM/DOCS dock stored GIT, YT, MEM and THEME. MAIN did not exist and the other three
@@ -28,11 +45,23 @@ const defaults = [
   { id: "main", visible: true },
   { id: "memory", visible: true },
   { id: "docs", visible: true },
+  { id: "activity", visible: true },
+  { id: "actions", visible: true },
 ];
 
 describe("dock slot preferences", () => {
-  it("offers MAIN, MEM and DOCS and no longer knows the retired slots", () => {
-    expect(DOCK_SLOTS.map((slot) => slot.id)).toEqual(["main", "memory", "docs"]);
+  it("offers MAIN, MEM, DOCS, ACT and ACC and no longer knows the retired slots", () => {
+    expect(DOCK_SLOTS.map((slot) => slot.id)).toEqual([
+      "main",
+      "memory",
+      "docs",
+      "activity",
+      "actions",
+    ]);
+    expect(DOCK_SLOTS.find((slot) => slot.id === "activity")?.label).toBe("Actividad");
+    expect(DOCK_SLOTS.find((slot) => slot.id === "actions")?.label).toBe("Acciones");
+    expect(dockSlotExists("activity")).toBe(true);
+    expect(dockSlotExists("actions")).toBe(true);
     for (const retired of ["explorer", "git", "youtube", "themes"]) {
       expect(dockSlotExists(retired)).toBe(false);
     }
@@ -40,9 +69,72 @@ describe("dock slot preferences", () => {
     expect(dockSlotExists("docs")).toBe(true);
   });
 
-  it("accepts the three-entry list as it is", () => {
+  it("accepts the five-entry list as it is", () => {
     expect(dockPreferenceErrors(current)).toEqual([]);
     expect(resolveDockSlots(current)).toEqual(current);
+  });
+
+  it("keeps validating the four-entry list of the previous release: ACC is appended, visible", () => {
+    expect(dockPreferenceErrors(fourCurrent)).toEqual([]);
+    expect(resolveDockSlots(fourCurrent)).toEqual(current);
+    // It is not written back by a read: the stored list is untouched.
+    const stored = fourCurrent.map((slot) => ({ ...slot }));
+    resolveDockSlots(stored);
+    expect(stored).toEqual(fourCurrent);
+  });
+
+  it("keeps validating the three-entry list of the release before: ACT and ACC are appended, visible", () => {
+    expect(dockPreferenceErrors(threeSlots)).toEqual([]);
+    expect(resolveDockSlots(threeSlots)).toEqual(current);
+    // Where the user put the others stays; ACT and ACC go after them.
+    const reordered = [threeSlots[0], threeSlots[2], threeSlots[1]];
+    expect(resolveDockSlots(reordered).map((slot) => slot.id)).toEqual([
+      "main",
+      "docs",
+      "memory",
+      "activity",
+      "actions",
+    ]);
+    // It is not written back by a read: the stored list is untouched.
+    const stored = threeSlots.map((slot) => ({ ...slot }));
+    resolveDockSlots(stored);
+    expect(stored).toEqual(threeSlots);
+  });
+
+  it("keeps a hidden ACT hidden and its place in the list", () => {
+    const stored = [
+      { id: "main", visible: true },
+      { id: "activity", visible: false },
+      { id: "docs", visible: true },
+      { id: "memory", visible: true },
+      { id: "actions", visible: true },
+    ];
+    expect(dockPreferenceErrors(stored)).toEqual([]);
+    expect(resolveDockSlots(stored)).toEqual(stored);
+  });
+
+  it("keeps a hidden ACC hidden and a moved ACC where the user put it", () => {
+    const stored = [
+      { id: "main", visible: true },
+      { id: "actions", visible: false },
+      { id: "memory", visible: true },
+      { id: "docs", visible: true },
+      { id: "activity", visible: true },
+    ];
+    expect(dockPreferenceErrors(stored)).toEqual([]);
+    expect(resolveDockSlots(stored)).toEqual(stored);
+    const moved = [
+      { id: "main", visible: true },
+      { id: "actions", visible: true },
+      { id: "docs", visible: true },
+    ];
+    expect(resolveDockSlots(moved).map((slot) => slot.id)).toEqual([
+      "main",
+      "actions",
+      "docs",
+      "memory",
+      "activity",
+    ]);
   });
 
   it("defaults to every slot visible, with main first, when nothing is stored", () => {
@@ -73,6 +165,8 @@ describe("dock slot preferences", () => {
         { id: "main", visible: true },
         { id: "docs", visible: true },
         { id: "memory", visible: false },
+        { id: "activity", visible: true },
+        { id: "actions", visible: true },
       ]);
     });
   });
@@ -86,6 +180,8 @@ describe("dock slot preferences", () => {
         { id: "main", visible: true },
         { id: "docs", visible: false },
         { id: "memory", visible: true },
+        { id: "activity", visible: true },
+        { id: "actions", visible: true },
       ]);
     });
   });
@@ -96,11 +192,13 @@ describe("dock slot preferences", () => {
       expect(dockPreferenceErrors(withExplorer)).toEqual([]);
     });
 
-    it("resolves to main, memory and docs, keeping the visibility and the place of memory", () => {
+    it("resolves to every slot of the registry, keeping the visibility and the place of memory", () => {
       expect(resolveDockSlots(fourSlots)).toEqual([
         { id: "main", visible: true },
         { id: "memory", visible: false },
         { id: "docs", visible: true },
+        { id: "activity", visible: true },
+        { id: "actions", visible: true },
       ]);
       expect(resolveDockSlots(withExplorer)).toEqual(resolveDockSlots(fourSlots));
       const reordered = [fourSlots[3], fourSlots[2], fourSlots[0], fourSlots[1]];
@@ -108,6 +206,8 @@ describe("dock slot preferences", () => {
         "main",
         "memory",
         "docs",
+        "activity",
+        "actions",
       ]);
     });
 

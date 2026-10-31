@@ -1,5 +1,5 @@
 import { renderBrandArt, renderBrandMark } from "./dashboard-art.js";
-import { controlsFor, type DashboardAction } from "./dashboard-controls.js";
+import { controlsFor, type DashboardAction, type DashboardControl } from "./dashboard-controls.js";
 import type { DashboardData } from "./dashboard-data.js";
 import { frameGlyph, paddedCell, visualText } from "./dashboard-theme.js";
 import { delegationSummary } from "./delegation-settings.js";
@@ -8,6 +8,8 @@ import { ASCII_GLYPHS, UNICODE_GLYPHS } from "./orchestration-draw.js";
 import type { OrchestrationState, OrchestrationTarget } from "./orchestration-state.js";
 import { renderOrchestrationSummary } from "./orchestration-view.js";
 import type { ConsoleTheme, ThemeColor } from "./pi-types.js";
+import { railGlyphs } from "./rail-cards.js";
+import { drawMainCards, drawMainHints, type MainCard, type MainRow } from "./rail-main.js";
 import { plainText, textWidth, truncate, wrap } from "./text.js";
 
 // The five modules (spec 7.8): WORKFLOWS retired, its methodologies are in TOOLS (P19) and a workflow is seen in
@@ -108,6 +110,37 @@ const LABELS: Readonly<Record<DashboardArea, string>> = {
   everywhere: "EVERYWHERE",
 };
 const YELLOW: ThemeColor = "warning";
+
+// The name an area goes by in the rail ("AGENTS").
+export function areaName(area: DashboardArea): string {
+  return LABELS[area];
+}
+
+// The area the rail shows its actions for: the one chosen in the list of areas, and TOOLS before any is chosen.
+export function railArea(area: DashboardArea | undefined): DashboardArea {
+  return area ?? "tools";
+}
+
+// The controls of the chosen area, as the MAIN rail's old ACCIONES group, the classic header, the keyboard menu and the
+// ACC tab all list them: one definition, so the four cannot drift apart.
+export function railControls(
+  facts: Pick<DashboardFacts, "data" | "runtime" | "runtimeAvailable" | "orchestration" | "locale">,
+  area: DashboardArea | undefined,
+): DashboardControl[] {
+  return controlsFor(
+    railArea(area),
+    facts.data,
+    facts.runtime,
+    facts.runtimeAvailable,
+    facts.orchestration.demo,
+    facts.locale ?? DEFAULT_UI_LOCALE,
+  );
+}
+
+// The words of the row (and of the ACC button) that opens the complete /haril menu.
+export function openMenuLabel(locale: UiLocale): string {
+  return locale === "es" ? "Abrir menú completo /haril" : "Open full /haril menu";
+}
 
 function fit(text: string, width: number): string {
   return truncate(plainText(text), Math.max(0, width));
@@ -265,6 +298,9 @@ interface RailOptions {
   // `areas` adds the clickable list of areas and the orchestration view. The classic header has its own row of area
   // tabs and a bounded height, so it leaves the list out.
   readonly areas: boolean;
+  // `actions` adds the group with the chosen area's controls. The classic header and the keyboard menu list them; the
+  // native rail leaves them to the ACC tab.
+  readonly actions: boolean;
 }
 
 function rightRailContent(
@@ -277,17 +313,9 @@ function rightRailContent(
   const rows: RailRow[] = [];
   const warnings = railWarnings(facts);
   const mode = facts.mode ?? "unknown";
-  const currentArea = area ?? "tools";
+  const currentArea = railArea(area);
   const lang = facts.locale ?? DEFAULT_UI_LOCALE;
   const tr = (english: string, spanish: string): string => (lang === "es" ? spanish : english);
-  const controls = controlsFor(
-    currentArea,
-    facts.data,
-    facts.runtime,
-    facts.runtimeAvailable,
-    facts.orchestration.demo,
-    facts.locale ?? DEFAULT_UI_LOCALE,
-  );
   const isExpanded = (section: RailSection): boolean => railSectionOpen(expanded, section);
   const add = (
     content: string,
@@ -381,44 +409,206 @@ function rightRailContent(
     add(`Runtime: ${facts.runtime}`, "text");
     add(`${tr("Memory", "Memoria")}: ${facts.memory}`, "text");
   }
-  section(`${tr("ACTIONS", "ACCIONES")} · ${LABELS[currentArea]}`, "actions", controls.length);
-  if (isExpanded("actions")) {
-    for (const control of controls) {
-      add(options.showKeys ? `[${control.hint}] ${control.label}` : control.label, "teal", {
-        action: "run",
-        control: control.action,
-      });
+  if (options.actions) {
+    const controls = railControls(facts, area);
+    section(`${tr("ACTIONS", "ACCIONES")} · ${LABELS[currentArea]}`, "actions", controls.length);
+    if (isExpanded("actions")) {
+      for (const control of controls) {
+        add(options.showKeys ? `[${control.hint}] ${control.label}` : control.label, "teal", {
+          action: "run",
+          control: control.action,
+        });
+      }
+      add(`↗ ${openMenuLabel(lang)}`, "muted", { action: "menu" });
     }
-    add(tr("↗ Open full /haril menu", "↗ Abrir menú completo /haril"), "muted", { action: "menu" });
   }
 
   return rows;
 }
 
-// The native full-height right dock reuses the same live facts as the legacy header rail. Its lines are rendered
-// inside a dedicated Pi layout component, not within the header, so activity and agent details can remain visible.
-export function renderNativeRailContent(
+// The most rows a warning or an extension status takes in the rail before it is cut with an ellipsis.
+const LONG_TEXT_ROWS = 3;
+// The most of each list the rail names; the rest are counted in one row that opens the details.
+const LISTED = 3;
+
+// The MAIN tab of the native rail as cards: the status, the areas and the sections that open and close. It says in words
+// what rightRailContent says, in a box each; the row texts a long value could cut (the folder, the project, the model)
+// keep their label whole, and a warning or a status that does not fit goes on in the rows under it (rail-main.ts).
+function railCards(
   facts: DashboardFacts,
   area: DashboardArea | undefined,
   width: number,
   expanded: Readonly<Partial<Record<RailSection, boolean>>>,
 ): NativeRailContent {
+  const glyphs = railGlyphs(facts.asciiGlyphs);
+  const warnings = railWarnings(facts);
+  const currentArea = railArea(area);
+  const lang = facts.locale ?? DEFAULT_UI_LOCALE;
+  const tr = (english: string, spanish: string): string => (lang === "es" ? spanish : english);
+  const toggle = (section: RailSection): NonNullable<MainCard<RailHitAction>["toggle"]> => ({
+    open: railSectionOpen(expanded, section),
+    hit: { action: "toggle", section },
+  });
+  const more = (text: string): MainRow<RailHitAction> => ({
+    text,
+    tone: "yellow",
+    hit: { action: "details" },
+  });
+  const listed = (
+    items: readonly string[],
+    prefix: string,
+    tone: MainRow<RailHitAction>["tone"],
+    rest: (count: number) => string,
+  ): MainRow<RailHitAction>[] => [
+    ...items.slice(0, LISTED).map(
+      (item): MainRow<RailHitAction> => ({
+        prefix,
+        text: item,
+        tone,
+        hit: { action: "details" },
+        rows: LONG_TEXT_ROWS,
+      }),
+    ),
+    ...(items.length > LISTED ? [more(rest(items.length - LISTED))] : []),
+  ];
+
+  const cards: MainCard<RailHitAction>[] = [
+    {
+      title: `HARIL · ${LABELS[currentArea]}`,
+      titleTone: "yellow",
+      lead: { text: glyphs.eye, tone: eyeTone(facts) },
+      rows: [
+        {
+          text: `${tr("I am in", "Estoy en")}: ${facts.cwd}`,
+          tone: "muted",
+          hit: { action: "focus" },
+        },
+        {
+          text: `${tr("Mode", "Modo")}: ${facts.mode ?? "unknown"}  ·  ${tr("change", "cambiar")} ${glyphs.external}`,
+          tone: "yellow",
+          hit: { action: "mode" },
+        },
+        { text: `${tr("Project", "Proyecto")}: ${facts.project}`, tone: "muted" },
+        { text: `${tr("Model", "Modelo")}: ${facts.modelLevel}`, tone: "text" },
+      ],
+    },
+    {
+      title: tr("AREAS", "ÁREAS"),
+      rows: [
+        ...DASHBOARD_AREAS.map(
+          (candidate): MainRow<RailHitAction> => ({
+            text: `${candidate === currentArea ? glyphs.selected : glyphs.unselected} ${LABELS[candidate]}`,
+            tone: candidate === currentArea ? "yellow" : "text",
+            hit: { action: "area", area: candidate },
+          }),
+        ),
+        {
+          text: tr("Open orchestration view", "Abrir vista de orquestación"),
+          tone: "teal",
+          hit: { action: "run", control: "orchestration-view" },
+        },
+      ],
+    },
+    {
+      title: `${tr("WARNINGS", "AVISOS")} · ${warnings.length}`,
+      ...(warnings.length > 0 ? { titleTone: "yellow" as const } : {}),
+      toggle: toggle("warnings"),
+      rows:
+        warnings.length === 0
+          ? [{ text: tr("No known warnings", "Sin alertas conocidas"), tone: "muted" }]
+          : listed(warnings, "! ", "error", (count) =>
+              tr(`+ ${count} more · click to see all`, `+ ${count} avisos · clic para ver todos`),
+            ),
+    },
+    {
+      title: `${tr("EXTENSIONS", "EXTENSIONES")} · ${facts.extensionStatuses.length}`,
+      toggle: toggle("extensions"),
+      rows:
+        facts.extensionStatuses.length === 0
+          ? [
+              {
+                text: tr("Pi exposes no full inventory", "Pi no expone inventario completo"),
+                tone: "muted",
+              },
+            ]
+          : listed(facts.extensionStatuses, `${glyphs.bullet} `, "text", (count) =>
+              tr(`+ ${count} more · see details`, `+ ${count} estados · ver detalles`),
+            ),
+    },
+  ];
+  if (currentArea === "orchestration") {
+    const snapshot = facts.orchestration.snapshot;
+    cards.push({
+      title: tr("ORCHESTRATION", "ORQUESTACIÓN"),
+      toggle: toggle("orchestration"),
+      rows:
+        snapshot === undefined
+          ? [
+              {
+                text: tr("No workflow selected", "Sin workflow seleccionado"),
+                tone: "muted",
+                hit: { action: "focus" },
+              },
+            ]
+          : [
+              {
+                text: `${tr("State", "Estado")}: ${snapshot.workflow.state}`,
+                hit: { action: "focus" },
+              },
+              {
+                text: `${tr("Agents", "Agentes")}: ${snapshot.totals.agentsCreated}/${snapshot.totals.agentsCap} · ${tr("queue", "cola")}: ${snapshot.totals.queued}`,
+                hit: { action: "focus" },
+              },
+            ],
+    });
+  }
+  cards.push({
+    // The project and the model are in the status card; the session adds what they do not say.
+    title: tr("SESSION", "SESIÓN"),
+    toggle: toggle("status"),
+    rows: [
+      { text: `Runtime: ${facts.runtime}` },
+      { text: `${tr("Memory", "Memoria")}: ${facts.memory}` },
+    ],
+  });
+
+  const drawn = drawMainCards(cards, width, facts.asciiGlyphs);
+  // Two rows: all four hints do not fit the rail on one.
+  const hints = drawMainHints(
+    [
+      tr("Alt+K panel menu · Alt+H areas", "Alt+K menú del panel · Alt+H áreas"),
+      tr("Alt+I panel · Alt+C commands", "Alt+I panel · Alt+C comandos"),
+    ],
+    width,
+  );
+  return { lines: [...drawn.lines, ...hints.lines], hits: [...drawn.hits, ...hints.hits] };
+}
+
+// The native full-height right dock reuses the same live facts as the legacy header rail. Its lines are rendered
+// inside a dedicated Pi layout component, not within the header, so the status and the actions can remain visible.
+export function renderNativeRailContent(
+  facts: DashboardFacts,
+  area: DashboardArea | undefined,
+  width: number,
+  expanded: Readonly<Partial<Record<RailSection, boolean>>>,
+  options: { readonly actions?: boolean; readonly cards?: boolean } = {},
+): NativeRailContent {
   const safeWidth = Math.max(1, width);
-  const body = rightRailContent(facts, area, safeWidth, expanded, { showKeys: false, areas: true });
+  // The native MAIN tab asks for cards; the keyboard menu is built from the flat rows it always read its labels from.
+  if (options.cards === true) return railCards(facts, area, safeWidth, expanded);
+  // The ACC tab holds the actions, so the MAIN rail leaves them out; the keyboard menu is built with them.
+  const body = rightRailContent(facts, area, safeWidth, expanded, {
+    showKeys: false,
+    areas: true,
+    actions: options.actions ?? false,
+  });
   const rows = body.map((item) => item.line);
-  // Only the rail body is clickable; the activity log and the key hints below it carry no action.
+  // Only the rail body is clickable; the key hints below it carry no action. The recent events are the ACT tab's.
   const hits: (RailHitAction | undefined)[] = body.map((item) => item.hit);
   const add = (line: string, tone: "cyan" | "teal" | "muted" | "text" = "text") => {
     rows.push(paddedCell(` ${line}`, safeWidth, tone, "panel"));
     hits.push(undefined);
   };
-  add("", "muted");
-  add("─ ACTIVIDAD RECIENTE ─", "cyan");
-  const recent = facts.data.events.slice(-5).reverse();
-  if (recent.length === 0) add("Sin eventos registrados", "muted");
-  for (const event of recent) {
-    add(`#${event.seq} ${event.type}`, "teal");
-  }
   add("", "muted");
   // Two rows: all four hints do not fit the rail's 39 columns on one.
   add("Alt+K menú del panel · Alt+H áreas", "muted");
@@ -450,6 +640,7 @@ function wideHeader(
   const right = rightRailContent(facts, selected, railWidth, expanded, {
     showKeys: true,
     areas: false,
+    actions: true,
   });
   const budget = Math.max(10, Math.min(24, height - 18));
   const clipped = right.length > budget;

@@ -35,10 +35,19 @@ export interface InstallFailureView {
   readonly retryAt: string | null;
 }
 
+// The memory provider haril.json sets, which `haril memory status` does not tell before the runtime has run. null: the
+// file says nothing usable (no memory section, or one that cannot be read).
+export interface MemoryConfigView {
+  readonly provider: "null" | "engram" | null;
+  readonly binary: string | undefined;
+}
+
 export interface ToolsStatusView {
   readonly engram: ToolView | undefined;
   readonly gentleAi: ToolView | undefined;
   readonly failure: InstallFailureView | undefined;
+  // undefined: the report does not say (an older haril).
+  readonly memoryConfig: MemoryConfigView | undefined;
 }
 
 type EnsureAction = "none" | "installed" | "updated" | "skipped" | "busy" | "failed";
@@ -170,6 +179,14 @@ function failureOf(value: unknown): InstallFailureView | undefined {
   return { failedAt, message, retryAt: textOf(value.retryAt, 40) ?? null };
 }
 
+// The settings of the report; anything that is not the object it should be is "not said", never a guess.
+function memoryConfigOf(value: unknown): MemoryConfigView | undefined {
+  if (!isObject(value)) return undefined;
+  const provider = value.provider;
+  if (provider !== "null" && provider !== "engram" && provider !== null) return undefined;
+  return { provider, binary: textOf(value.binary, 600) };
+}
+
 function statusOf(value: unknown): ToolsStatusView | undefined {
   if (!isObject(value) || !Array.isArray(value.tools)) return undefined;
   const tools = value.tools.map(toolOf).filter((tool): tool is ToolView => tool !== undefined);
@@ -177,6 +194,7 @@ function statusOf(value: unknown): ToolsStatusView | undefined {
     engram: tools.find((tool) => tool.id === "engram"),
     gentleAi: tools.find((tool) => tool.id === "gentle-ai"),
     failure: failureOf(value.engramInstallFailure),
+    memoryConfig: memoryConfigOf(value.memoryConfig),
   };
 }
 

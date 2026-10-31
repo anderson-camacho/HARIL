@@ -1,21 +1,25 @@
 import { NOT_LAUNCHED } from "./cli.js";
 import { tailFit } from "./docs-folder.js";
 import { localized, type UiLocale } from "./locale.js";
+import { CARD_CONTENT_WIDTH } from "./rail-metrics.js";
+import type { DockCard } from "./rail-view.js";
 import { wrap } from "./text.js";
 import type {
   InstallFailureView,
   InstallView,
+  MemoryConfigView,
   MemoryView,
   ToolState,
   ToolsStatusView,
   ToolView,
 } from "./tools-model.js";
 
-// The MEM tab of the right panel: Engram, the memory process and gentle-ai, then the actions that act on them. It is
-// built only from what the HARIL CLI printed (tools-model.ts parses it); nothing here reads a file or runs a command.
+// The MEM tab of the right panel: Engram, the memory process and gentle-ai, then the actions that act on them, each
+// section a card. It is built only from what the HARIL CLI printed (tools-model.ts parses it); nothing here reads a
+// file or runs a command.
 
-// Columns a row of the panel has for its text: its width less the border and the margin of each row.
-const ROW_WIDTH = 38;
+// Columns a row of a card has for its text.
+const ROW_WIDTH = CARD_CONTENT_WIDTH;
 // The most "other copies" listed per tool, and the most lines a failure message takes.
 const MAX_OTHERS = 3;
 const MAX_REASON_LINES = 3;
@@ -50,8 +54,7 @@ export interface MemOptions {
 
 export interface MemRows {
   readonly status: string;
-  readonly lines: string[];
-  readonly actions: { line: number; action: string }[];
+  readonly cards: DockCard[];
 }
 
 type Say = (english: string, spanish: string) => string;
@@ -110,8 +113,8 @@ function whenText(iso: string, locale: UiLocale): string {
   return format.format(new Date(at));
 }
 
-// A sentence indented under its section, broken to the panel's width.
-function sentence(text: string, indent = 2): string[] {
+// A sentence broken to the card's width and indented by `indent` columns.
+function sentence(text: string, indent = 0): string[] {
   const pad = " ".repeat(indent);
   return wrap(text, ROW_WIDTH - indent).map((part) => `${pad}${part}`);
 }
@@ -140,10 +143,7 @@ function stateWord(state: ToolState, say: Say): string {
 // The install that runs: its version and where it came from, then its path (the end of it, which names the file).
 function activeLines(tool: ToolView, say: Say): string[] {
   if (tool.active === undefined) return [];
-  return [
-    ...sentence(installText(tool.active, say)),
-    `  ${tailFit(tool.active.path, ROW_WIDTH - 2)}`,
-  ];
+  return [...sentence(installText(tool.active, say)), tailFit(tool.active.path, ROW_WIDTH)];
 }
 
 function latestLines(tool: ToolView, say: Say): string[] {
@@ -156,23 +156,20 @@ function othersLines(tool: ToolView, heading: string, say: Say): string[] {
   if (tool.others.length === 0) return [];
   const lines = sentence(heading);
   for (const other of tool.others.slice(0, MAX_OTHERS)) {
-    lines.push(
-      ...sentence(installText(other, say), 4),
-      `    ${tailFit(other.path, ROW_WIDTH - 4)}`,
-    );
+    lines.push(...sentence(installText(other, say), 2), `  ${tailFit(other.path, ROW_WIDTH - 2)}`);
   }
   const hidden = tool.others.length - MAX_OTHERS;
-  if (hidden > 0) lines.push(`    ${say(`…and ${hidden} more`, `…y ${hidden} más`)}`);
+  if (hidden > 0) lines.push(`  ${say(`…and ${hidden} more`, `…y ${hidden} más`)}`);
   return lines;
 }
 
 function failureLines(failure: InstallFailureView, locale: UiLocale, say: Say): string[] {
-  const message = wrap(failure.message, ROW_WIDTH - 2).slice(0, MAX_REASON_LINES);
+  const message = wrap(failure.message, ROW_WIDTH).slice(0, MAX_REASON_LINES);
   return [
-    `  ${say("The last install failed:", "Falló la última instalación:")}`,
-    ...message.map((part) => `  ${part}`),
+    ...sentence(say("The last install failed:", "Falló la última instalación:")),
+    ...message,
     ...(failure.retryAt === null
-      ? [`  ${say("A new attempt is allowed now.", "Ya se puede reintentar.")}`]
+      ? sentence(say("A new attempt is allowed now.", "Ya se puede reintentar."))
       : sentence(
           say(
             `Retries by itself from ${whenText(failure.retryAt, locale)}.`,
@@ -182,27 +179,27 @@ function failureLines(failure: InstallFailureView, locale: UiLocale, say: Say): 
   ];
 }
 
-function engramLines(
+function engramCard(
   tool: ToolView | undefined,
   failure: InstallFailureView | undefined,
   locale: UiLocale,
   say: Say,
-): string[] {
+): DockCard {
   if (tool === undefined) {
-    return ["Engram", ...sentence(say("No data for it.", "Sin datos."))];
+    return { title: "Engram", rows: sentence(say("No data for it.", "Sin datos.")) };
   }
-  const lines = [`Engram · ${stateWord(tool.state, say)}`];
+  const rows: string[] = [];
   if (tool.active === undefined) {
-    lines.push(`  ${say("No copy for HARIL to run.", "No hay copia que HARIL ejecute.")}`);
+    rows.push(...sentence(say("No copy for HARIL to run.", "No hay copia que HARIL ejecute.")));
   } else {
-    lines.push(...activeLines(tool, say));
+    rows.push(...activeLines(tool, say));
   }
   if (tool.qualified !== null) {
-    lines.push(...sentence(`${say("Qualified by HARIL", "Probada por HARIL")}: ${tool.qualified}`));
+    rows.push(...sentence(`${say("Qualified by HARIL", "Probada por HARIL")}: ${tool.qualified}`));
   }
-  lines.push(...latestLines(tool, say));
+  rows.push(...latestLines(tool, say));
   if (tool.newerUpstream && tool.latest !== null) {
-    lines.push(
+    rows.push(
       ...sentence(
         say(
           `A newer one exists (${tool.latest}); HARIL will use it once it has qualified it.`,
@@ -211,7 +208,7 @@ function engramLines(
       ),
     );
   }
-  lines.push(
+  rows.push(
     ...othersLines(
       tool,
       say("Other copies (not used by HARIL):", "Otras copias, que HARIL no usa:"),
@@ -220,8 +217,8 @@ function engramLines(
   );
   // A failure on record says nothing once the copy works: only an Engram that is not fine needs to show it.
   if (failure !== undefined && tool.state !== "ok")
-    lines.push(...failureLines(failure, locale, say));
-  return lines;
+    rows.push(...failureLines(failure, locale, say));
+  return { title: `Engram · ${stateWord(tool.state, say)}`, rows };
 }
 
 // The facts the CLI itself could not establish ("could not read the version...", "could not check the latest...").
@@ -253,15 +250,15 @@ function gentleGuidance(tool: ToolView, say: Say): string | undefined {
   }
 }
 
-function gentleLines(tool: ToolView | undefined, say: Say): string[] {
-  if (tool === undefined) return ["gentle-ai", ...sentence(say("No data for it.", "Sin datos."))];
-  const lines = [`gentle-ai · ${stateWord(tool.state, say)}`];
-  lines.push(...activeLines(tool, say));
-  lines.push(...latestLines(tool, say));
+function gentleCard(tool: ToolView | undefined, say: Say): DockCard {
+  if (tool === undefined) {
+    return { title: "gentle-ai", rows: sentence(say("No data for it.", "Sin datos.")) };
+  }
+  const rows: string[] = [...activeLines(tool, say), ...latestLines(tool, say)];
   const guidance = gentleGuidance(tool, say);
-  if (guidance !== undefined) lines.push(...sentence(guidance));
+  if (guidance !== undefined) rows.push(...sentence(guidance));
   if (tool.active?.origins.includes("go-bin") && !tool.active.origins.includes("path")) {
-    lines.push(
+    rows.push(
       ...sentence(
         say(
           "It is only in go/bin, which is not on PATH.",
@@ -270,58 +267,89 @@ function gentleLines(tool: ToolView | undefined, say: Say): string[] {
       ),
     );
   }
-  lines.push(
+  rows.push(
     ...othersLines(
       tool,
       say("Other copies, which do not run:", "Otras copias, que no se ejecutan:"),
       say,
     ),
   );
-  for (const note of problemNotes(tool)) lines.push(...sentence(note));
-  return lines;
+  for (const note of problemNotes(tool)) rows.push(...sentence(note));
+  return { title: `gentle-ai · ${stateWord(tool.state, say)}`, rows };
 }
 
 function healthWord(health: string, say: Say): string {
   return health === "not_checked" ? say("not checked", "sin comprobar") : health;
 }
 
+// What haril.json sets, in the card's first row: the runtime's own answer comes after it.
+function configuredText(config: MemoryConfigView, say: Say): string {
+  const prefix = say("Configured", "Configurado");
+  if (config.provider === null) return `${prefix}: ${say("no section", "sin sección")}`;
+  return `${prefix}: ${config.provider}`;
+}
+
 // `engramReady`: Engram runs from HARIL's own copy, so a runtime that was started before it only needs a restart.
-function memoryLines(memory: MemoryView, engramReady: boolean, say: Say): string[] {
-  const none = memory.provider === "null";
-  const lines = [
-    none
-      ? say("Memory process · NOT SAVING", "Proceso de memoria · NO GUARDA")
-      : say("Memory process", "Proceso de memoria"),
-  ];
-  if (none) {
-    lines.push(`  ${say("Provider: null (keeps nothing)", "Proveedor: null (no guarda nada)")}`);
+// `config`: what haril.json sets, when the report says. The runtime records its provider only once it has run, so
+// "null" next to a configured Engram is a runtime that has not started yet (or one that started before the setting),
+// not a memory that keeps nothing.
+function memoryCard(
+  memory: MemoryView,
+  engramReady: boolean,
+  config: MemoryConfigView | undefined,
+  say: Say,
+): DockCard {
+  const recordedNull = memory.provider === "null";
+  const unstarted = recordedNull && config?.provider === "engram";
+  const none = recordedNull && !unstarted;
+  const rows: string[] = [];
+  if (config !== undefined) rows.push(...sentence(configuredText(config, say)));
+  if (unstarted) {
+    rows.push(...sentence(say("Last runtime state: null", "Último estado del runtime: null")));
+  } else if (none) {
+    rows.push(
+      ...sentence(say("Provider: null (keeps nothing)", "Proveedor: null (no guarda nada)")),
+    );
   } else {
     const kept =
       memory.persistent === null
         ? ""
         : ` · ${memory.persistent ? say("persistent", "persistente") : say("not persistent", "no persistente")}`;
-    lines.push(...sentence(`${say("Provider", "Proveedor")}: ${memory.provider}${kept}`));
+    rows.push(...sentence(`${say("Provider", "Proveedor")}: ${memory.provider}${kept}`));
   }
-  lines.push(
-    `  Runtime: ${memory.running ? say("running", "en marcha") : say("not running", "parado")}`,
+  rows.push(
+    ...sentence(
+      `Runtime: ${memory.running ? say("running", "en marcha") : say("not running", "parado")}`,
+    ),
     ...sentence(`${say("Health", "Salud")}: ${healthWord(memory.health, say)}`),
   );
   const errorText = memory.lastErrorCode === undefined ? "" : ` (${memory.lastErrorCode})`;
-  lines.push(
+  rows.push(
     ...sentence(
       `${say("Degraded", "Degradada")}: ${memory.degraded ? say("yes", "sí") : "no"}${errorText}`,
     ),
   );
-  lines.push(
+  rows.push(
     ...sentence(
       `${say("Queue", "Cola")}: ${say(`${memory.outboxDepth} to deliver`, `${memory.outboxDepth} por entregar`)}`,
     ),
   );
   if (!memory.initialized) {
-    lines.push(`  ${say("Store not initialized.", "Almacén sin inicializar.")}`);
+    rows.push(...sentence(say("Store not initialized.", "Almacén sin inicializar.")));
   }
-  if (none) {
-    lines.push(
+  if (unstarted) {
+    rows.push(
+      ...sentence(
+        memory.running
+          ? say(
+              "Restart the runtime so it uses Engram.",
+              "Reinicia el runtime para que use Engram.",
+            )
+          : say("Engram starts with the runtime.", "Engram arranca con el runtime."),
+      ),
+    );
+  } else if (none) {
+    rows.push(
       ...sentence(
         engramReady
           ? say(
@@ -335,7 +363,15 @@ function memoryLines(memory: MemoryView, engramReady: boolean, say: Say): string
       ),
     );
   }
-  return lines;
+  const title = say("Memory process", "Proceso de memoria");
+  return {
+    title: none
+      ? say("Memory process · NOT SAVING", "Proceso de memoria · NO GUARDA")
+      : unstarted && !memory.running
+        ? `${title} · ${say("stopped", "parado")}`
+        : title,
+    rows,
+  };
 }
 
 // Why a part has no answer, in at most a few lines of the panel's width.
@@ -381,60 +417,49 @@ function cannotAct(data: MemData): boolean {
 
 export function memRows(data: MemData, options: MemOptions): MemRows {
   const say: Say = (english, spanish) => localized(options.locale, english, spanish);
-  const lines: string[] = [];
-  const actions: { line: number; action: string }[] = [];
+  const cards: DockCard[] = [];
 
   if (data.tools.ok) {
-    lines.push(
-      ...engramLines(data.tools.value.engram, data.tools.value.failure, options.locale, say),
-    );
+    cards.push(engramCard(data.tools.value.engram, data.tools.value.failure, options.locale, say));
   } else {
-    lines.push(
-      say("Engram and gentle-ai · not available", "Engram y gentle-ai · no disponible"),
-      ...reasonLines(data.tools.reason),
-    );
+    cards.push({
+      title: say("Engram and gentle-ai · not available", "Engram y gentle-ai · no disponible"),
+      rows: reasonLines(data.tools.reason),
+    });
   }
-  lines.push("");
 
   if (data.memory.ok) {
-    lines.push(
-      ...memoryLines(
+    cards.push(
+      memoryCard(
         data.memory.value,
         data.tools.ok && data.tools.value.engram?.state === "ok",
+        data.tools.ok ? data.tools.value.memoryConfig : undefined,
         say,
       ),
     );
   } else {
-    lines.push(
-      say("Memory process · not available", "Proceso de memoria · no disponible"),
-      ...reasonLines(data.memory.reason),
-    );
+    cards.push({
+      title: say("Memory process · not available", "Proceso de memoria · no disponible"),
+      rows: reasonLines(data.memory.reason),
+    });
   }
 
-  if (data.tools.ok) lines.push("", ...gentleLines(data.tools.value.gentleAi, say));
+  if (data.tools.ok) cards.push(gentleCard(data.tools.value.gentleAi, say));
 
   if (options.checkError !== undefined) {
-    lines.push(
-      "",
-      say("Start-up check", "Comprobación al arrancar"),
-      ...sentence(say(`failed: ${options.checkError}`, `falló: ${options.checkError}`)),
-    );
+    cards.push({
+      title: say("Start-up check", "Comprobación al arrancar"),
+      rows: sentence(say(`failed: ${options.checkError}`, `falló: ${options.checkError}`)),
+    });
   }
 
+  const actions = say("Actions", "Acciones");
   if (options.busy !== undefined) {
-    // The row that says what runs; a longer one goes on under it, indented.
-    const [first = "", ...rest] = wrap(`… ${busyLabel(options.busy, say)}`, ROW_WIDTH - 2);
-    lines.push("", first, ...rest.map((part) => `  ${part}`));
+    // The row that says what runs; a longer one goes on under it, indented to start under its words.
+    const [first = "", ...rest] = wrap(busyLabel(options.busy, say), ROW_WIDTH - 2);
+    cards.push({ title: actions, rows: [`… ${first}`, ...rest.map((part) => `  ${part}`)] });
   } else if (!cannotAct(data)) {
-    lines.push("");
-    for (const { action, label } of actionLabels(data, say)) {
-      actions.push({ line: lines.length, action });
-      lines.push(`▸ ${label}`);
-    }
+    cards.push({ title: actions, rows: [], buttons: actionLabels(data, say) });
   }
-  return {
-    status: say("Memory and tools", "Memoria y herramientas"),
-    lines,
-    actions,
-  };
+  return { status: say("Memory and tools", "Memoria y herramientas"), cards };
 }

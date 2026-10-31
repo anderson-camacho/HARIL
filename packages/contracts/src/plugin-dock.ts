@@ -9,6 +9,8 @@ export const DOCK_SLOTS = [
   { id: "main", label: "Principal" },
   { id: "memory", label: "Memoria" },
   { id: "docs", label: "Documentación" },
+  { id: "activity", label: "Actividad" },
+  { id: "actions", label: "Acciones" },
 ] as const;
 
 export type DockSlotId = (typeof DOCK_SLOTS)[number]["id"];

@@ -36,10 +36,16 @@ describe("HARIL dock shortcuts", () => {
     const numeric = createDockPicker(state.slots, "main", chosen);
     numeric.handleInput("3");
     expect(chosen).toHaveBeenLastCalledWith({ type: "open", id: "docs" });
-    // Only three slots exist: a fourth digit opens nothing.
+    const fourth = createDockPicker(state.slots, "main", chosen);
+    fourth.handleInput("4");
+    expect(chosen).toHaveBeenLastCalledWith({ type: "open", id: "activity" });
+    const fifth = createDockPicker(state.slots, "main", chosen);
+    fifth.handleInput("5");
+    expect(chosen).toHaveBeenLastCalledWith({ type: "open", id: "actions" });
+    // Only five slots exist: a sixth digit opens nothing.
     const beyond = createDockPicker(state.slots, "main", chosen);
-    beyond.handleInput("4");
-    expect(chosen).toHaveBeenCalledTimes(2);
+    beyond.handleInput("6");
+    expect(chosen).toHaveBeenCalledTimes(4);
     const cancel = createDockPicker(state.slots, "main", chosen);
     cancel.handleInput("\u001b");
     expect(chosen).toHaveBeenLastCalledWith({ type: "cancel" });
@@ -58,10 +64,42 @@ describe("HARIL dock shortcuts", () => {
     picker.handleInput(up);
     expect(picker.render(48).map(stripAnsi).join("\n")).toContain("▸ 1. Principal");
     picker.handleInput(up);
-    expect(picker.render(48).map(stripAnsi).join("\n")).toContain("▸ 3. Documentación");
+    expect(picker.render(48).map(stripAnsi).join("\n")).toContain("▸ 5. Acciones");
     expect(tui.requestRender).toHaveBeenCalledTimes(3);
     picker.handleInput("\u001b[13u");
-    expect(selected).toHaveBeenCalledWith({ type: "open", id: "docs" });
+    expect(selected).toHaveBeenCalledWith({ type: "open", id: "actions" });
+  });
+
+  it("lists the five slots in the order of the registry, ACC last, in English too", () => {
+    const picker = createDockPicker(initialPaneSettings().slots, "main", vi.fn(), undefined, "en");
+    const text = picker.render(48).map(stripAnsi);
+    expect(text.every((line) => textWidth(line) === 48)).toBe(true);
+    const names = text
+      .filter((line) => /\d\. /.test(line))
+      .map((line) => line.replace(/[│▸ ]+/gu, " ").trim());
+    expect(names).toEqual(["1. Main", "2. Memory", "3. Docs", "4. Activity", "5. Actions"]);
+    // A hidden slot is not offered and the digits count the visible ones.
+    const hidden = createDockPicker(
+      [
+        { id: "main", visible: true },
+        { id: "actions", visible: true },
+        { id: "memory", visible: false },
+        { id: "docs", visible: true },
+        { id: "activity", visible: false },
+      ],
+      "main",
+      vi.fn(),
+    );
+    expect(hidden.render(48).map(stripAnsi).join("\n")).not.toContain("Memoria");
+    expect(
+      dockSlotAt(
+        [
+          { id: "main", visible: true },
+          { id: "actions", visible: true },
+        ],
+        2,
+      )?.id,
+    ).toBe("actions");
   });
 
   it("ignores unrelated shortcuts and accepts Kitty Escape", () => {
