@@ -2,6 +2,8 @@
 
 **¿Primera vez?** Consulta la [guía completa de uso](docs/GUIA_DE_USO.md): instalación, modos, comandos, paneles laterales e interpretación de cada indicador.
 
+**¿Quieres decidir los próximos cambios?** Abre el [plan editable de integración](docs/PLAN_INTEGRACION_EDITABLE.md). Es una propuesta para revisar y modificar, no una implementación.
+
 ## Windows 11: instalar desde cero, sin clonar HARIL (PowerShell)
 
 Los comandos funcionan desde cualquier carpeta, también `C:\Windows\System32`. Instala primero Node.js y Corepack; después ejecuta el instalador remoto de HARIL. No necesitas `git clone`, `git pull` ni conservar fuentes.
@@ -1029,7 +1031,7 @@ Los dossiers de `docs/research/` se leen solo bajo demanda, cuando un documento 
 
 ## Versiones
 
-Versión actual: **0.23.12**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
+Versión actual: **0.23.13**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
 
 ## Licencia
 

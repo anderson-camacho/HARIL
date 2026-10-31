@@ -4,6 +4,30 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.23.13
+
+- **Fecha:** 2026-10-30
+- **Estado:** plan editable para decidir la integración y reorganización de HARIL, sin ejecutar cambios de código ni reactivar Matrix.
+
+### Añadido
+
+- docs/PLAN_INTEGRACION_EDITABLE.md: punto de partida comprobado en main 0.23.12, decisiones editables, inventario de herramientas externas, plan por etapas, criterios de aceptación y prompt breve para un agente implementador.
+- Enlace al plan desde la primera sección de README.md.
+
+### Cambiado
+
+- Versión de los paquetes y referencia de versión actual alineadas con la entrega de planificación. Sin cambios en dependencias ni en tiempo de ejecución.
+
+### Corregido
+
+- Nada en el funcionamiento del producto; esta entrega es exclusivamente documental.
+
+### Verificación
+
+- Documento y enlaces revisados sobre la rama de planificación. Las pruebas automáticas de GitHub se ejecutan en el PR; no se declara validación de Windows Terminal en una entrega sin cambios de interfaz.
+
+---
+
 ## 0.23.12
 
 - **Fecha:** 2026-10-30
