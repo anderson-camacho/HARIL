@@ -253,7 +253,7 @@ describe("the bottom bar beside the native dock", () => {
       const full = lines();
       expect(full).toHaveLength(3);
       expect(full[1]).toContain("fake-cwd");
-      expect(full[1]).toContain("(main)");
+      expect(full[1]).toContain("main");
       expect(full[2]).toContain("[1 AGENTS]");
       await plugin("docs");
       expect(lines()).toHaveLength(3);

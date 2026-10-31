@@ -1,14 +1,30 @@
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { type ChildProcess, execFile, execFileSync } from "node:child_process";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createGitSummaryCache,
   type GitSummary,
   parseGitStatus,
   readGitSummary,
+  runWithLimits,
 } from "../src/git-summary.js";
+
+// Every execFile of the module goes through the real one, and the spy keeps what it was called with: the tests below
+// read the program, the arguments and the options the reader hands to the operating system.
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, execFile: vi.fn(actual.execFile) };
+});
 
 // The change counts of the bar's git segment (powerline line): staged, modified and untracked paths, read from git's
 // own porcelain without a shell, kept in a small cache so the footer's render never waits for git.
@@ -125,6 +141,70 @@ describe("readGitSummary", () => {
     ).toBeUndefined();
   });
 
+  // What the reader hands to the operating system: the spy keeps the program, the arguments and the options.
+  function lastStart() {
+    const spy = vi.mocked(execFile);
+    const index = spy.mock.calls.length - 1;
+    const [program, args, options] = spy.mock.calls[index] as unknown as [
+      string,
+      string[],
+      { cwd?: string; env: NodeJS.ProcessEnv; shell?: boolean; windowsHide?: boolean },
+    ];
+    return { program, args, options, child: spy.mock.results[index]?.value as ChildProcess };
+  }
+
+  it("starts git with no prompt, no LFS filter and a closed stdin, as the writing side does (integrations/git/src/run.ts)", async () => {
+    git("init", "--quiet");
+    await readGitSummary(root, { env: { ...isolated(), GIT_TERMINAL_PROMPT: "1" } });
+    const { program, args, options, child } = lastStart();
+    expect(program).toBe("git");
+    expect(options.shell).toBe(false);
+    expect(options.windowsHide).toBe(true);
+    expect(options.env.GIT_TERMINAL_PROMPT).toBe("0");
+    expect(options.env.GIT_LFS_SKIP_SMUDGE).toBe("1");
+    for (const setting of [
+      "filter.lfs.smudge=",
+      "filter.lfs.clean=",
+      "filter.lfs.process=",
+      "filter.lfs.required=false",
+      "core.fsmonitor=false",
+    ]) {
+      const at = args.indexOf(setting);
+      expect(at, setting).toBeGreaterThan(0);
+      expect(args[at - 1], setting).toBe("-c");
+    }
+    expect(child.stdin?.writableEnded).toBe(true);
+  });
+
+  it("names the folder as an absolute path and runs git from a neutral folder, never the one it summarises", async () => {
+    git("init", "--quiet");
+    await readGitSummary(root, { env: isolated() });
+    const { args, options } = lastStart();
+    expect(options.cwd).toBeDefined();
+    expect(isAbsolute(options.cwd ?? "")).toBe(true);
+    expect(existsSync(options.cwd ?? "")).toBe(true);
+    expect(options.cwd).not.toBe(root);
+    expect(options.cwd).not.toBe(process.cwd());
+    expect(args[args.indexOf("-C") + 1]).toBe(root);
+
+    await readGitSummary("a-relative-folder", { env: isolated() });
+    const relative = lastStart();
+    expect(relative.args[relative.args.indexOf("-C") + 1]).toBe(resolve("a-relative-folder"));
+  });
+
+  it("answers undefined, and does not throw, when the output is past the cap", async () => {
+    git("init", "--quiet");
+    for (let index = 0; index < 20; index++) {
+      writeFileSync(join(root, `file-${index}.txt`), "x\n");
+    }
+    expect(await readGitSummary(root, { env: isolated() })).toEqual({
+      staged: 0,
+      modified: 0,
+      untracked: 20,
+    });
+    expect(await readGitSummary(root, { env: isolated(), maxOutputBytes: 16 })).toBeUndefined();
+  });
+
   it("ignores the variables that point git at another repository", async () => {
     git("init", "--quiet");
     const elsewhere = mkdtempSync(join(tmpdir(), "haril-git-elsewhere-"));
@@ -134,6 +214,188 @@ describe("readGitSummary", () => {
     } finally {
       rmSync(elsewhere, { recursive: true, force: true });
     }
+  });
+});
+
+describe("runWithLimits", () => {
+  const LIMITS = { timeoutMs: 5_000, maxBuffer: 1024 * 1024 };
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "haril-run-limits-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // A script that writes its pid to `file` and then sleeps; `before` runs first (a parent starts its child there).
+  function sleeper(file: string, before = ""): string {
+    return `${before}require("node:fs").writeFileSync(${JSON.stringify(file)}, String(process.pid)); setInterval(() => {}, 1000);`;
+  }
+
+  function alive(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === "EPERM";
+    }
+  }
+
+  async function goneWithin(pid: number, ms: number): Promise<boolean> {
+    const until = Date.now() + ms;
+    while (Date.now() < until) {
+      if (!alive(pid)) return true;
+      await new Promise((done) => setTimeout(done, 40));
+    }
+    return !alive(pid);
+  }
+
+  function pidIn(file: string): number {
+    return Number(readFileSync(file, "utf8"));
+  }
+
+  it("answers the standard output of a command that ends in time", async () => {
+    expect(
+      await runWithLimits(process.execPath, ["-e", "process.stdout.write('hello')"], LIMITS),
+    ).toBe("hello");
+  });
+
+  it("answers undefined for a command that fails, and for one that does not exist", async () => {
+    expect(
+      await runWithLimits(process.execPath, ["-e", "process.exit(3)"], LIMITS),
+    ).toBeUndefined();
+    expect(await runWithLimits(join(dir, "no-such-program"), [], LIMITS)).toBeUndefined();
+  });
+
+  it("answers undefined, and does not throw, when the output is past the cap", async () => {
+    const script = "process.stdout.write('x'.repeat(5000))";
+    expect(await runWithLimits(process.execPath, ["-e", script], LIMITS)).toHaveLength(5000);
+    expect(
+      await runWithLimits(process.execPath, ["-e", script], { ...LIMITS, maxBuffer: 100 }),
+    ).toBeUndefined();
+  });
+
+  it("gives up on a command that outlives the time limit: undefined within about the limit, and the command gone", async () => {
+    const file = join(dir, "pid");
+    const started = Date.now();
+    const answer = await runWithLimits(process.execPath, ["-e", sleeper(file)], {
+      ...LIMITS,
+      timeoutMs: 1_200,
+    });
+    const elapsed = Date.now() - started;
+    expect(answer).toBeUndefined();
+    expect(elapsed).toBeGreaterThanOrEqual(1_100);
+    expect(elapsed).toBeLessThan(1_200 + 2_500);
+    expect(await goneWithin(pidIn(file), 3_000)).toBe(true);
+  });
+
+  it("starts the command with the environment and the folder it is given", async () => {
+    const script = "process.stdout.write(process.cwd() + '|' + process.env.HARIL_PROBE)";
+    const answer = await runWithLimits(process.execPath, ["-e", script], {
+      ...LIMITS,
+      cwd: dir,
+      env: { ...process.env, HARIL_PROBE: "seen" },
+    });
+    expect(answer?.toLowerCase()).toBe(`${realpathSync(dir)}|seen`.toLowerCase());
+  });
+
+  describe("on Windows the time limit takes the descendants down too", () => {
+    // Git for Windows starts through a launcher (cmd\git.exe) whose child does the work: killing the launcher alone
+    // leaves that child running. The tree kill runs before the launcher is gone, then the launcher is killed anyway.
+    it("asks for the tree kill while the command is alive, then ends the command itself", async () => {
+      const file = join(dir, "pid");
+      const killed: { pid: number; aliveThen: boolean }[] = [];
+      const answer = await runWithLimits(process.execPath, ["-e", sleeper(file)], {
+        ...LIMITS,
+        timeoutMs: 1_200,
+        platform: "win32",
+        killTree: (pid, done) => {
+          killed.push({ pid, aliveThen: alive(pid) });
+          setTimeout(done, 30);
+        },
+      });
+      expect(answer).toBeUndefined();
+      expect(killed).toEqual([{ pid: pidIn(file), aliveThen: true }]);
+      expect(await goneWithin(pidIn(file), 3_000)).toBe(true);
+    });
+
+    it("ends the command itself even when the tree kill does nothing", async () => {
+      const file = join(dir, "pid");
+      const answer = await runWithLimits(process.execPath, ["-e", sleeper(file)], {
+        ...LIMITS,
+        timeoutMs: 1_200,
+        platform: "win32",
+        killTree: (_pid, done) => done(),
+      });
+      expect(answer).toBeUndefined();
+      expect(await goneWithin(pidIn(file), 3_000)).toBe(true);
+    });
+
+    it("does not ask for it when the command ends in time", async () => {
+      const calls: number[] = [];
+      const answer = await runWithLimits(process.execPath, ["-e", "process.stdout.write('ok')"], {
+        ...LIMITS,
+        timeoutMs: 1_200,
+        platform: "win32",
+        killTree: (pid, done) => {
+          calls.push(pid);
+          done();
+        },
+      });
+      expect(answer).toBe("ok");
+      await new Promise((done) => setTimeout(done, 1_500));
+      expect(calls).toEqual([]);
+    });
+
+    it("is left to the platform's own time limit elsewhere", async () => {
+      const file = join(dir, "pid");
+      const calls: number[] = [];
+      const answer = await runWithLimits(process.execPath, ["-e", sleeper(file)], {
+        ...LIMITS,
+        timeoutMs: 1_200,
+        platform: "linux",
+        killTree: (pid, done) => {
+          calls.push(pid);
+          done();
+        },
+      });
+      expect(answer).toBeUndefined();
+      expect(calls).toEqual([]);
+      expect(await goneWithin(pidIn(file), 3_000)).toBe(true);
+    });
+
+    // The real thing, with a parent and a child of its own: both must be gone after the time limit. The child is
+    // detached, as git.exe behind the launcher is: a Node parent kills its undetached children when it ends (libuv puts
+    // them in a job object), which would hide the problem.
+    it.runIf(process.platform === "win32")(
+      "kills a command's child process with taskkill, not only the command",
+      async () => {
+        const parentFile = join(dir, "parent-pid");
+        const childFile = join(dir, "child-pid");
+        const child = `require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(sleeper(childFile))}], { stdio: "ignore", detached: true });`;
+        const answer = await runWithLimits(process.execPath, ["-e", sleeper(parentFile, child)], {
+          ...LIMITS,
+          timeoutMs: 3_000,
+        });
+        expect(answer).toBeUndefined();
+        try {
+          expect(await goneWithin(pidIn(parentFile), 3_000)).toBe(true);
+          expect(await goneWithin(pidIn(childFile), 3_000)).toBe(true);
+        } finally {
+          // A child that survived must not outlive the test.
+          for (const file of [parentFile, childFile]) {
+            try {
+              process.kill(pidIn(file));
+            } catch {
+              // Already gone.
+            }
+          }
+        }
+      },
+      20_000,
+    );
   });
 });
 
@@ -259,8 +521,10 @@ describe("the git summary cache", () => {
     await settle();
     expect(summaries.peek("/work")).toBeUndefined();
     expect(changes).toBe(2);
+  });
 
-    const throwing = createGitSummaryCache({
+  it("treats a reader that throws before it returns a promise as a failed read", async () => {
+    const summaries = createGitSummaryCache({
       read: () => {
         throw new Error("synchronous failure");
       },
@@ -270,12 +534,13 @@ describe("the git summary cache", () => {
         changes++;
       },
     });
-    expect(() => throwing.peek("/work")).not.toThrow();
+    expect(summaries.peek("/work")).toBeUndefined();
     await settle();
-    expect(throwing.peek("/work")).toBeUndefined();
+    expect(summaries.peek("/work")).toBeUndefined();
+    expect(changes).toBe(0);
   });
 
-  it("does not hammer a failing git: it tries again only after the time to live", async () => {
+  it("does not hammer a failing git: it tries again only after a longer delay than the time to live", async () => {
     const reader = manualReader();
     const summaries = cache(reader, 5_000);
     summaries.peek("/work");
@@ -285,7 +550,71 @@ describe("the git summary cache", () => {
     for (let index = 0; index < 5; index++) summaries.peek("/work");
     await settle();
     expect(reader.calls).toHaveLength(1);
+    // The normal time to live is not enough after a failure: a git slower than its time limit would be started again
+    // every few seconds, and the runs would pile up.
     clock += 5_000;
+    summaries.peek("/work");
+    await settle();
+    expect(reader.calls).toHaveLength(1);
+    clock += 24_999;
+    summaries.peek("/work");
+    await settle();
+    expect(reader.calls).toHaveLength(1);
+    clock += 1;
+    summaries.peek("/work");
+    await settle();
+    expect(reader.calls).toHaveLength(2);
+  });
+
+  it("goes back to the normal time to live as soon as a read succeeds", async () => {
+    const reader = manualReader();
+    const summaries = cache(reader, 5_000);
+    summaries.peek("/work");
+    await settle();
+    reader.answer(undefined);
+    await settle();
+    clock += 30_000;
+    summaries.peek("/work");
+    await settle();
+    reader.answer(SOME);
+    await settle();
+    clock += 5_000;
+    expect(summaries.peek("/work")).toEqual(SOME);
+    await settle();
+    expect(reader.calls).toHaveLength(3);
+  });
+
+  it("reads at once after a failure when the branch changes, whatever the delay", async () => {
+    const reader = manualReader();
+    const summaries = cache(reader, 5_000);
+    summaries.peek("/work");
+    await settle();
+    reader.answer(undefined);
+    await settle();
+    summaries.invalidate();
+    summaries.peek("/work");
+    await settle();
+    expect(reader.calls).toHaveLength(2);
+  });
+
+  it("honours the delay it is given", async () => {
+    const reader = manualReader();
+    const summaries = createGitSummaryCache({
+      read: (cwd) => reader.read(cwd),
+      ttlMs: 100,
+      retryAfterFailureMs: 400,
+      now: () => clock,
+      onChange: () => undefined,
+    });
+    summaries.peek("/work");
+    await settle();
+    reader.fail("down");
+    await settle();
+    clock += 399;
+    summaries.peek("/work");
+    await settle();
+    expect(reader.calls).toHaveLength(1);
+    clock += 1;
     summaries.peek("/work");
     await settle();
     expect(reader.calls).toHaveLength(2);
@@ -329,6 +658,70 @@ describe("the git summary cache", () => {
     expect(reader.calls).toHaveLength(2);
     reader.answer({ staged: 0, modified: 0, untracked: 9 });
     await settle();
+    expect(summaries.peek("/work")).toEqual({ staged: 0, modified: 0, untracked: 9 });
+  });
+
+  // A repaint that throws must not become an unhandled rejection (that ends a Node process by default): the read runs
+  // from a microtask nobody awaits.
+  async function withUnhandledRejections(run: () => Promise<void>): Promise<unknown[]> {
+    const seen: unknown[] = [];
+    const listener = (reason: unknown): void => {
+      seen.push(reason);
+    };
+    process.on("unhandledRejection", listener);
+    try {
+      await run();
+      // The event is emitted after the microtasks drain, from the next turn of the loop.
+      await new Promise((done) => setTimeout(done, 30));
+    } finally {
+      process.off("unhandledRejection", listener);
+    }
+    return seen;
+  }
+
+  it("is not brought down by an onChange that throws: no unhandled rejection, and the answer is kept", async () => {
+    const reader = manualReader();
+    const summaries = createGitSummaryCache({
+      read: (cwd) => reader.read(cwd),
+      ttlMs: 5_000,
+      now: () => clock,
+      onChange: () => {
+        changes++;
+        throw new Error("the repaint failed");
+      },
+    });
+    const unhandled = await withUnhandledRejections(async () => {
+      summaries.peek("/work");
+      await settle();
+      reader.answer(SOME);
+      await settle();
+    });
+    expect(unhandled).toEqual([]);
+    expect(changes).toBe(1);
+    expect(summaries.peek("/work")).toEqual(SOME);
+  });
+
+  it("still reads again after an invalidation when onChange throws on the way", async () => {
+    const reader = manualReader();
+    const summaries = createGitSummaryCache({
+      read: (cwd) => reader.read(cwd),
+      ttlMs: 60_000,
+      now: () => clock,
+      onChange: () => {
+        throw new Error("the repaint failed");
+      },
+    });
+    const unhandled = await withUnhandledRejections(async () => {
+      summaries.peek("/work");
+      await settle();
+      summaries.invalidate();
+      reader.answer(SOME);
+      await settle();
+      reader.answer({ staged: 0, modified: 0, untracked: 9 });
+      await settle();
+    });
+    expect(unhandled).toEqual([]);
+    expect(reader.calls).toHaveLength(2);
     expect(summaries.peek("/work")).toEqual({ staged: 0, modified: 0, untracked: 9 });
   });
 
