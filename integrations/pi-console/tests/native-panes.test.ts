@@ -132,7 +132,7 @@ describe("Pi's native split-pane adapter", () => {
     expect(lines.every((line) => textWidth(line) === 23)).toBe(true);
     const text = lines.join("\n");
     expect(text.indexOf("1:MAIN")).toBeLessThan(text.indexOf("2:DOCS"));
-    expect(text).not.toContain("MEM");
+    expect(text).not.toContain("TOOLS");
     expect(
       readDockSlots({ value: [{ id: "explorer", visible: true }] }).map((slot) => slot.id),
     ).toEqual(["main", "memory", "docs", "activity", "actions"]);
@@ -197,13 +197,13 @@ describe("Pi's native split-pane adapter", () => {
     const tabRows = right?.render(RAIL_WIDTH).map(stripAnsi);
     // The tabs sit in the header box, under its first row (the space).
     expect(tabRows?.[2]).toContain("1:MAIN");
-    expect(tabRows?.[2]).toContain("2:MEM");
+    expect(tabRows?.[2]).toContain("2:TOOLS");
     expect(tabRows?.[2]).toContain("3:DOCS");
     right?.handleMouse?.({
       type: "click",
       button: "left",
       y: 2,
-      x: (tabRows?.[2] ?? "").indexOf("2:MEM"),
+      x: (tabRows?.[2] ?? "").indexOf("2:TOOLS"),
     });
     expect(select).toHaveBeenCalledWith("memory");
 
@@ -274,11 +274,11 @@ describe("Pi's native split-pane adapter", () => {
       right?.handleMouse?.({ type: "click", button: "left", y: 2, x });
       return select.mock.calls.map((call) => call[0]);
     };
-    // Drawn as "│ │ [1:MAIN]  2:MEM   3:DOCS ...": the dock's "│", the margin, the box's "│" and its padding, then the
+    // Drawn as "│ │ [1:MAIN]  2:TOOLS   3:DOCS ...": the dock's "│", the margin, the box's "│" and its padding, then the
     // tab text. An unselected tab keeps one padding space on each side of its text.
     const main = row.indexOf("[1:MAIN]");
-    const memory = row.indexOf("2:MEM") - 1;
-    const memoryLast = memory + " 2:MEM ".length - 1;
+    const memory = row.indexOf("2:TOOLS") - 1;
+    const memoryLast = memory + " 2:TOOLS ".length - 1;
     expect(main).toBe(CARD_TEXT_X);
     expect(clickAt(main)).toEqual(["main"]);
     expect(clickAt(main + "[1:MAIN]".length - 1)).toEqual(["main"]);
@@ -425,7 +425,7 @@ describe("the status block belongs to the MAIN tab", () => {
     state.selected = "memory";
     state.detail = memoryDetail;
     const memory = rows();
-    expect(memory[1]).toContain("▶ Espacio: Memoria · Alt+L");
+    expect(memory[1]).toContain("▶ Espacio: Tools · Alt+L");
     expect(memory.join("\n")).not.toContain("DASH ROW");
     // Not a blank rail: the header says where the user is and that the dock can be opened.
     expect(memory[1]?.trim().length).toBeGreaterThan(10);
@@ -489,7 +489,7 @@ describe("where the status of the console is shown", () => {
     ["the terminal is a column short", { columns: MIN_PANE_COLUMNS - 1 }],
     ["the terminal is a row short", { rows: MIN_PANE_ROWS - 1 }],
     ["the right sidebar is hidden", { rightVisible: false }],
-    ["MEM is selected", { selected: "memory" as const }],
+    ["TOOLS is selected", { selected: "memory" as const }],
     ["DOCS is selected", { selected: "docs" as const }],
   ])("is the bottom bar when %s", (_name, change) => {
     expect(statusInSidebar({ ...base, ...change })).toBe(false);

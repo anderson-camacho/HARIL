@@ -7,7 +7,9 @@
 // A slot added or removed in one must be added or removed in the other.
 export const DOCK_SLOTS = [
   { id: "main", label: "Principal" },
-  { id: "memory", label: "Memoria" },
+  // The slot is called Tools (its tab is TOOLS) but its id stays «memory»: a haril.json written before the rename keeps
+  // validating. The CLI also takes «tools» for it (canonicalDockSlotId).
+  { id: "memory", label: "Tools" },
   { id: "docs", label: "Documentación" },
   { id: "activity", label: "Actividad" },
   { id: "actions", label: "Acciones" },
@@ -93,6 +95,15 @@ export function resolveDockSlots(value: unknown): DockSlotPreference[] {
 
 export function dockSlotExists(id: string): id is DockSlotId {
   return IDS.has(id);
+}
+
+// Other names a slot answers to on the command line. The Tools slot is stored as «memory» and is also «tools».
+const ALIASES: ReadonlyMap<string, DockSlotId> = new Map([["tools", "memory"]]);
+
+// The id of the slot a name refers to: the name itself, or the id its alias stands for. An unknown name is returned as it
+// came, for the caller to refuse.
+export function canonicalDockSlotId(name: string): string {
+  return ALIASES.get(name) ?? name;
 }
 
 // True for the slot that always comes first and cannot be hidden (the CLI refuses to hide or move it).

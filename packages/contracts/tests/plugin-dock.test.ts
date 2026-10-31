@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  canonicalDockSlotId,
   DOCK_SLOTS,
   dockPreferenceErrors,
   dockSlotExists,
@@ -50,7 +51,21 @@ const defaults = [
 ];
 
 describe("dock slot preferences", () => {
-  it("offers MAIN, MEM, DOCS, ACT and ACC and no longer knows the retired slots", () => {
+  it("calls the memory slot Tools, keeps its stored id, and takes «tools» as another name for it", () => {
+    expect(DOCK_SLOTS.find((slot) => slot.id === "memory")?.label).toBe("Tools");
+    // A haril.json written before the rename still validates: the id on disk did not change.
+    expect(dockPreferenceErrors(current)).toEqual([]);
+    expect(dockSlotExists("memory")).toBe(true);
+    // «tools» is only a name on the command line, never an id to store.
+    expect(dockSlotExists("tools")).toBe(false);
+    expect(canonicalDockSlotId("tools")).toBe("memory");
+    expect(canonicalDockSlotId("memory")).toBe("memory");
+    for (const other of ["main", "docs", "mystery", "constructor", ""]) {
+      expect(canonicalDockSlotId(other)).toBe(other);
+    }
+  });
+
+  it("offers MAIN, TOOLS, DOCS, ACT and ACC and no longer knows the retired slots", () => {
     expect(DOCK_SLOTS.map((slot) => slot.id)).toEqual([
       "main",
       "memory",

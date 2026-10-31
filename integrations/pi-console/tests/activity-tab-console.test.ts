@@ -273,7 +273,7 @@ describe("the ACT tab", () => {
       await h.shows("╭─ Actividad · 3 ");
       await h.command("haril-plugin", "9");
       expect(h.ctx.notes.at(-1)?.[0]).toBe(
-        "Uso: /haril-plugin [main|memory|docs|activity|actions|1..5|details]",
+        "Uso: /haril-plugin [main|tools|docs|activity|actions|1..5|details]",
       );
     });
   });

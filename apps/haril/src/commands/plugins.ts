@@ -1,4 +1,10 @@
-import { DOCK_SLOTS, dockSlotExists, isPinnedDockSlot, resolveDockSlots } from "@haril/contracts";
+import {
+  canonicalDockSlotId,
+  DOCK_SLOTS,
+  dockSlotExists,
+  isPinnedDockSlot,
+  resolveDockSlots,
+} from "@haril/contracts";
 import { argsProblem, parseArgs } from "../args.js";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
 import { configDocumentErrors, harilConfigPath } from "../providers.js";
@@ -8,11 +14,12 @@ import { readConfigDocument, serializeConfig, writeConfigAtomically } from "./co
 // install, enable, unload or inspect Pi extensions: Pi's live inventory is not available here.
 const USAGE = [
   "usage: haril plugins list [--json]",
-  "       haril plugins show|hide <main|memory|docs|activity|actions> [--json]",
+  "       haril plugins show|hide <main|tools|docs|activity|actions> [--json]",
   "       haril plugins move <id> up|down [--json]",
   "       haril plugins reset [--json]",
   "These settings control HARIL's visual dock; Pi extensions are not changed.",
   "main is always the first slot and always visible: it cannot be hidden or moved.",
+  "tools is the slot haril.json stores as memory: either name works.",
 ].join("\n");
 
 const PINNED_MESSAGE =
@@ -46,7 +53,9 @@ export function plugins(args: readonly string[], io: CliIo, host: HostInfo): num
   const parsed = parseArgs(args, { values: [], flags: ["--json"] });
   const problem = argsProblem(parsed, io);
   if (problem !== null) return problem;
-  const [verb = "list", id, direction, ...extra] = parsed.positionals;
+  const [verb = "list", requested, direction, ...extra] = parsed.positionals;
+  // «tools» is the slot that haril.json stores as «memory».
+  const id = requested === undefined ? undefined : canonicalDockSlotId(requested);
   const json = parsed.flags.has("--json");
   if (extra.length > 0) return failure(io, USAGE);
   if (verb === "list" || verb === "reset") {

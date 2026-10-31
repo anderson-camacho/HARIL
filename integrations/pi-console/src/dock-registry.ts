@@ -6,7 +6,9 @@
 // repeated here; a test compares them (dock-registry.test.ts).
 export const DOCK_LABELS = [
   { id: "main", label: "Principal", labelEn: "Main", tab: "MAIN", readOnly: true },
-  { id: "memory", label: "Memoria", labelEn: "Memory", tab: "MEM", readOnly: true },
+  // The id stays «memory» so a haril.json written before the tab was renamed keeps validating; /haril-plugin also
+  // answers to «tools» (dockIdFromWord in dock-navigation.ts).
+  { id: "memory", label: "Tools", labelEn: "Tools", tab: "TOOLS", readOnly: true },
   { id: "docs", label: "Documentación", labelEn: "Docs", tab: "DOCS", readOnly: true },
   { id: "activity", label: "Actividad", labelEn: "Activity", tab: "ACT", readOnly: true },
   { id: "actions", label: "Acciones", labelEn: "Actions", tab: "ACC", readOnly: true },

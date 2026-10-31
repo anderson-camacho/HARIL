@@ -1,7 +1,7 @@
 import { plainText } from "./text.js";
 
 // What `haril tools status|ensure|update --json` and `haril memory status --json` print, read defensively. The console
-// imports no workspace package, so these shapes are repeated here for the fields the MEM tab uses; anything that is not
+// imports no workspace package, so these shapes are repeated here for the fields the TOOLS tab uses; anything that is not
 // what it expects is dropped, and every text that reaches the panel went through plainText first (a path, a message or
 // a provider name comes from outside HARIL's own code).
 

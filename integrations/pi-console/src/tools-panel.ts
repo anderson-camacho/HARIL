@@ -12,7 +12,7 @@ import {
 } from "./tools-model.js";
 import { type BusyKind, busyLabel, type MemData, TOOLS_ACTIONS } from "./tools-view.js";
 
-// What the console does for the MEM tab besides drawing it: the check that runs when it opens, the four actions the
+// What the console does for the TOOLS tab besides drawing it: the check that runs when it opens, the four actions the
 // tab offers, and the one notice each of them leaves. Everything goes through the HARIL CLI (`host.run`), in the
 // background: the console never waits for it, and no failure here reaches the user as anything but a line in the tab
 // or a notice.
@@ -43,7 +43,7 @@ export interface ToolsHost {
         confirm(title: string, message: string): Promise<boolean>;
       }
     | undefined;
-  // The MEM tab is the one on screen.
+  // The TOOLS tab is the one on screen.
   memoryOpen(): boolean;
   // Draws the tab again from the data it holds: only its busy state changed.
   repaint(): void;
@@ -182,8 +182,8 @@ function attentionParts(status: ToolsStatusView | undefined, say: Say): Part[] {
     parts.push({
       key: `gentle-ai:outdated:${installed}>${gentle.latest}`,
       text: say(
-        `gentle-ai ${installed} → ${gentle.latest} available: Alt+L → MEM → Update.`,
-        `gentle-ai ${installed} → ${gentle.latest} disponible: Alt+L → MEM → Actualizar.`,
+        `gentle-ai ${installed} → ${gentle.latest} available: Alt+L → TOOLS → Update.`,
+        `gentle-ai ${installed} → ${gentle.latest} disponible: Alt+L → TOOLS → Actualizar.`,
       ),
       level: "info",
     });
@@ -191,8 +191,8 @@ function attentionParts(status: ToolsStatusView | undefined, say: Say): Part[] {
     parts.push({
       key: "gentle-ai:missing",
       text: say(
-        "gentle-ai is not installed: Alt+L → MEM → Install gentle-ai.",
-        "gentle-ai no está instalado: Alt+L → MEM → Instalar gentle-ai.",
+        "gentle-ai is not installed: Alt+L → TOOLS → Install gentle-ai.",
+        "gentle-ai no está instalado: Alt+L → TOOLS → Instalar gentle-ai.",
       ),
       level: "info",
     });

@@ -1,4 +1,4 @@
-// How a dock view (the MEM and DOCS tabs) is laid out in the right rail: as cards, the actions of a card as buttons.
+// How a dock view (the TOOLS and DOCS tabs) is laid out in the right rail: as cards, the actions of a card as buttons.
 // The view declares its sections as data (DockCard) and this module draws them, so what a menu or a click needs (an
 // action and its label) is carried by the data and never read back from the rows that were drawn.
 import type { DashboardTone } from "./dashboard-theme.js";
