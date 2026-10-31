@@ -1,6 +1,8 @@
 import { homedir } from "node:os";
 import { sep } from "node:path";
+import type { GitSummary } from "./git-summary.js";
 import type { ConsoleTheme, ThemeColor } from "./pi-types.js";
+import { powerlineHead } from "./powerline.js";
 import { plainText, stripAnsi, textWidth, truncate, wrap } from "./text.js";
 
 // What the console draws: the HARIL bar (Pi's footer), the startup header and the output of a HARIL command (a widget
@@ -34,6 +36,9 @@ export interface BarFacts {
   // and the model, and leaves out what the sidebar already says (the folder, the branch, the statuses, the warnings).
   // Absent or false is the full bar: two lines, with the folder line and the warnings count.
   readonly compact?: boolean;
+  // The folder line is drawn as powerline segments (powerline.ts) with these git counts, undefined while unknown.
+  // Absent is the plain dim line, which is also what HARIL_POWERLINE=off asks for.
+  readonly powerline?: { readonly git: GitSummary | undefined } | undefined;
 }
 
 // The parts of the bar a click acts on: the model opens the model selector, the level the level selector, the mode the
@@ -237,20 +242,38 @@ function homeRelative(path: string): string {
   return inside ? `~${path.slice(home.length)}` : path;
 }
 
-function placeLine(facts: BarFacts, width: number, theme: ConsoleTheme): string {
-  const parts: Part[] = [{ text: plainText(homeRelative(facts.cwd)), tone: "dim" }];
-  if (facts.branch !== null) parts.push({ text: ` (${plainText(facts.branch)})`, tone: "dim" });
-  for (const status of facts.statuses) {
+// The statuses other extensions set, as dim text after two spaces; one that is empty once cleaned is left out.
+function statusParts(statuses: readonly string[]): Part[] {
+  const parts: Part[] = [];
+  for (const status of statuses) {
     const text = plainText(stripAnsi(status)).trim();
     if (text !== "") parts.push({ text: `  ${text}`, tone: "dim" });
   }
-  return paint(fit(parts, width), theme);
+  return parts;
+}
+
+function placeLine(facts: BarFacts, width: number, theme: ConsoleTheme): string {
+  const statuses = statusParts(facts.statuses);
+  if (facts.powerline !== undefined) {
+    const head = powerlineHead(
+      { folder: homeRelative(facts.cwd), branch: facts.branch, git: facts.powerline.git },
+      width,
+      theme,
+    );
+    // The statuses take what the segments leave. A width that holds no segment draws the plain line below.
+    if (head !== undefined) return head.line + paint(fit(statuses, width - head.width), theme);
+  }
+  const parts: Part[] = [{ text: plainText(homeRelative(facts.cwd)), tone: "dim" }];
+  if (facts.branch !== null) parts.push({ text: ` (${plainText(facts.branch)})`, tone: "dim" });
+  return paint(fit([...parts, ...statuses], width), theme);
 }
 
 // The full bar is two lines: HARIL, the mode, the place and `model · level` on the left, the session, the runtime and the
 // warnings count on the right, and the STOP ALL button at the right end; below, the folder, its git branch and the
-// statuses other extensions set. The compact bar (the status is in the sidebar) is the first line without the place,
-// the warnings and the folder line. The hit-boxes are the mode, the model, the level and the button on the first line.
+// statuses other extensions set (the folder and the branch are powerline segments with the git counts when the bar
+// asks for them, `powerline` in BarFacts). The compact bar (the status is in the sidebar) is the first line without
+// the place, the warnings and the folder line. The hit-boxes are the mode, the model, the level and the button on the
+// first line.
 export function renderBarLayout(facts: BarFacts, width: number, theme: ConsoleTheme): BarLayout {
   if (width <= 0) return { lines: [], hits: [] };
   const first = barLine(facts, width, theme);
