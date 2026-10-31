@@ -147,3 +147,40 @@ describe("reading and writing the state file", () => {
     expect(statSync(path).mode & 0o777).toBe(0o600);
   });
 });
+
+describe("the engram install failure record", () => {
+  const failure = { failedAt: "2026-10-30T10:00:00.000Z", message: "network error: fetch failed" };
+
+  it("reads back a failure record next to the tools", () => {
+    const state: ToolsState = { version: 1, tools: {}, engramInstall: failure };
+    expect(parseToolsState(JSON.stringify(state))).toEqual(state);
+  });
+
+  it("stays readable both ways: a file without the record is a state without it", () => {
+    const parsed = parseToolsState('{"version":1,"tools":{}}');
+    expect(parsed).toEqual({ version: 1, tools: {} });
+    expect("engramInstall" in parsed).toBe(false);
+  });
+
+  it.each([
+    ["a record that is not an object", '"x"'],
+    ["a missing message", '{"failedAt":"2026-10-30T10:00:00.000Z"}'],
+    ["a bad timestamp", '{"failedAt":"yesterday","message":"x"}'],
+    ["a missing timestamp", '{"message":"x"}'],
+  ])("drops %s without failing the rest of the file", (_name, record) => {
+    const text = `{"version":1,"tools":{"engram":{"latest":"3.6.0"}},"engramInstall":${record}}`;
+    expect(parseToolsState(text)).toEqual({
+      version: 1,
+      tools: { engram: { latest: "3.6.0" } },
+    });
+  });
+
+  it("bounds the stored message", () => {
+    const text = JSON.stringify({
+      version: 1,
+      tools: {},
+      engramInstall: { ...failure, message: "x".repeat(5000) },
+    });
+    expect(parseToolsState(text).engramInstall?.message).toHaveLength(200);
+  });
+});

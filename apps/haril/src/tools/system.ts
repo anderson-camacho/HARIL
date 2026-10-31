@@ -12,7 +12,16 @@ const DEFAULT_CAP = 4096;
 export interface RunLimits {
   readonly timeoutMs?: number;
   readonly capBytes?: number;
+  // The child gets exactly this environment; absent, it inherits the parent's.
+  readonly env?: Readonly<Record<string, string>>;
 }
+
+// Runs a command with limits; the real one is runCapped, a test passes a fake.
+export type ExecFn = (
+  file: string,
+  args: readonly string[],
+  limits?: RunLimits,
+) => Promise<ExecResult>;
 
 // Runs a command with no shell and no stdin. The first `capBytes` of stdout and stderr are kept (the version is at the
 // top), and a command that outlives `timeoutMs` is killed. It never rejects: a failure is part of the result.
@@ -35,7 +44,11 @@ export function runCapped(
     };
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(file, [...args], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+      child = spawn(file, [...args], {
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+        ...(limits.env === undefined ? {} : { env: { ...limits.env } }),
+      });
     } catch (error) {
       done({ code: null, output: "", timedOut: false, error: reason(error) });
       return;

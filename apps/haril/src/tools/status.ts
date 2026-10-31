@@ -78,7 +78,7 @@ function engramVerdict(active: Install | null, view: LatestView, context: ToolCo
   }
   if (active === null) {
     notes.push(
-      `Engram is not installed where HARIL runs it (expected at ${context.runtimeBinary}); install it with: npm run memory:install`,
+      `Engram is not installed where HARIL runs it (expected at ${context.runtimeBinary}); install it with: haril tools ensure`,
     );
     return { state: "missing", notes, newerUpstream };
   }
@@ -235,7 +235,8 @@ export async function collectToolsReport(
       if (latest.record !== undefined) tools[id] = latest.record;
     }
     try {
-      deps.writeState({ version: 1, tools });
+      // The rest of the file (the install failure record) is carried over, not rebuilt.
+      deps.writeState({ ...state, tools });
     } catch (error) {
       saveFailure = error instanceof Error ? error.message : String(error);
     }

@@ -106,7 +106,7 @@ describe("haril tools status", () => {
     expect(text).toContain("engram: missing");
     expect(text).toContain("active      none");
     expect(text).toContain("/home/ana/go/bin/engram  3.3.2  (go-bin; not used by HARIL)");
-    expect(text).toContain("npm run memory:install");
+    expect(text).toContain("haril tools ensure");
   });
 
   it("looks the latest versions up with --refresh and saves them", async () => {
@@ -213,18 +213,19 @@ describe("haril tools status", () => {
 
 describe("haril tools usage errors", () => {
   const USAGE = "usage: haril tools status [--json] [--refresh]";
+  const ENSURE = "usage: haril tools ensure [engram|gentle-ai] [--json] [--force]";
 
   it("needs a subcommand", async () => {
     const { code, out, err } = await cli([], services({}));
     expect(code).toBe(2);
     expect(out).toEqual([]);
-    expect(err).toEqual(["haril: tools needs a subcommand", USAGE]);
+    expect(err).toEqual(["haril: tools needs a subcommand", USAGE, ENSURE]);
   });
 
   it("refuses an unknown subcommand", async () => {
-    const { code, err } = await cli(["ensure"], services({}));
+    const { code, err } = await cli(["bogus"], services({}));
     expect(code).toBe(2);
-    expect(err).toEqual(['haril: unknown tools subcommand "ensure"', USAGE]);
+    expect(err).toEqual(['haril: unknown tools subcommand "bogus"', USAGE, ENSURE]);
   });
 
   it("refuses extra arguments", async () => {

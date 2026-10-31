@@ -16,9 +16,17 @@ export interface ToolRecord {
   readonly lastFailure?: string;
 }
 
+// The last Engram install that failed, kept so a console that starts again does not retry for a while.
+interface EngramInstallFailure {
+  readonly failedAt: string;
+  readonly message: string;
+}
+
 export interface ToolsState {
   readonly version: 1;
   readonly tools: Partial<Record<ToolId, ToolRecord>>;
+  // Optional, so a file written before it existed reads as before, and one that has it still reads as version 1.
+  readonly engramInstall?: EngramInstallFailure;
 }
 
 const MAX_FAILURE_LENGTH = 200;
@@ -49,6 +57,13 @@ function parseRecord(value: unknown): ToolRecord | undefined {
   return record;
 }
 
+function parseInstallFailure(value: unknown): EngramInstallFailure | undefined {
+  if (!isRecord(value) || !isoTime(value.failedAt) || typeof value.message !== "string") {
+    return undefined;
+  }
+  return { failedAt: value.failedAt, message: value.message.slice(0, MAX_FAILURE_LENGTH) };
+}
+
 // Any text is accepted: what cannot be read as the current schema is dropped, never reported as an error.
 export function parseToolsState(text: string | undefined): ToolsState {
   if (text === undefined) return emptyToolsState();
@@ -66,7 +81,8 @@ export function parseToolsState(text: string | undefined): ToolsState {
     const record = parseRecord(parsed.tools[id]);
     if (record !== undefined) tools[id] = record;
   }
-  return { version: 1, tools };
+  const engramInstall = parseInstallFailure(parsed.engramInstall);
+  return engramInstall === undefined ? { version: 1, tools } : { version: 1, tools, engramInstall };
 }
 
 export function readToolsState(path: string): ToolsState {

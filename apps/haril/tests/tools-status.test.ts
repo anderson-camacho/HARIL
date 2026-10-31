@@ -117,7 +117,7 @@ describe("classifying engram", () => {
   it("tells how to install it when it is missing, naming where HARIL expects it", () => {
     const { notes } = buildToolStatus("engram", [], NO_LATEST, context);
     expect(notes.join("\n")).toContain(HARIL_COPY);
-    expect(notes.join("\n")).toContain("npm run memory:install");
+    expect(notes.join("\n")).toContain("haril tools ensure");
   });
 
   it("only notifies about a newer upstream version: the qualified version stays the pin", () => {
@@ -508,5 +508,14 @@ describe("a whole tools report", () => {
       "haril.json is not valid JSON; using the default Engram path",
     );
     expect(byId(report, "gentle-ai")?.notes.join("\n")).not.toContain("haril.json");
+  });
+
+  it("keeps the fields next to the tools when a refresh rewrites the state", async () => {
+    const failure = { failedAt: iso(NOW - 3_600_000), message: "network error: fetch failed" };
+    const r = rig({ state: { version: 1, tools: {}, engramInstall: failure } });
+    await collectToolsReport(INPUT, r.deps, "always");
+    expect(r.saved).toHaveLength(1);
+    expect(r.saved[0]?.engramInstall).toEqual(failure);
+    expect(r.saved[0]?.tools["gentle-ai"]?.latest).toBe("4.3.1");
   });
 });
