@@ -438,14 +438,15 @@ describe("the buttons of the ACT tab", () => {
 
   it("keep the range while the user looks at another tab and comes back", async () => {
     installProject();
-    cli.answer("tools status", { stdout: "{}" });
     await withConsole(async (h) => {
       await openActivity(h);
       await h.shows("╭─ Actividad · 3 ");
       h.clickRow("▸ Última hora");
       await waitFor(() => expect(h.eventCalls()).toHaveLength(2));
-      await h.command("haril-plugin", "docs");
-      await h.shows("Espacio: Documentación");
+      await h.shows("▸ Rango…");
+      // MAIN has no command to run, so the way back is the only CLI call of the round trip.
+      await h.command("haril-plugin", "main");
+      await h.shows("[1:MAIN]");
       await h.command("haril-plugin", "activity");
       await waitFor(() => expect(h.eventCalls()).toHaveLength(3));
       expect(h.eventCalls()[2]).toContain("1h");
