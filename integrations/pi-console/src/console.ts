@@ -116,6 +116,8 @@ interface Session extends CommandHost {
   nativePanes: NativePanes | undefined;
   dock: PaneSettings;
   dockLoadSeq: number;
+  // The tab being read right now: reloading the list of tabs must not start a second read of it.
+  dockLoading: PaneSettings["selected"] | undefined;
   area: DashboardArea | undefined;
   branch: string | null | undefined;
   extensionStatuses: readonly string[];
@@ -518,6 +520,7 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
       nativePanes: undefined,
       dock: initialPaneSettings(),
       dockLoadSeq: 0,
+      dockLoading: undefined,
       area: undefined,
       branch: undefined,
       extensionStatuses: [],
@@ -929,7 +932,10 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
     if (!current.dock.slots.some((slot) => slot.visible && slot.id === current.dock.selected)) {
       current.dock.selected = current.dock.slots.find((slot) => slot.visible)?.id ?? MAIN_DOCK_ID;
     }
-    if (current.dock.detail?.id !== current.dock.selected)
+    if (
+      current.dock.detail?.id !== current.dock.selected &&
+      current.dockLoading !== current.dock.selected
+    )
       void openDockSlot(current, current.dock.selected);
     current.nativePanes?.refresh();
   }
@@ -940,6 +946,7 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
       return;
     }
     const seq = ++current.dockLoadSeq;
+    current.dockLoading = id;
     current.dock.selected = id;
     current.dock.detail = undefined;
     redraw();
@@ -952,6 +959,7 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
               locale: current.locale,
               ...(id === "actions" ? { actions: actionsInput(current) } : {}),
             });
+    if (current.dockLoadSeq === seq) current.dockLoading = undefined;
     if (current.closed || session !== current || current.dockLoadSeq !== seq) return;
     current.dock.detail = details;
     current.nativePanes?.refresh();

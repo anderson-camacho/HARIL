@@ -248,6 +248,29 @@ describe("the ACT tab", () => {
     });
   });
 
+  it("reads the tab once when the plugin list answers while the tab is still loading", async () => {
+    installProject();
+    // The list of tabs answers (0.7 s) before the events do (1.2 s): reloading the list used to start a second read of
+    // the tab that was already loading, so the tab asked the CLI twice.
+    cli.answer("events", { stdout: eventsList(), delayMs: 1200 });
+    cli.answer("config get ui.plugins", {
+      stdout: JSON.stringify({
+        path: "ui.plugins",
+        value: ["main", "memory", "docs", "activity", "actions"].map((id) => ({
+          id,
+          visible: true,
+        })),
+      }),
+      delayMs: 700,
+    });
+    await withConsole(async (h) => {
+      await openActivity(h);
+      await h.shows("╭─ Actividad · 3 ");
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      expect(h.eventCalls()).toHaveLength(1);
+    });
+  });
+
   it("is not offered when the user hid it, and the plugin command says so", async () => {
     installProject({
       plugins: [
