@@ -7,7 +7,7 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 ## 0.23.13
 
 - **Fecha:** 2026-10-30
-- **Estado:** Engram conectado al runtime: `memory.provider = "engram"` en `haril.json` lo activa; sin esa clave el proveedor sigue siendo `null`.
+- **Estado:** Engram conectado al runtime (`memory.provider = "engram"` en `haril.json` lo activa; sin esa clave el proveedor sigue siendo `null`) y HARIL comprueba, instala y actualiza Engram y detecta gentle-ai al abrir la consola, con el resultado en la ficha `MEM`.
 
 ### Añadido
 
@@ -34,8 +34,11 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 - Las pruebas se copiaron antes que el código y fallaron (RED): `memory-config.test.ts` no cargaba su módulo y `memory-runtime.test.ts` fallaba en 2 casos (el outbox no entregaba los resúmenes y el prompt no recibía el recuerdo). Con el código quedaron en verde.
 - `npm run check` (Biome, tipos, capas/pureza, knip, versión) correcto.
-- Suite principal: 2954 pruebas aprobadas y 2 omitidas; pruebas de parada: 17 aprobadas y 1 omitida; pruebas de scripts: 133 aprobadas.
-- No verificado: `engram-real.test.ts` y `npm run memory:install` contra el Engram real quedan sin ejecutar en esta entrega (la prueba exige `HARIL_TEST_ENGRAM_BINARY`; el instalador descarga de GitHub).
+- Cada pieza posterior (`tools status`, `tools ensure`, `tools update gentle-ai`, la ficha `MEM` y la corrección de la sección `memory`) también empezó con pruebas que fallaban y se comprobó con mutaciones hechas a mano que las pruebas las detectan.
+- Suite completa de la rama (`npm test`): 3528 pruebas aprobadas y 4 omitidas en 265 archivos; pruebas de parada: 17 aprobadas y 1 omitida; pruebas de scripts: 133 aprobadas.
+- Con el CLI compilado y carpetas temporales (nunca el runtime ni `~/.engram` reales): `haril tools ensure` descargó el Engram 3.6.0 oficial, lo verificó (SHA-256, versión y salud real), lo instaló, lo reparó tras dañar o borrar el binario y devolvió `none` en la segunda pasada; `haril tools update gentle-ai --yes` instaló la 4.3.1 con `go install` en una carpeta de Go temporal y avisó de que la copia activa del `PATH` seguía en 4.0.0.
+- `engram-real.test.ts` contra el Engram 3.6.0 real (`HARIL_TEST_ENGRAM_BINARY`, datos efímeros): 1 prueba aprobada.
+- No verificado: el TUI de Pi en sí (clic, `Alt+K`, aviso y repintado) solo se probó con un Pi simulado, y un `haril start` completo con el runtime arrancando Engram de verdad (solo se probó el contrato real y la comprobación de salud del instalador).
 
 ---
 
