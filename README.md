@@ -547,6 +547,28 @@ node apps/bootstrap/dist/haril-bootstrap.mjs install
 
 `uninstall` borra solo lo que `install` creó y conserva `data\`, `runtime\` y `vendor\`.
 
+### Perfil opcional de Windows Terminal con efecto CRT (0.23.16)
+
+Solo para Windows con Windows Terminal y HARIL ya instalado. Crea un perfil **HARIL** en el menú de nueva pestaña. Ese perfil abre `bin\haril.cmd` y aplica un shader CRT suave: scanlines tenues y un ligero bloom.
+
+```powershell
+# Con un checkout (después de npm run build):
+node apps/bootstrap/dist/haril-bootstrap.mjs terminal-profile
+# Sin checkout, con la versión instalada:
+node "$env:LOCALAPPDATA\HARIL\app\<versión>\haril-bootstrap.mjs" terminal-profile
+
+# El mismo perfil sin efecto:
+... terminal-profile --shader none
+# Quitarlo todo:
+... terminal-profile --remove
+```
+
+- El perfil es un *fragment* de Windows Terminal en `%LOCALAPPDATA%\Microsoft\Windows Terminal\Fragments\HARIL\haril.json`. El shader se guarda en `<raíz>\terminal\haril-crt.hlsl`. Al instalarlo, HARIL no edita tu `settings.json`. Si Windows Terminal ya está abierto, el perfil aparece al reiniciarlo.
+- Windows Terminal añade por su cuenta una entrada que hace referencia al perfil en `settings.json`, y no la borra aunque desaparezca el fragment. `--remove` quita solo esa entrada y guarda antes el archivo original como `settings.json.haril-backup`. El archivo se reescribe con otro formato, pero su contenido no cambia. Si `settings.json` tiene comentarios, o si HARIL es tu perfil predeterminado, no se toca y se indica qué entrada borrar a mano.
+- El efecto no lee el tiempo, así que Windows Terminal no redibuja continuamente y no gasta GPU con la pantalla quieta. Para activarlo y desactivarlo, asigna la acción `toggleShaderEffects` en Windows Terminal.
+- No funciona en otros terminales (VS Code, conhost, macOS, Linux): ahí HARIL se ve igual que siempre.
+- Basado en [`crt.hlsl`](https://github.com/Hammster/windows-terminal-shaders) (CC0) y en `Retro.hlsl` de Microsoft Terminal (MIT). Ver `THIRD_PARTY_NOTICES.md`.
+
 ### M2: agente real `analyst` (opt-in)
 
 `analyst` ejecuta Pi 1.2.0, aislado en un Node propio, a través del Broker de HARIL y de un gateway compatible con OpenAI (CLIProxyAPI). Necesita un runtime instalado, una clave de cliente del gateway y un modelo de `haril models`. HARIL no guarda la clave: la lee solo del entorno y nunca la escribe en el repositorio, en la base de datos, en los eventos ni en la salida. Crea la variable de usuario `HARIL_CLIPROXYAPI_KEY` desde «Editar las variables de entorno de tu cuenta» de Windows y abre una terminal nueva; no la escribas en la terminal, donde quedaría en el historial.
@@ -1047,7 +1069,7 @@ Los dossiers de `docs/research/` se leen solo bajo demanda, cuando un documento 
 
 ## Versiones
 
-Versión actual: **0.23.15**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
+Versión actual: **0.23.16**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
 
 ## Licencia
 
