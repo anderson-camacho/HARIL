@@ -4,6 +4,7 @@ import {
   boxFrame,
   button,
   card,
+  chipRow,
   inset,
   plainBox,
   railGlyphs,
@@ -157,6 +158,115 @@ describe("a button", () => {
       `│ ╰${"─".repeat(BUTTON_WIDTH - 2)}╯ │`,
       `╰${"─".repeat(CARD_WIDTH - 2)}╯`,
     ]);
+  });
+});
+
+// A row of chips: small bordered boxes side by side, three rows tall, one column apart (the ACT tab's range chips).
+describe("a row of chips", () => {
+  const chips = (...labels: string[]) => labels.map((label) => ({ label }));
+  const ES = ["1h", "1d", "Rango", "Todo"];
+  const EN = ["1h", "1d", "Range", "All"];
+
+  it("is three rows tall and exactly the card's content wide, whatever the labels", () => {
+    for (const labels of [
+      ES,
+      EN,
+      ["1h", "1d", "Espera", "Todo"],
+      ["1h", "1d", "Waiting", "All"],
+      ["x".repeat(40), "日本語のテキスト", "🧠🧠🧠🧠", ""],
+    ]) {
+      for (const ascii of [false, true]) {
+        const { rows } = chipRow(chips(...labels), { ascii });
+        expect(rows, labels.join()).toHaveLength(3);
+        expect(new Set(widths(rows)), `${labels.join()} ascii=${ascii}`).toEqual(
+          new Set([CARD_CONTENT_WIDTH]),
+        );
+      }
+    }
+  });
+
+  it("draws small rounded boxes side by side, one column apart, left-aligned", () => {
+    const { rows, cells } = chipRow(chips(...ES));
+    expect(plain(rows)).toEqual([
+      "╭────╮ ╭────╮ ╭───────╮ ╭──────╮ ".padEnd(CARD_CONTENT_WIDTH),
+      "│ 1h │ │ 1d │ │ Rango │ │ Todo │ ".padEnd(CARD_CONTENT_WIDTH),
+      "╰────╯ ╰────╯ ╰───────╯ ╰──────╯ ".padEnd(CARD_CONTENT_WIDTH),
+    ]);
+    // Each chip spans its borders; the gap between two chips belongs to neither.
+    expect(cells).toEqual([
+      { from: 0, to: 6 },
+      { from: 7, to: 13 },
+      { from: 14, to: 23 },
+      { from: 24, to: 32 },
+    ]);
+  });
+
+  it("falls back to + - | in the same widths", () => {
+    const { rows, cells } = chipRow(chips(...EN), { ascii: true });
+    expect(plain(rows)).toEqual([
+      "+----+ +----+ +-------+ +-----+".padEnd(CARD_CONTENT_WIDTH),
+      "| 1h | | 1d | | Range | | All |".padEnd(CARD_CONTENT_WIDTH),
+      "+----+ +----+ +-------+ +-----+".padEnd(CARD_CONTENT_WIDTH),
+    ]);
+    expect(cells.at(-1)).toEqual({ from: 24, to: 31 });
+    expect(plain(rows).join("")).not.toMatch(/[╭╮╰╯─│]/u);
+  });
+
+  it("cuts the widest label with an ellipsis, as a button does, when the chips do not fit", () => {
+    const { rows, cells } = chipRow(chips("1h", "x".repeat(40), "y".repeat(40)));
+    expect(new Set(widths(rows))).toEqual(new Set([CARD_CONTENT_WIDTH]));
+    const middle = plain(rows)[1] ?? "";
+    expect(middle).toContain("…");
+    expect(middle.startsWith("│ 1h │")).toBe(true);
+    // Every chip is still there and the last one ends inside the row.
+    expect(cells).toHaveLength(3);
+    expect(cells.at(-1)?.to).toBeLessThanOrEqual(CARD_CONTENT_WIDTH);
+    // The cells follow the drawn boxes: each one starts on a corner and ends one column after the other corner.
+    const top = plain(rows)[0] ?? "";
+    for (const { from, to } of cells) {
+      expect(top[from]).toBe("╭");
+      expect(top[to - 1]).toBe("╮");
+    }
+  });
+
+  it("drops the chips that cannot fit even with one-column labels, and never widens", () => {
+    const many = chipRow(chips(...Array.from({ length: 9 }, (_unused, index) => `c${index}`)));
+    expect(new Set(widths(many.rows))).toEqual(new Set([CARD_CONTENT_WIDTH]));
+    expect(many.cells.length).toBeLessThan(9);
+    expect(many.cells.length).toBeGreaterThan(3);
+    expect(widths(chipRow([]).rows)).toEqual(Array(3).fill(CARD_CONTENT_WIDTH));
+    expect(chipRow([]).cells).toEqual([]);
+  });
+
+  it("draws the active chip's border and label in the selected tone, and no other chip", () => {
+    const saved = { noColor: process.env.NO_COLOR, term: process.env.TERM };
+    delete process.env.NO_COLOR;
+    process.env.TERM = "xterm-256color";
+    try {
+      const idle = chipRow(chips(...ES));
+      const active = chipRow([
+        { label: "1h" },
+        { label: "1d" },
+        { label: "Rango", active: true },
+        { label: "Todo" },
+      ]);
+      // The text does not change, only the tone of the third chip.
+      expect(active.rows.map(stripAnsi)).toEqual(idle.rows.map(stripAnsi));
+      const yellow = "38;2;231;207;117m";
+      for (const row of active.rows) expect(row).toContain(yellow);
+      for (const row of idle.rows) expect(row).not.toContain(yellow);
+      // The yellow run is the third chip's own: its top edge, its middle row and its bottom edge.
+      expect(active.rows[0]).toContain(`${yellow}╭───────╮`);
+      expect(active.rows[1]).toContain(`${yellow}│`);
+      expect(active.rows[1]).toContain(`${yellow}Rango`);
+      expect(active.rows[2]).toContain(`${yellow}╰───────╯`);
+      // Every run keeps the panel's background, so the rail's base does not show through the gaps.
+      for (const row of active.rows) expect(row).toContain("48;2;6;20;10m");
+    } finally {
+      if (saved.noColor !== undefined) process.env.NO_COLOR = saved.noColor;
+      if (saved.term === undefined) delete process.env.TERM;
+      else process.env.TERM = saved.term;
+    }
   });
 });
 

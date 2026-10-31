@@ -40,7 +40,12 @@ import { aiEyeTone, HARIL_PALETTES, setHarilPalette, visualText } from "./dashbo
 import { delegateFromChat } from "./delegation.js";
 import { effectText, sourceText, valueText } from "./delegation-settings.js";
 import { actionsDetails, loadDockDetails, readDocsPath } from "./dock-details.js";
-import { createDockPicker, type DockPickerResult, dockSlotAt } from "./dock-navigation.js";
+import {
+  createDockPicker,
+  type DockPickerResult,
+  dockIdFromWord,
+  dockSlotAt,
+} from "./dock-navigation.js";
 import { stopAll } from "./emergency.js";
 import { createGitSummaryCache, type GitSummary } from "./git-summary.js";
 import { DEFAULT_UI_LOCALE, localized, readConsoleLocale, type UiLocale } from "./locale.js";
@@ -201,7 +206,7 @@ function safely<T>(read: () => T, fallback: T): T {
   }
 }
 
-// What a test may replace so that no real command runs: the way the MEM tab's check and actions reach the HARIL CLI, and
+// What a test may replace so that no real command runs: the way the TOOLS tab's check and actions reach the HARIL CLI, and
 // how long the check waits after the console opens. Pi calls the console with the extension API alone.
 export interface ConsoleOptions {
   readonly tools?: {
@@ -245,7 +250,7 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
     onChange: redraw,
   });
 
-  // The MEM tab's data, its actions and the check that runs when the console opens (tools-panel.ts). Every command goes
+  // The TOOLS tab's data, its actions and the check that runs when the console opens (tools-panel.ts). Every command goes
   // through the HARIL CLI, in the background, and none is waited for by the console.
   const toolsPanel = createToolsPanel(
     {
@@ -1010,7 +1015,7 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
   }
 
   // The rows a dock view declares (DockDetails.actions), by the tab they belong to. DOCS's rows connect, change and
-  // disconnect the documentation folder; MEM's check Engram, look the versions up and update gentle-ai; ACT's choose
+  // disconnect the documentation folder; the TOOLS tab's check Engram, look the versions up and update gentle-ai; ACT's choose
   // the range of the events; ACC's are the controls of the area chosen in MAIN, which run through the rail's own path.
   async function runDockAction(current: Session, id: string, action: string): Promise<void> {
     if (id === "memory") {
@@ -1500,7 +1505,7 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
     if (entry !== undefined) runRail(current, entry.hit);
   }
 
-  // The rows the tab on screen declared (DockDetails.actions), as menu choices: "MEM · Comprobar e instalar Engram".
+  // The rows the tab on screen declared (DockDetails.actions), as menu choices: "TOOLS · Comprobar e instalar Engram".
   // They come first, since they are what the user is looking at. A tab with no rows, or one that is busy, adds none.
   // ACC adds none either: its buttons are the rail entries the menu lists below them anyway.
   function viewMenuRows(current: Session): { label: string; dock: string; action: string }[] {
@@ -1654,7 +1659,7 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
   });
   pi.registerCommand("haril-plugin", {
     description:
-      "Open a HARIL dock view: /haril-plugin [main|memory|docs|activity|actions|1..5|details]",
+      "Open a HARIL dock view: /haril-plugin [main|tools|docs|activity|actions|1..5|details]",
     handler: async (args, ctx) => {
       const current = session;
       if (current === undefined || !ctx.hasUI || ctx.mode !== "tui") return;
@@ -1668,10 +1673,10 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
           ? current.dock.selected
           : /^[1-9]$/.test(word)
             ? dockSlotAt(current.dock.slots, Number(word))?.id
-            : DOCK_LABELS.find((slot) => slot.id === word)?.id;
+            : dockIdFromWord(word);
       if (id === undefined) {
         ctx.ui.notify(
-          "Uso: /haril-plugin [main|memory|docs|activity|actions|1..5|details]",
+          "Uso: /haril-plugin [main|tools|docs|activity|actions|1..5|details]",
           "warning",
         );
         return;

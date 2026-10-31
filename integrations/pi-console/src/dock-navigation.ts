@@ -16,6 +16,16 @@ export function dockSlotAt(slots: readonly DockSlot[], oneBased: number): DockSl
   return visibleDockSlots(slots)[oneBased - 1];
 }
 
+// The other names a slot answers to when it is typed: the TOOLS tab keeps the stored id «memory» (so a haril.json written
+// before the tab was renamed keeps validating) and is also «tools».
+const DOCK_ALIASES: ReadonlyMap<string, DockId> = new Map([["tools", "memory"]]);
+
+// The slot a typed word names (/haril-plugin tools): its id or one of its aliases, or undefined.
+export function dockIdFromWord(word: string): DockId | undefined {
+  const id = DOCK_ALIASES.get(word) ?? word;
+  return DOCK_LABELS.find((slot) => slot.id === id)?.id;
+}
+
 // Alt+L opens this Pi-native modal, then a digit or an arrow is captured by the modal.
 export function createDockPicker(
   slots: readonly DockSlot[],

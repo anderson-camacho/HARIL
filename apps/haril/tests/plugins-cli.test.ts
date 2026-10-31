@@ -47,6 +47,34 @@ describe("haril plugins (dock preferences, not Pi extension control)", () => {
     expect(readdirSync(root)).toEqual([]);
   });
 
+  it("calls the memory slot Tools in its listing and keeps «memory» as the id it stores", async () => {
+    const text = await cli("list");
+    expect(text.code).toBe(0);
+    const line = text.out.find((row) => row.includes("(memory)")) ?? "";
+    expect(line).toContain("Tools");
+    expect(line).not.toContain("Memoria");
+    expect(text.out.join("\n")).not.toContain("Memoria");
+  });
+
+  it("takes «tools» as another name of the memory slot in show, hide and move, and «memory» still works", async () => {
+    const hidden = await cli("hide", "tools", "--json");
+    expect(hidden.code).toBe(0);
+    const plugins = parseJson<{ plugins: { id: string; visible: boolean }[] }>(hidden.out).plugins;
+    expect(plugins.find((plugin) => plugin.id === "memory")?.visible).toBe(false);
+    // What is stored is the id, never the alias.
+    expect(readFileSync(path, "utf8")).toContain('"memory"');
+    expect(readFileSync(path, "utf8")).not.toContain('"tools"');
+    expect((await cli("show", "tools")).code).toBe(0);
+    const moved = await cli("move", "tools", "down", "--json");
+    expect(moved.code).toBe(0);
+    expect(ids(moved.out)).toEqual(["main", "docs", "memory", "activity", "actions"]);
+    const back = await cli("move", "memory", "up", "--json");
+    expect(back.code).toBe(0);
+    expect(ids(back.out)).toEqual(["main", "memory", "docs", "activity", "actions"]);
+    expect((await cli("hide", "memory")).code).toBe(0);
+    expect((await cli("move", "tools", "left")).code).toBe(2);
+  });
+
   it("hides, shows, reorders and resets dock slots, preserving the other settings", async () => {
     writeFileSync(path, '{\r\n    "ui": { "theme": "haril-blossom", "locale": "es" }\r\n}\r\n');
     expect((await cli("hide", "docs")).code).toBe(0);
@@ -149,7 +177,7 @@ describe("haril plugins (dock preferences, not Pi extension control)", () => {
   it("names the activity and actions slots in its usage text", async () => {
     const result = await cli("hide", "nope");
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toContain("<main|memory|docs|activity|actions>");
+    expect(result.err.join("\n")).toContain("<main|tools|docs|activity|actions>");
   });
 
   it("does not overwrite malformed configuration or duplicate slots", async () => {

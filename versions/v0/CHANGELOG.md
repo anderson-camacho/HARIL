@@ -4,7 +4,7 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
-## 0.23.16
+## 0.23.18
 
 - **Fecha:** 2026-10-31
 - **Estado:** la segunda línea de la barra completa de la consola (carpeta, rama de git y estados de extensiones) se dibuja como segmentos powerline, tomando como referencia el tema `craver` de Oh My Posh: un bloque de color para la carpeta y otro para la rama con los cambios del árbol de trabajo (`+n` en el índice, `~n` modificados, `?n` sin seguimiento). La primera línea (HARIL, `MODE`, modelo y nivel, `STOP ALL`) y la barra compacta no cambian. `HARIL_POWERLINE=off` devuelve la línea de texto plano de siempre. Necesita una fuente con los glifos de Powerline (una Nerd Font). No verificado: el dibujo en un Pi real y en Windows Terminal con una Nerd Font; solo se ejercitó el código de la consola con un Pi simulado.
@@ -35,10 +35,68 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 - Las pruebas se escribieron antes del código, en dos rondas. Primera ronda, rojo observado: `git-summary.test.ts` y `powerline.test.ts` no cargaban (el módulo no existía), `view.test.ts` fallaba en 4 de 14 pruebas (las 10 restantes, entre ellas la línea plana de siempre con un tema que etiqueta cada color, pasaban con el código anterior, lo que confirma que `off` produce los mismos bytes) y `console.test.ts` fallaba en 7 de 11.
 - Segunda ronda (el endurecimiento), rojo observado: con el código anterior fallaban 17 de las 39 pruebas de `git-summary.test.ts` (las dos de `onChange` con una excepción registraron el rechazo sin manejar; faltaban el reintento tras un fallo, el tope de salida, la carpeta neutra, `GIT_TERMINAL_PROMPT`, los filtros LFS y `runWithLimits`). Con `runWithLimits` usando solo el `timeout` de `execFile` quedaban 2 en rojo: la que pide el `taskkill` y la real de Windows, en la que el nieto (separado del padre, como el git que lanza `cmd\git.exe`) seguía vivo tras el límite. Con el `taskkill` pasaron las 39, también en tres ejecuciones seguidas.
-- `integrations/pi-console`, `npx vitest run --testTimeout=15000`: 56 archivos, 971 pruebas, todas correctas. Con el límite por defecto de 5 s (`npx vitest run` a secas) fallaron bajo carga pruebas ya existentes que lanzan la CLI simulada, a unos 5,0 s: en una ejecución `chat-log-console.test.ts` («logs a typed HARIL command as an order…») y `console-children.test.ts` («loads the persisted locale…»), en otra `console-children.test.ts` y `activity-tab-console.test.ts` (««Todo» goes back to every event…»); esos tres archivos, ejecutados solos, pasaron (30 pruebas). Una prueba nueva (`runWithLimits` con un límite de 200 ms) también falló en esa primera ejecución bajo carga y se rehízo con márgenes mayores.
-- Suite principal sin las cuatro pruebas de procesos (`vitest run --testTimeout=15000 --exclude …` de `test`): 281 archivos, 279 correctos y 2 omitidos; 3926 pruebas, 3922 correctas y 4 omitidas, ninguna fallida. `npm run test:stop` no se ejecutó.
-- Pruebas que en ejecuciones anteriores fallaron solo con la suite completa en paralelo y que esta vez no fallaron, ejecutadas además solas: `stop-all-console.test.ts` y `tools-mem-console.test.ts` (15 s) en la primera ejecución completa de este cambio, y `pi-agent-runtime.test.ts` («the tree kill also takes a tool command Pi started through the shell», una limpieza de carpeta temporal con EPERM) y `tools-mem-console.test.ts` en la ejecución del verificador independiente. Solas, esos tres archivos pasan (84 pruebas). `native-panes-console.test.ts` comprobaba el texto plano antiguo `(main)` de la línea de la carpeta; ahora comprueba `main`, que la línea powerline sí contiene.
-- `npm run check` (Biome, tipos de todos los proyectos, capas/pureza/prohibidos, knip, compatibilidad —omitida: `docs/COMPATIBILITY.md` no existe en este árbol— y versión): correcto en 0.23.16. `apps/haril/tests/version.test.ts`: 1 prueba correcta. `npm run test:scripts`: 133 correctas.
+- Fusión de `origin/main` (0.23.17: pestaña `TOOLS`, fichas de `ACT`, perfil de Windows Terminal) en la rama, con la versión 0.23.18 por encima de la suya. `git diff origin/main -- integrations/pi-console` solo muestra esta entrega: `git-summary.ts`, `powerline.ts`, el cableado en `view.ts` y `console.ts` y sus pruebas, más la aserción `main` de `native-panes-console.test.ts`; nada de `origin/main` se perdió ni se duplicó.
+- Tras la fusión, `integrations/pi-console`, `npx vitest run --testTimeout=15000`: 56 archivos, 1027 pruebas, todas correctas. Antes de la fusión, con el límite por defecto de 5 s (`npx vitest run` a secas), fallaron bajo carga pruebas ya existentes que lanzan la CLI simulada, a unos 5,0 s (`chat-log-console.test.ts`, `console-children.test.ts` y `activity-tab-console.test.ts`, según la ejecución); esos tres archivos, ejecutados solos, pasaron (30 pruebas).
+- Tras la fusión, suite principal sin las cuatro pruebas de procesos (`vitest run --testTimeout=15000 --exclude …` de `test`): 282 archivos, 280 correctos y 2 omitidos; 3994 pruebas, 3990 correctas y 4 omitidas, ninguna fallida. `npm run test:stop` no se ejecutó.
+- Pruebas que en ejecuciones anteriores (antes de la fusión) fallaron solo con la suite completa en paralelo y que en las últimas no fallaron: `stop-all-console.test.ts` y `tools-mem-console.test.ts` (15 s) en la primera ejecución completa de este cambio, y `pi-agent-runtime.test.ts` («the tree kill also takes a tool command Pi started through the shell», una limpieza de carpeta temporal con EPERM) y `tools-mem-console.test.ts` en la ejecución del verificador independiente. Solos, esos tres archivos pasaron (84 pruebas). Tras la fusión no falló ninguna prueba bajo carga.
+- Tras la fusión: `npm run check` (Biome, tipos de todos los proyectos, capas/pureza/prohibidos, knip, compatibilidad —omitida: `docs/COMPATIBILITY.md` no existe en este árbol— y versión) correcto en 0.23.18; `apps/haril/tests/version.test.ts`: 1 prueba correcta; `npm run test:scripts`: 133 correctas.
+
+---
+
+## 0.23.17
+
+- **Fecha:** 2026-10-31
+- **Estado:** `ACT` usa fichas compactas para el rango, «Rango» responde de forma visible con un solo cuadro y la pestaña `MEM` se llama `TOOLS`.
+
+### Añadido
+
+- `tools` es otro nombre del espacio que `haril.json` guarda como `memory`, en `haril plugins show|hide|move` y en `/haril-plugin`.
+- Las filas del panel pueden llevar clics por columna; las fichas los usan y un clic en el hueco entre ellas no hace nada.
+
+### Cambiado
+
+- El recuadro superior de `ACT`, sin título, reúne el rango, una fila de fichas (`1h`, `1d`, `Rango` y `Todo`, con la vigente en amarillo) y el botón ancho «Actualizar»; ya no hay tarjeta «Acciones» en esa pestaña.
+- El título bajo la cabecera de `ACT` es «Actividad».
+- `MEM` pasa a `TOOLS` en las pestañas, la cabecera, `Alt+K`, `Alt+L` y `haril plugins`; el id guardado sigue siendo `memory`. Con el nombre más largo, las cinco pestañas se reparten 3+2 en dos filas.
+
+### Corregido
+
+- «Rango…» no daba ninguna reacción visible: Pi dibuja su cuadro en el centro de la pantalla, y un segundo clic se descartaba en silencio. Ahora es un solo cuadro (`3h`, `2d`, `desde .. hasta` o `desde ..`), con el ejemplo en el título porque Pi 1.2.0 no dibuja el texto de ayuda; la ficha dice «Espera», un aviso indica dónde escribir, un segundo clic repite el aviso y un fallo del cuadro se avisa.
+
+### Verificación
+
+- Pruebas de fichas, columnas y «Rango» escritas antes del código: 72 de 194 en rojo y luego todas correctas. El cambio de nombre se probó después del código, sin rojo propio.
+- `vitest` de `integrations/pi-console`, `packages/contracts`, `plugins-cli` y `cli`: 1176 pruebas correctas, dos veces seguidas; `npm run check` correcto.
+- Dibujo con el código real de la consola sobre un Pi simulado, en Unicode y ASCII: ninguna fila distinta de 40 columnas.
+- No verificado: el Pi real (clic en las columnas de las fichas y el cuadro de «Rango» en una terminal), que en 0.23.15 no reaccionaba para el usuario. La causa se dedujo leyendo el código de Pi 1.2.0, sin ejecutarlo.
+
+---
+
+## 0.23.16
+
+- **Fecha:** 2026-10-31
+- **Estado:** perfil opcional de Windows Terminal para HARIL, con un efecto CRT suave. Solo Windows; no cambia nada si no se ejecuta el comando.
+
+### Añadido
+
+- `haril-bootstrap terminal-profile [--root <dir>] [--shader crt|none] [--remove] [--json]`. Escribe un *fragment* de Windows Terminal (`%LOCALAPPDATA%\Microsoft\Windows Terminal\Fragments\HARIL\haril.json`) con un perfil **HARIL** que abre `<raíz>\bin\haril.cmd`. El GUID del perfil es fijo: reinstalar actualiza el mismo perfil. Si `bin\haril.cmd` no existe, falla sin escribir nada.
+- Shader `haril-crt.hlsl` en `<raíz>\terminal\`: versión reducida de `crt.hlsl` (Hammster/windows-terminal-shaders, CC0) que solo conserva bloom (0,35) y scanlines (0,12). Las scanlines proceden de `Retro.hlsl` de Microsoft Terminal (MIT). No lee `Time`, así que Windows Terminal no redibuja cada fotograma.
+- `--shader none` deja el perfil sin efecto y borra el shader. `--remove` borra el fragment y el shader, y quita de `settings.json` la entrada que Windows Terminal añade al cargar el fragment, que nunca borra por su cuenta. Antes guarda el original como `settings.json.haril-backup`. Si el archivo tiene comentarios o HARIL es el perfil predeterminado, no lo toca e indica la edición manual.
+- Avisos de licencia del shader en `THIRD_PARTY_NOTICES.md` y nueva sección en el README.
+
+### Cambiado
+
+- Nada.
+
+### Corregido
+
+- Nada.
+
+### Verificación
+
+- `npm run check` completo (Biome, tipos, capas, pureza, prohibidos, knip, compat y versión) correcto.
+- Suite principal: 3849 pruebas aprobadas, 4 omitidas (9 nuevas en `apps/bootstrap/tests/terminal-profile.test.ts`). Scripts: 133 aprobadas. No se ejecutó `test:stop` (procesos), ajeno al cambio.
+- Manual en Windows 11 con Windows Terminal 1.24.12741.0 y la instalación real 0.23.15. Un fragment con `experimental.pixelShaderPath` aplica el shader: se comprobó con un shader de inversión y después con el real, cuyas filas alternan entre G=255 y G=224 (factor 0,12). El perfil abre la consola de HARIL. Tras borrar el fragment, la entrada huérfana de `settings.json` seguía abriendo `cmd.exe` con el nombre HARIL; `--remove` la quita y Windows Terminal no la vuelve a crear al recargar.
 
 ---
 

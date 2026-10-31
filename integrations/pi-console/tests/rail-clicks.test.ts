@@ -245,7 +245,7 @@ describe("a click on the right rail body", () => {
     // The header is a box: its first row is the border, then the space, then the tabs.
     const tabsRow = pane.rows()[2] ?? "";
     expect(tabsRow).toContain("[1:MAIN]");
-    pane.click(2, tabsRow.indexOf("2:MEM"));
+    pane.click(2, tabsRow.indexOf("2:TOOLS"));
     expect(pane.select).toHaveBeenCalledWith("memory");
     expect(pane.railAction).not.toHaveBeenCalled();
     expect(pane.state.dockExpanded).toBe(true);

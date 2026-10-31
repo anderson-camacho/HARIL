@@ -66,12 +66,12 @@ El panel lateral nativo (el derecho; el izquierdo está apagado por defecto) req
 
 | Zona | Qué contiene | Cómo interactúas |
 | --- | --- | --- |
-| **Izquierda** | Apagada por defecto (`/haril-dock left`). Bajo `MAIN` solo remite al panel derecho; bajo `MEM` o `DOCS` repite su ficha | Pestañas, clic, `Alt+L`, rueda del mouse |
+| **Izquierda** | Apagada por defecto (`/haril-dock left`). Bajo `MAIN` solo remite al panel derecho; bajo `TOOLS` o `DOCS` repite su ficha | Pestañas, clic, `Alt+L`, rueda del mouse |
 | **Centro** | Chat real de Pi, comandos `/` y respuestas de herramientas | Escribes peticiones, `/model`, `/haril` |
-| **Derecha** | Cinco pestañas: `MAIN` (ubicación, modo, proyecto, modelo, áreas, avisos, extensiones y sesión), `MEM`, `DOCS`, `ACT` (la actividad reciente) y `ACC` (las acciones del área elegida) | Clic en las pestañas, en `▶`/`▼` y en las áreas; `Alt+I`, `Alt+K` |
+| **Derecha** | Cinco pestañas: `MAIN` (ubicación, modo, proyecto, modelo, áreas, avisos, extensiones y sesión), `TOOLS`, `DOCS`, `ACT` (la actividad reciente) y `ACC` (las acciones del área elegida) | Clic en las pestañas, en `▶`/`▼` y en las áreas; `Alt+I`, `Alt+K` |
 | **Inferior** | Barra de una línea (compacta) o de dos (completa), con modo, modelo, uso del contexto, coste, runtime, STOP ALL y, en la completa, carpeta, rama y avisos; debajo, las cinco áreas | `Alt+H`, `Alt+M`, clic |
 
-El estado de la consola vive en **un solo sitio a la vez**. Con el panel derecho abierto y `MAIN` activa, está en el panel y la barra inferior es la **compacta** (una línea). Si cierras el panel con `Alt+I`, la terminal es menor de 132×24 o eliges `MEM`, `DOCS`, `ACT` o `ACC`, la barra inferior pasa a la **completa**: dos líneas, con la carpeta, la rama de git y un contador de avisos (el mismo número que `AVISOS` en `MAIN`).
+El estado de la consola vive en **un solo sitio a la vez**. Con el panel derecho abierto y `MAIN` activa, está en el panel y la barra inferior es la **compacta** (una línea). Si cierras el panel con `Alt+I`, la terminal es menor de 132×24 o eliges `TOOLS`, `DOCS`, `ACT` o `ACC`, la barra inferior pasa a la **completa**: dos líneas, con la carpeta, la rama de git y un contador de avisos (el mismo número que `AVISOS` en `MAIN`).
 
 El centro puede estar negro y vacío al iniciar porque **no se ha conversado todavía**. Las columnas no crean una conversación automáticamente.
 
@@ -86,18 +86,18 @@ El centro puede estar negro y vacío al iniciar porque **no se ha conversado tod
 
 La paleta visual de HARIL y el tema interno de Pi son configuraciones relacionadas pero distintas. Si ves el chat verde y los laterales naranja, hay probablemente una preferencia antigua `ui.theme=amber` guardada: usa `/haril-theme matrix` o `haril config set ui.theme matrix`.
 
-## 4. Pestañas del panel: MAIN, MEM, DOCS, ACT y ACC
+## 4. Pestañas del panel: MAIN, TOOLS, DOCS, ACT y ACC
 
-Las pestañas están en la parte alta del panel derecho, dentro de un **recuadro de esquinas redondeadas** que cierra la cabecera: una primera fila con `▼ Espacio: Principal · Alt+L` y debajo las pestañas, `[1:MAIN]  2:MEM  3:DOCS  4:ACT` y, en una segunda fila del recuadro, `5:ACC` (cinco pestañas no caben en una fila). Un clic en las dos primeras filas del recuadro (el borde y la fila del espacio) cierra o abre el dock; un clic en una pestaña la elige. Los números indican el **orden actual de espacios visibles**; `Alt+L` y el clic los eligen. Antes había también `GIT`, `YT` y `THEME`; se retiraron (la rama de git sigue en la línea de la carpeta de la barra completa). Con `HARIL_CONSOLE_ASCII=1` los bordes, los punteros y los marcadores `▼`/`▶` se dibujan con `+ - |`, `>` y `v`.
+Las pestañas están en la parte alta del panel derecho, dentro de un **recuadro de esquinas redondeadas** que cierra la cabecera: una primera fila con `▼ Espacio: Principal · Alt+L` y debajo las pestañas, `[1:MAIN]  2:TOOLS  3:DOCS` y, en una segunda fila del recuadro, `4:ACT  5:ACC` (cinco pestañas no caben en una fila). Un clic en las dos primeras filas del recuadro (el borde y la fila del espacio) cierra o abre el dock; un clic en una pestaña la elige. Los números indican el **orden actual de espacios visibles**; `Alt+L` y el clic los eligen. Antes había también `GIT`, `YT` y `THEME`; se retiraron (la rama de git sigue en la línea de la carpeta de la barra completa). Con `HARIL_CONSOLE_ASCII=1` los bordes, los punteros y los marcadores `▼`/`▶` se dibujan con `+ - |`, `>` y `v`.
 
-`MEM`, `DOCS`, `ACT` y `ACC` dibujan cada sección como una **tarjeta** con su título en el borde y cada acción como un **botón** de tres filas dentro de la tarjeta «Acciones»; un clic en cualquiera de las tres filas del botón ejecuta la acción. Si la vista es más alta que el panel, la rueda del ratón la desplaza.
+`TOOLS`, `DOCS`, `ACT` y `ACC` dibujan cada sección como una **tarjeta** con su título en el borde y cada acción como un **botón** de tres filas dentro de la tarjeta «Acciones»; un clic en cualquiera de las tres filas del botón ejecuta la acción. Si la vista es más alta que el panel, la rueda del ratón la desplaza.
 
 | Pestaña | Qué significa | Qué puedes hacer | Límite |
 | --- | --- | --- | --- |
 | **MAIN / Principal** | El estado de la consola: ubicación, modo, proyecto, modelo, áreas, avisos, extensiones y sesión (sección 5) | Todo lo de la sección 5 | Es la única pestaña que dibuja ese bloque; siempre va primera y siempre está visible |
-| **MEM / Memoria** | Engram (estado, versión, ruta), el proceso de memoria (proveedor, salud, cola) y gentle-ai | Ver qué copia usa HARIL; clic en **▸ Comprobar e instalar Engram**, **▸ Reinstalar Engram (forzar)**, **▸ Comprobar versiones ahora** o **▸ Actualizar gentle-ai…** | Un proveedor `null` no guarda nada: la ficha lo marca y dice cómo activar Engram. Si `haril.json` ya fija `engram` y el runtime aún no ha corrido, no lo marca así: dice «Configurado: engram» y que Engram arranca con el runtime. Instalar o actualizar solo ocurre con tu clic (o su aviso al abrir, que solo informa) |
+| **TOOLS** (antes `MEM`) | Engram (estado, versión, ruta), el proceso de memoria (proveedor, salud, cola) y gentle-ai | Ver qué copia usa HARIL; clic en **▸ Comprobar e instalar Engram**, **▸ Reinstalar Engram (forzar)**, **▸ Comprobar versiones ahora** o **▸ Actualizar gentle-ai…** | Un proveedor `null` no guarda nada: la ficha lo marca y dice cómo activar Engram. Si `haril.json` ya fija `engram` y el runtime aún no ha corrido, no lo marca así: dice «Configurado: engram» y que Engram arranca con el runtime. Instalar o actualizar solo ocurre con tu clic (o su aviso al abrir, que solo informa) |
 | **DOCS / Documentación** | Tu carpeta de documentación conectada (por ejemplo una bóveda de Obsidian): la ruta, cuántas notas `.md` tiene y las 10 últimas | Clic en **▸ Definir carpeta…**, **▸ Cambiar carpeta…** o **▸ Desconectar**; o `/haril-docs` | Solo lectura: HARIL no escribe en la carpeta, la administras tú (con Obsidian) |
-| **ACT / Actividad** | La actividad reciente del proyecto (antes salía al final de `MAIN`): el filtro de tiempo activo, cinco botones y los últimos eventos de `haril events`, el más nuevo primero, con cuánto hace que ocurrió (`#375 watchdog.closed · hace 3 min`) | Clic en **▸ Última hora**, **▸ Último día**, **▸ Rango…** (te pregunta «desde» y «hasta»: una duración como `3h` o `2d`, o una fecha ISO como `2026-10-30T08:00`; «hasta» vacío es ahora), **▸ Todo** o **▸ Actualizar** | Muestra como mucho los últimos 50 eventos del rango y lo dice. El rango dura lo que la sesión: no se guarda. Los eventos que fallaron o se cancelaron van en rojo |
+| **ACT / Actividad** | La actividad reciente del proyecto (antes salía al final de `MAIN`): el filtro de tiempo activo, cuatro fichas de rango con el botón Actualizar debajo y los últimos eventos de `haril events`, el más nuevo primero, con cuánto hace que ocurrió (`#375 watchdog.closed · hace 3 min`) | Clic en las fichas **1h** (última hora), **1d** (último día), **Rango** (abre un solo cuadro, «Actividad · rango»: una duración como `3h` o `2d`, o `desde .. hasta` con fechas ISO o como las escribe la tarjeta Filtro, `29/10 08:00`; `desde ..` llega hasta ahora) o **Todo**, o en el botón **▸ Actualizar** | El cuadro de **Rango** lo dibuja Pi en el hueco del editor (el centro de la pantalla, no el panel): mientras está abierto la ficha dice «Espera» y un aviso recuerda dónde escribir; `Esc` lo cierra sin cambiar nada. Muestra como mucho los últimos 50 eventos del rango y lo dice. El rango dura lo que la sesión: no se guarda. Los eventos que fallaron o se cancelaron van en rojo |
 | **ACC / Acciones** | Los controles del **área elegida en `MAIN`** (los que antes salían al final de `MAIN` bajo `ACCIONES · AGENTS`): una tarjeta que dice qué área sigue y la tarjeta «Acciones» con un botón de tres filas por control, más **▸ Abrir menú completo /haril** | Clic en cualquiera de las tres filas de un botón: hace lo mismo que hacía la fila de `MAIN` (**▸ Ver detalles completos**, **▸ Elegir modelo de Pi**, **▸ Actualizar datos**…) | El área se elige en la lista `ÁREAS` de `MAIN` (o con `Alt+H`); `ACC` la sigue en cada cuadro. Una etiqueta larga pasa a una segunda fila del botón. Sus filas no se repiten en `Alt+K`, que ya lista las acciones del área |
 
 ### Conectar tu documentación (DOCS)
@@ -108,17 +108,17 @@ Con una carpeta conectada, `DOCS` muestra en la tarjeta «Carpeta» la ruta (si 
 
 Desde la consola con el teclado: `/haril-docs` (abre la entrada), `/haril-docs <ruta>` (conecta esa carpeta) y `/haril-docs clear` (desconecta). Fuera de la consola, en PowerShell: `haril config set docs.path "<ruta>"`, `haril config get docs.path` y `haril config set docs.path --reset`. Ninguna de estas órdenes toca el contenido de la carpeta.
 
-### Engram y gentle-ai (MEM)
+### Engram y gentle-ai (TOOLS)
 
-`MEM` lee dos órdenes a la vez, `haril tools status --json` y `haril memory status --json`; si una falla, la otra se sigue viendo y la que falló dice por qué. Cada bloque es una tarjeta. Ejemplo (40 columnas, Engram bien, proveedor `engram`; la columna de la izquierda es el separador del panel):
+`TOOLS` lee dos órdenes a la vez, `haril tools status --json` y `haril memory status --json`; si una falla, la otra se sigue viendo y la que falló dice por qué. Cada bloque es una tarjeta. Ejemplo (40 columnas, Engram bien, proveedor `engram`; la columna de la izquierda es el separador del panel):
 
 ```text
 │ ╭───────────────────────────────────╮
-│ │ ▼ Espacio: Memoria · Alt+L        │
-│ │  1:MAIN  [2:MEM]  3:DOCS   4:ACT  │
-│ │  5:ACC                            │
+│ │ ▼ Espacio: Tools · Alt+L          │
+│ │  1:MAIN  [2:TOOLS]  3:DOCS        │
+│ │  4:ACT   5:ACC                    │
 │ ╰───────────────────────────────────╯
-│ Memoria y herramientas
+│ Tools
 │ ╭─ Engram · ok ─────────────────────╮
 │ │ 3.6.0 · copia de HARIL            │
 │ │ …e\vendor\engram\3.6.0\engram.exe │
@@ -161,8 +161,8 @@ Un título que no cabe en el borde de la tarjeta conserva su nombre allí y pasa
 - **Engram** es siempre la copia propia de HARIL (`<raíz>\vendor\engram\<versión>`); nunca se usa la de `go\bin` ni la de `~/.engram`, que se listan como «no usadas». Los estados son `ok`, `falta`, `desactualizado` y `desconocido`. Si la última instalación falló y Engram no está bien, la ficha dice el motivo y cuándo HARIL lo reintenta solo (6 horas); **Reinstalar Engram (forzar)** reintenta ya.
 - **Proceso de memoria**: con el proveedor `null` la ficha dice «NO GUARDA». Si Engram aún no está listo, para activarlo usa **Comprobar e instalar Engram** (o `haril tools ensure` en PowerShell) y **reinicia el runtime**; si ya está `ok`, solo falta reiniciar el runtime («Engram está listo: reinicia el runtime para que lo use»), porque el runtime lee su configuración al arrancar y `memory.provider` debe ser `engram` en `haril.json`.
 - **gentle-ai** no tiene binarios para Windows: **Actualizar gentle-ai…** (o **Instalar gentle-ai…** si falta) abre una confirmación con el plan exacto (`go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v<versión>`, la carpeta donde queda y la versión de Go) y solo si aceptas lo ejecuta. Necesita Go y puede tardar unos minutos la primera vez.
-- Mientras una acción corre, la tarjeta «Acciones» muestra «… Comprobando e instalando Engram» (o la que toque) en lugar de los botones; una sola operación a la vez. Al terminar sale un aviso con el resultado y la ficha se carga de nuevo. Las mismas filas están en `Alt+K` (o `/haril-panel`) como «MEM · …».
-- **Al abrir `haril`**, la consola lanza en segundo plano `haril tools ensure --json` (hasta 5 minutos, sin frenar nada): instala o repara Engram y refresca las últimas versiones. Solo si pasó algo o queda algo pendiente aparece **un aviso**; con todo al día no dice nada. Para omitirla, define `HARIL_TOOLS_CHECK=off` (también `0` o `false`) antes de abrir `haril`. Si la comprobación falla, la ficha `MEM` lo dice en «Comprobación al arrancar».
+- Mientras una acción corre, la tarjeta «Acciones» muestra «… Comprobando e instalando Engram» (o la que toque) en lugar de los botones; una sola operación a la vez. Al terminar sale un aviso con el resultado y la ficha se carga de nuevo. Las mismas filas están en `Alt+K` (o `/haril-panel`) como «TOOLS · …».
+- **Al abrir `haril`**, la consola lanza en segundo plano `haril tools ensure --json` (hasta 5 minutos, sin frenar nada): instala o repara Engram y refresca las últimas versiones. Solo si pasó algo o queda algo pendiente aparece **un aviso**; con todo al día no dice nada. Para omitirla, define `HARIL_TOOLS_CHECK=off` (también `0` o `false`) antes de abrir `haril`. Si la comprobación falla, la ficha `TOOLS` lo dice en «Comprobación al arrancar».
 
 ### Ocultar, mostrar o reordenar espacios
 
@@ -178,13 +178,13 @@ haril plugins reset
 
 `MAIN` no se puede ocultar ni mover, y ningún espacio puede ponerse por encima de ella: `haril plugins hide main` y `haril plugins move main …` se rechazan con un mensaje. Un `haril.json` de una versión anterior (con `git`, `youtube` o `themes` en `ui.plugins`) sigue funcionando: esas entradas se ignoran y el archivo se reescribe con la lista nueva en el siguiente cambio que hagas con `haril plugins`.
 
-Dentro de HARIL usa `/haril-plugins`. Se ofrecen **Mostrar, Ocultar, Subir y Bajar**. Para entrar directamente a una vista: `/haril-plugin main`, `/haril-plugin memory`, `/haril-plugin docs`, `/haril-plugin activity` o `/haril-plugin actions`. El argumento numérico (`1`–`5`) selecciona una vista **visible**.
+Dentro de HARIL usa `/haril-plugins`. Se ofrecen **Mostrar, Ocultar, Subir y Bajar**. Para entrar directamente a una vista: `/haril-plugin main`, `/haril-plugin tools` (o `memory`, el nombre con el que `haril.json` guarda ese espacio), `/haril-plugin docs`, `/haril-plugin activity` o `/haril-plugin actions`. El argumento numérico (`1`–`5`) selecciona una vista **visible**.
 
 Estas operaciones cambian la interfaz, no los paquetes Pi. Si gestionaste el dock desde otra ventana, usa `/haril-plugins` o reabre HARIL para verlo reflejado.
 
 ## 5. Pestaña MAIN: significado de los valores
 
-Este bloque se dibuja **solo bajo la pestaña `MAIN`**; con `MEM`, `DOCS`, `ACT` o `ACC` el panel muestra únicamente la ficha de esa pestaña. Las secciones con `▶` están contraídas y con `▼` expandidas. Su contenido corresponde a la **sesión y área actuales**, no a un inventario universal.
+Este bloque se dibuja **solo bajo la pestaña `MAIN`**; con `TOOLS`, `DOCS`, `ACT` o `ACC` el panel muestra únicamente la ficha de esa pestaña. Las secciones con `▶` están contraídas y con `▼` expandidas. Su contenido corresponde a la **sesión y área actuales**, no a un inventario universal.
 
 Cada sección de `MAIN` es una **tarjeta** de esquinas redondeadas con su título en el borde: la de estado (`◉ HARIL · AGENTS`, con `Estoy en`, `Modo`, `Proyecto` y `Modelo`), `ÁREAS` (con «Abrir vista de orquestación» dentro), `AVISOS`, `EXTENSIONES` y `SESIÓN` (y `ORQUESTACIÓN` cuando esa es el área elegida). `AVISOS`, `EXTENSIONES` y `SESIÓN` se abren y cierran con un clic en **la fila de su título** (el borde de arriba, con `▼` o `▶`); cerrada, una tarjeta se dibuja como un recuadro de dos filas, sin contenido. Un aviso o un estado que no cabe en el ancho de la tarjeta (33 columnas) continúa en las filas de abajo, sangrado: hasta tres filas y la última acaba en `…`; la carpeta, el proyecto y el modelo se cortan con `…` y conservan su etiqueta. Los atajos `Alt+K` y `Alt+I` quedan debajo de las tarjetas, fuera de ellas. La cabecera clásica (terminales de menos de 132 columnas) sigue con sus filas de siempre, sin tarjetas.
 
@@ -295,7 +295,7 @@ Si solo tienes Claude Code, instala la extensión una vez con `haril extensions 
 | **Alt+L** | Selector de las pestañas del panel: **1–4**, `↑/↓`, `Enter`, `Esc` |
 | **Alt+H** | Selector de las cinco áreas: `↑/↓`, `Enter`, `Esc` |
 | **Alt+I** | Mostrar/ocultar panel derecho; en terminal compacta abre acciones |
-| **Alt+K** | Menú del panel derecho (también `/haril-panel`): primero las filas de la ficha abierta (`MEM · …`, `DOCS · …`, `ACT · …`), luego las del panel; `↑/↓`, `Enter`, `Esc` |
+| **Alt+K** | Menú del panel derecho (también `/haril-panel`): primero las filas de la ficha abierta (`TOOLS · …`, `DOCS · …`, `ACT · …`), luego las del panel; `↑/↓`, `Enter`, `Esc` |
 | **Alt+C** | Catálogo de comandos Pi/HARIL disponibles |
 | **Alt+M** | Siguiente modo de consola |
 | **Alt+O** | Vista de orquestación |
@@ -309,7 +309,7 @@ Las flechas `←/→` también pueden mover la selección en los diálogos, pero
 | --- | --- |
 | `/haril` | Menú general |
 | `/haril-commands` | Comandos efectivamente disponibles en esta sesión |
-| `/haril-plugin [main\|memory\|docs\|activity\|1..4\|details]` | Abrir una pestaña del dock |
+| `/haril-plugin [main\|tools\|docs\|activity\|actions\|1..5\|details]` | Abrir una pestaña del dock |
 | `/haril-plugins` | Mostrar, ocultar o mover espacios del dock |
 | `/haril-docs [<ruta>\|clear]` | Conectar o desconectar la carpeta de documentación (pestaña `DOCS`) |
 | `/haril-extensions` | Administrar paquetes Pi declarados; la carga puede requerir reiniciar |
@@ -352,7 +352,7 @@ Otros comandos disponibles incluyen `haril quota`, `haril memory status`, `haril
 ### A. Conocer la consola sin agentes reales
 
 1. Ejecuta `haril` desde una carpeta de proyecto.
-2. `Alt+L` → 2 (`MEM`) y vuelve a `MAIN` con `Alt+L` → 1; compara la barra inferior: compacta bajo `MAIN`, completa bajo `MEM`.
+2. `Alt+L` → 2 (`TOOLS`) y vuelve a `MAIN` con `Alt+L` → 1; compara la barra inferior: compacta bajo `MAIN`, completa bajo `TOOLS`.
 3. `Alt+H` → recorre las cinco áreas y vuelve a AGENTS.
 4. Escribe `/orchestration demo` para activar una muestra. Repítelo para desactivarla.
 5. Ejecuta `/haril-commands` para ver qué comandos registra realmente Pi.
@@ -434,7 +434,7 @@ HARIL usa una **instancia privada de Pi**: sus extensiones y sesiones no se copi
 | Chat, modelos, temas e idioma | Disponibles si los proveedores y Pi responden |
 | Paneles | Nativos en Pi y terminal compatibles; en tamaños pequeños se compactan |
 | MAIN | El estado vivo de la consola; la única pestaña con ese bloque |
-| MEM | Ficha de Engram, memoria y gentle-ai; instalar o actualizar solo con tu clic o su confirmación |
+| TOOLS | Ficha de Engram, memoria y gentle-ai; instalar o actualizar solo con tu clic o su confirmación |
 | DOCS | Lee la carpeta conectada con `docs.path` y nunca escribe en ella |
 | ACT | Lee `haril events` del proyecto con el rango elegido; solo lectura |
 | AGENTS | Agentes observados en tareas; **no** catálogo universal de perfiles |

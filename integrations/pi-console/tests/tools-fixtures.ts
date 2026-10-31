@@ -1,4 +1,4 @@
-// The JSON that `haril tools status --json` and `haril memory status --json` print, built for the MEM tab's tests.
+// The JSON that `haril tools status --json` and `haril memory status --json` print, built for the TOOLS tab's tests.
 
 export const COPY = "D:\\HARIL\\engram\\3.6.0\\engram.exe";
 export const GO_ENGRAM = "C:\\Users\\ana\\go\\bin\\engram.exe";

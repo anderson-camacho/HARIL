@@ -48,11 +48,11 @@ interface CommandAnswer {
 }
 
 export interface DockSource {
-  // `haril memory status --json`: the memory process, for the MEM tab.
+  // `haril memory status --json`: the memory process, for the TOOLS tab.
   readonly memory?: () => Promise<CommandAnswer>;
-  // `haril tools status --json`: Engram and gentle-ai, for the MEM tab.
+  // `haril tools status --json`: Engram and gentle-ai, for the TOOLS tab.
   readonly tools?: () => Promise<CommandAnswer>;
-  // What the console is doing for the MEM tab now, and why the check it ran at start-up gave no answer.
+  // What the console is doing for the TOOLS tab now, and why the check it ran at start-up gave no answer.
   readonly busy?: BusyKind | undefined;
   readonly checkError?: string | undefined;
   // The documentation folder the user connected: its path, or undefined when none is. Rejects with the reason when
@@ -68,6 +68,8 @@ export interface DockSource {
   readonly now?: () => number;
   // The ACT tab is being loaded again: its buttons give way to a «Cargando…» row.
   readonly activityBusy?: boolean;
+  // The «Rango…» dialog of the ACT tab is open: its chip says it is waiting.
+  readonly activityWaiting?: boolean;
   // The area chosen in MAIN and its controls, for the ACC tab: it reads nothing, it is made of this.
   readonly actions?: ActionsInput;
   readonly locale?: UiLocale;
@@ -207,7 +209,7 @@ async function docsDetails(id: DockId, cwd: string, source: DockSource): Promise
   return view(id, status, cards);
 }
 
-// One of the two commands of the MEM tab: its answer parsed, or the reason there is none. The exit code does not decide
+// One of the two commands of the TOOLS tab: its answer parsed, or the reason there is none. The exit code does not decide
 // (a command that printed its document and then exited non-zero still answered); a rejection is a failed part, never
 // a failed tab.
 async function readPart<T>(
@@ -227,7 +229,7 @@ async function readPart<T>(
   return { ok: false, reason: !answer.ok && reason !== "" ? reason : invalid };
 }
 
-// Both commands of the MEM tab, asked at the same time: one that fails must not blank the other.
+// Both commands of the TOOLS tab, asked at the same time: one that fails must not blank the other.
 export async function loadMemData(cwd: string, source: DockSource = {}): Promise<MemData> {
   const invalid = localized(
     source.locale ?? "es",
@@ -249,7 +251,7 @@ export async function loadMemData(cwd: string, source: DockSource = {}): Promise
   return { tools, memory };
 }
 
-// The MEM tab from what was loaded; the console draws it again from the same data when only its busy state changes.
+// The TOOLS tab from what was loaded; the console draws it again from the same data when only its busy state changes.
 export function memDetails(data: MemData, options: MemOptions): DockDetails {
   const rows = memRows(data, options);
   return view("memory", rows.status, rows.cards);
@@ -306,6 +308,7 @@ export async function loadDockDetails(
           locale: source.locale ?? "es",
           range: source.activityRange ?? ALL_RANGE,
           busy: source.activityBusy ?? false,
+          waiting: source.activityWaiting ?? false,
         });
       }
       // ACC has nothing to load either: the console hands in the area and its controls.
