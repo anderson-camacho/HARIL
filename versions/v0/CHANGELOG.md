@@ -17,6 +17,7 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 - Prueba que documenta por qué una delegación parece atascada: con la parada por defecto `after_plan` el flujo espera a la persona y sus hijos quedan en cola; nada falló.
 - Cada tarea explica ahora por qué está donde está: qué pasa, por qué, qué hace el sistema, si te necesita y hasta cuándo. Cubre todos los motivos de bloqueo y estados, y el compilador rechaza uno nuevo sin explicación. Se escribe con datos guardados, nunca con un modelo.
 - `haril workflow show` y `watch` añaden `stopReason` y `explanation` al flujo y a cada nodo, sin cambiar la versión del formato. Con `after_plan` dicen qué ejecutar: `haril workflow continue <id>`, o pulsar `c` en la fábrica.
+- `haril factory show [--json]` y `haril factory watch` dan una vista de todos los flujos recientes, o de uno con `--project`: tareas por columna (por hacer, en curso, detenidas, errores, hechas), agentes, quién delegó a quién, eventos y lo que te espera. Una tarea fallida dice a quién se le devolvió, y nada entra en detenidas sin explicación. Para levantar una parada se sigue usando `haril workflow continue`.
 
 ### Limitaciones
 
