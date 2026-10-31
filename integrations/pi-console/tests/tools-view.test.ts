@@ -642,3 +642,123 @@ describe("text that does not belong to HARIL", () => {
     expect(details.lines).toContain("Engram · desconocido");
   });
 });
+
+// `haril memory status` tells what the runtime recorded, and the runtime records a provider only once it has run: before
+// that it says null whatever haril.json sets. The tool report carries what haril.json sets (memoryConfig), and the card
+// shows both, so a configured Engram is not called «NO GUARDA».
+describe("the configured provider in the memory process card", () => {
+  const stale = memoryJson({
+    provider: "null",
+    persistent: false,
+    health: "not_checked",
+    runtime: "not_running",
+  });
+  const withConfig = (memoryConfig: Record<string, unknown>) =>
+    statusJson([engram(), gentle()], { memoryConfig });
+
+  it("does not call a configured Engram «NO GUARDA» before the runtime has run", async () => {
+    const details = await mem(source(withConfig({ provider: "engram" }), stale));
+    const title = details.lines.indexOf("Proceso de memoria · parado");
+    expect(title).toBeGreaterThanOrEqual(0);
+    // The configured provider is the card's first row, and the runtime's last state replaces «Proveedor: null».
+    expect(details.lines.slice(title + 1, title + 3)).toEqual([
+      "  Configurado: engram",
+      "  Último estado del runtime: null",
+    ]);
+    const body = text(details).replace(/\s+/g, " ");
+    expect(body).not.toContain("NO GUARDA");
+    expect(body).not.toContain("no guarda nada");
+    expect(body).not.toContain("Para activar Engram");
+    expect(body).not.toContain("memory.provider = engram");
+    expect(body).toContain("Engram arranca con el runtime.");
+    // Every other line of the card stays.
+    expect(details.lines).toContain("  Runtime: parado");
+    expect(details.lines).toContain("  Salud: sin comprobar");
+    expect(details.lines).toContain("  Degradada: no");
+    expect(details.lines).toContain("  Cola: 0 por entregar");
+    expectRowsToFit(details);
+  });
+
+  it("says the same in English", async () => {
+    const details = await mem(source(withConfig({ provider: "engram" }), stale, { locale: "en" }));
+    const title = details.lines.indexOf("Memory process · stopped");
+    expect(title).toBeGreaterThanOrEqual(0);
+    expect(details.lines.slice(title + 1, title + 3)).toEqual([
+      "  Configured: engram",
+      "  Last runtime state: null",
+    ]);
+    const body = text(details).replace(/\s+/g, " ");
+    expect(body).not.toContain("NOT SAVING");
+    expect(body).toContain("Engram starts with the runtime.");
+    expectRowsToFit(details);
+  });
+
+  it("asks for a restart, with a plain title, when the runtime is running and still recorded null", async () => {
+    const running = memoryJson({ provider: "null", persistent: false, runtime: "running" });
+    const details = await mem(source(withConfig({ provider: "engram" }), running));
+    expect(details.lines).toContain("Proceso de memoria");
+    expect(details.lines).not.toContain("Proceso de memoria · parado");
+    expect(details.lines).toContain("  Configurado: engram");
+    expect(details.lines).toContain("  Último estado del runtime: null");
+    expect(text(details).replace(/\s+/g, " ")).toContain(
+      "Reinicia el runtime para que use Engram.",
+    );
+    expect(text(details)).not.toContain("NO GUARDA");
+    expectRowsToFit(details);
+  });
+
+  it.each([
+    ["null", "  Configurado: null"],
+    [null, "  Configurado: sin sección"],
+  ])(
+    "keeps «NO GUARDA» and the advice when the file sets %j, and says what it sets",
+    async (provider, row) => {
+      const details = await mem(source(withConfig({ provider }), stale));
+      const title = details.lines.indexOf("Proceso de memoria · NO GUARDA");
+      expect(title).toBeGreaterThanOrEqual(0);
+      expect(details.lines[title + 1]).toBe(row);
+      expect(details.lines).toContain("  Proveedor: null (no guarda nada)");
+      expect(text(details).replace(/\s+/g, " ")).toContain(
+        "Engram está listo: reinicia el runtime",
+      );
+      expect(text(details)).not.toContain("Último estado del runtime");
+      expectRowsToFit(details);
+    },
+  );
+
+  it("says what the file sets in English too", async () => {
+    const none = await mem(source(withConfig({ provider: null }), stale, { locale: "en" }));
+    expect(none.lines).toContain("  Configured: no section");
+    expect(none.lines).toContain("Memory process · NOT SAVING");
+    const off = await mem(source(withConfig({ provider: "null" }), stale, { locale: "en" }));
+    expect(off.lines).toContain("  Configured: null");
+  });
+
+  it("shows the configured provider above the runtime's own when both are Engram", async () => {
+    const details = await mem(source(withConfig({ provider: "engram" }), memoryJson()));
+    const title = details.lines.indexOf("Proceso de memoria");
+    expect(title).toBeGreaterThanOrEqual(0);
+    expect(details.lines.slice(title + 1, title + 3)).toEqual([
+      "  Configurado: engram",
+      "  Proveedor: engram · persistente",
+    ]);
+    expect(text(details)).not.toContain("Último estado del runtime");
+  });
+
+  it("changes nothing when the report does not say (an older haril, or the tools could not be read)", async () => {
+    const older = await mem(source(statusJson([engram(), gentle()]), stale));
+    expect(older.lines).toContain("Proceso de memoria · NO GUARDA");
+    expect(text(older)).not.toContain("Configurado");
+    const failed = await mem({ tools: failure("boom"), memory: answer(stale) });
+    expect(failed.lines).toContain("Proceso de memoria · NO GUARDA");
+    expect(text(failed)).not.toContain("Configurado");
+  });
+
+  it("ignores a memoryConfig that is not one", async () => {
+    for (const memoryConfig of [{ provider: "chroma" }, { provider: 7 }, "engram", [], null, {}]) {
+      const details = await mem(source(statusJson([engram(), gentle()], { memoryConfig }), stale));
+      expect(text(details), JSON.stringify(memoryConfig)).not.toContain("Configurado");
+      expect(details.lines).toContain("Proceso de memoria · NO GUARDA");
+    }
+  });
+});

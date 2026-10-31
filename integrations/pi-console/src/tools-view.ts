@@ -7,6 +7,7 @@ import { wrap } from "./text.js";
 import type {
   InstallFailureView,
   InstallView,
+  MemoryConfigView,
   MemoryView,
   ToolState,
   ToolsStatusView,
@@ -281,11 +282,31 @@ function healthWord(health: string, say: Say): string {
   return health === "not_checked" ? say("not checked", "sin comprobar") : health;
 }
 
+// What haril.json sets, in the card's first row: the runtime's own answer comes after it.
+function configuredText(config: MemoryConfigView, say: Say): string {
+  const prefix = say("Configured", "Configurado");
+  if (config.provider === null) return `${prefix}: ${say("no section", "sin sección")}`;
+  return `${prefix}: ${config.provider}`;
+}
+
 // `engramReady`: Engram runs from HARIL's own copy, so a runtime that was started before it only needs a restart.
-function memoryCard(memory: MemoryView, engramReady: boolean, say: Say): DockCard {
-  const none = memory.provider === "null";
+// `config`: what haril.json sets, when the report says. The runtime records its provider only once it has run, so
+// "null" next to a configured Engram is a runtime that has not started yet (or one that started before the setting),
+// not a memory that keeps nothing.
+function memoryCard(
+  memory: MemoryView,
+  engramReady: boolean,
+  config: MemoryConfigView | undefined,
+  say: Say,
+): DockCard {
+  const recordedNull = memory.provider === "null";
+  const unstarted = recordedNull && config?.provider === "engram";
+  const none = recordedNull && !unstarted;
   const rows: string[] = [];
-  if (none) {
+  if (config !== undefined) rows.push(...sentence(configuredText(config, say)));
+  if (unstarted) {
+    rows.push(...sentence(say("Last runtime state: null", "Último estado del runtime: null")));
+  } else if (none) {
     rows.push(
       ...sentence(say("Provider: null (keeps nothing)", "Proveedor: null (no guarda nada)")),
     );
@@ -316,7 +337,18 @@ function memoryCard(memory: MemoryView, engramReady: boolean, say: Say): DockCar
   if (!memory.initialized) {
     rows.push(...sentence(say("Store not initialized.", "Almacén sin inicializar.")));
   }
-  if (none) {
+  if (unstarted) {
+    rows.push(
+      ...sentence(
+        memory.running
+          ? say(
+              "Restart the runtime so it uses Engram.",
+              "Reinicia el runtime para que use Engram.",
+            )
+          : say("Engram starts with the runtime.", "Engram arranca con el runtime."),
+      ),
+    );
+  } else if (none) {
     rows.push(
       ...sentence(
         engramReady
@@ -331,10 +363,13 @@ function memoryCard(memory: MemoryView, engramReady: boolean, say: Say): DockCar
       ),
     );
   }
+  const title = say("Memory process", "Proceso de memoria");
   return {
     title: none
       ? say("Memory process · NOT SAVING", "Proceso de memoria · NO GUARDA")
-      : say("Memory process", "Proceso de memoria"),
+      : unstarted && !memory.running
+        ? `${title} · ${say("stopped", "parado")}`
+        : title,
     rows,
   };
 }
@@ -395,7 +430,12 @@ export function memRows(data: MemData, options: MemOptions): MemRows {
 
   if (data.memory.ok) {
     cards.push(
-      memoryCard(data.memory.value, data.tools.ok && data.tools.value.engram?.state === "ok", say),
+      memoryCard(
+        data.memory.value,
+        data.tools.ok && data.tools.value.engram?.state === "ok",
+        data.tools.ok ? data.tools.value.memoryConfig : undefined,
+        say,
+      ),
     );
   } else {
     cards.push({

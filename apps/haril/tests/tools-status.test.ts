@@ -535,6 +535,24 @@ describe("a whole tools report", () => {
     expect(byId(report, "gentle-ai")?.notes.join("\n")).not.toContain("haril.json");
   });
 
+  it("carries the memory provider haril.json sets, and only when the caller read it", async () => {
+    const without = await collectToolsReport(INPUT, rig().deps, "never");
+    expect("memoryConfig" in without).toBe(false);
+    const withIt = await collectToolsReport(
+      { ...INPUT, memoryConfig: { provider: "engram", binary: HARIL_COPY } },
+      rig().deps,
+      "never",
+    );
+    expect(withIt.memoryConfig).toEqual({ provider: "engram", binary: HARIL_COPY });
+    const nothing = await collectToolsReport(
+      { ...INPUT, memoryConfig: { provider: null } },
+      rig().deps,
+      "never",
+    );
+    expect(nothing.memoryConfig).toEqual({ provider: null });
+    expect(JSON.parse(JSON.stringify(withIt))).toEqual(withIt);
+  });
+
   describe("the last Engram install failure", () => {
     const HOUR = 3_600_000;
     const withFailure = (failedAt: number): ToolsState => ({

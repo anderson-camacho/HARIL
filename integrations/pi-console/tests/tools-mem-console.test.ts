@@ -230,6 +230,33 @@ describe("the MEM tab through the console", () => {
     );
   });
 
+  it("shows the provider haril.json sets: a configured Engram is stopped, not «NO GUARDA», before the runtime has run", async () => {
+    cli.answer("tools status", {
+      stdout: statusJson([engram(), gentle()], { memoryConfig: { provider: "engram" } }),
+    });
+    cli.answer("memory status", {
+      stdout: memoryJson({
+        provider: "null",
+        persistent: false,
+        health: "not_checked",
+        runtime: "not_running",
+      }),
+    });
+    await withConsole(
+      async (h) => {
+        await open(h);
+        await h.shows("Proceso de memoria · parado");
+        const view = h.sidebar();
+        expect(view).toContain("Configurado: engram");
+        expect(view).toContain("Último estado del runtime: null");
+        expect(view).toContain("Engram arranca con el runtime.");
+        expect(view).not.toContain("NO GUARDA");
+        expect(view).not.toContain("Para activar Engram");
+      },
+      { console: { tools: { checkDelayMs: 60_000 } } },
+    );
+  });
+
   it("keeps the memory part when the tools command fails, and says why", async () => {
     cli.answer("tools status", { stderr: "haril: tools exploded\n", code: 1 });
     cli.answer("memory status", { stdout: memoryJson() });
