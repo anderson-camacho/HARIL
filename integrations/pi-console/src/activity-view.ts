@@ -251,13 +251,12 @@ export function activityRows(data: ActivityData, options: ActivityOptions): Acti
     ...wrap(describeRange(options.range, data.loadedAt, options.locale), CARD_CONTENT_WIDTH),
     say(`Updated ${clockText(data.loadedAt)}`, `Actualizado ${clockText(data.loadedAt)}`),
   ];
-  const title = say("Filter", "Filtro");
   const filter: DockCard = options.busy
-    ? { title, rows: [...rows, say("… Loading…", "… Cargando…")] }
+    ? { title: "", rows: [...rows, say("… Loading…", "… Cargando…")] }
     : data.kind === "failed" && data.reason === NOT_LAUNCHED
-      ? { title, rows }
+      ? { title: "", rows }
       : {
-          title,
+          title: "",
           rows,
           chips: rangeChips(options, say),
           buttons: [{ label: say("Refresh", "Actualizar"), action: ACTIVITY_ACTIONS.refresh }],

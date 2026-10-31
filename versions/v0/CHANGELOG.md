@@ -16,7 +16,7 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ### Cambiado
 
-- La tarjeta «Filtro» de `ACT` reúne el rango, una fila de fichas (`1h`, `1d`, `Rango` y `Todo`, con la vigente en amarillo) y el botón ancho «Actualizar»; ya no hay tarjeta «Acciones» en esa pestaña.
+- El recuadro superior de `ACT`, sin título, reúne el rango, una fila de fichas (`1h`, `1d`, `Rango` y `Todo`, con la vigente en amarillo) y el botón ancho «Actualizar»; ya no hay tarjeta «Acciones» en esa pestaña.
 - El título bajo la cabecera de `ACT` es «Actividad».
 - `MEM` pasa a `TOOLS` en las pestañas, la cabecera, `Alt+K`, `Alt+L` y `haril plugins`; el id guardado sigue siendo `memory`. Con el nombre más largo, las cinco pestañas se reparten 3+2 en dos filas.
 

@@ -212,14 +212,14 @@ describe("the cards of the tab", () => {
       { locale: "es", range: ALL_RANGE, busy: false },
     );
     expect(status).toBe("Actividad");
-    expect(titles(cards)).toEqual(["Filtro", "Actividad · 3"]);
+    expect(titles(cards)).toEqual(["", "Actividad · 3"]);
     const english = activityRows(loaded([event(1, "a.b", 1)]), {
       locale: "en",
       range: ALL_RANGE,
       busy: false,
     });
     expect(english.status).toBe("Activity");
-    expect(titles(english.cards)).toEqual(["Filter", "Activity · 1"]);
+    expect(titles(english.cards)).toEqual(["", "Activity · 1"]);
   });
 
   it("name the range in words and the moment the events were read", () => {
@@ -293,7 +293,7 @@ describe("the cards of the tab", () => {
 
   it("say so when there is nothing in the range, and keep the filter and the actions", () => {
     const es = activityRows(loaded([]), { locale: "es", range: { kind: "hour" }, busy: false });
-    expect(titles(es.cards)).toEqual(["Filtro", "Actividad · 0"]);
+    expect(titles(es.cards)).toEqual(["", "Actividad · 0"]);
     expect(es.cards[1]?.rows).toEqual(["Sin eventos en este rango."]);
     const en = activityRows(loaded([]), { locale: "en", range: ALL_RANGE, busy: false });
     expect(en.cards[1]?.rows).toEqual(["No events in this range."]);
@@ -322,7 +322,7 @@ describe("the cards of the tab", () => {
       "haril: store not initialized (run haril project init <path> --name <name> --yes first) and more words to spare";
     const failed: ActivityData = { kind: "failed", reason, ...LOADED_AT };
     const { cards } = activityRows(failed, { locale: "es", range: ALL_RANGE, busy: false });
-    expect(titles(cards)).toEqual(["Filtro", "Actividad · no disponible"]);
+    expect(titles(cards)).toEqual(["", "Actividad · no disponible"]);
     const rows = cards[1]?.rows ?? [];
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.length).toBeLessThanOrEqual(3);
@@ -335,7 +335,7 @@ describe("the cards of the tab", () => {
   it("invite to register the folder when it is no project", () => {
     const none: ActivityData = { kind: "none", ...LOADED_AT };
     const { cards } = activityRows(none, { locale: "es", range: ALL_RANGE, busy: false });
-    expect(titles(cards)).toEqual(["Filtro", "Actividad"]);
+    expect(titles(cards)).toEqual(["", "Actividad"]);
     expect(cards[1]?.rows.join(" ")).toContain("Sin proyecto registrado");
     expect(cards[1]?.rows.join(" ")).toContain("haril project init");
     const english = activityRows(none, { locale: "en", range: ALL_RANGE, busy: false });
@@ -441,7 +441,7 @@ describe("the cards of the tab", () => {
       { kind: "failed", reason: NOT_LAUNCHED, ...LOADED_AT },
       { locale: "es", range: ALL_RANGE, busy: false },
     );
-    expect(titles(cards)).toEqual(["Filtro", "Actividad · no disponible"]);
+    expect(titles(cards)).toEqual(["", "Actividad · no disponible"]);
   });
 });
 

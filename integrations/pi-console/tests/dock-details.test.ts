@@ -355,7 +355,7 @@ describe("the ACT view", () => {
       "Todo",
       "Actualizar",
     ]);
-    expect(details.cards?.map((card) => card.title)).toEqual(["Filtro", "Actividad · 2"]);
+    expect(details.cards?.map((card) => card.title)).toEqual(["", "Actividad · 2"]);
   });
 
   it("defaults to every event, in the interface language", async () => {

@@ -240,7 +240,6 @@ describe("the ACT tab", () => {
       const view = h.sidebar();
       expect(view).toContain("[4:ACT]");
       expect(view).toContain("Espacio: Actividad");
-      expect(view).toContain("╭─ Filtro ");
       expect(view).toContain("│ Todo");
       expect(view).toContain("│ Actualizado ");
       // The range buttons are four compact chips on one row, «Actualizar» the full-width button under them.
@@ -387,7 +386,6 @@ describe("the ACT tab", () => {
       await h.command("haril-plugin", "activity");
       await h.shows("╭─ Activity · 3 ");
       const view = h.sidebar();
-      expect(view).toContain("╭─ Filter ");
       expect(view).toContain("│ 1h │ │ 1d │ │ Range │ │ All │");
       expect(view).toContain("▸ Refresh");
       expect(view).toContain("#375 watchdog.closed · 3 min ago");
@@ -403,7 +401,6 @@ describe("the ACT tab", () => {
         await openActivity(h);
         await h.shows("+- Actividad · 3 ");
         const view = h.sidebar();
-        expect(view).toContain("+- Filtro ");
         expect(view).toContain("| 1h | | 1d | | Rango | | Todo |");
         expect(view).toContain("| > Actualizar");
         expect(view).not.toMatch(/[╭╮╰╯─│▸▼▶▣]/u);
