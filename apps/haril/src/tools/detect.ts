@@ -67,6 +67,13 @@ function goBinDirs(
   return dirs;
 }
 
+// Where `go install` puts a binary: GOBIN, else the first GOPATH entry's bin, else ~/go/bin, which is the first of the Go
+// bin directories searched. Undefined when none can be known (no GOBIN or GOPATH and no home directory).
+export function goInstallDir(ctx: DetectContext): string | undefined {
+  const windows = ctx.platform === "win32";
+  return goBinDirs(ctx, windows ? win32 : posix, windows)[0];
+}
+
 function candidates(tool: ToolId, ctx: DetectContext): Candidate[] {
   const windows = ctx.platform === "win32";
   const ops = windows ? win32 : posix;

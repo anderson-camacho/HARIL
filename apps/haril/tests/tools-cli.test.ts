@@ -214,18 +214,19 @@ describe("haril tools status", () => {
 describe("haril tools usage errors", () => {
   const USAGE = "usage: haril tools status [--json] [--refresh]";
   const ENSURE = "usage: haril tools ensure [engram|gentle-ai] [--json] [--force]";
+  const UPDATE = "usage: haril tools update gentle-ai [--yes] [--json]";
 
   it("needs a subcommand", async () => {
     const { code, out, err } = await cli([], services({}));
     expect(code).toBe(2);
     expect(out).toEqual([]);
-    expect(err).toEqual(["haril: tools needs a subcommand", USAGE, ENSURE]);
+    expect(err).toEqual(["haril: tools needs a subcommand", USAGE, ENSURE, UPDATE]);
   });
 
   it("refuses an unknown subcommand", async () => {
     const { code, err } = await cli(["bogus"], services({}));
     expect(code).toBe(2);
-    expect(err).toEqual(['haril: unknown tools subcommand "bogus"', USAGE, ENSURE]);
+    expect(err).toEqual(['haril: unknown tools subcommand "bogus"', USAGE, ENSURE, UPDATE]);
   });
 
   it("refuses extra arguments", async () => {
