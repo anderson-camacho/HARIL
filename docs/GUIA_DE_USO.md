@@ -88,7 +88,9 @@ La paleta visual de HARIL y el tema interno de Pi son configuraciones relacionad
 
 ## 4. Pestañas del panel: MAIN, MEM y DOCS
 
-Las pestañas están en la parte alta del panel derecho: `[1:MAIN]  2:MEM  3:DOCS`. Los números indican el **orden actual de espacios visibles**; `Alt+L` y el clic los eligen. Antes había también `GIT`, `YT` y `THEME`; se retiraron (la rama de git sigue en la línea de la carpeta de la barra completa).
+Las pestañas están en la parte alta del panel derecho, dentro de un **recuadro de esquinas redondeadas** que cierra la cabecera: una primera fila con `▼ Espacio: Principal · Alt+L` y debajo las pestañas, `[1:MAIN]  2:MEM  3:DOCS`. Un clic en las dos primeras filas del recuadro (el borde y la fila del espacio) cierra o abre el dock; un clic en una pestaña la elige. Los números indican el **orden actual de espacios visibles**; `Alt+L` y el clic los eligen. Antes había también `GIT`, `YT` y `THEME`; se retiraron (la rama de git sigue en la línea de la carpeta de la barra completa). Con `HARIL_CONSOLE_ASCII=1` los bordes, los punteros y los marcadores `▼`/`▶` se dibujan con `+ - |`, `>` y `v`.
+
+`MEM` y `DOCS` dibujan cada sección como una **tarjeta** con su título en el borde y cada acción como un **botón** de tres filas dentro de la tarjeta «Acciones»; un clic en cualquiera de las tres filas del botón ejecuta la acción. Si la vista es más alta que el panel, la rueda del ratón la desplaza.
 
 | Pestaña | Qué significa | Qué puedes hacer | Límite |
 | --- | --- | --- | --- |
@@ -100,48 +102,63 @@ Las pestañas están en la parte alta del panel derecho: `[1:MAIN]  2:MEM  3:DOC
 
 La carpeta de documentación se administra **fuera de HARIL**; HARIL solo guarda su ruta (`docs.path` en `haril.json`) y la lee. Sin carpeta conectada, `DOCS` dice «Sin carpeta conectada.» y ofrece **▸ Definir carpeta…**: se abre una entrada «Ruta de la carpeta de documentación»; escribe una ruta **absoluta** (por ejemplo `D:\Obsidian\MiBoveda`) y pulsa `Enter`. Una ruta que no existe, que es un archivo o que no es absoluta se rechaza con el mensaje del comando y no se guarda nada. Si cancelas o dejas la entrada vacía, no cambia nada.
 
-Con una carpeta conectada, `DOCS` muestra la ruta (si no cabe, su final), el número de notas `.md` (con `+` si el recorrido llegó a su límite de 2000, por ejemplo «2000+ notas .md») y las 10 últimas con su fecha. Si la carpeta desaparece (un disco que no está conectado), `DOCS` dice «Carpeta no encontrada» y puedes cambiarla o desconectarla; HARIL sigue funcionando y `haril doctor` lo marca solo como advertencia. El recorrido omite lo que empieza por punto (`.obsidian`, `.git`, `.trash`), `node_modules` y las carpetas del sistema de Windows, y no sigue enlaces.
+Con una carpeta conectada, `DOCS` muestra en la tarjeta «Carpeta» la ruta (si no cabe, su final) y el número de notas `.md` (con `+` si el recorrido llegó a su límite de 2000, por ejemplo «2000+ notas .md»), en la tarjeta «Últimas notas» las 10 últimas con su fecha y, en «Acciones», los botones **Cambiar carpeta…** y **Desconectar**. Si la carpeta desaparece (un disco que no está conectado), `DOCS` dice «Carpeta no encontrada» y puedes cambiarla o desconectarla; HARIL sigue funcionando y `haril doctor` lo marca solo como advertencia. El recorrido omite lo que empieza por punto (`.obsidian`, `.git`, `.trash`), `node_modules` y las carpetas del sistema de Windows, y no sigue enlaces.
 
 Desde la consola con el teclado: `/haril-docs` (abre la entrada), `/haril-docs <ruta>` (conecta esa carpeta) y `/haril-docs clear` (desconecta). Fuera de la consola, en PowerShell: `haril config set docs.path "<ruta>"`, `haril config get docs.path` y `haril config set docs.path --reset`. Ninguna de estas órdenes toca el contenido de la carpeta.
 
 ### Engram y gentle-ai (MEM)
 
-`MEM` lee dos órdenes a la vez, `haril tools status --json` y `haril memory status --json`; si una falla, la otra se sigue viendo y la que falló dice por qué. Ejemplo (40 columnas, Engram bien, proveedor `engram`):
+`MEM` lee dos órdenes a la vez, `haril tools status --json` y `haril memory status --json`; si una falla, la otra se sigue viendo y la que falló dice por qué. Cada bloque es una tarjeta. Ejemplo (40 columnas, Engram bien, proveedor `engram`; la columna de la izquierda es el separador del panel):
 
 ```text
-Engram · ok
-  3.6.0 · copia de HARIL
-  …time\vendor\engram\3.6.0\engram.exe
-  Probada por HARIL: 3.6.0
-  Última publicada: 3.6.0
-  Otras copias, que HARIL no usa:
-    3.3.2 · PATH + go/bin
-    C:\Users\ana\go\bin\engram.exe
-
-Proceso de memoria
-  Proveedor: engram · persistente
-  Runtime: en marcha
-  Salud: active
-  Degradada: no
-  Cola: 0 por entregar
-
-gentle-ai · desactualizado
-  4.0.0 · PATH + go/bin
-  C:\Users\ana\go\bin\gentle-ai.exe
-  Última publicada: 4.3.1
-  Hay una versión más nueva: usa
-  «Actualizar gentle-ai».
-
-▸ Comprobar e instalar Engram
-▸ Reinstalar Engram (forzar)
-▸ Comprobar versiones ahora
-▸ Actualizar gentle-ai…
+│ ╭───────────────────────────────────╮
+│ │ ▼ Espacio: Memoria · Alt+L        │
+│ │  1:MAIN  [2:MEM]  3:DOCS          │
+│ ╰───────────────────────────────────╯
+│ Memoria y herramientas
+│ ╭─ Engram · ok ─────────────────────╮
+│ │ 3.6.0 · copia de HARIL            │
+│ │ …e\vendor\engram\3.6.0\engram.exe │
+│ │ Probada por HARIL: 3.6.0          │
+│ │ Última publicada: 3.6.0           │
+│ │ Otras copias, que HARIL no usa:   │
+│ │   3.3.2 · PATH + go/bin           │
+│ │   …\Users\maria\go\bin\engram.exe │
+│ ╰───────────────────────────────────╯
+│ ╭─ Proceso de memoria ──────────────╮
+│ │ Proveedor: engram · persistente   │
+│ │ Runtime: en marcha                │
+│ │ Salud: active                     │
+│ │ Degradada: no                     │
+│ │ Cola: 0 por entregar              │
+│ ╰───────────────────────────────────╯
+│ ╭─ gentle-ai · ok ──────────────────╮
+│ │ 4.3.1 · PATH + go/bin             │
+│ │ …Users\maria\go\bin\gentle-ai.exe │
+│ │ Última publicada: 4.3.1           │
+│ ╰───────────────────────────────────╯
+│ ╭─ Acciones ────────────────────────╮
+│ │ ╭───────────────────────────────╮ │
+│ │ │ ▸ Comprobar e instalar Engram │ │
+│ │ ╰───────────────────────────────╯ │
+│ │ ╭───────────────────────────────╮ │
+│ │ │ ▸ Reinstalar Engram (forzar)  │ │
+│ │ ╰───────────────────────────────╯ │
+│ │ ╭───────────────────────────────╮ │
+│ │ │ ▸ Comprobar versiones ahora   │ │
+│ │ ╰───────────────────────────────╯ │
+│ │ ╭───────────────────────────────╮ │
+│ │ │ ▸ Actualizar gentle-ai…       │ │
+│ │ ╰───────────────────────────────╯ │
+│ ╰───────────────────────────────────╯
 ```
+
+Un título que no cabe en el borde de la tarjeta conserva su nombre allí y pasa el estado a su primera fila (por ejemplo «Engram y gentle-ai» con «no disponible» debajo).
 
 - **Engram** es siempre la copia propia de HARIL (`<raíz>\vendor\engram\<versión>`); nunca se usa la de `go\bin` ni la de `~/.engram`, que se listan como «no usadas». Los estados son `ok`, `falta`, `desactualizado` y `desconocido`. Si la última instalación falló y Engram no está bien, la ficha dice el motivo y cuándo HARIL lo reintenta solo (6 horas); **Reinstalar Engram (forzar)** reintenta ya.
 - **Proceso de memoria**: con el proveedor `null` la ficha dice «NO GUARDA». Si Engram aún no está listo, para activarlo usa **Comprobar e instalar Engram** (o `haril tools ensure` en PowerShell) y **reinicia el runtime**; si ya está `ok`, solo falta reiniciar el runtime («Engram está listo: reinicia el runtime para que lo use»), porque el runtime lee su configuración al arrancar y `memory.provider` debe ser `engram` en `haril.json`.
 - **gentle-ai** no tiene binarios para Windows: **Actualizar gentle-ai…** (o **Instalar gentle-ai…** si falta) abre una confirmación con el plan exacto (`go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v<versión>`, la carpeta donde queda y la versión de Go) y solo si aceptas lo ejecuta. Necesita Go y puede tardar unos minutos la primera vez.
-- Mientras una acción corre, la ficha muestra «… Comprobando e instalando Engram» (o la que toque) en lugar de las filas; una sola operación a la vez. Al terminar sale un aviso con el resultado y la ficha se carga de nuevo. Las mismas filas están en `Alt+K` (o `/haril-panel`) como «MEM · …».
+- Mientras una acción corre, la tarjeta «Acciones» muestra «… Comprobando e instalando Engram» (o la que toque) en lugar de los botones; una sola operación a la vez. Al terminar sale un aviso con el resultado y la ficha se carga de nuevo. Las mismas filas están en `Alt+K` (o `/haril-panel`) como «MEM · …».
 - **Al abrir `haril`**, la consola lanza en segundo plano `haril tools ensure --json` (hasta 5 minutos, sin frenar nada): instala o repara Engram y refresca las últimas versiones. Solo si pasó algo o queda algo pendiente aparece **un aviso**; con todo al día no dice nada. Para omitirla, define `HARIL_TOOLS_CHECK=off` (también `0` o `false`) antes de abrir `haril`. Si la comprobación falla, la ficha `MEM` lo dice en «Comprobación al arrancar».
 
 ### Ocultar, mostrar o reordenar espacios

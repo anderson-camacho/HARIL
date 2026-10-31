@@ -4,6 +4,39 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.23.15
+
+- **Fecha:** 2026-10-30
+- **Estado:** el panel derecho de la consola dibuja su cabecera (el espacio y las pestañas) en un recuadro de esquinas redondeadas, y las fichas `MEM` y `DOCS` como tarjetas con su título en el borde y botones de tres filas para sus acciones. Solo cambia la apariencia, el ajuste de los textos y dónde cae cada clic; las acciones, los menús y la paleta son los de siempre.
+
+### Añadido
+
+- `rail-metrics.ts`: un único `RAIL_WIDTH = 40` y las medidas que salen de él (columna del separador, margen, tarjeta de 37 columnas, contenido de 33, botón de 33 y su etiqueta de 29, columna donde empieza el texto de una tarjeta). Ni el panel ni las fichas escriben ya 40, 39 o 38 por su cuenta.
+- `rail-cards.ts`: ayudantes puros que dibujan una tarjeta (`╭─ Título ───╮`), un botón de tres filas y un recuadro sin título, con esquinas redondeadas, bordes `teal`, títulos `cyan` y fondo de panel propio. Cada fila mide justo lo que el hueco: lo que no cabe se corta con `…` y no empuja ningún borde. Con `HARIL_CONSOLE_ASCII=1` bordes, punteros y marcadores `▼ ▶ ▣` pasan a `+ - |`, `>`, `v`, `>` y `#`.
+- `rail-view.ts`: una ficha se declara como datos (`DockCard`: título, filas y botones) y el panel los dibuja; un título que no cabe en el borde conserva su nombre allí y pasa lo que sigue a su « · » a la primera fila de la tarjeta.
+- `DockDetails.cards` (las tarjetas de la ficha) y `label` en cada acción de `DockDetails.actions`: el menú `Alt+K` lee la etiqueta de la acción (`MEM · Comprobar e instalar Engram`, `DOCS · Definir carpeta…`) y no las filas que se dibujaron.
+- Con `HARIL_CONSOLE_ASCII=1` también el separador del panel pasa a `|`.
+
+### Cambiado
+
+- La cabecera del panel es un recuadro: la primera fila es el espacio (`▼ Espacio: Principal · Alt+L`) y debajo van las pestañas, que ya no ocupan una columna de más a la izquierda (su texto empieza en la columna 4, y los clics se calculan con la misma medida). La regla que cerraba la cabecera bajo `MAIN` desaparece: la cierra el recuadro, y el bloque de estado empieza tras una fila en blanco. Un clic en las dos primeras filas del recuadro abre o cierra el dock (antes solo la primera fila); con el dock cerrado, las tres filas del recuadro lo abren. La variante `▣ Espacio` (dock a la izquierda) también va en recuadro.
+- `MEM` se compone de las tarjetas «Engram», «Proceso de memoria», «gentle-ai», «Comprobación al arrancar» (solo si falló) y «Acciones»; `DOCS`, de «Carpeta», «Últimas notas» y «Acciones». Cada acción es un botón de tres filas y un clic en cualquiera de ellas la ejecuta; mientras algo corre, «Acciones» muestra solo la fila «… Comprobando…». Los textos son los mismos, pero se ajustan a las 33 columnas de una tarjeta (antes 38): las frases largas ocupan una fila más. La vista de un fallo de lectura va en una tarjeta «Motivo».
+- Una ficha es más alta que antes (cada tarjeta suma dos filas y cada botón tres). Si no cabe en el panel, la rueda del ratón la desplaza, como hasta ahora; no se añadió otro desplazamiento.
+- Las líneas planas de la ficha (las que dibuja el dock izquierdo y la vista de detalles) ahora llevan el título de cada tarjeta como encabezado, con sus filas sangradas debajo.
+
+### Corregido
+
+- Nada.
+
+### Verificación
+
+- Las pruebas de los ayudantes (anchos exactos, esquinas, títulos y etiquetas cortados, respaldo ASCII, tonos por separado) y las del panel (todas las filas miden 40 columnas en `MAIN`, `MEM` y `DOCS`, en español e inglés, con Unicode y ASCII; un clic en cada una de las tres filas de un botón ejecuta su acción; los clics de las pestañas con la columna nueva; los títulos largos; una ficha más alta que el panel) se escribieron junto al código, no antes: no hay una ejecución en rojo propia de ellas. Lo que sí falló antes de actualizarlas fueron 30 pruebas existentes que dependían del ancho de 38 columnas, de la fila de cada pestaña o del texto sin envolver; se cambiaron solo en eso y conservan sus comprobaciones de clics, etiquetas de menú y rutas.
+- `vitest` de `integrations/pi-console` y `packages/contracts`: 841 pruebas correctas. `npm run check` (Biome, tipos, capas/pureza, knip, versión) correcto.
+- Dibujo real con el panel nativo: la CLI recién construida, carpetas temporales nuevas, `haril tools ensure engram --json` con la descarga oficial de Engram 3.6.0 solo en la carpeta temporal, y `MEM`, `DOCS` (con y sin carpeta) y la cabecera dibujados con `render(40)`, en Unicode y con `HARIL_CONSOLE_ASCII=1`: 0 filas de otro ancho que 40.
+- No verificado: el Pi real. No se probó la entrega real de clics por la terminal, `Alt+K` en vivo, el repintado ni una terminal o fuente sin los glifos de recuadro.
+
+---
+
 ## 0.23.14
 
 - **Fecha:** 2026-10-30
