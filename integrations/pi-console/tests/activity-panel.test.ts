@@ -5,7 +5,7 @@ import { ACTIVITY_ACTIONS } from "../src/activity-view.js";
 import type { CliResult } from "../src/cli.js";
 
 // What the console does for the ACT tab besides drawing it: it holds the range for the session, reloads the events
-// when a button changes it, asks for a range of its own in two questions, and says what went wrong in a notice. The
+// when a button changes it, asks for a range of its own in one question, and says what went wrong in a notice. The
 // host here is a fake: nothing runs a command or opens a dialog.
 
 const HOUR = 3_600_000;
@@ -238,17 +238,25 @@ describe("the buttons that choose a range", () => {
   });
 });
 
+// The words the notice says when the dialog opens: where to type, since Pi draws the box in the editor's place.
+const HINT_ES = "Escribe el rango en el cuadro de abajo (Esc cancela).";
+const HINT_EN = "Type the range in the box below (Esc cancels).";
+
+const chipsOf = (
+  details: { cards?: readonly { chips?: readonly { label: string }[] }[] } | undefined,
+) => details?.cards?.[1]?.chips?.map((chip) => chip.label);
+
 describe("«Rango…»", () => {
-  it("asks twice, from and to, and filters by the instants it was given", async () => {
+  it("asks ONE question and filters by the two instants of «desde .. hasta»", async () => {
     const state = setup();
     const panel = open(state);
     await panel.load();
     state.runs.length = 0;
-    state.answers = ["2026-10-30T08:00:00Z", "2026-10-30T12:00:00Z"];
+    state.answers = ["2026-10-30T08:00:00Z .. 2026-10-30T12:00:00Z"];
     await panel.act(ACTIVITY_ACTIONS.range);
-    expect(state.asked).toHaveLength(2);
-    expect(state.asked[0]?.[0]).toBe("Actividad · desde (3h, 2d o fecha ISO)");
-    expect(state.asked[1]?.[0]).toBe("Actividad · hasta (vacío = ahora)");
+    expect(state.asked).toHaveLength(1);
+    expect(state.asked[0]?.[0]).toBe("Actividad · rango (ej. 3h, 2d, 29/10 08:00 .. 29/10 12:00)");
+    expect(state.asked[0]?.[1]).toBe("3h, 2d, 29/10 08:00 .. 29/10 12:00");
     expect(state.runs).toEqual([
       [
         "events",
@@ -271,12 +279,26 @@ describe("«Rango…»", () => {
     expect(text(panel.view())).toContain("Rango: ");
   });
 
-  it("takes durations, counted back from now, and an empty end as now", async () => {
+  it("reads the dates as the Filtro card writes them", async () => {
+    const state = setup();
+    const panel = open(state);
+    await panel.load();
+    state.answers = ["29/10 08:00 .. 29/10 12:00"];
+    await panel.act(ACTIVITY_ACTIONS.range);
+    expect(panel.range()).toEqual({
+      kind: "custom",
+      from: new Date(2026, 9, 29, 8).getTime(),
+      to: new Date(2026, 9, 29, 12).getTime(),
+    });
+    expect(state.notes.some(([, level]) => level === "warning")).toBe(false);
+  });
+
+  it("takes a duration as the last N, and «desde ..» with nothing after as until now", async () => {
     const state = setup();
     const panel = open(state);
     await panel.load();
     state.runs.length = 0;
-    state.answers = ["3h", ""];
+    state.answers = ["3h"];
     await panel.act(ACTIVITY_ACTIONS.range);
     expect(state.runs).toEqual([
       [
@@ -292,7 +314,7 @@ describe("«Rango…»", () => {
     ]);
     expect(panel.range()).toEqual({ kind: "custom", from: NOW - 3 * HOUR });
     expect(text(panel.view())).toContain("→ ahora");
-    state.answers = ["2d", "1h"];
+    state.answers = ["2d .. 1h"];
     state.runs.length = 0;
     await panel.act(ACTIVITY_ACTIONS.range);
     expect(state.runs[0]?.slice(5)).toEqual([
@@ -302,70 +324,120 @@ describe("«Rango…»", () => {
       new Date(NOW - HOUR).toISOString(),
       "--json",
     ]);
+    state.answers = ["29/10 08:00 .."];
+    state.runs.length = 0;
+    await panel.act(ACTIVITY_ACTIONS.range);
+    expect(state.runs[0]?.slice(5)).toEqual([
+      "--from",
+      new Date(2026, 9, 29, 8).toISOString(),
+      "--json",
+    ]);
+    expect(panel.range()).toEqual({ kind: "custom", from: new Date(2026, 9, 29, 8).getTime() });
   });
 
-  it("asks in English when the interface is in English", async () => {
+  it("asks in English, with the date order of English, when the interface is in English", async () => {
     const state = setup();
     state.locale = "en";
     const panel = open(state);
     await panel.load();
-    state.answers = ["3h", ""];
+    state.answers = ["10/29 08:00 .."];
     await panel.act(ACTIVITY_ACTIONS.range);
-    expect(state.asked.map(([title]) => title)).toEqual([
-      "Activity · from (3h, 2d or an ISO date)",
-      "Activity · to (empty = now)",
+    expect(state.asked).toEqual([
+      [
+        "Activity · range (e.g. 3h, 2d, 10/29 08:00 .. 10/29 12:00)",
+        "3h, 2d, 10/29 08:00 .. 10/29 12:00",
+      ],
     ]);
+    expect(panel.range()).toEqual({ kind: "custom", from: new Date(2026, 9, 29, 8).getTime() });
     expect(text(panel.view())).toContain("→ now");
+    expect(state.notes[0]).toEqual([HINT_EN, "info"]);
   });
 
   it.each([
-    ["not a time", ["ayer", ""], "«Desde»"],
-    ["an end that is not a time", ["3h", "mañana"], "«Hasta»"],
-    ["an end before the start", ["1h", "3h"], "anterior"],
-  ])("leaves the range as it was and says why when it gets %s", async (_name, answers, words) => {
+    ["not a time", "ayer", "«Desde»"],
+    ["an end that is not a time", "3h .. mañana", "«Hasta»"],
+    ["an end before the start", "1h .. 3h", "anterior"],
+    ["too many dots", "3h .. 1h .. 30m", "Demasiados"],
+  ])("leaves the range as it was and warns when it gets %s", async (_name, answer, words) => {
     const state = setup();
     const panel = open(state);
     await panel.load();
     await panel.act(ACTIVITY_ACTIONS.hour);
     state.runs.length = 0;
-    state.repaints.count = 0;
-    state.answers = [...answers];
+    state.notes.length = 0;
+    state.answers = [answer];
     await panel.act(ACTIVITY_ACTIONS.range);
     expect(state.runs).toEqual([]);
-    expect(state.repaints.count).toBe(0);
     expect(panel.range()).toEqual({ kind: "hour" });
-    expect(state.notes).toHaveLength(1);
-    expect(state.notes[0]?.[1]).toBe("warning");
-    expect(state.notes[0]?.[0]).toContain(words);
+    // The notice that says where to type, then the one that says what could not be read.
+    expect(state.notes).toHaveLength(2);
+    expect(state.notes[0]).toEqual([HINT_ES, "info"]);
+    expect(state.notes[1]?.[1]).toBe("warning");
+    expect(state.notes[1]?.[0]).toContain(words);
+    expect(panel.waiting()).toBe(false);
   });
 
   it.each([
-    ["is cancelled at the first question", [undefined]],
-    ["is left empty", ["", "1h"]],
-    ["is only blanks", ["   ", "1h"]],
-    ["is cancelled at the second question", ["3h", undefined]],
-  ])("changes nothing, and says nothing, when the dialog %s", async (_name, answers) => {
+    ["is cancelled", [undefined]],
+    ["is left empty", [""]],
+    ["is only blanks", ["   "]],
+  ])("changes nothing, and warns of nothing, when the dialog %s", async (_name, answers) => {
     const state = setup();
     const panel = open(state);
     await panel.load();
     state.runs.length = 0;
+    state.notes.length = 0;
     state.answers = [...answers];
     await panel.act(ACTIVITY_ACTIONS.range);
     expect(state.runs).toEqual([]);
-    expect(state.notes).toEqual([]);
+    // Only the notice that said where to type: no warning, no error.
+    expect(state.notes).toEqual([[HINT_ES, "info"]]);
     expect(panel.range()).toEqual(ALL_RANGE);
+    expect(panel.waiting()).toBe(false);
   });
 
-  it("opens one dialog even if the button is pressed twice", async () => {
+  it("shows the «Rango» chip as waiting while the dialog is open, and says where to type", async () => {
+    const state = setup();
+    const panel = open(state);
+    await panel.load();
+    expect(chipsOf(panel.view())).toEqual(["1h", "1d", "Rango", "Todo"]);
+    let answer: ((value: string | undefined) => void) | undefined;
+    state.input = () => new Promise<string | undefined>((resolve) => (answer = resolve));
+    state.repaints.count = 0;
+    state.notes.length = 0;
+    const asking = panel.act(ACTIVITY_ACTIONS.range);
+    // At once: the tab was drawn again with the chip waiting, and the notice named the box.
+    expect(panel.waiting()).toBe(true);
+    expect(state.repaints.count).toBe(1);
+    expect(chipsOf(panel.view())).toEqual(["1h", "1d", "Espera", "Todo"]);
+    expect(state.notes).toEqual([[HINT_ES, "info"]]);
+    // Waiting for an answer is not reading the events: the buttons stay.
+    expect(panel.busy()).toBe(false);
+    expect(text(panel.view())).not.toContain("Cargando");
+    answer?.(undefined);
+    await asking;
+    expect(panel.waiting()).toBe(false);
+    expect(state.repaints.count).toBe(2);
+    expect(chipsOf(panel.view())).toEqual(["1h", "1d", "Rango", "Todo"]);
+  });
+
+  it("tells again where to type when the button is pressed while the dialog is open, and opens no second one", async () => {
     const state = setup();
     const panel = open(state);
     await panel.load();
     let answer: ((value: string | undefined) => void) | undefined;
     state.input = () => new Promise<string | undefined>((resolve) => (answer = resolve));
+    state.notes.length = 0;
     const first = panel.act(ACTIVITY_ACTIONS.range);
     await panel.act(ACTIVITY_ACTIONS.range);
-    // The second press found the dialog open and asked nothing.
+    await panel.act(ACTIVITY_ACTIONS.range);
     expect(state.asked).toHaveLength(1);
+    expect(state.notes).toEqual([
+      [HINT_ES, "info"],
+      [HINT_ES, "info"],
+      [HINT_ES, "info"],
+    ]);
+    expect(panel.waiting()).toBe(true);
     answer?.(undefined);
     await first;
     expect(panel.range()).toEqual(ALL_RANGE);
@@ -376,6 +448,48 @@ describe("«Rango…»", () => {
     expect(state.asked).toHaveLength(2);
   });
 
+  it("shows an error notice, never silence, when the input dialog rejects", async () => {
+    const state = setup();
+    const panel = open(state);
+    await panel.load();
+    state.runs.length = 0;
+    state.notes.length = 0;
+    state.input = async () => {
+      throw new Error("no editor to host the box");
+    };
+    await expect(panel.act(ACTIVITY_ACTIONS.range)).resolves.toBeUndefined();
+    expect(state.runs).toEqual([]);
+    expect(panel.range()).toEqual(ALL_RANGE);
+    expect(state.notes).toEqual([
+      [HINT_ES, "info"],
+      ["No se pudo abrir el cuadro del rango: no editor to host the box", "error"],
+    ]);
+    // The chip is back, and the button works again.
+    expect(panel.waiting()).toBe(false);
+    expect(chipsOf(panel.view())).toEqual(["1h", "1d", "Rango", "Todo"]);
+    state.input = undefined;
+    state.answers = ["1h"];
+    await panel.act(ACTIVITY_ACTIONS.range);
+    expect(panel.range()).toEqual({ kind: "custom", from: NOW - HOUR });
+  });
+
+  it("shows an error notice when the dialog throws before it even asks, and in English", async () => {
+    const state = setup();
+    state.locale = "en";
+    const panel = open(state);
+    await panel.load();
+    state.notes.length = 0;
+    state.input = () => {
+      throw new TypeError("ui.input is not a function");
+    };
+    await panel.act(ACTIVITY_ACTIONS.range);
+    expect(state.notes.at(-1)).toEqual([
+      "Could not open the range box: ui.input is not a function",
+      "error",
+    ]);
+    expect(panel.waiting()).toBe(false);
+  });
+
   it("does nothing without a session to ask in", async () => {
     const state = setup();
     const panel = open(state);
@@ -384,6 +498,7 @@ describe("«Rango…»", () => {
     state.hasUi = false;
     await panel.act(ACTIVITY_ACTIONS.range);
     expect(state.runs).toEqual([]);
+    expect(panel.waiting()).toBe(false);
   });
 });
 
@@ -411,14 +526,40 @@ describe("the range belongs to the session", () => {
     const panel = open(state);
     await panel.load();
     state.runs.length = 0;
+    state.notes.length = 0;
     let answer: ((value: string | undefined) => void) | undefined;
     state.input = () => new Promise<string | undefined>((resolve) => (answer = resolve));
     const asking = panel.act(ACTIVITY_ACTIONS.range);
     panel.reset();
+    expect(panel.waiting()).toBe(false);
     answer?.("yesterday");
     await asking;
     expect(state.runs).toEqual([]);
-    expect(state.notes).toEqual([]);
+    // Only the notice of the session that opened it: the answer said nothing in the next one.
+    expect(state.notes).toEqual([[HINT_ES, "info"]]);
     expect(panel.range()).toEqual(ALL_RANGE);
+    expect(panel.waiting()).toBe(false);
+  });
+
+  it("does not let a dialog of the ended session close the waiting state of the next one", async () => {
+    const state = setup();
+    const panel = open(state);
+    await panel.load();
+    let old: ((value: string | undefined) => void) | undefined;
+    state.input = () => new Promise<string | undefined>((resolve) => (old = resolve));
+    const first = panel.act(ACTIVITY_ACTIONS.range);
+    panel.reset();
+    await panel.load();
+    let current: ((value: string | undefined) => void) | undefined;
+    state.input = () => new Promise<string | undefined>((resolve) => (current = resolve));
+    const second = panel.act(ACTIVITY_ACTIONS.range);
+    expect(panel.waiting()).toBe(true);
+    old?.(undefined);
+    await first;
+    // The old dialog closing is not the new one closing.
+    expect(panel.waiting()).toBe(true);
+    current?.(undefined);
+    await second;
+    expect(panel.waiting()).toBe(false);
   });
 });

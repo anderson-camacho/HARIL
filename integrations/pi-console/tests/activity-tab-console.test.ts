@@ -624,19 +624,19 @@ describe("the buttons of the ACT tab", () => {
 });
 
 describe("«Rango…» in the console", () => {
-  it("asks twice with the input dialog and filters by what it was given", async () => {
+  const HINT = "Escribe el rango en el cuadro de abajo (Esc cancela).";
+  const TITLE = "Actividad · rango (ej. 3h, 2d, 29/10 08:00 .. 29/10 12:00)";
+
+  it("asks one question with the input dialog and filters by «desde .. hasta»", async () => {
     installProject();
-    const answers = ["2026-10-30T08:00:00Z", "2026-10-30T12:00:00Z"];
+    const answers = ["2026-10-30T08:00:00Z .. 2026-10-30T12:00:00Z"];
     await withConsole(
       async (h) => {
         await openActivity(h);
         await h.shows("╭─ Actividad · 3 ");
         h.clickChip("Rango");
         await waitFor(() => expect(h.eventCalls()).toHaveLength(2));
-        expect(h.input.mock.calls.map(([title]) => title)).toEqual([
-          "Actividad · desde (3h, 2d o fecha ISO)",
-          "Actividad · hasta (vacío = ahora)",
-        ]);
+        expect(h.input.mock.calls).toEqual([[TITLE, "3h, 2d, 29/10 08:00 .. 29/10 12:00"]]);
         expect(h.eventCalls()[1]).toEqual([
           "events",
           "--project",
@@ -655,9 +655,9 @@ describe("«Rango…» in the console", () => {
     );
   });
 
-  it("takes a duration and an empty end, as «hasta ahora»", async () => {
+  it("takes a duration, and «desde ..» as until now", async () => {
     installProject();
-    const answers = ["3h", ""];
+    const answers = ["3h"];
     await withConsole(
       async (h) => {
         await openActivity(h);
@@ -678,7 +678,7 @@ describe("«Rango…» in the console", () => {
 
   it("says in a notice what it cannot read, and leaves the tab as it was", async () => {
     installProject();
-    const answers = ["ayer", ""];
+    const answers = ["ayer"];
     await withConsole(
       async (h) => {
         await openActivity(h);
@@ -688,7 +688,7 @@ describe("«Rango…» in the console", () => {
         await waitFor(() => expect(h.notes()).toContain("«Desde» no es válido"));
         expect(h.ctx.notes.at(-1)?.[1]).toBe("warning");
         expect(h.eventCalls()).toHaveLength(1);
-        expect(h.sidebar()).toBe(before);
+        await waitFor(() => expect(h.sidebar()).toBe(before));
       },
       { input: () => answers.shift() },
     );
@@ -700,15 +700,66 @@ describe("«Rango…» in the console", () => {
       async (h) => {
         await openActivity(h);
         await h.shows("╭─ Actividad · 3 ");
-        // The console says some things of its own at start (the models, for one): what matters is that the dialog adds none.
-        const before = h.notes();
+        const before = h.sidebar();
+        const notes = h.ctx.notes.length;
         h.clickChip("Rango");
         await waitFor(() => expect(h.input).toHaveBeenCalledTimes(1));
+        await waitFor(() => expect(h.sidebar()).toBe(before));
         await new Promise((resolve) => setTimeout(resolve, 100));
         expect(h.eventCalls()).toHaveLength(1);
-        expect(h.notes()).toBe(before);
+        // Only the notice that says where to type: no warning and no error.
+        expect(h.ctx.notes.slice(notes)).toEqual([[HINT, "info"]]);
       },
       { input: () => undefined },
+    );
+  });
+
+  it("shows the chip waiting and says where to type while the dialog is open, then goes back", async () => {
+    installProject();
+    let answer: ((value: string | undefined) => void) | undefined;
+    await withConsole(
+      async (h) => {
+        await openActivity(h);
+        await h.shows("╭─ Actividad · 3 ");
+        const notes = h.ctx.notes.length;
+        h.clickChip("Rango");
+        await h.shows("│ Espera │");
+        expect(h.sidebar()).not.toContain("│ Rango │");
+        expect(h.sidebar()).not.toContain("Cargando");
+        expect(h.ctx.notes.slice(notes)).toEqual([[HINT, "info"]]);
+        // A second press finds the box open: it says where it is again and opens no other.
+        h.clickChip("Espera");
+        await waitFor(() => expect(h.ctx.notes.slice(notes)).toHaveLength(2));
+        expect(h.ctx.notes.at(-1)).toEqual([HINT, "info"]);
+        expect(h.input).toHaveBeenCalledTimes(1);
+        answer?.(undefined);
+        await h.shows("│ Rango │");
+        expect(h.sidebar()).not.toContain("Espera");
+        expect(h.eventCalls()).toHaveLength(1);
+      },
+      { input: () => new Promise<string | undefined>((resolve) => (answer = resolve)) },
+    );
+  });
+
+  it("shows an error notice, never silence, when the dialog cannot open", async () => {
+    installProject();
+    await withConsole(
+      async (h) => {
+        await openActivity(h);
+        await h.shows("╭─ Actividad · 3 ");
+        h.clickChip("Rango");
+        await waitFor(() =>
+          expect(h.notes()).toContain("No se pudo abrir el cuadro del rango: no editor"),
+        );
+        expect(h.ctx.notes.at(-1)?.[1]).toBe("error");
+        await h.shows("│ Rango │");
+        expect(h.eventCalls()).toHaveLength(1);
+      },
+      {
+        input: () => {
+          throw new Error("no editor");
+        },
+      },
     );
   });
 });
