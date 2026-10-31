@@ -68,10 +68,10 @@ El panel lateral nativo (el derecho; el izquierdo está apagado por defecto) req
 | --- | --- | --- |
 | **Izquierda** | Apagada por defecto (`/haril-dock left`). Bajo `MAIN` solo remite al panel derecho; bajo `MEM` o `DOCS` repite su ficha | Pestañas, clic, `Alt+L`, rueda del mouse |
 | **Centro** | Chat real de Pi, comandos `/` y respuestas de herramientas | Escribes peticiones, `/model`, `/haril` |
-| **Derecha** | Cuatro pestañas: `MAIN` (ubicación, modo, proyecto, modelo, áreas, avisos, extensiones, sesión y acciones), `MEM`, `DOCS` y `ACT` (la actividad reciente) | Clic en las pestañas, en `▶`/`▼` y en las áreas; `Alt+I`, `Alt+K` |
+| **Derecha** | Cinco pestañas: `MAIN` (ubicación, modo, proyecto, modelo, áreas, avisos, extensiones y sesión), `MEM`, `DOCS`, `ACT` (la actividad reciente) y `ACC` (las acciones del área elegida) | Clic en las pestañas, en `▶`/`▼` y en las áreas; `Alt+I`, `Alt+K` |
 | **Inferior** | Barra de una línea (compacta) o de dos (completa), con modo, modelo, uso del contexto, coste, runtime, STOP ALL y, en la completa, carpeta, rama y avisos; debajo, las cinco áreas | `Alt+H`, `Alt+M`, clic |
 
-El estado de la consola vive en **un solo sitio a la vez**. Con el panel derecho abierto y `MAIN` activa, está en el panel y la barra inferior es la **compacta** (una línea). Si cierras el panel con `Alt+I`, la terminal es menor de 132×24 o eliges `MEM`, `DOCS` o `ACT`, la barra inferior pasa a la **completa**: dos líneas, con la carpeta, la rama de git y un contador de avisos (el mismo número que `AVISOS` en `MAIN`).
+El estado de la consola vive en **un solo sitio a la vez**. Con el panel derecho abierto y `MAIN` activa, está en el panel y la barra inferior es la **compacta** (una línea). Si cierras el panel con `Alt+I`, la terminal es menor de 132×24 o eliges `MEM`, `DOCS`, `ACT` o `ACC`, la barra inferior pasa a la **completa**: dos líneas, con la carpeta, la rama de git y un contador de avisos (el mismo número que `AVISOS` en `MAIN`).
 
 El centro puede estar negro y vacío al iniciar porque **no se ha conversado todavía**. Las columnas no crean una conversación automáticamente.
 
@@ -86,18 +86,19 @@ El centro puede estar negro y vacío al iniciar porque **no se ha conversado tod
 
 La paleta visual de HARIL y el tema interno de Pi son configuraciones relacionadas pero distintas. Si ves el chat verde y los laterales naranja, hay probablemente una preferencia antigua `ui.theme=amber` guardada: usa `/haril-theme matrix` o `haril config set ui.theme matrix`.
 
-## 4. Pestañas del panel: MAIN, MEM, DOCS y ACT
+## 4. Pestañas del panel: MAIN, MEM, DOCS, ACT y ACC
 
-Las pestañas están en la parte alta del panel derecho, dentro de un **recuadro de esquinas redondeadas** que cierra la cabecera: una primera fila con `▼ Espacio: Principal · Alt+L` y debajo las pestañas, `[1:MAIN]  2:MEM  3:DOCS  4:ACT`. Un clic en las dos primeras filas del recuadro (el borde y la fila del espacio) cierra o abre el dock; un clic en una pestaña la elige. Los números indican el **orden actual de espacios visibles**; `Alt+L` y el clic los eligen. Antes había también `GIT`, `YT` y `THEME`; se retiraron (la rama de git sigue en la línea de la carpeta de la barra completa). Con `HARIL_CONSOLE_ASCII=1` los bordes, los punteros y los marcadores `▼`/`▶` se dibujan con `+ - |`, `>` y `v`.
+Las pestañas están en la parte alta del panel derecho, dentro de un **recuadro de esquinas redondeadas** que cierra la cabecera: una primera fila con `▼ Espacio: Principal · Alt+L` y debajo las pestañas, `[1:MAIN]  2:MEM  3:DOCS  4:ACT` y, en una segunda fila del recuadro, `5:ACC` (cinco pestañas no caben en una fila). Un clic en las dos primeras filas del recuadro (el borde y la fila del espacio) cierra o abre el dock; un clic en una pestaña la elige. Los números indican el **orden actual de espacios visibles**; `Alt+L` y el clic los eligen. Antes había también `GIT`, `YT` y `THEME`; se retiraron (la rama de git sigue en la línea de la carpeta de la barra completa). Con `HARIL_CONSOLE_ASCII=1` los bordes, los punteros y los marcadores `▼`/`▶` se dibujan con `+ - |`, `>` y `v`.
 
-`MEM`, `DOCS` y `ACT` dibujan cada sección como una **tarjeta** con su título en el borde y cada acción como un **botón** de tres filas dentro de la tarjeta «Acciones»; un clic en cualquiera de las tres filas del botón ejecuta la acción. Si la vista es más alta que el panel, la rueda del ratón la desplaza.
+`MEM`, `DOCS`, `ACT` y `ACC` dibujan cada sección como una **tarjeta** con su título en el borde y cada acción como un **botón** de tres filas dentro de la tarjeta «Acciones»; un clic en cualquiera de las tres filas del botón ejecuta la acción. Si la vista es más alta que el panel, la rueda del ratón la desplaza.
 
 | Pestaña | Qué significa | Qué puedes hacer | Límite |
 | --- | --- | --- | --- |
-| **MAIN / Principal** | El estado de la consola: ubicación, modo, proyecto, modelo, áreas, avisos, extensiones, sesión y acciones (sección 5) | Todo lo de la sección 5 | Es la única pestaña que dibuja ese bloque; siempre va primera y siempre está visible |
+| **MAIN / Principal** | El estado de la consola: ubicación, modo, proyecto, modelo, áreas, avisos, extensiones y sesión (sección 5) | Todo lo de la sección 5 | Es la única pestaña que dibuja ese bloque; siempre va primera y siempre está visible |
 | **MEM / Memoria** | Engram (estado, versión, ruta), el proceso de memoria (proveedor, salud, cola) y gentle-ai | Ver qué copia usa HARIL; clic en **▸ Comprobar e instalar Engram**, **▸ Reinstalar Engram (forzar)**, **▸ Comprobar versiones ahora** o **▸ Actualizar gentle-ai…** | Un proveedor `null` no guarda nada: la ficha lo marca y dice cómo activar Engram. Si `haril.json` ya fija `engram` y el runtime aún no ha corrido, no lo marca así: dice «Configurado: engram» y que Engram arranca con el runtime. Instalar o actualizar solo ocurre con tu clic (o su aviso al abrir, que solo informa) |
 | **DOCS / Documentación** | Tu carpeta de documentación conectada (por ejemplo una bóveda de Obsidian): la ruta, cuántas notas `.md` tiene y las 10 últimas | Clic en **▸ Definir carpeta…**, **▸ Cambiar carpeta…** o **▸ Desconectar**; o `/haril-docs` | Solo lectura: HARIL no escribe en la carpeta, la administras tú (con Obsidian) |
 | **ACT / Actividad** | La actividad reciente del proyecto (antes salía al final de `MAIN`): el filtro de tiempo activo, cinco botones y los últimos eventos de `haril events`, el más nuevo primero, con cuánto hace que ocurrió (`#375 watchdog.closed · hace 3 min`) | Clic en **▸ Última hora**, **▸ Último día**, **▸ Rango…** (te pregunta «desde» y «hasta»: una duración como `3h` o `2d`, o una fecha ISO como `2026-10-30T08:00`; «hasta» vacío es ahora), **▸ Todo** o **▸ Actualizar** | Muestra como mucho los últimos 50 eventos del rango y lo dice. El rango dura lo que la sesión: no se guarda. Los eventos que fallaron o se cancelaron van en rojo |
+| **ACC / Acciones** | Los controles del **área elegida en `MAIN`** (los que antes salían al final de `MAIN` bajo `ACCIONES · AGENTS`): una tarjeta que dice qué área sigue y la tarjeta «Acciones» con un botón de tres filas por control, más **▸ Abrir menú completo /haril** | Clic en cualquiera de las tres filas de un botón: hace lo mismo que hacía la fila de `MAIN` (**▸ Ver detalles completos**, **▸ Elegir modelo de Pi**, **▸ Actualizar datos**…) | El área se elige en la lista `ÁREAS` de `MAIN` (o con `Alt+H`); `ACC` la sigue en cada cuadro. Una etiqueta larga pasa a una segunda fila del botón. Sus filas no se repiten en `Alt+K`, que ya lista las acciones del área |
 
 ### Conectar tu documentación (DOCS)
 
@@ -115,6 +116,7 @@ Desde la consola con el teclado: `/haril-docs` (abre la entrada), `/haril-docs <
 │ ╭───────────────────────────────────╮
 │ │ ▼ Espacio: Memoria · Alt+L        │
 │ │  1:MAIN  [2:MEM]  3:DOCS   4:ACT  │
+│ │  5:ACC                            │
 │ ╰───────────────────────────────────╯
 │ Memoria y herramientas
 │ ╭─ Engram · ok ─────────────────────╮
@@ -176,15 +178,15 @@ haril plugins reset
 
 `MAIN` no se puede ocultar ni mover, y ningún espacio puede ponerse por encima de ella: `haril plugins hide main` y `haril plugins move main …` se rechazan con un mensaje. Un `haril.json` de una versión anterior (con `git`, `youtube` o `themes` en `ui.plugins`) sigue funcionando: esas entradas se ignoran y el archivo se reescribe con la lista nueva en el siguiente cambio que hagas con `haril plugins`.
 
-Dentro de HARIL usa `/haril-plugins`. Se ofrecen **Mostrar, Ocultar, Subir y Bajar**. Para entrar directamente a una vista: `/haril-plugin main`, `/haril-plugin memory`, `/haril-plugin docs` o `/haril-plugin activity`. El argumento numérico (`1`–`3`) selecciona una vista **visible**.
+Dentro de HARIL usa `/haril-plugins`. Se ofrecen **Mostrar, Ocultar, Subir y Bajar**. Para entrar directamente a una vista: `/haril-plugin main`, `/haril-plugin memory`, `/haril-plugin docs`, `/haril-plugin activity` o `/haril-plugin actions`. El argumento numérico (`1`–`5`) selecciona una vista **visible**.
 
 Estas operaciones cambian la interfaz, no los paquetes Pi. Si gestionaste el dock desde otra ventana, usa `/haril-plugins` o reabre HARIL para verlo reflejado.
 
 ## 5. Pestaña MAIN: significado de los valores
 
-Este bloque se dibuja **solo bajo la pestaña `MAIN`**; con `MEM` o `DOCS` el panel muestra únicamente la ficha de esa pestaña. Las secciones con `▶` están contraídas y con `▼` expandidas. Su contenido corresponde a la **sesión y área actuales**, no a un inventario universal.
+Este bloque se dibuja **solo bajo la pestaña `MAIN`**; con `MEM`, `DOCS`, `ACT` o `ACC` el panel muestra únicamente la ficha de esa pestaña. Las secciones con `▶` están contraídas y con `▼` expandidas. Su contenido corresponde a la **sesión y área actuales**, no a un inventario universal.
 
-En el panel derecho responden al clic las cabeceras de sección (`AVISOS`, `EXTENSIONES`, `SESIÓN`, `ACCIONES`), las cinco filas de `ÁREAS` (abren esa área; el `●` marca la abierta), la fila «Abrir vista de orquestación», cada acción de `ACCIONES` y el texto `cambiar` de la fila `Modo`.
+En el panel derecho responden al clic las cabeceras de sección (`AVISOS`, `EXTENSIONES`, `SESIÓN`), las cinco filas de `ÁREAS` (abren esa área; el `●` marca la abierta), la fila «Abrir vista de orquestación» y el texto `cambiar` de la fila `Modo`. Las acciones del área ya no están aquí: están en la pestaña `ACC`.
 
 **Con el teclado:** `Alt+K` (o el comando `/haril-panel`) abre un menú «Panel derecho» con esas mismas secciones, áreas y acciones: abrir o cerrar una sección, abrir un área, cambiar el modo, ver detalles completos, elegir modelo, etc. Muévete con `↑/↓`, elige con `Enter` y cancela con `Esc`. Elegir una entrada hace lo mismo que su clic. El panel en sí **no recibe el foco del teclado**: Pi entrega los atajos de las extensiones al editor, no a un panel. Por eso el menú es la vía de teclado, y los prefijos `[D]`, `[M]`, `[T]` y `[R]` que antes se veían ante las acciones (solo texto, no teclas) ya no se dibujan en el panel.
 
@@ -199,12 +201,13 @@ En el panel derecho responden al clic las cabeceras de sección (`AVISOS`, `EXTE
 | `AVISOS · 0` | Cantidad de avisos conocidos ahora | Expande; cero **no garantiza** ausencia total de errores |
 | `EXTENSIONES · 0` | **Estados observados** de extensiones, no paquetes instalados | `haril extensions list --json` para inventario declarado |
 | `SESIÓN` | Runtime y memoria resumida (el proyecto y el modelo ya están en las filas de arriba) | Expande con clic |
-| `ACCIONES · AGENTS · 4` | Cuatro controles disponibles en **esa área**, no cuatro agentes ejecutando | Clic en un control o `/haril` |
 | `Alt+K menú del panel · Alt+H áreas` y `Alt+I panel · Alt+C comandos` | Los atajos, en las dos últimas filas de `MAIN` | La actividad reciente ya no está aquí: está en la pestaña `ACT` (`haril events`, `haril usage log`) |
 
 **Ojo IA (`◉`):** pequeño indicador basado en hechos observables. Puede volverse rojo cuando el contexto supera un umbral alto o hay muchos trabajadores ocupados; amarillo si se está ejecutando trabajo. **No** mide emociones ni esfuerzo interno invisible del modelo.
 
-### Acciones contextuales
+### Acciones contextuales (pestaña ACC)
+
+Las acciones del área elegida viven en la pestaña `ACC` (antes salían bajo `ACCIONES · AGENTS · 4` al final de `MAIN`): elige el área en `ÁREAS`, abre `ACC` (clic en `5:ACC`, `Alt+L` o `/haril-plugin actions`) y pulsa el botón. El número de botones es el de controles disponibles en **esa área**, no el de agentes ejecutando. La lista:
 
 - `[I] Registrar esta carpeta`: vincular un proyecto.
 - `[D] Ver detalles completos`: consultar datos del área.
