@@ -23,6 +23,7 @@ import { states } from "./commands/states.js";
 import { status } from "./commands/status.js";
 import { stop } from "./commands/stop.js";
 import { task } from "./commands/task.js";
+import { theme } from "./commands/theme.js";
 import { tools } from "./commands/tools.js";
 import { update } from "./commands/update.js";
 import { usage } from "./commands/usage.js";
@@ -117,6 +118,12 @@ const HELP_LINES = [
   "    health checked before it replaces anything); for gentle-ai it only detects",
   "  haril tools update gentle-ai [--yes] [--json]   install or update gentle-ai with go install at the latest release",
   "    (needs Go; shows the plan and asks first, --yes skips the question), then check the version it left behind",
+  "  haril theme list [--json]        the terminal profiles, marking the active one",
+  "  haril theme preview <id> [--json]   the palette and fonts of a profile; writes nothing",
+  "  haril theme apply <id> [--prompt-engine oh-my-posh|starship] [--animations on|off] [--intensity low|medium|high]",
+  "    [--shaders on|off] [--reduced-motion on|off] [--startup banner|minimal|none] [--json]   record the selection in",
+  "    config/terminal.json; terminal integration is not available yet, so the terminal itself does not change",
+  "  haril theme status [--json]      the active profile and the terminal preferences; read-only",
   "  haril workflow start <goal> --model <ref> [--autonomous | --stop-at <stops>] [--agent <ref>] [--json]",
   "    queue a three-layer workflow (orchestrator, delegators, executors, auditors) that haril start runs; it stops",
   "    after the first plan unless --autonomous or --stop-at; --agent defaults to fake:orchestrate (simulated agents)",
@@ -224,6 +231,8 @@ function dispatch(argv: readonly string[], io: CliIo, host: HostInfo): number | 
       return events(rest, io, host);
     case "memory":
       return memory(rest, io, host);
+    case "theme":
+      return theme(rest, io, host);
     case "tools":
       return tools(rest, io, host);
     case "usage":
