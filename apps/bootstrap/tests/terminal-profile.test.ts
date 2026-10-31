@@ -48,7 +48,10 @@ function installed(): MemoryFs {
   return fs;
 }
 
-function fragment(fs: MemoryFs): { profiles: Record<string, unknown>[] } {
+function fragment(fs: MemoryFs): {
+  profiles: Record<string, unknown>[];
+  schemes: Record<string, unknown>[];
+} {
   const bytes = fs.files.get(FRAGMENT);
   if (bytes === undefined) throw new Error("fragment not written");
   return JSON.parse(new TextDecoder().decode(bytes));
@@ -59,15 +62,23 @@ describe("haril-bootstrap terminal-profile", () => {
     const { fs, out, run } = harness(installed());
     expect(await run([])).toBe(0);
 
-    const [profile] = fragment(fs).profiles;
+    const { profiles, schemes } = fragment(fs);
+    const [profile] = profiles;
     expect(profile).toEqual({
       guid: TERMINAL_PROFILE_GUID,
       name: "HARIL",
       commandline: `"${LAUNCHER}"`,
       startingDirectory: "%USERPROFILE%",
       tabTitle: "HARIL",
+      colorScheme: "HARIL Future",
+      cursorShape: "filledBox",
       "experimental.pixelShaderPath": SHADER,
+      backgroundImage: "C:\\HARIL\\terminal\\haril-background.png",
+      backgroundImageOpacity: 0.35,
+      backgroundImageStretchMode: "uniformToFill",
     });
+    // The profile names a scheme that the same fragment defines.
+    expect(schemes.map((scheme) => scheme.name)).toEqual(["HARIL Future"]);
     const shader = new TextDecoder().decode(fs.files.get(SHADER));
     expect(shader).toContain("float4 main(PSInput pin) : SV_TARGET");
     // Reading Time would make Windows Terminal redraw every frame.
@@ -80,7 +91,7 @@ describe("haril-bootstrap terminal-profile", () => {
     await run([]);
     out.length = 0;
     expect(await run([])).toBe(0);
-    expect(out.filter((line) => line.includes("skipped"))).toHaveLength(2);
+    expect(out.filter((line) => line.includes("skipped"))).toHaveLength(3);
   });
 
   it("--shader none drops the shader setting and the file a previous run wrote", async () => {
@@ -117,7 +128,7 @@ describe("haril-bootstrap terminal-profile", () => {
     expect(fs.files.has(FRAGMENT)).toBe(false);
     expect(fs.files.has(SHADER)).toBe(false);
     expect(fs.files.has(LAUNCHER)).toBe(true);
-    expect(out.join("\n")).toContain("removed 2 entries");
+    expect(out.join("\n")).toContain("removed 3 entries");
 
     out.length = 0;
     expect(await run(["--remove"])).toBe(0);
@@ -147,5 +158,95 @@ describe("haril-bootstrap terminal-profile", () => {
       expect(fs.files.has(`${SETTINGS}.haril-backup`)).toBe(false);
       expect(out.join("\n")).toContain(`manual    remove the profile ${TERMINAL_PROFILE_GUID}`);
     }
+  });
+});
+
+describe("the blue look of the HARIL profile", () => {
+  const FONTS = "C:\\Users\\tester\\AppData\\Local\\Microsoft\\Windows\\Fonts";
+
+  async function install(fs: MemoryFs) {
+    await fs.writeFile(LAUNCHER, new TextEncoder().encode("launcher"));
+    const { run } = harness(fs);
+    await run([]);
+    return JSON.parse(text(fs, FRAGMENT));
+  }
+
+  it("ships the scheme in the fragment and names it with a filled cursor", async () => {
+    const fragment = await install(createMemoryFs());
+    const profile = fragment.profiles[0];
+    expect(profile.cursorShape).toBe("filledBox");
+    expect(profile.colorScheme).toBe("HARIL Future");
+    expect(profile.font).toBeUndefined();
+    expect(profile.backgroundImage).toBe("C:\\HARIL\\terminal\\haril-background.png");
+    expect(fragment.profiles).toHaveLength(1);
+    expect(fragment.schemes[0]).toMatchObject({
+      name: "HARIL Future",
+      background: "#07172C",
+      cursorColor: "#5EC2FF",
+    });
+  });
+
+  it("uses a Nerd Font only when one is installed", async () => {
+    const fs = createMemoryFs();
+    await fs.writeFile(
+      win32.join(FONTS, "JetBrainsMonoNerdFont-Regular.ttf"),
+      new TextEncoder().encode("font"),
+    );
+    const fragment = await install(fs);
+    expect(fragment.profiles[0].font).toEqual({ face: "JetBrainsMono Nerd Font" });
+  });
+
+  it("writes the same default image on every run and removes it with the profile", async () => {
+    const png = "C:\\HARIL\\terminal\\haril-background.png";
+    const fs = installed();
+    const { run, out } = harness(fs);
+    await run([]);
+    const first = fs.files.get(png);
+    expect(first?.slice(0, 4)).toEqual(Uint8Array.of(0x89, 0x50, 0x4e, 0x47));
+    await run([]);
+    expect(fs.files.get(png)).toEqual(first);
+    expect(out.join("\n")).toContain("background");
+    await run(["--remove"]);
+    expect(fs.files.has(png)).toBe(false);
+  });
+
+  it("uses a valid picture of the user's, and turns the image off with none", async () => {
+    const image = "C:\\pictures\\space.jpg";
+    const fs = installed();
+    fs.files.set(image, new TextEncoder().encode("picture"));
+    const { run } = harness(fs);
+    expect(
+      await run([
+        "--background-image",
+        image,
+        "--background-opacity",
+        "0.5",
+        "--background-stretch",
+        "fill",
+      ]),
+    ).toBe(0);
+    expect(fragment(fs).profiles[0]).toMatchObject({
+      backgroundImage: image,
+      backgroundImageOpacity: 0.5,
+      backgroundImageStretchMode: "fill",
+    });
+    expect(fs.files.has(image)).toBe(true);
+    expect(await run(["--background-image", "none"])).toBe(0);
+    expect(fragment(fs).profiles[0]).not.toHaveProperty("backgroundImage");
+    expect(fs.files.has("C:\\HARIL\\terminal\\haril-background.png")).toBe(false);
+  });
+
+  it("keeps the default and warns when the picture cannot be used", async () => {
+    const fs = installed();
+    fs.files.set("C:\\pictures\\notes.txt", new TextEncoder().encode("text"));
+    const { run, err } = harness(fs);
+    for (const bad of ["space.png", "C:\\pictures\\missing.png", "C:\\pictures\\notes.txt"]) {
+      expect(await run(["--background-image", bad])).toBe(0);
+      expect(fragment(fs).profiles[0]?.backgroundImage).toBe(
+        "C:\\HARIL\\terminal\\haril-background.png",
+      );
+    }
+    expect(err.join("\n")).toContain("keeping the default image");
+    expect(await run(["--background-opacity", "2"])).not.toBe(0);
   });
 });

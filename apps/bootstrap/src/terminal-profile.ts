@@ -1,6 +1,7 @@
 import { win32 } from "node:path";
 import type { FsPort } from "./ports.js";
 import { sha256Hex } from "./shasums.js";
+import { terminalBackgroundPng } from "./terminal-background.js";
 import {
   TERMINAL_SHADER_NAMES,
   type TerminalShaderName,
@@ -31,7 +32,7 @@ export interface TerminalProfileDeps {
 }
 
 interface TerminalProfileStep {
-  readonly name: "launcher" | "shader" | "profile";
+  readonly name: "launcher" | "shader" | "background" | "profile";
   readonly status: "ok" | "skipped" | "failed";
   readonly detail: string;
 }
@@ -76,21 +77,120 @@ function shaderFile(root: string, name: TerminalShaderName): string {
   return win32.join(root, "terminal", `haril-${name}.hlsl`);
 }
 
-function fragmentContents(launcher: string, shaderPath: string | null): string {
+// The Future palette as a Windows Terminal scheme, delivered in the fragment beside the profile: nothing of it reaches
+// the user's settings.json or any other profile.
+const SCHEME_NAME = "HARIL Future";
+const FUTURE_SCHEME = {
+  name: SCHEME_NAME,
+  background: "#07172C",
+  foreground: "#C4E9FF",
+  cursorColor: "#5EC2FF",
+  selectionBackground: "#16365C",
+  black: "#07172C",
+  red: "#FF6576",
+  green: "#7DF8D5",
+  yellow: "#F4D35E",
+  blue: "#5EC2FF",
+  purple: "#9DCDEC",
+  cyan: "#7DF8D5",
+  white: "#C4E9FF",
+  brightBlack: "#56789C",
+  brightRed: "#FF6576",
+  brightGreen: "#A8E6CF",
+  brightYellow: "#FF9F45",
+  brightBlue: "#9DCDEC",
+  brightPurple: "#C4E9FF",
+  brightCyan: "#C8FFF0",
+  brightWhite: "#FFFFFF",
+};
+
+// Font files name a family without its spaces. The first family found on this machine wins; none leaves the font alone.
+const NERD_FONTS = [
+  ["jetbrainsmononerdfont", "JetBrainsMono Nerd Font"],
+  ["caskaydiacovenerdfont", "CaskaydiaCove Nerd Font"],
+  ["caskaydiamononerdfont", "CaskaydiaMono Nerd Font"],
+  ["firacodenerdfont", "FiraCode Nerd Font"],
+  ["mesloLGSnerdfont".toLowerCase(), "MesloLGS Nerd Font"],
+  ["hacknerdfont", "Hack Nerd Font"],
+] as const;
+
+async function installedNerdFont(
+  deps: Pick<TerminalProfileDeps, "env" | "homeDir" | "fs">,
+): Promise<string | undefined> {
+  const folders = [
+    win32.join(localAppData(deps), "Microsoft", "Windows", "Fonts"),
+    win32.join(deps.env.SystemRoot ?? "C:\\Windows", "Fonts"),
+  ];
+  const files: string[] = [];
+  for (const folder of folders) {
+    try {
+      for (const file of await deps.fs.readDir(folder)) files.push(file.name.toLowerCase());
+    } catch {
+      // A folder that cannot be read only means no font is chosen from it.
+    }
+  }
+  return NERD_FONTS.find(([stem]) => files.some((file) => file.startsWith(stem)))?.[1];
+}
+
+// The picture behind HARIL's profile, and only that profile. Windows Terminal draws it behind cells that keep the default
+// background, which is why the Future palette leaves those cells unpainted. "default" is the image this code draws
+// (terminal-background.ts), written beside the shaders; a path is the user's own, used where it is.
+export const BACKGROUND_STRETCH_MODES = ["none", "fill", "uniform", "uniformToFill"] as const;
+const BACKGROUND_FILE = "haril-background.png";
+const BACKGROUND_EXTENSIONS = /\.(png|jpe?g|gif)$/i;
+export interface TerminalBackground {
+  readonly image: "default" | "none" | string;
+  readonly opacity: number;
+  readonly stretch: (typeof BACKGROUND_STRETCH_MODES)[number];
+}
+export const DEFAULT_BACKGROUND: TerminalBackground = {
+  image: "default",
+  opacity: 0.35,
+  stretch: "uniformToFill",
+};
+
+// Why a user's path cannot be the background, or undefined when it can.
+export async function backgroundProblem(fs: FsPort, path: string): Promise<string | undefined> {
+  if (!win32.isAbsolute(path)) return `${path} is not an absolute path`;
+  if (!BACKGROUND_EXTENSIONS.test(path)) return `${path} is not a png, jpg or gif`;
+  return (await fs.exists(path)) ? undefined : `${path} does not exist`;
+}
+
+function backgroundFile(root: string): string {
+  return win32.join(root, "terminal", BACKGROUND_FILE);
+}
+
+function fragmentContents(
+  launcher: string,
+  shaderPath: string | null,
+  font: string | undefined,
+  background: { readonly path: string; readonly settings: TerminalBackground } | null,
+): string {
   const profile = {
     guid: TERMINAL_PROFILE_GUID,
     name: "HARIL",
     commandline: `"${launcher}"`,
     startingDirectory: "%USERPROFILE%",
     tabTitle: "HARIL",
+    colorScheme: SCHEME_NAME,
+    cursorShape: "filledBox",
+    ...(font === undefined ? {} : { font: { face: font } }),
+    ...(background === null
+      ? {}
+      : {
+          backgroundImage: background.path,
+          backgroundImageOpacity: background.settings.opacity,
+          backgroundImageStretchMode: background.settings.stretch,
+        }),
     ...(shaderPath === null ? {} : { "experimental.pixelShaderPath": shaderPath }),
   };
-  return `${JSON.stringify({ profiles: [profile] }, null, 2)}\n`;
+  return `${JSON.stringify({ profiles: [profile], schemes: [FUTURE_SCHEME] }, null, 2)}\n`;
 }
 
 export async function installTerminalProfile(
   deps: TerminalProfileDeps,
   shader: TerminalShaderName | null,
+  background: TerminalBackground = DEFAULT_BACKGROUND,
 ): Promise<TerminalProfileResult> {
   if (deps.platform !== "win32") {
     return {
@@ -139,11 +239,32 @@ export async function installTerminalProfile(
     return result();
   }
 
+  let picture: { readonly path: string; readonly settings: TerminalBackground } | null = null;
+  try {
+    const generated = backgroundFile(deps.root);
+    if (background.image === "default") {
+      const status = await writeBytesIfChanged(deps.fs, generated, terminalBackgroundPng());
+      steps.push({ name: "background", status, detail: generated });
+      picture = { path: generated, settings: background };
+    } else {
+      if (await deps.fs.exists(generated)) await deps.fs.remove(generated);
+      if (background.image === "none") {
+        steps.push({ name: "background", status: "skipped", detail: "no background image" });
+      } else {
+        steps.push({ name: "background", status: "ok", detail: background.image });
+        picture = { path: background.image, settings: background };
+      }
+    }
+  } catch (error) {
+    steps.push({ name: "background", status: "failed", detail: messageOf(error) });
+    return result();
+  }
+
   try {
     const status = await writeIfChanged(
       deps.fs,
       fragmentPath,
-      fragmentContents(launcher, shaderPath),
+      fragmentContents(launcher, shaderPath, await installedNerdFont(deps), picture),
     );
     steps.push({ name: "profile", status, detail: fragmentPath });
   } catch (error) {
@@ -168,6 +289,7 @@ export async function removeTerminalProfile(
   const candidates = [
     win32.join(dir, FRAGMENT_FILE),
     ...TERMINAL_SHADER_NAMES.map((name) => shaderFile(deps.root, name)),
+    backgroundFile(deps.root),
   ];
   const removed: string[] = [];
   const manual: string[] = [];
@@ -242,7 +364,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 async function writeIfChanged(fs: FsPort, path: string, text: string): Promise<"ok" | "skipped"> {
-  const bytes = encoder.encode(text);
+  return writeBytesIfChanged(fs, path, encoder.encode(text));
+}
+
+async function writeBytesIfChanged(
+  fs: FsPort,
+  path: string,
+  bytes: Uint8Array,
+): Promise<"ok" | "skipped"> {
   if ((await fs.exists(path)) && sha256Hex(await fs.readBytes(path)) === sha256Hex(bytes)) {
     return "skipped";
   }
