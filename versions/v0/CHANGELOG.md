@@ -4,7 +4,7 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
-## 0.23.13
+## 0.23.14
 
 - **Fecha:** 2026-10-30
 - **Estado:** Engram conectado al runtime (`memory.provider = "engram"` en `haril.json` lo activa; sin esa clave el proveedor sigue siendo `null`) y HARIL comprueba, instala y actualiza Engram y detecta gentle-ai al abrir la consola, con el resultado en la ficha `MEM`.
@@ -39,6 +39,30 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 - Con el CLI compilado y carpetas temporales (nunca el runtime ni `~/.engram` reales): `haril tools ensure` descargó el Engram 3.6.0 oficial, lo verificó (SHA-256, versión y salud real), lo instaló, lo reparó tras dañar o borrar el binario y devolvió `none` en la segunda pasada; `haril tools update gentle-ai --yes` instaló la 4.3.1 con `go install` en una carpeta de Go temporal y avisó de que la copia activa del `PATH` seguía en 4.0.0.
 - `engram-real.test.ts` contra el Engram 3.6.0 real (`HARIL_TEST_ENGRAM_BINARY`, datos efímeros): 1 prueba aprobada.
 - No verificado: el TUI de Pi en sí (clic, `Alt+K`, aviso y repintado) solo se probó con un Pi simulado, y un `haril start` completo con el runtime arrancando Engram de verdad (solo se probó el contrato real y la comprobación de salud del instalador).
+
+---
+
+## 0.23.13
+
+- **Fecha:** 2026-10-30
+- **Estado:** plan editable para decidir la integración y reorganización de HARIL, sin ejecutar cambios de código ni reactivar Matrix.
+
+### Añadido
+
+- docs/PLAN_INTEGRACION_EDITABLE.md: punto de partida comprobado en main 0.23.12, decisiones editables, inventario de herramientas externas, plan por etapas, criterios de aceptación y prompt breve para un agente implementador.
+- Enlace al plan desde la primera sección de README.md.
+
+### Cambiado
+
+- Versión de los paquetes y referencia de versión actual alineadas con la entrega de planificación. Sin cambios en dependencias ni en tiempo de ejecución.
+
+### Corregido
+
+- Nada en el funcionamiento del producto; esta entrega es exclusivamente documental.
+
+### Verificación
+
+- Documento y enlaces revisados sobre la rama de planificación. Las pruebas automáticas de GitHub se ejecutan en el PR; no se declara validación de Windows Terminal en una entrega sin cambios de interfaz.
 
 ---
 
