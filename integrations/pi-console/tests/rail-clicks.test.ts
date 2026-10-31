@@ -14,7 +14,7 @@ import { type RailActionTarget, runRailHit } from "../src/rail-actions.js";
 import { stripAnsi } from "../src/text.js";
 import { fakeContext, fakePi } from "./fake-pi.js";
 
-// The right rail's body (AVISOS, EXTENSIONES, SESIÓN, the areas and "cambiar") must answer a mouse click. These tests
+// The right rail's body (AVISOS, SESIÓN, the areas, the mode, the model, the level and STOP ALL) must answer a mouse click. These tests
 // drive the real pane with the real rail content: the row that is clicked is found by the text the user sees, and the
 // action it must run is read from the independent `hit` metadata of that same row. The actions of the chosen area are
 // the ACC tab's now (actions-tab.test.ts).
@@ -116,11 +116,12 @@ function setup(
 describe("a click on the right rail body", () => {
   it.each([
     ["AVISOS", { action: "toggle", section: "warnings" }],
-    ["EXTENSIONES", { action: "toggle", section: "extensions" }],
     ["SESIÓN", { action: "toggle", section: "status" }],
     ["cambiar", { action: "mode" }],
+    ["Modelo:", { action: "model" }],
+    ["Nivel:", { action: "level" }],
+    ["STOP ALL", { action: "stop" }],
     ["! Provider offline", { action: "details" }],
-    ["• pi-extension ready", { action: "details" }],
     ["● AGENTS", { action: "area", area: "agents" }],
     ["○ ORCHESTRATION", { action: "area", area: "orchestration" }],
     ["○ AUTOMATION", { action: "area", area: "automation" }],
@@ -128,7 +129,7 @@ describe("a click on the right rail body", () => {
     ["○ EVERYWHERE", { action: "area", area: "everywhere" }],
     ["Abrir vista de orquestación", { action: "run", control: "orchestration-view" }],
   ] as const)("on the row %s runs the action that row declares", (needle, expected) => {
-    const pane = setup({ expanded: { extensions: true } });
+    const pane = setup();
     const { y, hit } = pane.find(needle);
     // The hit metadata of the row is the contract; the literal is only a guard against an empty table.
     expect(hit).toEqual(expected);
@@ -143,11 +144,11 @@ describe("a click on the right rail body", () => {
     const pane = setup({
       rows: 24,
       warnings: 6,
-      expanded: { extensions: true, status: true, warnings: true },
+      expanded: { status: true, warnings: true },
     });
-    // The session section is below the fold of a 24-row terminal until the wheel brings it up.
+    // The session section is below the fold of a 24-row terminal (the status card alone is ten rows) until the wheel brings it up.
     expect(pane.rows().some((row) => row.includes("SESIÓN"))).toBe(false);
-    pane.right.handleMouse?.({ type: "wheel", button: "none", x: 8, y: 5, wheelDelta: 6 });
+    pane.right.handleMouse?.({ type: "wheel", button: "none", x: 8, y: 5, wheelDelta: 12 });
     const { y, hit } = pane.find("SESIÓN");
     expect(hit).toEqual({ action: "toggle", section: "status" });
     pane.click(y);
@@ -156,19 +157,15 @@ describe("a click on the right rail body", () => {
 
   it("no longer lists the actions of the area: they are the ACC tab's, and MAIN keeps the rest", () => {
     for (const area of ["agents", "orchestration", "automation", "tools", "everywhere"] as const) {
-      const pane = setup({ area, expanded: { extensions: true, status: true } });
+      const pane = setup({ area, expanded: { status: true } });
       const text = pane.rows().join("\n");
       expect(text, area).not.toContain("ACCIONES");
       expect(text, area).not.toContain("Abrir menú completo");
       expect(text, area).not.toContain("Ver detalles completos");
       expect(text, area).not.toContain("Actualizar datos");
-      for (const kept of [
-        "ÁREAS",
-        "Abrir vista de orquestación",
-        "AVISOS",
-        "EXTENSIONES",
-        "SESIÓN",
-      ]) {
+      // The extensions moved to the TOOLS tab.
+      expect(text, area).not.toContain("EXTENSIONES");
+      for (const kept of ["ÁREAS", "Abrir vista de orquestación", "AVISOS", "SESIÓN"]) {
         expect(text, `${area} · ${kept}`).toContain(kept);
       }
       expect(text, area).toContain("Alt+K menú del panel · Alt+H áreas");
@@ -223,7 +220,7 @@ describe("a click on the right rail body", () => {
     const pane = setup();
     const rendersBefore = pane.tui.requestRender.mock.calls.length;
     const content = renderNativeRailContent(facts(), "agents", 39, {}, { cards: true });
-    for (const needle of ["Proyecto: fake-project", "Modelo: fake-model", "Alt+K menú del panel"]) {
+    for (const needle of ["Proyecto: fake-project", "Runtime: idle", "Alt+K menú del panel"]) {
       const y = pane.rows().findIndex((row) => row.includes(needle));
       expect(y).toBeGreaterThan(0);
       const index = content.lines.findIndex((line) => stripAnsi(line).includes(needle));
@@ -272,6 +269,9 @@ describe("the actions a rail hit runs", () => {
       redraw: () => calls.push("redraw"),
       runControl: (control) => calls.push(`run:${control}`),
       chooseMode: () => calls.push("mode"),
+      chooseModel: () => undefined,
+      chooseLevel: () => undefined,
+      stopAll: () => undefined,
       openMenu: () => calls.push("menu"),
       focus: () => calls.push("focus"),
       openArea: (area) => calls.push(`area:${area}`),
@@ -281,10 +281,10 @@ describe("the actions a rail hit runs", () => {
 
   it("toggles a section against its default and redraws", () => {
     const { host, calls, expanded } = target();
-    // AVISOS and ACCIONES start open, EXTENSIONES and SESIÓN start closed.
+    // AVISOS, SESIÓN and ACCIONES start open, EXTENSIONES starts closed.
     runRailHit(host, { action: "toggle", section: "warnings" });
     runRailHit(host, { action: "toggle", section: "status" });
-    expect(expanded).toEqual({ warnings: false, status: true });
+    expect(expanded).toEqual({ warnings: false, status: false });
     runRailHit(host, { action: "toggle", section: "warnings" });
     expect(expanded.warnings).toBe(true);
     expect(calls).toEqual(["redraw", "redraw", "redraw"]);
@@ -392,15 +392,15 @@ describe("the console's rails", () => {
         return right.handleMouse?.({ type: "click", button: "left", x: 8, y });
       };
 
-      expect(rows().find((row) => row.includes("AVISOS"))).toContain("▼");
-      expect(click("AVISOS")).toEqual({ handled: true, render: true });
-      expect(rows().find((row) => row.includes("AVISOS"))).toContain("▶");
-      click("AVISOS");
-      expect(rows().find((row) => row.includes("AVISOS"))).toContain("▼");
-
-      expect(rows().some((row) => row.includes("Runtime:"))).toBe(false);
+      // SESIÓN is open by default and always drawn; AVISOS only appears with a warning, and this console has none.
+      expect(rows().some((row) => row.includes("AVISOS"))).toBe(false);
+      expect(rows().find((row) => row.includes("SESIÓN"))).toContain("▼");
+      expect(rows().some((row) => row.includes("Memoria:"))).toBe(true);
+      expect(click("SESIÓN")).toEqual({ handled: true, render: true });
+      expect(rows().find((row) => row.includes("SESIÓN"))).toContain("▶");
+      expect(rows().some((row) => row.includes("Memoria:"))).toBe(false);
       click("SESIÓN");
-      expect(rows().some((row) => row.includes("Runtime:"))).toBe(true);
+      expect(rows().some((row) => row.includes("Memoria:"))).toBe(true);
 
       click("cambiar");
       expect(selects).toHaveLength(1);

@@ -1,6 +1,7 @@
 import type { CliResult } from "./cli.js";
 import { type DockDetails, type DockSource, loadMemData, memDetails } from "./dock-details.js";
 import { localized, type UiLocale } from "./locale.js";
+import type { ExtensionEntry } from "./status-info.js";
 import { plainText } from "./text.js";
 import {
   type EnsureView,
@@ -36,6 +37,7 @@ export interface ToolsHost {
   run(args: readonly string[], options: { readonly timeoutMs: number }): Promise<CliResult>;
   env(): Readonly<Record<string, string | undefined>>;
   locale(): UiLocale;
+  extensions?(): readonly ExtensionEntry[];
   // The session's notices and questions; undefined when there is no session to talk to.
   ui():
     | {
@@ -326,11 +328,19 @@ export function createToolsPanel(host: ToolsHost, options: ToolsPanelOptions = {
     else host.repaint();
   };
 
-  const memOptions = () => ({ locale: host.locale(), busy, checkError });
+  const memOptions = () => ({
+    locale: host.locale(),
+    busy,
+    checkError,
+    extensions: host.extensions?.(),
+  });
 
   const dockSource: DockSource = {
     tools: () => exec(["tools", "status", "--json"], LOAD_TIMEOUT_MS),
     memory: () => exec(["memory", "status", "--json"], LOAD_TIMEOUT_MS),
+    get extensions() {
+      return host.extensions?.();
+    },
     get locale() {
       return host.locale();
     },

@@ -3,6 +3,7 @@ import { tailFit } from "./docs-folder.js";
 import { localized, type UiLocale } from "./locale.js";
 import { CARD_CONTENT_WIDTH } from "./rail-metrics.js";
 import type { DockCard } from "./rail-view.js";
+import { type ExtensionEntry, extensionRows } from "./status-info.js";
 import { wrap } from "./text.js";
 import type {
   InstallFailureView,
@@ -50,6 +51,8 @@ export interface MemOptions {
   readonly busy?: BusyKind | undefined;
   // Why the check the console ran at start-up gave no answer (a timeout, a CLI that could not run).
   readonly checkError?: string | undefined;
+  // The extensions this session can prove (status-info.ts), for the Extensions card.
+  readonly extensions?: readonly ExtensionEntry[] | undefined;
 }
 
 export interface MemRows {
@@ -445,6 +448,23 @@ export function memRows(data: MemData, options: MemOptions): MemRows {
   }
 
   if (data.tools.ok) cards.push(gentleCard(data.tools.value.gentleAi, say));
+
+  if (options.extensions !== undefined) {
+    cards.push({
+      title: `${say("Extensions", "Extensiones")} · ${options.extensions.length}`,
+      rows: [
+        ...extensionRows(options.extensions, options.locale),
+        ...(options.extensions.some(({ state }) => state === "declared")
+          ? sentence(
+              say(
+                "Declared: in settings, with no registered command or tool.",
+                "Declarada: en settings, sin comando ni herramienta registrados.",
+              ),
+            )
+          : []),
+      ],
+    });
+  }
 
   if (options.checkError !== undefined) {
     cards.push({

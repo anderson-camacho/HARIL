@@ -12,6 +12,7 @@ import { localized, type UiLocale } from "./locale.js";
 import { DOCK_LABELS, type DockId } from "./native-panes.js";
 import { CARD_CONTENT_WIDTH } from "./rail-metrics.js";
 import { type DockAction, type DockCard, flatView } from "./rail-view.js";
+import type { ExtensionEntry } from "./status-info.js";
 import { plainText, textWidth, wrap } from "./text.js";
 import { type MemoryView, parseMemoryStatus, parseToolsStatus } from "./tools-model.js";
 import {
@@ -48,6 +49,7 @@ interface CommandAnswer {
 }
 
 export interface DockSource {
+  readonly extensions?: readonly ExtensionEntry[] | undefined;
   // `haril memory status --json`: the memory process, for the TOOLS tab.
   readonly memory?: () => Promise<CommandAnswer>;
   // `haril tools status --json`: Engram and gentle-ai, for the TOOLS tab.
@@ -298,6 +300,7 @@ export async function loadDockDetails(
           locale: source.locale ?? "es",
           busy: source.busy,
           checkError: source.checkError,
+          extensions: source.extensions,
         });
       }
       case "docs":

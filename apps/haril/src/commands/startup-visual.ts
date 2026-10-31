@@ -51,7 +51,8 @@ const rgb = (red: number, green: number, blue: number): string =>
 
 const WELCOME_TONES: Record<WelcomePalette, WelcomeTones> = {
   future: {
-    background: "\u001b[48;2;7;23;44m",
+    // The terminal's default background: the navy of OSC 11, or the user's background image through it.
+    background: "",
     head: rgb(196, 233, 255),
     bright: rgb(94, 194, 255),
     middle: rgb(47, 127, 192),

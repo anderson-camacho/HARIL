@@ -10,6 +10,10 @@ const RESTORE = `${ESC}]111${ST}${ESC}]110${ST}${ESC}]112${ST}${ESC}[0 q`;
 const LEAVE_SCREEN = `${ESC}[0m${ESC}[?25h${ESC}[?1049l`;
 const SIGNALS = ["SIGTERM", "SIGHUP", "SIGBREAK"] as const;
 
+// The Windows Terminal profile haril-bootstrap writes (apps/bootstrap/src/terminal-profile.ts): it already carries the
+// colours as its scheme, so nothing is set over them.
+const HARIL_PROFILE_GUID = "{5ecd8f72-4341-4503-86a6-238cea39b3f7}";
+
 // CI is a flag with many spellings: anything but empty, "0" or "false" counts as CI.
 export function isCi(env: Readonly<Record<string, string | undefined>>): boolean {
   const value = env.CI?.trim().toLowerCase();
@@ -26,7 +30,8 @@ export function terminalColorsApply(input: {
     input.theme === "haril-future" &&
     !isCi(input.env) &&
     input.env.TERM?.toLowerCase() !== "dumb" &&
-    input.env.HARIL_TERMINAL_COLORS !== "off"
+    input.env.HARIL_TERMINAL_COLORS !== "off" &&
+    input.env.WT_PROFILE_ID?.toLowerCase() !== HARIL_PROFILE_GUID
   );
 }
 

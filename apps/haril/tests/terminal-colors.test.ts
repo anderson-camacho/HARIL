@@ -48,6 +48,13 @@ describe("terminal colours for the future palette", () => {
     expect(terminalColorsApply({ ...base, theme: undefined })).toBe(false);
     expect(terminalColorsApply({ ...base, env: { TERM: "dumb" } })).toBe(false);
     expect(terminalColorsApply({ ...base, env: { HARIL_TERMINAL_COLORS: "off" } })).toBe(false);
+    expect(
+      terminalColorsApply({
+        ...base,
+        env: { WT_PROFILE_ID: "{5ECD8F72-4341-4503-86A6-238CEA39B3F7}" },
+      }),
+    ).toBe(false);
+    expect(terminalColorsApply({ ...base, env: { WT_PROFILE_ID: "{other}" } })).toBe(true);
   });
 
   it("sets background, foreground and cursor, and restores all of them once", () => {

@@ -6,8 +6,9 @@ import { stripAnsi } from "../src/text.js";
 import { type FakeCli, installFakeCli } from "./fake-cli.js";
 import { type FakeContext, type FakePi, fakeContext, fakePi } from "./fake-pi.js";
 
-// The folder line of the bar in the running console: powerline segments with the git counts, which come from a
-// background read the footer's render only asks for and never waits on.
+// The folder of the bar in the running console: in the middle of the bar's line with the git change count when everything
+// fits, and as powerline segments with the counts on a second line otherwise (with extension statuses, say). The counts
+// come from a background read the footer's render only asks for and never waits on.
 
 const LAYOUT_NODE = Symbol.for("@earendil-works/pi-tui/layout-node");
 const THEME: ConsoleTheme = { fg: (_tone, text) => text, bold: (text) => text };
@@ -99,12 +100,18 @@ function mount(tui: ConsoleTui = { terminal: { columns: 160, rows: 45 }, request
   });
 }
 
+// The bar's line, with the folder and branch in the middle of it.
+function barLine(component: ConsoleComponent, width = 140): string {
+  return stripAnsi(component.render(width)[0] ?? "");
+}
+
+// The second line, where the powerline segments are drawn: the bar draws it when an extension has set a status.
 function folderLine(component: ConsoleComponent, width = 140): string {
   return stripAnsi(component.render(width)[1] ?? "");
 }
 
 beforeEach(async () => {
-  // The terminal here is not attached to the dock, so the bar is the full one, with its folder line.
+  // The terminal here is not attached to the dock, so the bar is drawn rather than left to the sidebar.
   vi.stubEnv("HARIL_POWERLINE", "");
   await start();
 });
@@ -116,9 +123,11 @@ afterEach(async () => {
 });
 
 describe("the folder line in the console", () => {
-  it("draws powerline segments by default, and the counts once git has answered", async () => {
+  it("puts the folder and branch in the bar's line, and the change count once git has answered", async () => {
     const component = mount();
-    expect(folderLine(component)).toBe(` ${FOLDER} fake-cwd ${ARROW} ${BRANCH} main ${ARROW}`);
+    expect(component.render(140)).toHaveLength(1);
+    expect(barLine(component)).toContain("fake-cwd  main");
+    expect(barLine(component)).not.toContain("~");
     // The render asked for the counts and went on without them: git has not even been started yet.
     expect(reads.cwds).toEqual([]);
     await settle();
@@ -127,10 +136,22 @@ describe("the folder line in the console", () => {
 
     reads.answer(SOME);
     await settle();
-    // The answer asks Pi to draw the footer again, and that draw has the counts.
+    // The answer asks Pi to draw the footer again, and that draw has the count: 1 + 2 + 3 changes.
     expect(renders).toHaveBeenCalledTimes(1);
+    expect(barLine(component)).toContain("fake-cwd  main ~6");
+  });
+
+  it("draws powerline segments with the counts on a second line when a status needs one", async () => {
+    statuses = new Map([["indexer", "indexer ready"]]);
+    const component = mount();
     expect(folderLine(component)).toBe(
-      ` ${FOLDER} fake-cwd ${ARROW} ${BRANCH} main +1 ~2 ?3 ${ARROW}`,
+      ` ${FOLDER} fake-cwd ${ARROW} ${BRANCH} main ${ARROW}  indexer ready`,
+    );
+    await settle();
+    reads.answer(SOME);
+    await settle();
+    expect(folderLine(component)).toBe(
+      ` ${FOLDER} fake-cwd ${ARROW} ${BRANCH} main +1 ~2 ?3 ${ARROW}  indexer ready`,
     );
   });
 
@@ -164,12 +185,13 @@ describe("the folder line in the console", () => {
     branch = "feature";
     for (const listener of branchListeners) listener();
     expect(renders).toHaveBeenCalledTimes(1);
-    expect(folderLine(component)).toContain(`${BRANCH} feature +1 ~2 ?3`);
+    expect(barLine(component)).toContain("fake-cwd  feature ~6");
     await settle();
     expect(reads.cwds).toEqual(["fake-cwd", "fake-cwd"]);
     reads.answer({ staged: 0, modified: 0, untracked: 0 });
     await settle();
-    expect(folderLine(component)).toBe(` ${FOLDER} fake-cwd ${ARROW} ${BRANCH} feature ${ARROW}`);
+    expect(barLine(component)).toContain("fake-cwd  feature");
+    expect(barLine(component)).not.toContain("~");
   });
 
   it("shows no counts, and breaks nothing, when git fails", async () => {
@@ -178,14 +200,16 @@ describe("the folder line in the console", () => {
     await settle();
     reads.fail("git exploded");
     await settle();
-    expect(folderLine(component)).toBe(` ${FOLDER} fake-cwd ${ARROW} ${BRANCH} main ${ARROW}`);
-    expect(component.render(140)).toHaveLength(3);
+    expect(barLine(component)).toContain("fake-cwd  main");
+    expect(barLine(component)).not.toContain("~");
+    expect(component.render(140)).toHaveLength(1);
   });
 
   it("does not run git outside a repository, and shows the folder segment alone", async () => {
     branch = null;
     const component = mount();
-    expect(folderLine(component)).toBe(` ${FOLDER} fake-cwd ${ARROW}`);
+    expect(barLine(component)).toContain("fake-cwd");
+    expect(barLine(component)).not.toContain("main");
     await settle();
     expect(reads.cwds).toEqual([]);
   });
@@ -201,20 +225,22 @@ describe("the folder line in the console", () => {
     expect(branchListeners).toEqual([]);
   });
 
-  it("keeps the first line of the bar as it is", async () => {
+  it("keeps HARIL, the mode and the button on the bar's line, the button ending two columns early", async () => {
     const component = mount();
     const first = stripAnsi(component.render(140)[0] ?? "");
     expect(first).toContain("◆ HARIL");
     expect(first).toContain("MODE: ACTION");
     expect(first.endsWith("■ STOP ALL")).toBe(true);
+    expect(first).toHaveLength(138);
   });
 });
 
 describe("HARIL_POWERLINE=off", () => {
-  it("is the plain folder line it has always been, and git is never run", async () => {
+  it("is the plain folder and branch, and git is never run", async () => {
     vi.stubEnv("HARIL_POWERLINE", "off");
     const component = mount();
-    expect(component.render(140)[1]).toBe("fake-cwd (main)");
+    expect(barLine(component)).toContain("fake-cwd  main");
+    expect(barLine(component)).not.toContain(BRANCH);
     await settle();
     expect(reads.cwds).toEqual([]);
     expect(renders).not.toHaveBeenCalled();
@@ -222,15 +248,16 @@ describe("HARIL_POWERLINE=off", () => {
 
   it("takes effect on the next draw, with no restart", async () => {
     const component = mount();
+    statuses = new Map([["indexer", "indexer ready"]]);
     expect(folderLine(component)).toContain(BRANCH);
     vi.stubEnv("HARIL_POWERLINE", "off");
-    expect(component.render(140)[1]).toBe("fake-cwd (main)");
+    expect(folderLine(component)).toBe("fake-cwd (main)  indexer ready");
   });
 });
 
 describe("beside the right sidebar", () => {
-  it("draws no folder line and does not run git", async () => {
-    // With the dock drawn, the right sidebar holds the status and the bar is one line.
+  it("draws no bar and does not run git", async () => {
+    // With the dock drawn, the right sidebar holds the status and the bar draws nothing.
     const root = {
       render: () => ["Pi chat"],
       invalidate: () => undefined,
@@ -244,8 +271,7 @@ describe("beside the right sidebar", () => {
     anchor?.(tui as unknown as ConsoleTui, THEME);
     const component = mount(tui);
     const lines = component.render(160).map(stripAnsi);
-    expect(lines).toHaveLength(2);
-    expect(lines.join("\n")).not.toContain("fake-cwd");
+    expect(lines).toEqual([]);
     await settle();
     expect(reads.cwds).toEqual([]);
   });

@@ -73,8 +73,10 @@ describe("mode and STOP ALL in the bar (F4)", () => {
     const stop = layout.hits.find((hit) => hit.target === "stop");
     expect(hitText(line, mode ?? { start: 0, end: 0 })).toBe("MODE: CONSULT");
     expect(hitText(line, stop ?? { start: 0, end: 0 })).toBe("■ STOP ALL");
-    expect(stop?.end).toBe(140);
+    // The button ends BAR_MARGIN (2) columns before the width.
+    expect(stop?.end).toBe(138);
     expect(stripAnsi(line).endsWith("■ STOP ALL")).toBe(true);
+    expect(textWidth(stripAnsi(line))).toBe(138);
   });
 
   it("says when chat rows could not be logged, and drops that note first", () => {
@@ -95,18 +97,38 @@ describe("mode and STOP ALL in the bar (F4)", () => {
   });
 });
 
-// The status of the console lives in one of two places. With the right sidebar open on MAIN it is there, and the bar is
-// the compact one-liner; in any other case (sidebar closed, terminal too small, another tab selected) the bar is the
-// full one: two lines, with a count of the warnings the sidebar would list.
-describe("the bar: compact beside the sidebar, full anywhere else", () => {
-  it("is two lines when the status is not in the sidebar: the bar and the folder line", () => {
+// The status of the console lives in one of two places. With the right sidebar open on MAIN it is there, and the bar
+// draws nothing; in any other case (sidebar closed, terminal too small, another tab selected) the bar is one line, with
+// the folder in the middle when it fits and under it, with the statuses, when it does not.
+describe("the bar: nothing beside the sidebar, one line anywhere else", () => {
+  it("is one line, with the folder and branch in the middle, when everything fits", () => {
     const layout = renderBarLayout(bar({ cwd: "fake-cwd", branch: "main" }), 140, THEME);
+    expect(layout.lines).toHaveLength(1);
+    const text = stripAnsi(layout.lines[0] ?? "");
+    expect(text).toContain("fake-cwd  main");
+    expect(text.indexOf("Gemini1/gemini-3-flash")).toBeLessThan(text.indexOf("fake-cwd"));
+    expect(text.indexOf("fake-cwd")).toBeLessThan(text.indexOf("ctx "));
+    // Compact is opt-in: a bar built without the flag is drawn.
+    expect(renderBarLayout(bar({ compact: false }), 140, THEME).lines).toHaveLength(1);
+  });
+
+  it("puts the folder on a second line when the first has no room for it", () => {
+    const layout = renderBarLayout(bar({ cwd: "fake-cwd", branch: "main" }), 60, THEME);
     expect(layout.lines).toHaveLength(2);
-    const text = layout.lines.map(stripAnsi).join("\n");
-    expect(text).toContain("fake-project");
-    expect(text).toContain("fake-cwd (main)");
-    // Compact is opt-in: a bar built without the flag is the full one.
-    expect(renderBarLayout(bar({ compact: false }), 140, THEME).lines).toHaveLength(2);
+    expect(stripAnsi(layout.lines[0] ?? "")).not.toContain("fake-cwd");
+    expect(stripAnsi(layout.lines[1] ?? "")).toContain("fake-cwd (main)");
+  });
+
+  it("puts the statuses other extensions set on a second line, with the folder", () => {
+    const layout = renderBarLayout(
+      bar({ cwd: "fake-cwd", branch: "main", statuses: ["indexer: ready"] }),
+      140,
+      THEME,
+    );
+    expect(layout.lines).toHaveLength(2);
+    expect(stripAnsi(layout.lines[0] ?? "")).not.toContain("indexer");
+    expect(stripAnsi(layout.lines[1] ?? "")).toContain("fake-cwd (main)");
+    expect(stripAnsi(layout.lines[1] ?? "")).toContain("indexer: ready");
   });
 
   describe("compact", () => {
@@ -117,54 +139,14 @@ describe("the bar: compact beside the sidebar, full anywhere else", () => {
         THEME,
       );
 
-    it("is one line: HARIL, mode and model · level on the left; ctx, cost, runtime and STOP ALL on the right", () => {
-      const layout = compact();
-      expect(layout.lines).toHaveLength(1);
-      const line = stripAnsi(layout.lines[0] ?? "");
-      expect(line).toContain("◆ HARIL");
-      expect(line).toContain("MODE: ACTION");
-      expect(line).toContain("Gemini1/gemini-3-flash · medium");
-      expect(line).toContain("ctx ");
-      expect(line).toContain("$0.000");
-      expect(line).toContain("runtime idle");
-      expect(line.endsWith("■ STOP ALL")).toBe(true);
-      expect(line.indexOf("MODE: ACTION")).toBeLessThan(line.indexOf("Gemini1/gemini-3-flash"));
-      expect(line.indexOf("Gemini1/gemini-3-flash")).toBeLessThan(line.indexOf("ctx "));
-    });
-
-    it("has no place, folder, branch or status line, and does not repeat the warnings the sidebar lists", () => {
-      const layout = compact({ logFailures: 2, statuses: ["indexer: ready"] });
-      const text = layout.lines.map(stripAnsi).join("\n");
-      for (const absent of ["fake-project", "fake-cwd", "(main)", "indexer", "warning", "log ✗"]) {
-        expect(text, absent).not.toContain(absent);
+    it("draws nothing at any width: the sidebar says all of it, approvals and failures included", () => {
+      for (const width of [0, 12, 30, 80, 140]) {
+        expect(compact({}, width), String(width)).toEqual({ lines: [], hits: [] });
+        expect(
+          compact({ pending: 2, logFailures: 2, statuses: ["indexer: ready"] }, width),
+          String(width),
+        ).toEqual({ lines: [], hits: [] });
       }
-    });
-
-    it("still tells the human that approvals wait, since the sidebar block does not show them", () => {
-      expect(stripAnsi(compact({ pending: 2 }).lines[0] ?? "")).toContain("2 pending");
-      expect(stripAnsi(compact({ pending: 0 }).lines[0] ?? "")).not.toContain("pending");
-      expect(stripAnsi(compact({ pending: undefined }).lines[0] ?? "")).not.toContain("approvals");
-    });
-
-    it("keeps every hit-box on its one line, and never drops the button, however narrow", () => {
-      for (const width of [12, 20, 30, 44, 60, 80, 140]) {
-        const layout = compact({}, width);
-        expect(layout.lines, String(width)).toHaveLength(1);
-        const line = layout.lines[0] ?? "";
-        expect(textWidth(stripAnsi(line))).toBeLessThanOrEqual(width);
-        expect(layout.hits.every((hit) => hit.row === 0)).toBe(true);
-        const stop = layout.hits.find((hit) => hit.target === "stop");
-        expect(hitText(line, stop ?? { start: 0, end: 0 }), String(width)).toBe("■ STOP ALL");
-      }
-      const wide = compact();
-      const line = wide.lines[0] ?? "";
-      expect(wide.hits.map((hit) => hit.target)).toEqual(["mode", "model", "level", "stop"]);
-      const model = wide.hits.find((hit) => hit.target === "model");
-      expect(hitText(line, model ?? { start: 0, end: 0 })).toBe("Gemini1/gemini-3-flash");
-    });
-
-    it("draws nothing for a width that cannot hold a bar", () => {
-      expect(renderBarLayout(bar({ compact: true }), 0, THEME)).toEqual({ lines: [], hits: [] });
     });
   });
 
@@ -192,8 +174,7 @@ describe("the bar: compact beside the sidebar, full anywhere else", () => {
           expect(line, String(width)).toContain("1 pending");
           expect(line, String(width)).toContain("ctx ");
         }
-        expect(layout.lines, String(width)).toHaveLength(2);
-        expect(layout.hits.find((hit) => hit.target === "stop")?.end).toBe(width);
+        expect(layout.hits.find((hit) => hit.target === "stop")?.end).toBe(width - 2);
       }
       expect(seen).toBeGreaterThan(0);
     });

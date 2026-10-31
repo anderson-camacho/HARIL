@@ -45,9 +45,9 @@ describe("palette-aware welcome", () => {
   });
 
   it("colours rain and logo by palette: blue for future, green for matrix", () => {
-    expect(welcomeMorph(7, 80, 24, "future").join("")).toContain("48;2;7;23;44");
+    expect(welcomeMorph(7, 80, 24, "future").join("")).toContain("38;2;94;194;255");
+    expect(welcomeMorph(7, 80, 24, "future").join("")).not.toContain("48;2");
     expect(welcomeMorph(7, 80, 24, "matrix").join("")).toContain("[1;92m");
-    expect(welcomeMorph(7, 80, 24, "matrix").join("")).not.toContain("48;2;7;23;44");
     expect(tteMatrixArgs("future")).toContain("--rain-color-gradient");
     expect(tteMatrixArgs("future")).toContain("5ec2ff");
     expect(tteMatrixArgs("matrix")).toEqual(TTE_MATRIX_ARGS);

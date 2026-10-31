@@ -59,10 +59,11 @@ describe("Future default and optional HARIL palettes with compact AI eye", () =>
     expect(getHarilPalette()).toBe("future");
   });
 
-  it("paints Future blue on its dark blue background", () => {
+  it("paints Future blue without a background, except on the selected surface", () => {
     setHarilPalette("future");
-    expect(visualText("x", "cyan", "base")).toContain("48;2;7;23;44m");
-    expect(visualText("x", "cyan", "panel")).toContain("48;2;12;34;64m");
+    // The terminal's own background shows through base and panel.
+    expect(visualText("x", "cyan", "base")).not.toContain("48;2;");
+    expect(visualText("x", "cyan", "panel")).not.toContain("48;2;");
     expect(visualText("x", "cyan", "selected")).toContain("48;2;22;54;92m");
     expect(foreground(visualText("x", "cyan"))).toEqual([94, 194, 255]);
     expect(foreground(visualText("x", "teal"))).toEqual([125, 248, 213]);

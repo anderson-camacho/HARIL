@@ -16,6 +16,9 @@ export interface RailActionTarget {
   redraw(): void;
   runControl(control: DashboardAction): void;
   chooseMode(): void;
+  chooseModel(): void;
+  chooseLevel(): void;
+  stopAll(): void;
   openMenu(): void;
   focus(): void;
   openArea(area: DashboardArea): void;
@@ -34,6 +37,15 @@ export function runRailHit(target: RailActionTarget, hit: RailHitAction): void {
       break;
     case "mode":
       target.chooseMode();
+      break;
+    case "model":
+      target.chooseModel();
+      break;
+    case "level":
+      target.chooseLevel();
+      break;
+    case "stop":
+      target.stopAll();
       break;
     case "menu":
       target.openMenu();
@@ -91,6 +103,12 @@ function menuEntry(hit: RailHitAction, text: string, locale: UiLocale): RailMenu
       return hit.control === undefined ? undefined : { label: plainLabel(text), hit };
     case "mode":
       return { label: localized(locale, "Change mode", "Cambiar modo"), hit };
+    case "model":
+      return { label: localized(locale, "Choose the model", "Elegir modelo"), hit };
+    case "level":
+      return { label: localized(locale, "Choose the level", "Elegir nivel"), hit };
+    case "stop":
+      return { label: localized(locale, "Stop all agents", "Detener todos los agentes"), hit };
     case "menu":
       return { label: plainLabel(text), hit };
     case "focus":

@@ -36,7 +36,7 @@ export { DOCK_LABELS, MAIN_DOCK_ID, readDockSlots } from "./dock-registry.js";
 // Whether the native panes are drawn at all: attached to Pi's layout, on a terminal big enough for them. The layout
 // patch itself and everything that must agree with it (the header that steps aside, the bar that follows the status)
 // decide with this one rule.
-function panesFit(input: {
+export function panesFit(input: {
   readonly attached: boolean;
   readonly columns: number;
   readonly rows: number;

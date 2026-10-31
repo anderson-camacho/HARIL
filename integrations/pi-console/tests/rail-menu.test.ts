@@ -81,7 +81,7 @@ describe("buildRailMenu", () => {
       "Cerrar sección avisos (1)",
       "Ver detalles completos",
       "Cerrar sección extensiones (1)",
-      "Abrir sección sesión",
+      "Cerrar sección sesión",
       "Cerrar sección acciones · AGENTS (4)",
       "Elegir modelo de Pi",
       "Tareas por agente observado",
@@ -112,7 +112,12 @@ describe("buildRailMenu", () => {
   });
 
   it("says in words whether a section opens or closes, and drops the rows a closed section hides", () => {
-    const { menu } = menuOf("agents", { warnings: false, extensions: false, actions: false });
+    const { menu } = menuOf("agents", {
+      warnings: false,
+      extensions: false,
+      status: false,
+      actions: false,
+    });
     expect(menu.map((entry) => entry.label)).toEqual([
       "Abrir detalles del área",
       "Cambiar modo",
@@ -178,7 +183,7 @@ describe("buildRailMenu", () => {
       "Close section warnings (1)",
       "View complete details",
       "Open section extensions (1)",
-      "Open section session",
+      "Close section session",
       "Close section actions · AGENTS (4)",
       "Choose Pi model",
       "Tasks by observed agent",
@@ -468,21 +473,22 @@ describe.each([
         ]),
       );
       expect(menu?.options.some((option) => /^Cerrar sección avisos \(\d+\)$/.test(option))).toBe(
-        true,
+        false,
       );
     });
   });
 
   it("toggles a section exactly like a click on its header", async () => {
     await withConsole(async (harness) => {
-      expect(harness.row("AVISOS")).toContain("▼");
-      harness.answer = choose(/^Cerrar sección avisos/);
+      // SESIÓN is the section MAIN always draws (AVISOS only appears with a warning), open by default.
+      expect(harness.row("SESIÓN")).toContain("▼");
+      harness.answer = choose(/^Cerrar sección sesión/);
       await open(harness);
-      await vi.waitFor(() => expect(harness.row("AVISOS")).toContain("▶"));
+      await vi.waitFor(() => expect(harness.row("SESIÓN")).toContain("▶"));
       // The menu now offers the opposite move.
-      harness.answer = choose(/^Abrir sección avisos/);
+      harness.answer = choose(/^Abrir sección sesión/);
       await open(harness);
-      await vi.waitFor(() => expect(harness.row("AVISOS")).toContain("▼"));
+      await vi.waitFor(() => expect(harness.row("SESIÓN")).toContain("▼"));
     });
   });
 
@@ -530,9 +536,7 @@ describe("the «acciones» section in the keyboard menu", () => {
         expect.arrayContaining([
           "Elegir modelo de Pi",
           "Abrir menú completo /haril",
-          expect.stringMatching(/^Cerrar sección avisos \(\d+\)$/),
-          expect.stringMatching(/^Abrir sección extensiones \(\d+\)$/),
-          "Abrir sección sesión",
+          "Cerrar sección sesión",
         ]),
       );
     });
@@ -571,8 +575,11 @@ describe("the «acciones» section in the keyboard menu", () => {
       }, options);
     }
     const [classic = [], native = []] = menus;
-    expect(classic.filter((option) => !ACTIONS.test(option))).toEqual(native);
-    expect(classic.length - native.length).toBe(1);
+    // With the panes drawn, the menu offers no section the panel does not draw.
+    const hidden = (option: string) =>
+      ACTIONS.test(option) || /sección (extensiones|avisos)/.test(option);
+    expect(classic.filter((option) => !hidden(option))).toEqual(native);
+    expect(classic.length).toBeGreaterThan(native.length);
   });
 });
 

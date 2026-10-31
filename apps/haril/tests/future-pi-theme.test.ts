@@ -31,8 +31,8 @@ describe("HARIL-managed Pi Future theme", () => {
     expect(resolved("accent")).toBe("#5ec2ff");
     expect(resolved("success")).toBe("#7df8d5");
     expect(resolved("text")).toBe("#c4e9ff");
-    expect(resolved("userMessageBg")).toBe("#07172c");
-    expect(resolved("customMessageBg")).toBe("#0c2240");
+    expect(resolved("userMessageBg")).toBe("");
+    expect(resolved("customMessageBg")).toBe("");
     expect(resolved("selectedBg")).toBe("#16365c");
     expect(resolved("warning")).not.toBe(resolved("borderAccent"));
   });

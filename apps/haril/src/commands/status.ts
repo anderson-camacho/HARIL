@@ -15,6 +15,7 @@ import type {
 } from "@haril/core/ports";
 import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
+import { readMemoryConfig } from "../tools/configured-memory.js";
 import { VERSION } from "../version.js";
 import { dataDirFor, leaseHolderAlive, openExisting } from "./common.js";
 import { memoryLine } from "./memory.js";
@@ -40,7 +41,7 @@ interface StatusReport {
   readonly runtime: RuntimeLeaseSummary;
   // An emergency stop's halt (3.14): nothing is claimed until haril resume.
   readonly halted: HaltState;
-  readonly memory: MemoryStatusView;
+  readonly memory: MemoryStatusView & { readonly configured?: string | null };
 }
 
 const USAGE = "usage: haril status [--project <slug>] [--json] [--data-dir <path>]";
@@ -130,7 +131,11 @@ function readReport(
       queuedCommands,
       runtime,
       halted: store.runtime.haltState(),
-      memory: describeMemory(store.memory.status(), leaseHolderAlive(runtime, host)),
+      memory: {
+        ...describeMemory(store.memory.status(), leaseHolderAlive(runtime, host)),
+        // What haril.json sets: the store records the provider in use only once a runtime has run.
+        configured: readMemoryConfig(host).provider,
+      },
     },
   };
 }
