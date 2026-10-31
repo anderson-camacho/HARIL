@@ -847,6 +847,13 @@ Remove-Item Env:\HARIL_STARTUP_ANIMATION
 Remove-Item Env:\HARIL_STARTUP_MATRIX_ENGINE
 ```
 
+Con la paleta `future`, la consola pone los colores del terminal y los restaura al salir. `$env:HARIL_TERMINAL_COLORS = 'off'` lo desactiva. HARIL no pinta el fondo del chat ni del panel, así que una imagen de fondo de tu terminal sigue visible. El perfil de Windows Terminal trae un fondo propio, que cambias o apagas así:
+
+```powershell
+haril-bootstrap terminal-profile --background-image 'D:\imagenes\fondo.png' --background-opacity 0.35 --background-stretch uniformToFill
+haril-bootstrap terminal-profile --background-image none
+```
+
 El video que inspiró el sonido no se descarga ni se reproduce automáticamente: para ese timbre concreto necesitas un archivo WAV local que tengas derecho a utilizar. En Windows se reproduce con el reproductor multimedia del sistema; en Linux se intenta `ffplay`, si está instalado.
 
 La paleta predeterminada es **matrix** (negro con verdes fosforescentes) en el dock, `haril shell` y la interfaz de Pi (editor, mensajes, herramientas y menús). El tema Pi se crea o repara al abrir `haril` dentro de su agente privado, sin tocar las extensiones ni el archivo `settings.json`. Las opciones anteriores **violet**, **rose**, **amber** y **obsidian** siguen disponibles con `/haril-theme` (la pestaña `THEME` del panel ya no existe). Si una instalación ya tenía otra paleta guardada en `haril.json`, puedes seleccionar Matrix una sola vez con `/haril-theme matrix` o `haril config set ui.theme matrix`. Los colores del dock se guardan en `haril.json`; Pi inicia con el tema Matrix administrado por HARIL. El indicador `◉` ocupa una celda y pasa a rojo en niveles de razonamiento `high`, `xhigh`, `max` o `ultra`. `/language es` y `/language en` siguen disponibles; el dock y su selector también muestran el idioma elegido. La cabecera muestra **Estoy en: <ruta>** sin invadir el chat.
@@ -1070,7 +1077,7 @@ Los dossiers de `docs/research/` se leen solo bajo demanda, cuando un documento 
 
 ## Versiones
 
-Versión actual: **0.23.20**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
+Versión actual: **0.23.21**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
 
 ## Licencia
 

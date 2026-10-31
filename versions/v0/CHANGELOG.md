@@ -4,6 +4,41 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.23.21
+
+- **Fecha:** 2026-10-31
+- **Estado:** publicada en rama; pendiente de revisión
+
+### Añadido
+
+- `/haril-status`: avisos, extensiones, contexto, sesión y atajos, con el panel abierto o cerrado. Se encuentra buscando en español o en inglés.
+- La pestaña TOOLS lista las extensiones conocidas: las que registraron comandos o herramientas, y las solo declaradas en `settings.json`, marcadas como tales.
+- Fondo original del perfil HARIL de Windows Terminal, generado por código en `<root>\terminal\haril-background.png`. `haril-bootstrap terminal-profile --background-image <ruta>|none` lo cambia o lo apaga, con `--background-opacity` y `--background-stretch`.
+- Bienvenida con la paleta activa: lluvia y logo azules en `future`, verdes en `matrix`, y la línea `SYSTEM ONLINE`.
+
+### Cambiado
+
+- Con `future`, la consola pone el fondo, el texto y el cursor del terminal (OSC 10/11/12) y los restaura al salir, también ante un error o una señal. `HARIL_TERMINAL_COLORS=off` lo desactiva; se omite fuera de un TTY, en CI, con otras paletas y dentro del perfil HARIL.
+- `future` deja de pintar el fondo del chat y del panel: la imagen del terminal se ve a través de ellos. Solo la fila seleccionada, los resultados de búsqueda y los errores de herramienta conservan fondo.
+- El chat empieza limpio: se fija `quietStartup: "header"` de Pi si no había elección y desaparece la línea de cabecera.
+- El panel MAIN deja las cajas: títulos sobre una línea fina, con contexto, coste, runtime y STOP ALL. AVISOS solo aparece si hay avisos, y EXTENSIONES pasa a TOOLS.
+- Sin información repetida: con el panel en MAIN no hay barra inferior; en otro caso hay una sola barra con todo, y el botón STOP ALL deja dos columnas libres para no cortarse.
+- Alt+C y `/haril-commands` abren una lista con búsqueda de todos los comandos y atajos. Enter deja el comando en el editor o ejecuta el atajo.
+- El perfil HARIL usa el esquema azul, `cursorShape: filledBox` y una Nerd Font si está instalada.
+
+### Corregido
+
+- El panel ya no muestra `Memoria: null · not_checked`: dice el proveedor configurado y «not checked yet». `haril status --json` añade `memory.configured`.
+- El menú Alt+K ya no ofrece secciones que el panel no dibuja.
+
+### No verificado
+
+- Nada se ha probado en Pi real ni en un terminal real: las vistas son funciones reales convertidas a HTML, sin compositor de Pi, sin OSC y sin la imagen de fondo.
+- El aviso `Package Updates Available` de Pi sigue en el chat: su única puerta es `PI_OFFLINE`, que también apaga el catálogo de modelos.
+- La franja negra de Alt+L no se ha reproducido: el menú genera su primera fila correctamente y la causa sigue sin conocerse.
+
+---
+
 ## 0.23.20
 
 - **Fecha:** 2026-10-31

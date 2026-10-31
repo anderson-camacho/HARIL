@@ -60,7 +60,7 @@ export function status(args: readonly string[], io: CliIo, host: HostInfo): numb
   try {
     const result =
       store === undefined
-        ? { ok: true as const, report: emptyReport(dataDir) }
+        ? { ok: true as const, report: emptyReport(dataDir, host) }
         : readReport(store, dataDir, lastValue(parsed, "--project"), host);
     if (!result.ok) {
       io.err(`haril: ${result.message}`);
@@ -74,7 +74,7 @@ export function status(args: readonly string[], io: CliIo, host: HostInfo): numb
   }
 }
 
-function emptyReport(dataDir: string): StatusReport {
+function emptyReport(dataDir: string, host: HostInfo): StatusReport {
   return {
     initialized: false,
     dataDir,
@@ -84,7 +84,10 @@ function emptyReport(dataDir: string): StatusReport {
     queuedCommands: [],
     runtime: { status: "none" },
     halted: { halted: false, since: null },
-    memory: describeMemory(UNRECORDED_MEMORY_STATUS, false),
+    memory: {
+      ...describeMemory(UNRECORDED_MEMORY_STATUS, false),
+      configured: readMemoryConfig(host).provider,
+    },
   };
 }
 

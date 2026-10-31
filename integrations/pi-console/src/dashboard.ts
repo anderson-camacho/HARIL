@@ -111,11 +111,6 @@ export interface DashboardLayout {
   }[];
 }
 
-export interface FooterNavigationLayout {
-  readonly lines: string[];
-  readonly tabHits: HeaderLayout["tabHits"];
-}
-
 const LABELS: Readonly<Record<DashboardArea, string>> = {
   agents: "AGENTS",
   orchestration: "ORCHESTRATION",

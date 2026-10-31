@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { memoryText } from "../src/dashboard-data.js";
 import {
   contextFiles,
   declaredPackages,
@@ -93,5 +94,21 @@ describe("what Pi lists at startup, kept for the panel and /haril-status", () =>
     ]) {
       expect(text).toContain(part);
     }
+  });
+});
+
+describe("the memory line of the panel", () => {
+  it("never prints a null provider or not_checked", () => {
+    const unchecked = { provider: "null", health: "not_checked", degraded: false };
+    expect(memoryText(unchecked, { depth: 0 })).toBe("no provider · not checked yet");
+    expect(memoryText({ ...unchecked, configured: "engram" }, undefined)).toBe(
+      "engram (configured) · not checked yet",
+    );
+    expect(memoryText({ ...unchecked, configured: "null" }, undefined)).toContain("no provider");
+  });
+
+  it("names the provider in use, and says degraded and the queue only when they matter", () => {
+    const active = { provider: "engram", health: "active", degraded: true };
+    expect(memoryText(active, { depth: 2 })).toBe("engram · active · degraded · outbox 2");
   });
 });

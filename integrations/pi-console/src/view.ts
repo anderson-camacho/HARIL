@@ -323,7 +323,9 @@ function plainPlace(facts: BarFacts): Part[] {
   const changes = git === undefined ? 0 : git.staged + git.modified + git.untracked;
   const branch =
     facts.branch === null ? "" : `  ${plainText(facts.branch)}${changes > 0 ? ` ~${changes}` : ""}`;
-  return [{ text: `${plainText(homeRelative(facts.cwd))}${branch}`, tone: "dim" }];
+  // The name alone: the whole path is one click away in /haril-status, and on the line of its own when this does not fit.
+  const name = plainText(facts.cwd).replace(/[/]+$/, "").split(/[/]/).pop() ?? "";
+  return [{ text: `${name}${branch}`, tone: "dim" }];
 }
 
 function placeLine(facts: BarFacts, width: number, theme: ConsoleTheme): string {
