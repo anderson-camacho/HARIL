@@ -243,7 +243,6 @@ describe("the ACT tab", () => {
       expect(view).toContain("╭─ Filtro ");
       expect(view).toContain("│ Todo");
       expect(view).toContain("│ Actualizado ");
-      expect(view).toContain("╭─ Acciones ");
       // The range buttons are four compact chips on one row, «Actualizar» the full-width button under them.
       expect(view).toContain("│ 1h │ │ 1d │ │ Rango │ │ Todo │");
       expect(view).toContain("▸ Actualizar");
@@ -389,7 +388,6 @@ describe("the ACT tab", () => {
       await h.shows("╭─ Activity · 3 ");
       const view = h.sidebar();
       expect(view).toContain("╭─ Filter ");
-      expect(view).toContain("╭─ Actions ");
       expect(view).toContain("│ 1h │ │ 1d │ │ Range │ │ All │");
       expect(view).toContain("▸ Refresh");
       expect(view).toContain("#375 watchdog.closed · 3 min ago");

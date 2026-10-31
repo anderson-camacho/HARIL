@@ -244,7 +244,7 @@ const HINT_EN = "Type the range in the box below (Esc cancels).";
 
 const chipsOf = (
   details: { cards?: readonly { chips?: readonly { label: string }[] }[] } | undefined,
-) => details?.cards?.[1]?.chips?.map((chip) => chip.label);
+) => details?.cards?.[0]?.chips?.map((chip) => chip.label);
 
 describe("«Rango…»", () => {
   it("asks ONE question and filters by the two instants of «desde .. hasta»", async () => {

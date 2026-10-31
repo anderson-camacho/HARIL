@@ -247,26 +247,23 @@ function rangeChips(options: ActivityOptions, say: Say): DockChip[] {
 // before the events so they stay in reach whatever the list is: it can be fifty rows long.
 export function activityRows(data: ActivityData, options: ActivityOptions): ActivityRows {
   const say: Say = (english, spanish) => localized(options.locale, english, spanish);
-  const cards: DockCard[] = [
-    {
-      title: say("Filter", "Filtro"),
-      rows: [
-        ...wrap(describeRange(options.range, data.loadedAt, options.locale), CARD_CONTENT_WIDTH),
-        say(`Updated ${clockText(data.loadedAt)}`, `Actualizado ${clockText(data.loadedAt)}`),
-      ],
-    },
+  const rows = [
+    ...wrap(describeRange(options.range, data.loadedAt, options.locale), CARD_CONTENT_WIDTH),
+    say(`Updated ${clockText(data.loadedAt)}`, `Actualizado ${clockText(data.loadedAt)}`),
   ];
-  const actions = say("Actions", "Acciones");
-  if (options.busy) {
-    cards.push({ title: actions, rows: [say("… Loading…", "… Cargando…")] });
-  } else if (!(data.kind === "failed" && data.reason === NOT_LAUNCHED)) {
-    cards.push({
-      title: actions,
-      rows: [],
-      chips: rangeChips(options, say),
-      buttons: [{ label: say("Refresh", "Actualizar"), action: ACTIVITY_ACTIONS.refresh }],
-    });
-  }
-  cards.push(activityCard(data, say, options.locale));
-  return { status: say("Activity", "Actividad"), cards };
+  const title = say("Filter", "Filtro");
+  const filter: DockCard = options.busy
+    ? { title, rows: [...rows, say("… Loading…", "… Cargando…")] }
+    : data.kind === "failed" && data.reason === NOT_LAUNCHED
+      ? { title, rows }
+      : {
+          title,
+          rows,
+          chips: rangeChips(options, say),
+          buttons: [{ label: say("Refresh", "Actualizar"), action: ACTIVITY_ACTIONS.refresh }],
+        };
+  return {
+    status: say("Activity", "Actividad"),
+    cards: [filter, activityCard(data, say, options.locale)],
+  };
 }

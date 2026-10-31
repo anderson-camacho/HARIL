@@ -212,14 +212,14 @@ describe("the cards of the tab", () => {
       { locale: "es", range: ALL_RANGE, busy: false },
     );
     expect(status).toBe("Actividad");
-    expect(titles(cards)).toEqual(["Filtro", "Acciones", "Actividad · 3"]);
+    expect(titles(cards)).toEqual(["Filtro", "Actividad · 3"]);
     const english = activityRows(loaded([event(1, "a.b", 1)]), {
       locale: "en",
       range: ALL_RANGE,
       busy: false,
     });
     expect(english.status).toBe("Activity");
-    expect(titles(english.cards)).toEqual(["Filter", "Actions", "Activity · 1"]);
+    expect(titles(english.cards)).toEqual(["Filter", "Activity · 1"]);
   });
 
   it("name the range in words and the moment the events were read", () => {
@@ -240,13 +240,13 @@ describe("the cards of the tab", () => {
       event(375, "watchdog.closed", 3),
     ];
     const es = activityRows(loaded(events), { locale: "es", range: ALL_RANGE, busy: false });
-    expect(es.cards[2]?.rows).toEqual([
+    expect(es.cards[1]?.rows).toEqual([
       "#375 watchdog.closed · hace 3 min",
       "#374 task.cancelled · hace 5 min",
       "#373 workflow.failed · hace 2 h",
     ]);
     const en = activityRows(loaded(events), { locale: "en", range: ALL_RANGE, busy: false });
-    expect(en.cards[2]?.rows).toEqual([
+    expect(en.cards[1]?.rows).toEqual([
       "#375 watchdog.closed · 3 min ago",
       "#374 task.cancelled · 5 min ago",
       "#373 workflow.failed · 2 h ago",
@@ -260,7 +260,7 @@ describe("the cards of the tab", () => {
       { seq: 3, type: "a.b", at: undefined },
     ];
     const rows = activityRows(loaded(events), { locale: "es", range: ALL_RANGE, busy: false })
-      .cards[2]?.rows;
+      .cards[1]?.rows;
     expect(rows).toEqual(["#3 a.b", "#2 a.b · hace 12 s", "#1 a.b · hace 3 d"]);
   });
 
@@ -268,7 +268,7 @@ describe("the cards of the tab", () => {
     const type = "workflow.node.verification.completed.with.a.very.long.name";
     const rows =
       activityRows(loaded([event(12345, type, 3)]), { locale: "es", range: ALL_RANGE, busy: false })
-        .cards[2]?.rows ?? [];
+        .cards[1]?.rows ?? [];
     expect(rows).toHaveLength(1);
     expect(rows[0]?.endsWith(" · hace 3 min")).toBe(true);
     expect(rows[0]).toContain("…");
@@ -288,15 +288,15 @@ describe("the cards of the tab", () => {
       { locale: "es", range: ALL_RANGE, busy: false },
     );
     // Newest first: 5 closed, 4 error, 3 cancelled, 2 failed, 1 started.
-    expect(cards[2]?.tones).toEqual([undefined, "error", "error", "error", undefined]);
+    expect(cards[1]?.tones).toEqual([undefined, "error", "error", "error", undefined]);
   });
 
   it("say so when there is nothing in the range, and keep the filter and the actions", () => {
     const es = activityRows(loaded([]), { locale: "es", range: { kind: "hour" }, busy: false });
-    expect(titles(es.cards)).toEqual(["Filtro", "Acciones", "Actividad · 0"]);
-    expect(es.cards[2]?.rows).toEqual(["Sin eventos en este rango."]);
+    expect(titles(es.cards)).toEqual(["Filtro", "Actividad · 0"]);
+    expect(es.cards[1]?.rows).toEqual(["Sin eventos en este rango."]);
     const en = activityRows(loaded([]), { locale: "en", range: ALL_RANGE, busy: false });
-    expect(en.cards[2]?.rows).toEqual(["No events in this range."]);
+    expect(en.cards[1]?.rows).toEqual(["No events in this range."]);
   });
 
   it("note that only the newest 50 are shown when the list is as long as the limit", () => {
@@ -304,17 +304,17 @@ describe("the cards of the tab", () => {
       event(index + 1, "task.started", index),
     );
     const capped = activityRows(loaded(fifty), { locale: "es", range: ALL_RANGE, busy: false });
-    expect(capped.cards[2]?.title).toBe("Actividad · 50");
-    expect(capped.cards[2]?.rows).toHaveLength(51);
-    expect(capped.cards[2]?.rows.at(-1)).toBe("Mostrando los últimos 50.");
+    expect(capped.cards[1]?.title).toBe("Actividad · 50");
+    expect(capped.cards[1]?.rows).toHaveLength(51);
+    expect(capped.cards[1]?.rows.at(-1)).toBe("Mostrando los últimos 50.");
     const english = activityRows(loaded(fifty), { locale: "en", range: ALL_RANGE, busy: false });
-    expect(english.cards[2]?.rows.at(-1)).toBe("Showing the latest 50.");
+    expect(english.cards[1]?.rows.at(-1)).toBe("Showing the latest 50.");
     const forty = activityRows(loaded(fifty.slice(0, 49)), {
       locale: "es",
       range: ALL_RANGE,
       busy: false,
     });
-    expect(forty.cards[2]?.rows.some((row) => row.startsWith("Mostrando"))).toBe(false);
+    expect(forty.cards[1]?.rows.some((row) => row.startsWith("Mostrando"))).toBe(false);
   });
 
   it("show why the events could not be read, inside the card, in at most three short rows", () => {
@@ -322,45 +322,44 @@ describe("the cards of the tab", () => {
       "haril: store not initialized (run haril project init <path> --name <name> --yes first) and more words to spare";
     const failed: ActivityData = { kind: "failed", reason, ...LOADED_AT };
     const { cards } = activityRows(failed, { locale: "es", range: ALL_RANGE, busy: false });
-    expect(titles(cards)).toEqual(["Filtro", "Acciones", "Actividad · no disponible"]);
-    const rows = cards[2]?.rows ?? [];
+    expect(titles(cards)).toEqual(["Filtro", "Actividad · no disponible"]);
+    const rows = cards[1]?.rows ?? [];
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.length).toBeLessThanOrEqual(3);
     for (const row of rows) expect(textWidth(row)).toBeLessThanOrEqual(CARD_CONTENT_WIDTH);
     expect(rows.join(" ")).toContain("store not initialized");
     const english = activityRows(failed, { locale: "en", range: ALL_RANGE, busy: false });
-    expect(english.cards[2]?.title).toBe("Activity · not available");
+    expect(english.cards[1]?.title).toBe("Activity · not available");
   });
 
   it("invite to register the folder when it is no project", () => {
     const none: ActivityData = { kind: "none", ...LOADED_AT };
     const { cards } = activityRows(none, { locale: "es", range: ALL_RANGE, busy: false });
-    expect(titles(cards)).toEqual(["Filtro", "Acciones", "Actividad"]);
-    expect(cards[2]?.rows.join(" ")).toContain("Sin proyecto registrado");
-    expect(cards[2]?.rows.join(" ")).toContain("haril project init");
+    expect(titles(cards)).toEqual(["Filtro", "Actividad"]);
+    expect(cards[1]?.rows.join(" ")).toContain("Sin proyecto registrado");
+    expect(cards[1]?.rows.join(" ")).toContain("haril project init");
     const english = activityRows(none, { locale: "en", range: ALL_RANGE, busy: false });
-    expect(english.cards[2]?.rows.join(" ")).toContain("No project registered");
+    expect(english.cards[1]?.rows.join(" ")).toContain("No project registered");
   });
 
   it("offer four compact chips and a «Actualizar» button, each with its own action", () => {
     const { cards } = activityRows(loaded([]), { locale: "es", range: ALL_RANGE, busy: false });
-    expect(cards[1]?.rows).toEqual([]);
     // The chips carry a short word to draw and the full words of the menu entry.
-    expect(cards[1]?.chips).toEqual([
+    expect(cards[0]?.chips).toEqual([
       { label: "1h", name: "Última hora", action: ACTIVITY_ACTIONS.hour, active: false },
       { label: "1d", name: "Último día", action: ACTIVITY_ACTIONS.day, active: false },
       { label: "Rango", name: "Rango…", action: ACTIVITY_ACTIONS.range, active: false },
       { label: "Todo", name: "Todo", action: ACTIVITY_ACTIONS.all, active: true },
     ]);
-    expect(cards[1]?.buttons).toEqual([{ label: "Actualizar", action: ACTIVITY_ACTIONS.refresh }]);
+    expect(cards[0]?.buttons).toEqual([{ label: "Actualizar", action: ACTIVITY_ACTIONS.refresh }]);
     const english = activityRows(loaded([]), { locale: "en", range: ALL_RANGE, busy: false });
-    expect(english.cards[1]?.chips?.map((chip) => [chip.label, chip.name])).toEqual([
+    expect(english.cards[0]?.chips?.map((chip) => [chip.label, chip.name])).toEqual([
       ["1h", "Last hour"],
       ["1d", "Last day"],
       ["Range", "Range…"],
       ["All", "All"],
     ]);
-    expect(english.cards[1]?.buttons?.map((button) => button.label)).toEqual(["Refresh"]);
+    expect(english.cards[0]?.buttons?.map((button) => button.label)).toEqual(["Refresh"]);
     expect(Object.values(ACTIVITY_ACTIONS)).toEqual([
       "activity:hour",
       "activity:day",
@@ -381,7 +380,7 @@ describe("the cards of the tab", () => {
     ],
   ])("highlight the chip of the range in force (%s) and no other", (_name, range, label) => {
     const { cards } = activityRows(loaded([]), { locale: "es", range, busy: false });
-    const active = cards[1]?.chips
+    const active = cards[0]?.chips
       ?.filter((chip) => chip.active === true)
       .map((chip) => chip.label);
     expect(active).toEqual([label]);
@@ -394,21 +393,21 @@ describe("the cards of the tab", () => {
       busy: false,
       waiting: true,
     });
-    expect(es.cards[1]?.chips?.map((chip) => chip.label)).toEqual(["1h", "1d", "Espera", "Todo"]);
+    expect(es.cards[0]?.chips?.map((chip) => chip.label)).toEqual(["1h", "1d", "Espera", "Todo"]);
     // The dialog is the user's now: the chip is lit, whatever range is in force, and «Todo» is not.
-    expect(es.cards[1]?.chips?.filter((chip) => chip.active).map((chip) => chip.action)).toEqual([
+    expect(es.cards[0]?.chips?.filter((chip) => chip.active).map((chip) => chip.action)).toEqual([
       ACTIVITY_ACTIONS.range,
     ]);
     // The words of the menu entry do not change.
-    expect(es.cards[1]?.chips?.[2]?.name).toBe("Rango…");
+    expect(es.cards[0]?.chips?.[2]?.name).toBe("Rango…");
     const en = activityRows(loaded([]), {
       locale: "en",
       range: { kind: "hour" },
       busy: false,
       waiting: true,
     });
-    expect(en.cards[1]?.chips?.map((chip) => chip.label)).toEqual(["1h", "1d", "Waiting", "All"]);
-    expect(en.cards[1]?.chips?.filter((chip) => chip.active).map((chip) => chip.label)).toEqual([
+    expect(en.cards[0]?.chips?.map((chip) => chip.label)).toEqual(["1h", "1d", "Waiting", "All"]);
+    expect(en.cards[0]?.chips?.filter((chip) => chip.active).map((chip) => chip.label)).toEqual([
       "Waiting",
     ]);
   });
@@ -420,8 +419,7 @@ describe("the cards of the tab", () => {
       busy: false,
       waiting: true,
     });
-    expect(cards[1]?.rows).toEqual([]);
-    expect(cards[1]?.buttons).toEqual([{ label: "Actualizar", action: ACTIVITY_ACTIONS.refresh }]);
+    expect(cards[0]?.buttons).toEqual([{ label: "Actualizar", action: ACTIVITY_ACTIONS.refresh }]);
   });
 
   it("show «… Cargando…» in place of the buttons while the events are read, and keep what was read", () => {
@@ -430,12 +428,12 @@ describe("the cards of the tab", () => {
       range: ALL_RANGE,
       busy: true,
     });
-    expect(busy.cards[1]?.rows).toEqual(["… Cargando…"]);
-    expect(busy.cards[1]?.buttons).toBeUndefined();
-    expect(busy.cards[1]?.chips).toBeUndefined();
-    expect(busy.cards[2]?.rows).toEqual(["#1 task.started · hace 1 min"]);
+    expect(busy.cards[0]?.rows.at(-1)).toBe("… Cargando…");
+    expect(busy.cards[0]?.buttons).toBeUndefined();
+    expect(busy.cards[0]?.chips).toBeUndefined();
+    expect(busy.cards[1]?.rows).toEqual(["#1 task.started · hace 1 min"]);
     const english = activityRows(loaded([]), { locale: "en", range: ALL_RANGE, busy: true });
-    expect(english.cards[1]?.rows).toEqual(["… Loading…"]);
+    expect(english.cards[0]?.rows.at(-1)).toBe("… Loading…");
   });
 
   it("offer nothing to press when this Pi was not opened by haril", () => {
