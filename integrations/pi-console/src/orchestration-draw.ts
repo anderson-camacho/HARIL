@@ -1,4 +1,4 @@
-import { type DashboardTone, visualText } from "./dashboard-theme.js";
+import { type DashboardTone, lineTone, visualText } from "./dashboard-theme.js";
 import type { OrchestrationTarget } from "./orchestration-state.js";
 import type { WorkflowNode, WorkflowState } from "./orchestration-types.js";
 import { plainText, textWidth, truncate } from "./text.js";
@@ -227,7 +227,7 @@ export class Canvas {
 }
 
 export function frameText(text: string): string {
-  return visualText(text, "cyan", "base");
+  return visualText(text, lineTone("cyan"), "base");
 }
 
 export function framed(

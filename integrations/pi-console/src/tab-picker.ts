@@ -1,5 +1,5 @@
 import { DASHBOARD_AREAS, type DashboardArea } from "./dashboard.js";
-import { paddedCell, visualText } from "./dashboard-theme.js";
+import { lineTone, paddedCell, visualText } from "./dashboard-theme.js";
 import { keyOf } from "./orchestration-state.js";
 import type { ConsoleTheme } from "./pi-types.js";
 
@@ -38,9 +38,9 @@ export function createTabPicker(
           ...DASHBOARD_AREAS.map((area) => LABELS[area].slice(0, span)),
         ];
       const inside = span - 2;
-      const horizontal = visualText(`╭${"─".repeat(inside)}╮`, "teal", "panel");
-      const bottom = visualText(`╰${"─".repeat(inside)}╯`, "teal", "panel");
-      const side = visualText("│", "teal", "panel");
+      const horizontal = visualText(`╭${"─".repeat(inside)}╮`, lineTone("teal", "accent"), "panel");
+      const bottom = visualText(`╰${"─".repeat(inside)}╯`, lineTone("teal", "accent"), "panel");
+      const side = visualText("│", lineTone("teal", "accent"), "panel");
       const cell = (
         label: string,
         tone: "cyan" | "teal" | "yellow" | "text" | "muted",

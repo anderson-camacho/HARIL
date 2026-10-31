@@ -2,7 +2,8 @@
 
 ## Estado actual
 
-- **Versión actual:** 0.23.19.
+- **Versión actual:** 0.23.20.
+- **Estado (0.23.20):** nace la paleta azul `future` con líneas finas naranjas, y es la predeterminada de la consola y de la shell cuando no se configura nada. Falta conectarla en dos archivos (`haril config` y el arranque de Pi): hasta entonces la consola sobre Pi sigue viéndose Matrix sin `ui.theme`.
 - **Estado (0.23.19):** nace el catálogo de perfiles de terminal y `haril theme list|preview|apply|status`. `apply` solo guarda la selección en `<raíz>/config/terminal.json`: no cambia Windows Terminal, `$PROFILE` ni las fuentes, ni instala nada, y lo dice al terminar.
 - **Estado (0.23.18):** la segunda línea de la barra completa de la consola dibuja la carpeta y la rama de git como segmentos powerline (estilo del tema `craver` de Oh My Posh), con los cambios del árbol de trabajo (`+n` staged, `~n` modificados, `?n` sin seguimiento) leídos con `git status` en segundo plano y en caché; los colores salen del tema activo y los estados de otras extensiones siguen detrás. Necesita una fuente Nerd Font; `HARIL_POWERLINE=off` devuelve la línea de texto plano. La primera línea y la barra compacta no cambian. No verificado: el dibujo en un Pi real y en Windows Terminal; solo se ejercitó el código de la consola con un Pi simulado.
 - **Estado (0.23.17):** `ACT` usa fichas compactas de rango, «Rango» responde de forma visible con un solo cuadro y la pestaña `MEM` se llama `TOOLS`.
@@ -87,4 +88,4 @@ Las versiones 0.x son preliminares: pueden cambiar sin compatibilidad hacia atr�
 
 Más reciente primero. Cada carpeta contiene el archivo de cambios de su versión mayor, con las versiones menores y de parche, la más nueva arriba.
 
-- [v0](v0/CHANGELOG.md): versiones 0.1.0 a 0.23.19.
+- [v0](v0/CHANGELOG.md): versiones 0.1.0 a 0.23.20.

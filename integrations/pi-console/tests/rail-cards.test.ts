@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { setHarilPalette } from "../src/dashboard-theme.js";
 import {
   blankRow,
   boxFrame,
@@ -97,6 +98,7 @@ describe("a card", () => {
     delete process.env.NO_COLOR;
     process.env.TERM = "xterm-256color";
     try {
+      setHarilPalette("matrix");
       const [top, body] = card("Engram", ["ok"]);
       // Truecolor foregrounds of the matrix palette: teal borders, cyan title, text body.
       expect(top).toContain("38;2;119;255;165m╭─ ");

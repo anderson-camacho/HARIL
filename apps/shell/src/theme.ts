@@ -3,6 +3,7 @@ import { join } from "node:path";
 import blossomTheme from "../themes/haril-blossom.json" with { type: "json" };
 import crimsonTheme from "../themes/haril-crimson.json" with { type: "json" };
 import darkTheme from "../themes/haril-dark.json" with { type: "json" };
+import futureTheme from "../themes/haril-future.json" with { type: "json" };
 import lightTheme from "../themes/haril-light.json" with { type: "json" };
 import matrixTheme from "../themes/haril-matrix.json" with { type: "json" };
 
@@ -13,8 +14,8 @@ import matrixTheme from "../themes/haril-matrix.json" with { type: "json" };
 // Supported color values: "#RGB" or "#RRGGBB", a 0-255 integer (256-color index), "" (terminal default), or the name
 // of an entry in "vars" (resolved recursively). OKLCH, OKHSL and other Pi color syntaxes are rejected with a warning.
 
-// Matrix phosphor green on black is the HARIL default. Explicit ui.theme overrides it.
-export const DEFAULT_THEME_NAME = "haril-matrix";
+// Electric blue with thin orange lines is the HARIL default. Explicit ui.theme overrides it.
+export const DEFAULT_THEME_NAME = "haril-future";
 
 // The tokens the shell draws with. accent, text, muted and warning are required: a theme without one of them is
 // rejected. border, ok and danger came with the console frame (LD-T6b-1); a theme written before them still loads,
@@ -66,6 +67,7 @@ type Color =
 class ThemeError extends Error {}
 
 const NATIVE: Readonly<Record<string, unknown>> = {
+  "haril-future": futureTheme,
   "haril-matrix": matrixTheme,
   "haril-dark": darkTheme,
   "haril-light": lightTheme,

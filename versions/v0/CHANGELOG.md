@@ -4,6 +4,36 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.23.20
+
+- **Fecha:** 2026-10-31
+- **Estado:** nace la paleta azul `future` con líneas finas naranjas, y es la predeterminada de la consola y de la shell cuando no se configura nada. Falta conectarla en dos archivos (`haril config` y el arranque de Pi): hasta entonces la consola sobre Pi sigue viéndose Matrix sin `ui.theme`.
+
+### Añadido
+
+- Paleta `future` en `HARIL_PALETTES`: fondo #07172C, panel #0C2240, selección #16365C, azul eléctrico #5EC2FF, turquesa #7DF8D5 y texto #C4E9FF. El texto apagado cumple un contraste de al menos 4.5:1 sobre el fondo.
+- `lineTone`: los bordes y separadores del panel, de las tarjetas, de los recuadros flotantes y de la orquestación salen naranjas en `future` (#FF9F45 en los recuadros flotantes, #B86E2E en los demás). Las otras paletas conservan el tono que cada línea ya tenía.
+- Tema de Pi `haril-future` (`future-pi-theme.ts`) con la elección del tema gestionado: sin `ui.theme`, o con `future` o `haril-future`, usa `haril-future`; con cualquier otro valor guardado sigue `haril-matrix`, como hasta ahora. Nunca escribe `settings.json` ni `ui.theme`.
+- Tema `haril-future` de la shell (`apps/shell/themes/haril-future.json`), incluido en el bundle igual que los demás.
+
+### Cambiado
+
+- El tema predeterminado de la shell y su respaldo pasan de `haril-matrix` a `haril-future`. Un `ui.theme` explícito se respeta.
+- La paleta de reserva de la consola pasa de `matrix` a `future`.
+- El README describe los temas actuales de la shell; todavía nombraba `haril-crimson` como predeterminado.
+
+### Corregido
+
+- Nada.
+
+### Verificación
+
+- Pruebas nuevas de la paleta, de `lineTone`, del tema de Pi y de la shell, en rojo antes de la implementación y en verde después. Build, tipos, biome, knip, pruebas y `check:version` se ejecutaron sobre esta entrega.
+- **No verificado:** no se vio en un Pi real ni en Windows Terminal; solo se comprobaron las secuencias de color en las pruebas.
+- **Pendiente:** `apps/haril/src/commands/config.ts` sigue informando `matrix` como valor por defecto de `ui.theme` y `apps/haril/src/commands/console.ts` sigue arrancando Pi con `haril-matrix`.
+
+---
+
 ## 0.23.19
 
 - **Fecha:** 2026-10-31

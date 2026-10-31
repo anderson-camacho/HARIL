@@ -1,6 +1,7 @@
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import harilConsole from "../src/console.js";
+import { setHarilPalette } from "../src/dashboard-theme.js";
 import type {
   ConsoleComponent,
   ConsoleContext,
@@ -559,6 +560,8 @@ describe("the buttons of the ACT tab", () => {
       await withConsole(async (h) => {
         await openActivity(h);
         await h.shows("╭─ Actividad · 3 ");
+        // Truecolor foregrounds of the matrix palette.
+        setHarilPalette("matrix");
         const yellow = "38;2;231;207;117m";
         const middle = (label: string): string =>
           h.raw().find((row) => stripAnsi(row).includes(`│ ${label} │`)) ?? "";
