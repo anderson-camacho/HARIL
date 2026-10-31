@@ -4,6 +4,32 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.23.22
+
+- **Fecha:** 2026-10-31
+- **Estado:** publicada en rama; pendiente de revisión
+
+### Añadido
+
+- TOOLS abre una lista de skills y servidores MCP (`Alt+K` o clic en «Abrir skills y MCP»), con un resumen de cada uno y un filtro.
+- Skills: las que Pi informa, con nombre, descripción y origen. La acción inserta `/skill:<nombre> ` en el editor. Si no hay ninguna, se explica dónde ponerlas.
+- MCP: los servidores de `agent/mcp.json`, de `.pi/mcp.json` y los registrados por extensiones, con estado, herramientas y destino. Los valores de `env`, `headers`, argumentos y la parte secreta de una URL nunca se muestran. Un `mcp.json` dañado es un aviso que no cita su contenido.
+- Conectar y desconectar: se insertan `/mcp reconnect <servidor>` o `/mcp` en el editor (Enter los ejecuta y aplican ya), o se guarda `enabled` en el `mcp.json` global con escritura atómica, conservando las demás claves, y aplica al próximo inicio o con `/reload`.
+- `/haril-status` muestra los contadores de skills y MCP.
+- Logo HARIL pequeño, siempre visible: al pie del panel cuando hay sitio (cede ante el contenido real) y al inicio del chat con el panel cerrado (`Alt+I`), nunca en los dos. En poco ancho o en ASCII es la palabra `HARIL`.
+
+### Limitaciones
+
+- Pi 1.2.0 no da a una extensión el estado de conexión. «conectado» significa que Pi registró herramientas del servidor en esta sesión. Una caída posterior, un fallo o un servidor arrancando se leen como «sin comprobar»; `/mcp` lo distingue.
+- La entrada `engram` no ofrece guardar `enabled`: `haril tools ensure` la reescribe y el cambio no duraría.
+
+### Verificación
+
+- Pruebas de la consola con un Pi simulado y renders HTML de las funciones reales.
+- No verificado: Pi real, un terminal real, clics reales, la inserción en el editor real, `/mcp` real y que `Alt+I` no deje filas viejas en una pantalla real.
+
+---
+
 ## 0.23.21
 
 - **Fecha:** 2026-10-31

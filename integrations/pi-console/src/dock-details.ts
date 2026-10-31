@@ -259,6 +259,14 @@ export function memDetails(data: MemData, options: MemOptions): DockDetails {
   return view("memory", rows.status, rows.cards);
 }
 
+// The TOOLS tab's list of skills and MCP servers, or the summary of one.
+export function toolsCatalogDetails(rows: {
+  readonly status: string;
+  readonly cards: readonly DockCard[];
+}): DockDetails {
+  return view("memory", rows.status, rows.cards);
+}
+
 // The ACT tab from what was loaded; the console draws it again from the same data when only its busy state changes.
 export function activityDetails(data: ActivityData, options: ActivityOptions): DockDetails {
   const rows = activityRows(data, options);

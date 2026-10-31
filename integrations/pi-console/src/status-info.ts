@@ -180,6 +180,12 @@ export interface StatusFacts {
   readonly warnings: readonly string[];
   readonly extensions: readonly ExtensionEntry[];
   readonly contextFiles: readonly string[];
+  // What the TOOLS tab lists; undefined where the session cannot say.
+  readonly catalog?: {
+    readonly skills: number;
+    readonly servers: number;
+    readonly connected: number;
+  };
   readonly shortcuts: readonly { readonly key: string; readonly description: string }[];
 }
 
@@ -200,6 +206,12 @@ export function statusLines(facts: StatusFacts): string[] {
       extensionRows(facts.extensions, facts.locale),
     ),
     ...section(`${say("CONTEXT", "CONTEXTO")} · ${facts.contextFiles.length}`, facts.contextFiles),
+    ...(facts.catalog === undefined
+      ? []
+      : section("SKILLS · MCP", [
+          `Skills: ${facts.catalog.skills}`,
+          `MCP: ${facts.catalog.servers} · ${facts.catalog.connected} ${say("connected this session", "conectados en esta sesión")}`,
+        ])),
     ...section(say("SESSION", "SESIÓN"), [
       `HARIL ${facts.version ?? "?"}`,
       `${say("Folder", "Carpeta")}: ${facts.cwd}`,

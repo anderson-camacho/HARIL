@@ -53,6 +53,8 @@ export interface MemOptions {
   readonly checkError?: string | undefined;
   // The extensions this session can prove (status-info.ts), for the Extensions card.
   readonly extensions?: readonly ExtensionEntry[] | undefined;
+  // The card that leads to the skills and MCP servers, first in the tab.
+  readonly catalogCard?: DockCard | undefined;
 }
 
 export interface MemRows {
@@ -420,7 +422,7 @@ function cannotAct(data: MemData): boolean {
 
 export function memRows(data: MemData, options: MemOptions): MemRows {
   const say: Say = (english, spanish) => localized(options.locale, english, spanish);
-  const cards: DockCard[] = [];
+  const cards: DockCard[] = options.catalogCard === undefined ? [] : [options.catalogCard];
 
   if (data.tools.ok) {
     cards.push(engramCard(data.tools.value.engram, data.tools.value.failure, options.locale, say));

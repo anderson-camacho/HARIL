@@ -493,7 +493,8 @@ describe("the TOOLS rows from the Alt+K menu", () => {
           await waitFor(() => expect(h.menus).toHaveLength(1));
           const [menu] = h.menus;
           expect(menu?.title).toBe("Panel derecho");
-          expect(menu?.options.slice(0, 4)).toEqual([
+          expect(menu?.options.slice(0, 5)).toEqual([
+            "TOOLS · Abrir skills y MCP",
             "TOOLS · Comprobar e instalar Engram",
             "TOOLS · Reinstalar Engram (forzar)",
             "TOOLS · Comprobar versiones ahora",

@@ -170,6 +170,7 @@ interface ConsoleCommandInfo {
 
 interface ConsoleMcpServer {
   readonly name: string;
+  readonly config?: unknown;
 }
 
 interface ModelRegistry {
@@ -196,7 +197,15 @@ export interface ConsoleContext {
   };
   getContextUsage(): ContextUsage | undefined;
   // Offered to command handlers; the loaded context files are in it. Only the paths are read.
-  getSystemPromptOptions?(): { readonly contextFiles?: readonly { readonly path: string }[] };
+  getSystemPromptOptions?(): {
+    readonly contextFiles?: readonly { readonly path: string }[];
+    readonly skills?: readonly {
+      readonly name: string;
+      readonly description?: string;
+      readonly filePath?: string;
+      readonly disableModelInvocation?: boolean;
+    }[];
+  };
   // Whether the agent is idle (not streaming).
   isIdle(): boolean;
   // Aborts the current agent operation (the chat turn); nothing happens while idle.
