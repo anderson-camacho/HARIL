@@ -7,7 +7,7 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 ## 0.23.20
 
 - **Fecha:** 2026-10-31
-- **Estado:** nace la paleta azul `future` con líneas finas naranjas, y es la predeterminada de la consola y de la shell cuando no se configura nada. Falta conectarla en dos archivos (`haril config` y el arranque de Pi): hasta entonces la consola sobre Pi sigue viéndose Matrix sin `ui.theme`.
+- **Estado:** nace la paleta azul `future` con líneas finas naranjas, y es la predeterminada de la consola y de la shell cuando no se configura nada. Un `ui.theme` guardado se respeta. No verificado: el aspecto en un Pi real y en Windows Terminal.
 
 ### Añadido
 
@@ -19,7 +19,7 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 ### Cambiado
 
 - El tema predeterminado de la shell y su respaldo pasan de `haril-matrix` a `haril-future`. Un `ui.theme` explícito se respeta.
-- La paleta de reserva de la consola pasa de `matrix` a `future`.
+- La paleta de reserva de la consola y el valor por defecto de `haril config get ui.theme` pasan de `matrix` a `future`, y `haril console` arranca Pi con el tema gestionado que corresponde a `ui.theme`.
 - El README describe los temas actuales de la shell; todavía nombraba `haril-crimson` como predeterminado.
 
 ### Corregido
@@ -30,7 +30,6 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 - Pruebas nuevas de la paleta, de `lineTone`, del tema de Pi y de la shell, en rojo antes de la implementación y en verde después. Build, tipos, biome, knip, pruebas y `check:version` se ejecutaron sobre esta entrega.
 - **No verificado:** no se vio en un Pi real ni en Windows Terminal; solo se comprobaron las secuencias de color en las pruebas.
-- **Pendiente:** `apps/haril/src/commands/config.ts` sigue informando `matrix` como valor por defecto de `ui.theme` y `apps/haril/src/commands/console.ts` sigue arrancando Pi con `haril-matrix`.
 
 ---
 
