@@ -3,7 +3,7 @@
 ## Estado actual
 
 - **Versión actual:** 0.23.23.
-- **Estado (0.23.23):** `/haril-factory` abre la fábrica a pantalla completa con siete pestañas y un kit visual con la paleta exacta de las referencias. Ninguna pestaña tiene datos todavía y lo dice; no tiene atajo porque `Alt+F` es de Pi. Una prueba documenta por qué una delegación parece atascada (parada `after_plan`). No verificado: Pi real ni terminal real.
+- **Estado (0.23.23):** `Alt+G` o `/haril-factory` abre la fábrica a pantalla completa con siete pestañas y un kit visual con la paleta exacta de las referencias. Ninguna pestaña tiene datos todavía y lo dice; el atajo no es `Alt+F` porque ese es de Pi. Una prueba documenta por qué una delegación parece atascada (parada `after_plan`). No verificado: Pi real ni terminal real.
 - **Estado (0.23.22):** TOOLS lista skills y servidores MCP con su resumen, inserta sus comandos reales en el editor y puede guardar `enabled` en el `mcp.json` global; logo HARIL pequeño en el panel o en el chat. «conectado» solo significa que Pi registró herramientas en esta sesión. No verificado: Pi real ni terminal real.
 - **Estado (0.23.21):** consola más limpia: el fondo del terminal se ve a través del chat y del panel, la información de arranque pasa al panel y a `/haril-status`, una sola barra sin duplicados, y Alt+C busca en todos los comandos. Sin verificar en Pi real ni en un terminal real.
 - **Estado (0.23.20):** nace la paleta azul `future` con líneas finas naranjas, y es la predeterminada de la consola y de la shell cuando no se configura nada. Un `ui.theme` guardado se respeta. No verificado: el aspecto en un Pi real y en Windows Terminal.

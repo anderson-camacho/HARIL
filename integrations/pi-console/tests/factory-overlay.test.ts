@@ -211,6 +211,18 @@ describe("/haril-factory", () => {
     }
   });
 
+  it("Alt+G opens the overlay too, and not twice at once", async () => {
+    const { fake, ctx, capture, opened } = await started();
+    const shortcut = fake.shortcuts.get("alt+g");
+    expect(shortcut).toBeDefined();
+    shortcut?.(ctx);
+    shortcut?.(ctx);
+    await Promise.resolve();
+    expect(opened()).toBe(1);
+    expect(stripAnsi(capture.component?.render(80)[1] ?? "")).toContain("Avance");
+    capture.resolve?.(undefined);
+  });
+
   it("describes itself in Spanish, and takes no key Pi already owns", async () => {
     const { fake } = await started();
     // Pi 1.2.0 binds Alt+F to tui.editor.cursorWordRight, and the console never overrides a built-in shortcut.

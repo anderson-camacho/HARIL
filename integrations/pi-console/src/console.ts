@@ -2036,6 +2036,15 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
     },
   });
 
+  // Alt+G is free in Pi 1.2.0's default keybindings; Alt+F, the obvious one, is Pi's cursorWordRight. It only views, so
+  // it works in every mode.
+  registerShortcut("alt+g", {
+    description: "Abrir la fábrica de HARIL",
+    handler: (ctx) => {
+      void session?.openFactoryView(ctx);
+    },
+  });
+
   // Alt+X and Alt+M are free in Pi 1.2.0's default keybindings (docs/keybindings.md), on Windows too.
   registerShortcut("alt+x", {
     description:
