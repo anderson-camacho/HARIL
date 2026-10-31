@@ -4,7 +4,7 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
-## 0.23.18
+## 0.23.19
 
 - **Fecha:** 2026-10-31
 - **Estado:** nace el catálogo de perfiles de terminal y `haril theme list|preview|apply|status`. `apply` solo guarda la selección en `<raíz>/config/terminal.json`: no cambia Windows Terminal, `$PROFILE` ni las fuentes, ni instala nada, y lo dice al terminar.
@@ -29,6 +29,45 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 - `apps/haril/tests/theme.test.ts`: 39 pruebas nuevas, en rojo antes de la implementación y en verde después. La suite de `apps/haril` pasa, igual que build, tipos, biome, knip y `check:version`. Ejecución manual de `list`, `preview`, `apply` y `status` con la CLI compilada y `HARIL_RUNTIME_DIR` en una carpeta temporal.
 - No verificado: el color de `preview` en una terminal real (solo se comprobaron sus secuencias en las pruebas).
+
+## 0.23.18
+
+- **Fecha:** 2026-10-31
+- **Estado:** la segunda línea de la barra completa de la consola (carpeta, rama de git y estados de extensiones) se dibuja como segmentos powerline, tomando como referencia el tema `craver` de Oh My Posh: un bloque de color para la carpeta y otro para la rama con los cambios del árbol de trabajo (`+n` en el índice, `~n` modificados, `?n` sin seguimiento). La primera línea (HARIL, `MODE`, modelo y nivel, `STOP ALL`) y la barra compacta no cambian. `HARIL_POWERLINE=off` devuelve la línea de texto plano de siempre. Necesita una fuente con los glifos de Powerline (una Nerd Font). No verificado: el dibujo en un Pi real y en Windows Terminal con una Nerd Font; solo se ejercitó el código de la consola con un Pi simulado.
+
+### Añadido
+
+- `git-summary.ts`: las cuentas del segmento de git (staged, modificados y sin seguimiento) salen de `git status --porcelain=v1 -z --untracked-files=normal --no-renames`, lanzado sin shell, con `--no-optional-locks`, `core.fsmonitor` apagado, un límite de 3 s y de 1 MiB de salida y sin las variables de entorno que apuntan git a otro repositorio. `parseGitStatus` lee la columna del índice (staged), la del árbol de trabajo (modificado) y `??` (sin seguimiento); una ruta sin fusionar cuenta una vez como modificada y las ignoradas no cuentan. `createGitSummaryCache` guarda la respuesta por carpeta durante 5 s: `peek` devuelve al instante lo que sabe y, si está caducada, inicia la lectura desde una microtarea (nunca dentro del dibujo), una sola lectura a la vez por carpeta, y avisa para repintar solo cuando las cuentas cambian. Un fallo de git (sin git, no es un repositorio, tiempo agotado) es «sin cuentas», nunca una excepción en el dibujo.
+- `powerline.ts`: `powerlineHead` dibuja el segmento de la carpeta (`~/ruta`, con el principio acortado si no cabe) y el de git (rama y cuentas) con los glifos Powerline `U+E0B0` (flecha), `U+E0A0` (rama) y `U+F07B` (carpeta). Los colores son fichas del tema: la carpeta usa `accent`; git, `success` sin cambios, `warning` con cambios y `muted` mientras no se conocen. Cada bloque va en vídeo inverso sobre `theme.fg(...)`, y la flecha entre dos bloques lleva el color del primero sobre el del segundo, que se obtiene de la propia secuencia de primer plano del tema (código 38 pasado a 48), sin colores propios; si el tema no da una secuencia legible, la flecha queda sobre el fondo de la terminal. `powerlineEnabled` lee `HARIL_POWERLINE` (`off`, `0` o `false` lo apagan).
+- `BarFacts.powerline` (`{ git }`) y `ConsoleOptions.git.read`, para que las pruebas respondan las cuentas sin ejecutar git.
+
+### Cambiado
+
+- La línea de la carpeta de la barra completa: con segmentos (por defecto) o, con `HARIL_POWERLINE=off`, exactamente el texto de antes. Los estados de otras extensiones siguen detrás, como texto atenuado, en el hueco que dejan los segmentos. Con poco ancho cede primero las cuentas, luego el nombre de la rama (primero cortado con `…`, después solo el icono), luego el segmento de git y por último acorta la carpeta por el principio; donde no cabe ni un bloque dibuja la línea plana. Ninguna línea excede el ancho (medido con `textWidth` sobre el texto sin secuencias de escape).
+- El pie de la consola crea una caché de cuentas por pie y la pide solo cuando dibuja la línea con segmentos (barra completa, no compacta, `HARIL_POWERLINE` sin apagar) y Pi conoce una rama; un cambio de rama la invalida y pide repintar. `HARIL_POWERLINE` se lee en cada dibujo, así que el cambio se nota sin reiniciar.
+- El lector de git se endureció tras una revisión independiente:
+  - `runWithLimits` (nuevo) ejecuta el programa sin shell, cierra su entrada estándar y devuelve su salida, o `undefined` si falla, se agota el tiempo, la salida pasa del tope o no arranca; nunca rechaza. En Windows el límite de tiempo es un temporizador propio: al vencer lanza `%SystemRoot%\System32\taskkill.exe /PID <pid> /T /F` (ruta absoluta, sin shell, 2 s de margen, errores ignorados) mientras el lanzador sigue vivo y solo después mata el proceso como respaldo, porque `cmd\git.exe` de Git for Windows es un lanzador y matarlo solo dejaba en marcha al git que hace el trabajo. En las demás plataformas sigue el `timeout` de `execFile`.
+  - Git se arranca desde una carpeta neutra (`System32` en Windows, la temporal en el resto) y la carpeta que se le da con `-C` se resuelve a ruta absoluta: en Windows un ejecutable sin ruta se busca primero en la carpeta desde la que se arranca, y un `git.exe` colocado en el proyecto se habría ejecutado.
+  - Mismas protecciones que `integrations/git/src/run.ts`: `GIT_TERMINAL_PROMPT=0`, `GIT_LFS_SKIP_SMUDGE=1`, entrada estándar cerrada y los ajustes `filter.lfs.smudge`, `clean`, `process` y `required` neutralizados con `-c`, de modo que un `git status` que tenga que calcular el hash de un archivo no arranca git-lfs. Contrapartida: un archivo de LFS cuya fecha cambió puede contarse como modificado.
+  - Tras una lectura sin respuesta (tiempo agotado, fallo de git, salida pasada del tope) la caché espera 30 s antes de leer otra vez, en lugar de los 5 s normales, para que un `git status` más lento que su límite no se relance cada pocos segundos y se acumulen procesos. Una lectura correcta vuelve a los 5 s y un cambio de rama sigue leyendo al instante.
+  - Un `onChange` (el repintado) que lanza una excepción ya no puede convertirse en un rechazo de promesa sin manejar, que termina un proceso de Node por defecto: la llamada va en un `try/catch` y la lectura que arranca desde una microtarea lleva un `catch` de respaldo; la respuesta se conserva y una invalidación pendiente sigue leyendo.
+- `README.md` describe la línea, la fuente necesaria y el modo `off`.
+
+### Corregido
+
+- Sin correcciones.
+
+### Verificación
+
+- Las pruebas se escribieron antes del código, en dos rondas. Primera ronda, rojo observado: `git-summary.test.ts` y `powerline.test.ts` no cargaban (el módulo no existía), `view.test.ts` fallaba en 4 de 14 pruebas (las 10 restantes, entre ellas la línea plana de siempre con un tema que etiqueta cada color, pasaban con el código anterior, lo que confirma que `off` produce los mismos bytes) y `console.test.ts` fallaba en 7 de 11.
+- Segunda ronda (el endurecimiento), rojo observado: con el código anterior fallaban 17 de las 39 pruebas de `git-summary.test.ts` (las dos de `onChange` con una excepción registraron el rechazo sin manejar; faltaban el reintento tras un fallo, el tope de salida, la carpeta neutra, `GIT_TERMINAL_PROMPT`, los filtros LFS y `runWithLimits`). Con `runWithLimits` usando solo el `timeout` de `execFile` quedaban 2 en rojo: la que pide el `taskkill` y la real de Windows, en la que el nieto (separado del padre, como el git que lanza `cmd\git.exe`) seguía vivo tras el límite. Con el `taskkill` pasaron las 39, también en tres ejecuciones seguidas.
+- Fusión de `origin/main` (0.23.17: pestaña `TOOLS`, fichas de `ACT`, perfil de Windows Terminal) en la rama, con la versión 0.23.18 por encima de la suya. `git diff origin/main -- integrations/pi-console` solo muestra esta entrega: `git-summary.ts`, `powerline.ts`, el cableado en `view.ts` y `console.ts` y sus pruebas, más la aserción `main` de `native-panes-console.test.ts`; nada de `origin/main` se perdió ni se duplicó.
+- Tras la fusión, `integrations/pi-console`, `npx vitest run --testTimeout=15000`: 56 archivos, 1027 pruebas, todas correctas. Antes de la fusión, con el límite por defecto de 5 s (`npx vitest run` a secas), fallaron bajo carga pruebas ya existentes que lanzan la CLI simulada, a unos 5,0 s (`chat-log-console.test.ts`, `console-children.test.ts` y `activity-tab-console.test.ts`, según la ejecución); esos tres archivos, ejecutados solos, pasaron (30 pruebas).
+- Tras la fusión, suite principal sin las cuatro pruebas de procesos (`vitest run --testTimeout=15000 --exclude …` de `test`): 282 archivos, 280 correctos y 2 omitidos; 3994 pruebas, 3990 correctas y 4 omitidas, ninguna fallida. `npm run test:stop` no se ejecutó.
+- Pruebas que en ejecuciones anteriores (antes de la fusión) fallaron solo con la suite completa en paralelo y que en las últimas no fallaron: `stop-all-console.test.ts` y `tools-mem-console.test.ts` (15 s) en la primera ejecución completa de este cambio, y `pi-agent-runtime.test.ts` («the tree kill also takes a tool command Pi started through the shell», una limpieza de carpeta temporal con EPERM) y `tools-mem-console.test.ts` en la ejecución del verificador independiente. Solos, esos tres archivos pasaron (84 pruebas). Tras la fusión no falló ninguna prueba bajo carga.
+- Tras la fusión: `npm run check` (Biome, tipos de todos los proyectos, capas/pureza/prohibidos, knip, compatibilidad —omitida: `docs/COMPATIBILITY.md` no existe en este árbol— y versión) correcto en 0.23.18; `apps/haril/tests/version.test.ts`: 1 prueba correcta; `npm run test:scripts`: 133 correctas.
+
+---
 
 ## 0.23.17
 
