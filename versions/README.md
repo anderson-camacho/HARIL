@@ -2,7 +2,8 @@
 
 ## Estado actual
 
-- **Versión actual:** 0.23.16.
+- **Versión actual:** 0.23.17.
+- **Estado (0.23.17):** `ACT` usa fichas compactas de rango, «Rango» responde de forma visible con un solo cuadro y la pestaña `MEM` se llama `TOOLS`.
 - **Estado (0.23.16):** nuevo comando opcional `haril-bootstrap terminal-profile` (solo Windows): crea un perfil **HARIL** de Windows Terminal como *fragment*, con un shader CRT suave derivado de `crt.hlsl` (Hammster, CC0) y `Retro.hlsl` (Microsoft, MIT); `--shader none` lo deja sin efecto y `--remove` lo quita junto a la entrada que Windows Terminal añade a `settings.json`. Verificado en Windows Terminal 1.24 con la instalación real.
 - **Estado (0.23.15):** el panel derecho dibuja la cabecera (espacio y pestañas) en un recuadro y las fichas `MEM` y `DOCS` como tarjetas con botones de tres filas para sus acciones; con `HARIL_CONSOLE_ASCII=1` los bordes y punteros pasan a ASCII. Nueva pestaña `ACT` con la actividad reciente y un filtro de tiempo (la actividad sale de `MAIN`), `haril events --since|--from|--to` y `MEM` muestra el proveedor de memoria que fija `haril.json`. Nueva pestaña `ACC` con los botones de las acciones del área elegida en `MAIN` (que dejan de salir en `MAIN`; la cabecera clásica y `Alt+K` las conservan). `MAIN` dibuja su estado, `ÁREAS`, `AVISOS`, `EXTENSIONES` y `SESIÓN` como tarjetas (las tres últimas se abren y cierran con un clic en su título; los avisos largos continúan en la fila de abajo) y `Alt+K` ya no ofrece la sección `acciones` en el panel nativo. No verificado: el Pi real (clic en las filas y columnas nuevas, en el título de cada tarjeta de `MAIN`, `Alt+K` en vivo, repintado, las cinco pestañas en dos filas); solo se ejercitó el código de la consola con un Pi simulado.
 - **Estado (0.23.14):** Engram conectado al runtime: con `memory.provider = "engram"` en `haril.json` el runtime recupera contexto de Engram 3.6.0 para los prompts de las tareas y guarda un resumen de cada tarea real completada; `npm run memory:install` lo instala con verificación SHA-256. Sin esa clave sigue el proveedor `null`.
@@ -84,4 +85,4 @@ Las versiones 0.x son preliminares: pueden cambiar sin compatibilidad hacia atr�
 
 Más reciente primero. Cada carpeta contiene el archivo de cambios de su versión mayor, con las versiones menores y de parche, la más nueva arriba.
 
-- [v0](v0/CHANGELOG.md): versiones 0.1.0 a 0.23.16.
+- [v0](v0/CHANGELOG.md): versiones 0.1.0 a 0.23.17.

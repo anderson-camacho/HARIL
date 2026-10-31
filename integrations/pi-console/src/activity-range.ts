@@ -1,7 +1,7 @@
 import { localized, type UiLocale } from "./locale.js";
 
 // The time range the ACT tab filters the recent events by, for the session: how it becomes the flags of `haril events`,
-// the words that name it in the tab, and how the two answers of the «Rango…» dialog become one. Times are epoch
+// the words that name it in the tab, and how what the «Rango…» dialog collects becomes one range. Times are epoch
 // milliseconds, as the CLI's are.
 
 export type ActivityRange =
@@ -106,15 +106,38 @@ export type RangeInput =
   | { readonly ok: true; readonly range: ActivityRange }
   | { readonly ok: false; readonly reason: string };
 
-// A moment the user typed: a duration is that long before `now`, anything else must be an instant.
-function moment(text: string, now: number): number | null {
-  const duration = parseDuration(text);
-  return duration === null ? parseInstant(text) : now - duration;
+// A date as the Filtro card prints it, on the local clock: «29/10 08:00» («10/29 08:00» in English), «29/10» for midnight,
+// and «29/10/2025 08:00» with a year (the year of `now` when there is none). Null for anything else, and for a date
+// the calendar does not have (31/04 would roll over to 01/05, so it is checked by reading the date back).
+function parseStamp(text: string, now: number, locale: UiLocale): number | null {
+  const match = /^(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?(?:\s+(\d{1,2}):(\d{2}))?$/.exec(text.trim());
+  if (match === null) return null;
+  const first = Number(match[1]);
+  const second = Number(match[2]);
+  const day = locale === "es" ? first : second;
+  const month = locale === "es" ? second : first;
+  const year = match[3] === undefined ? new Date(now).getFullYear() : Number(match[3]);
+  const hour = match[4] === undefined ? 0 : Number(match[4]);
+  const minute = match[5] === undefined ? 0 : Number(match[5]);
+  const date = new Date(year, month - 1, day, hour, minute);
+  const readBack =
+    date.getFullYear() === year &&
+    date.getMonth() === month - 1 &&
+    date.getDate() === day &&
+    date.getHours() === hour &&
+    date.getMinutes() === minute;
+  return readBack ? date.getTime() : null;
 }
 
-// The two answers of the «Rango…» dialog as one range. An empty end is now. Anything that is not a duration or an
-// instant, or an end that is not after the start, is refused with a sentence that names the answer and the forms
-// that are accepted.
+// A moment the user typed: a duration is that long before `now`; anything else must be an instant, ISO or as the card
+// writes it.
+function moment(text: string, now: number, locale: UiLocale): number | null {
+  const duration = parseDuration(text);
+  return duration === null ? (parseInstant(text) ?? parseStamp(text, now, locale)) : now - duration;
+}
+
+// The two ends of a range as one range. An empty end is now. Anything that is not a duration or an instant, or an end
+// that is not after the start, is refused with a sentence that names the end and the forms that are accepted.
 export function parseRange(
   fromText: string,
   toText: string,
@@ -125,13 +148,13 @@ export function parseRange(
   const invalid = (english: string, spanish: string): RangeInput => ({
     ok: false,
     reason: say(
-      `"${english}" is not valid: use 3h, 2d or a date such as 2026-10-30T08:00`,
-      `«${spanish}» no es válido: usa 3h, 2d o una fecha como 2026-10-30T08:00`,
+      `"${english}" is not valid: use 3h, 2d or a date such as 10/29 08:00`,
+      `«${spanish}» no es válido: usa 3h, 2d o una fecha como 29/10 08:00`,
     ),
   });
-  const from = moment(fromText, now);
+  const from = moment(fromText, now, locale);
   if (from === null) return invalid("From", "Desde");
-  const to = toText.trim() === "" ? undefined : moment(toText, now);
+  const to = toText.trim() === "" ? undefined : moment(toText, now, locale);
   if (to === null) return invalid("To", "Hasta");
   if (to !== undefined && from >= to) {
     return {
@@ -140,4 +163,22 @@ export function parseRange(
     };
   }
   return { ok: true, range: { kind: "custom", from, ...(to === undefined ? {} : { to }) } };
+}
+
+// What the «Rango…» dialog collects, in one answer: «3h» or «2d» (the last N, until now), or «desde .. hasta» with two
+// instants (ISO, or as the card writes them), where an empty «hasta» is now («desde ..»). The dots may touch the
+// instants. More than one « .. » is refused.
+export function parseRangeText(text: string, now: number, locale: UiLocale): RangeInput {
+  const parts = text.split("..");
+  if (parts.length > 2) {
+    return {
+      ok: false,
+      reason: localized(
+        locale,
+        'Too many " .. ": use 3h, 2d or "from .. to"',
+        "Demasiados « .. »: usa 3h, 2d o «desde .. hasta»",
+      ),
+    };
+  }
+  return parseRange(parts[0] ?? "", parts[1] ?? "", now, locale);
 }

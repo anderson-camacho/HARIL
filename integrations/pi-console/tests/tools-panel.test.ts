@@ -20,7 +20,7 @@ import {
   updateJson,
 } from "./tools-fixtures.js";
 
-// The MEM tab's controller: the check at start-up, the four actions and the notices they leave. Every command goes
+// The TOOLS tab's controller: the check at start-up, the four actions and the notices they leave. Every command goes
 // through a fake `run`, so no CLI runs; the console-level behaviour (clicks, the Alt+K menu, the real CLI pipe) is in
 // tools-mem-console.test.ts.
 
@@ -271,7 +271,7 @@ describe("the check at start-up", () => {
             gentle({ state: "outdated", active: old, installs: [old], latest: "4.3.1" }),
           ]),
         ),
-      ).toEqual([["gentle-ai 4.0.0 → 4.3.1 disponible: Alt+L → MEM → Actualizar.", "info"]]);
+      ).toEqual([["gentle-ai 4.0.0 → 4.3.1 disponible: Alt+L → TOOLS → Actualizar.", "info"]]);
     });
 
     it("says gentle-ai is missing, and where to install it", async () => {
@@ -282,7 +282,7 @@ describe("the check at start-up", () => {
             gentle({ state: "missing", active: null, installs: [] }),
           ]),
         ),
-      ).toEqual([["gentle-ai no está instalado: Alt+L → MEM → Instalar gentle-ai.", "info"]]);
+      ).toEqual([["gentle-ai no está instalado: Alt+L → TOOLS → Instalar gentle-ai.", "info"]]);
     });
 
     it("notices a newer upstream Engram that HARIL does not use yet", async () => {
@@ -306,7 +306,7 @@ describe("the check at start-up", () => {
       );
       expect(notes).toEqual([
         [
-          "Engram 3.6.0 instalado. Reinicia el runtime para que lo use.\ngentle-ai 4.0.0 → 4.3.1 disponible: Alt+L → MEM → Actualizar.",
+          "Engram 3.6.0 instalado. Reinicia el runtime para que lo use.\ngentle-ai 4.0.0 → 4.3.1 disponible: Alt+L → TOOLS → Actualizar.",
           "info",
         ],
       ]);
@@ -346,7 +346,7 @@ describe("the check at start-up", () => {
         ),
       ).toEqual([
         [
-          "Engram 3.6.0 installed. Restart the runtime so it uses it.\ngentle-ai 4.0.0 → 4.3.1 available: Alt+L → MEM → Update.",
+          "Engram 3.6.0 installed. Restart the runtime so it uses it.\ngentle-ai 4.0.0 → 4.3.1 available: Alt+L → TOOLS → Update.",
           "info",
         ],
       ]);
@@ -452,7 +452,7 @@ describe("the check at start-up", () => {
   });
 
   describe("refreshing the tab when it ends", () => {
-    it("loads the tab again when MEM is the one on screen", async () => {
+    it("loads the tab again when TOOLS is the one on screen", async () => {
       const r = rig();
       r.state.memoryOpen = true;
       r.answer(ENSURE, { stdout: ensureJson({ action: "installed", to: "3.6.0" }) });
@@ -482,7 +482,7 @@ describe("the check at start-up", () => {
   });
 });
 
-describe("the actions of the MEM tab", () => {
+describe("the actions of the TOOLS tab", () => {
   it("checks and installs Engram, shows it is busy, says the outcome and loads the tab again", async () => {
     const r = rig();
     r.state.memoryOpen = true;
@@ -584,7 +584,7 @@ describe("the actions of the MEM tab", () => {
     expect(busyDuring).toBe("refresh");
     expect(r.notes).toEqual([
       [
-        "Versiones consultadas: Engram 3.6.0, gentle-ai 4.3.1.\ngentle-ai 4.0.0 → 4.3.1 disponible: Alt+L → MEM → Actualizar.",
+        "Versiones consultadas: Engram 3.6.0, gentle-ai 4.3.1.\ngentle-ai 4.0.0 → 4.3.1 disponible: Alt+L → TOOLS → Actualizar.",
         "info",
       ],
     ]);

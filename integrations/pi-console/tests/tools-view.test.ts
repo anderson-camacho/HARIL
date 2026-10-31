@@ -14,7 +14,7 @@ import {
   statusJson,
 } from "./tools-fixtures.js";
 
-// The MEM tab: what `haril tools status --json` and `haril memory status --json` say, as the 40-column right panel
+// The TOOLS tab: what `haril tools status --json` and `haril memory status --json` say, as the 40-column right panel
 // shows it. The two commands are the only source; these tests give the view the JSON they print.
 
 // A card gives a row CARD_CONTENT_WIDTH columns; the plain lines of the left dock indent a row by two more.
@@ -52,11 +52,11 @@ function rowOf(details: DockDetails, action: string): string | undefined {
 
 const text = (details: DockDetails): string => details.lines.join("\n");
 
-describe("the MEM view with everything in order", () => {
+describe("the TOOLS view with everything in order", () => {
   it("says in words that Engram, the memory process and gentle-ai are fine", async () => {
     const details = await mem(source(statusJson([engram(), gentle()]), memoryJson()));
     expect(details.id).toBe("memory");
-    expect(details.status).toBe("Memoria y herramientas");
+    expect(details.status).toBe("Tools");
     expect(details.lines).toContain("Engram · ok");
     expect(details.lines).toContain("  3.6.0 · copia de HARIL");
     expect(details.lines).toContain("  D:\\HARIL\\engram\\3.6.0\\engram.exe");
@@ -95,7 +95,7 @@ describe("the MEM view with everything in order", () => {
     const details = await mem(
       source(statusJson([engram(), gentle()]), memoryJson(), { locale: "en" }),
     );
-    expect(details.status).toBe("Memory and tools");
+    expect(details.status).toBe("Tools");
     expect(details.lines).toContain("  3.6.0 · HARIL copy");
     expect(details.lines).toContain("  Qualified by HARIL: 3.6.0");
     expect(details.lines).toContain("  Latest published: 3.6.0");
@@ -113,7 +113,7 @@ describe("the MEM view with everything in order", () => {
   });
 });
 
-describe("Engram in the MEM view", () => {
+describe("Engram in the TOOLS view", () => {
   it("says it is missing and lists the user's other copy as not used by HARIL", async () => {
     const other = install(GO_ENGRAM, "3.3.2", ["go-bin"], false);
     const details = await mem(
@@ -256,7 +256,7 @@ describe("Engram in the MEM view", () => {
   });
 });
 
-describe("gentle-ai in the MEM view", () => {
+describe("gentle-ai in the TOOLS view", () => {
   it("says it is outdated, with both versions, where it is and how to update it", async () => {
     const old = install(GO_GENTLE, "4.0.0", ["go-bin"]);
     const details = await mem(
@@ -341,7 +341,7 @@ describe("gentle-ai in the MEM view", () => {
   });
 });
 
-describe("the memory process in the MEM view", () => {
+describe("the memory process in the TOOLS view", () => {
   it("makes a null provider obvious and says how to turn Engram on", async () => {
     const missing = engram({ state: "missing", active: null, installs: [] });
     const details = await mem(
@@ -516,7 +516,7 @@ describe("a part that could not be loaded", () => {
   });
 });
 
-describe("the MEM view while something runs", () => {
+describe("the TOOLS view while something runs", () => {
   const ready = (extra: DockSource = {}) =>
     source(statusJson([engram(), gentle()]), memoryJson(), extra);
 

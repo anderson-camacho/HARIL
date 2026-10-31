@@ -406,17 +406,22 @@ describe("the native pane on the ACC tab", () => {
 
   it("hits the ACC tab on the second row of the header box, on its own columns only", () => {
     const { rows, click, select } = mountPane(() => ({ area: "agents", locale: "es" }));
-    // The tab is drawn as "[5:ACC]" under the first row's text, right after the box's border and padding.
-    expect(rows()[3]?.indexOf("[5:ACC]")).toBe(CARD_TEXT_X);
-    for (const x of [CARD_TEXT_X, CARD_TEXT_X + 3, CARD_TEXT_X + 6]) {
+    // The second row of the box is " 4:ACT  [5:ACC]": the ACC tab starts after the ACT tab (7 columns) and the gap.
+    const start = CARD_TEXT_X + " 4:ACT ".length + 1;
+    expect(rows()[3]?.indexOf("[5:ACC]")).toBe(start);
+    for (const x of [start, start + 3, start + 6]) {
       select.mockClear();
       expect(click(3, x)).toEqual({ handled: true, render: true });
       expect(select).toHaveBeenCalledWith("actions");
     }
     select.mockClear();
-    expect(click(3, CARD_TEXT_X + 7)).toBeUndefined();
-    expect(click(3, CARD_TEXT_X - 1)).toBeUndefined();
+    expect(click(3, start + 7)).toBeUndefined();
+    // The gap column between the two tabs belongs to neither.
+    expect(click(3, start - 1)).toBeUndefined();
     expect(select).not.toHaveBeenCalled();
+    // The ACT tab, on the same row, is its own.
+    expect(click(3, CARD_TEXT_X + 2)).toEqual({ handled: true, render: true });
+    expect(select).toHaveBeenCalledWith("activity");
   });
 
   it("works in ASCII with the same hits", () => {
@@ -477,7 +482,7 @@ interface Harness {
   readonly customs: () => number;
   rows(): string[];
   text(): string;
-  clickRow(needle: string, offset?: number): unknown;
+  clickRow(needle: string, offset?: number, x?: number): unknown;
   command(name: string, args: string): Promise<void>;
   pickArea(area: DashboardArea): Promise<void>;
   answer: (menu: { title: string; options: string[] }) => string | undefined;
@@ -563,10 +568,10 @@ async function withConsole(run: (harness: Harness) => Promise<void>): Promise<vo
   Object.assign(harness, {
     rows,
     text: () => rows().join("\n"),
-    clickRow(needle: string, offset = 0) {
+    clickRow(needle: string, offset = 0, x = 8) {
       const y = rows().findIndex((row) => row.includes(needle));
       if (y < 0) throw new Error(`Row not found: ${needle}\n${rows().join("\n")}`);
-      return pane.handleMouse?.({ type: "click", button: "left", x: 8, y: y + offset });
+      return pane.handleMouse?.({ type: "click", button: "left", x, y: y + offset });
     },
   });
   try {
@@ -729,10 +734,11 @@ describe("the ACC tab in the console", () => {
   it("wraps its five tabs onto two rows of the header box, and the fifth one is hit on its own columns", async () => {
     await withConsole(async (h) => {
       const view = h.rows();
-      expect(view[2]).toContain("[1:MAIN]  2:MEM   3:DOCS   4:ACT");
-      expect(view[3]).toContain(" 5:ACC");
+      expect(view[2]).toContain("[1:MAIN]  2:TOOLS   3:DOCS");
+      expect(view[3]).toContain(" 4:ACT   5:ACC");
       expect(view[4]).toContain("╰");
-      h.clickRow("5:ACC");
+      // The ACC tab is the second one on its row: click on its own columns, not on the ACT tab before it.
+      h.clickRow("5:ACC", 0, (view[3] ?? "").indexOf("5:ACC") + 1);
       await waitFor(() => expect(h.text()).toContain("[5:ACC]"));
       await waitFor(() => expect(h.text()).toContain("╭─ Acciones · AGENTS "));
     });

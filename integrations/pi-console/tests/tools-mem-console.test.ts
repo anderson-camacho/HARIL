@@ -24,7 +24,7 @@ import {
   updateJson,
 } from "./tools-fixtures.js";
 
-// The MEM tab of the right panel, through the real console: what it shows from `haril tools status --json` and `haril
+// The TOOLS tab of the right panel, through the real console: what it shows from `haril tools status --json` and `haril
 // memory status --json`, the rows that act on a click and from the Alt+K menu, and the check that runs when the
 // console opens. The CLI is a fake one, the Pi a fake one, the right pane the real one. What is NOT exercised here is
 // Pi's own terminal: the delivery of real mouse clicks, the toast drawing and the repaint of a real screen.
@@ -177,7 +177,7 @@ function answerEverythingOk(): void {
   cli.answer("memory status", { stdout: memoryJson() });
 }
 
-describe("the MEM tab through the console", () => {
+describe("the TOOLS tab through the console", () => {
   it("shows Engram, the memory process and gentle-ai from the two commands, and the rows that act", async () => {
     answerEverythingOk();
     await withConsole(
@@ -192,10 +192,39 @@ describe("the MEM tab through the console", () => {
         expect(view).toContain("▸ Reinstalar Engram (forzar)");
         expect(view).toContain("▸ Comprobar versiones ahora");
         expect(view).toContain("▸ Actualizar gentle-ai…");
-        expect(view).toContain("Memoria y herramientas");
+        // The heading under the header box, the header and the tab are all «Tools», never «Memoria» or «MEM».
+        expect(view).toMatch(/^│ Tools *$/mu);
+        expect(view).toContain("▼ Espacio: Tools · Alt+L");
+        expect(view).toContain("[2:TOOLS]");
+        expect(view).not.toContain("MEM");
+        expect(view).not.toContain("Memoria y herramientas");
+        expect(view).not.toContain("Espacio: Memoria");
         const calls = cli.calls().map((call) => call.args.join(" "));
         expect(calls).toContain("tools status --json");
         expect(calls).toContain("memory status --json");
+      },
+      { console: { tools: { checkDelayMs: 60_000 } } },
+    );
+  });
+
+  it("opens with /haril-plugin tools, and still with /haril-plugin memory", async () => {
+    answerEverythingOk();
+    await withConsole(
+      async (h) => {
+        await h.command("haril-plugin", "tools");
+        await h.shows("Engram · ok");
+        expect(h.sidebar()).toContain("[2:TOOLS]");
+        await h.command("haril-plugin", "main");
+        await h.shows("[1:MAIN]");
+        await h.command("haril-plugin", "memory");
+        await h.shows("Engram · ok");
+        expect(h.sidebar()).toContain("[2:TOOLS]");
+        // «2» is the same tab by its number.
+        await h.command("haril-plugin", "docs");
+        await h.shows("[3:DOCS]");
+        await h.command("haril-plugin", "2");
+        await h.shows("Engram · ok");
+        expect(h.notes()).not.toContain("Uso:");
       },
       { console: { tools: { checkDelayMs: 60_000 } } },
     );
@@ -274,7 +303,7 @@ describe("the MEM tab through the console", () => {
   });
 });
 
-describe("the rows of the MEM tab", () => {
+describe("the rows of the TOOLS tab", () => {
   it("checks and installs Engram on a click, shows it is busy, tells the outcome and shows the new state", async () => {
     cli.answer("tools status", {
       stdout: statusJson([
@@ -361,7 +390,7 @@ describe("the rows of the MEM tab", () => {
         });
         await waitFor(() =>
           expect(h.notes()).toContain(
-            "gentle-ai 4.0.0 → 4.3.1 disponible: Alt+L → MEM → Actualizar.",
+            "gentle-ai 4.0.0 → 4.3.1 disponible: Alt+L → TOOLS → Actualizar.",
           ),
         );
         await h.shows("gentle-ai · desactualizado");
@@ -434,7 +463,7 @@ describe("the rows of the MEM tab", () => {
   });
 });
 
-describe("the MEM rows from the Alt+K menu", () => {
+describe("the TOOLS rows from the Alt+K menu", () => {
   const presses: [string, (h: Harness) => void][] = [
     [
       "Alt+K",
@@ -465,10 +494,10 @@ describe("the MEM rows from the Alt+K menu", () => {
           const [menu] = h.menus;
           expect(menu?.title).toBe("Panel derecho");
           expect(menu?.options.slice(0, 4)).toEqual([
-            "MEM · Comprobar e instalar Engram",
-            "MEM · Reinstalar Engram (forzar)",
-            "MEM · Comprobar versiones ahora",
-            "MEM · Actualizar gentle-ai…",
+            "TOOLS · Comprobar e instalar Engram",
+            "TOOLS · Reinstalar Engram (forzar)",
+            "TOOLS · Comprobar versiones ahora",
+            "TOOLS · Actualizar gentle-ai…",
           ]);
           // The rail's own entries are still there, after the rows of the view.
           expect(menu?.options).toContain("Cambiar modo");
@@ -486,7 +515,7 @@ describe("the MEM rows from the Alt+K menu", () => {
         h.choose = () => undefined;
         h.fake.shortcuts.get("alt+k")?.(h.ctx as ConsoleContext);
         await waitFor(() => expect(h.menus).toHaveLength(1));
-        expect(h.menus[0]?.options.some((option) => option.startsWith("MEM ·"))).toBe(false);
+        expect(h.menus[0]?.options.some((option) => option.startsWith("TOOLS ·"))).toBe(false);
         expect(h.menus[0]?.options.some((option) => option.startsWith("DOCS ·"))).toBe(false);
       },
       { console: { tools: { checkDelayMs: 60_000 } } },
@@ -504,7 +533,7 @@ describe("the MEM rows from the Alt+K menu", () => {
         await h.shows("… Comprobando e instalando Engram");
         h.fake.shortcuts.get("alt+k")?.(h.ctx as ConsoleContext);
         await waitFor(() => expect(h.menus).toHaveLength(1));
-        expect(h.menus[0]?.options.some((option) => option.startsWith("MEM ·"))).toBe(false);
+        expect(h.menus[0]?.options.some((option) => option.startsWith("TOOLS ·"))).toBe(false);
         await waitFor(() => expect(h.notes()).toContain("Engram al día (3.6.0)."));
       },
       { console: { tools: { checkDelayMs: 60_000 } } },
@@ -528,7 +557,7 @@ describe("the check when the console opens", () => {
         // session_start has already returned: the check is not waited for.
         await waitFor(() => expect(h.toolNotes()).toHaveLength(1));
         expect(h.toolNotes()[0]).toEqual([
-          "Engram 3.6.0 instalado. Reinicia el runtime para que lo use.\ngentle-ai 4.0.0 → 4.3.1 disponible: Alt+L → MEM → Actualizar.",
+          "Engram 3.6.0 instalado. Reinicia el runtime para que lo use.\ngentle-ai 4.0.0 → 4.3.1 disponible: Alt+L → TOOLS → Actualizar.",
           "info",
         ]);
         await pause(120);
@@ -595,7 +624,7 @@ describe("the check when the console opens", () => {
     );
   });
 
-  it("loads the MEM tab again when it ends while that tab is on screen", async () => {
+  it("loads the TOOLS tab again when it ends while that tab is on screen", async () => {
     cli.answer("tools status", {
       stdout: statusJson([
         engram({ state: "missing", active: null, installs: [], latest: null }),

@@ -36,8 +36,17 @@ interface Harness {
   readonly input: ReturnType<typeof vi.fn>;
   sidebar(): string;
   rows(): string[];
+  // The rows as drawn, with their colours.
+  raw(): string[];
   shows(text: string): Promise<void>;
   clickRow(needle: string, offset?: number): unknown;
+  // A click at a column of the rail (0 is its separator) on the row that holds `needle`, `offset` rows below it.
+  clickAt(needle: string, column: number, offset?: number): unknown;
+  // A click on the row of the chip with this label, `shift` columns from the middle of its label and `offset` rows below
+  // its middle row (a chip is three rows tall).
+  clickChip(label: string, offset?: number, shift?: number): unknown;
+  // The rail column of the first character of a chip's label.
+  chipColumn(label: string): number;
   // Turns the mouse wheel over the panel: a positive delta scrolls down.
   wheel(delta: number): void;
   readonly menus: { title: string; options: string[] }[];
@@ -103,7 +112,12 @@ function installProject(
 
 async function withConsole(
   run: (harness: Harness) => Promise<void>,
-  options: { readonly input?: (title: string, placeholder?: string) => string | undefined } = {},
+  options: {
+    readonly input?: (
+      title: string,
+      placeholder?: string,
+    ) => string | undefined | Promise<string | undefined>;
+  } = {},
 ): Promise<void> {
   const fake = fakePi();
   const ctx = fakeContext(tmpdir());
@@ -144,6 +158,19 @@ async function withConsole(
   const pane = layout.entries.at(-1)?.component;
   if (!pane) throw new Error("Expected the right pane");
   const rows = () => pane.render(40).map(stripAnsi);
+  // The middle row of a chip: its label between the chip's borders and padding.
+  const chipRowIndex = (label: string): number => {
+    const y = rows().findIndex(
+      (row) => row.includes(`│ ${label} │`) || row.includes(`| ${label} |`),
+    );
+    if (y < 0) throw new Error(`Chip not found: ${label}\n${rows().join("\n")}`);
+    return y;
+  };
+  const chipColumn = (label: string): number => {
+    const row = rows()[chipRowIndex(label)] ?? "";
+    const unicode = row.indexOf(`│ ${label} │`);
+    return (unicode >= 0 ? unicode : row.indexOf(`| ${label} |`)) + 2;
+  };
   try {
     await run({
       fake,
@@ -151,12 +178,24 @@ async function withConsole(
       input,
       sidebar: () => rows().join("\n"),
       rows,
+      raw: () => pane.render(40),
       shows: (text) => waitFor(() => expect(rows().join("\n")).toContain(text)),
       clickRow(needle, offset = 0) {
         const y = rows().findIndex((row) => row.includes(needle));
         if (y < 0) throw new Error(`Row not found: ${needle}\n${rows().join("\n")}`);
         return pane.handleMouse?.({ type: "click", button: "left", x: 8, y: y + offset });
       },
+      clickAt(needle, column, offset = 0) {
+        const y = rows().findIndex((row) => row.includes(needle));
+        if (y < 0) throw new Error(`Row not found: ${needle}\n${rows().join("\n")}`);
+        return pane.handleMouse?.({ type: "click", button: "left", x: column, y: y + offset });
+      },
+      clickChip(label, offset = 0, shift = 0) {
+        const y = chipRowIndex(label);
+        const x = chipColumn(label) + Math.floor(label.length / 2) + shift;
+        return pane.handleMouse?.({ type: "click", button: "left", x, y: y + offset });
+      },
+      chipColumn,
       wheel: (delta) => {
         pane.handleMouse?.({ type: "wheel", button: "none", x: 8, y: 8, wheelDelta: delta });
       },
@@ -201,13 +240,17 @@ describe("the ACT tab", () => {
       const view = h.sidebar();
       expect(view).toContain("[4:ACT]");
       expect(view).toContain("Espacio: Actividad");
-      expect(view).toContain("╭─ Filtro ");
       expect(view).toContain("│ Todo");
       expect(view).toContain("│ Actualizado ");
-      expect(view).toContain("╭─ Acciones ");
-      for (const label of ["Última hora", "Último día", "Rango…", "Todo", "Actualizar"]) {
-        expect(view, label).toContain(`▸ ${label}`);
+      // The range buttons are four compact chips on one row, «Actualizar» the full-width button under them.
+      expect(view).toContain("│ 1h │ │ 1d │ │ Rango │ │ Todo │");
+      expect(view).toContain("▸ Actualizar");
+      for (const label of ["Última hora", "Último día", "Rango…"]) {
+        expect(view, label).not.toContain(`▸ ${label}`);
       }
+      // The heading under the header box is just «Actividad».
+      expect(h.rows().some((row) => row.replace(/^│/u, "").trim() === "Actividad")).toBe(true);
+      expect(view).not.toContain("Actividad reciente");
       const events = h.rows().filter((row) => /#37\d /.test(row));
       expect(events.map((row) => row.replace(/[│ ]+$/u, "").replace(/^[ │]+/u, ""))).toEqual([
         "#375 watchdog.closed · hace 3 min",
@@ -228,7 +271,7 @@ describe("the ACT tab", () => {
       await h.shows("╭─ Actividad · 3 ");
       await h.command("haril-plugin", "9");
       expect(h.ctx.notes.at(-1)?.[0]).toBe(
-        "Uso: /haril-plugin [main|memory|docs|activity|actions|1..5|details]",
+        "Uso: /haril-plugin [main|tools|docs|activity|actions|1..5|details]",
       );
     });
   });
@@ -295,7 +338,7 @@ describe("the ACT tab", () => {
       await openActivity(h);
       await h.shows("Sin eventos en este rango.");
       expect(h.sidebar()).toContain("╭─ Actividad · 0 ");
-      expect(h.sidebar()).toContain("▸ Última hora");
+      expect(h.sidebar()).toContain("│ 1h │ │ 1d │ │ Rango │ │ Todo │");
     });
   });
 
@@ -343,9 +386,7 @@ describe("the ACT tab", () => {
       await h.command("haril-plugin", "activity");
       await h.shows("╭─ Activity · 3 ");
       const view = h.sidebar();
-      expect(view).toContain("╭─ Filter ");
-      expect(view).toContain("╭─ Actions ");
-      expect(view).toContain("▸ Last hour");
+      expect(view).toContain("│ 1h │ │ 1d │ │ Range │ │ All │");
       expect(view).toContain("▸ Refresh");
       expect(view).toContain("#375 watchdog.closed · 3 min ago");
     });
@@ -360,8 +401,8 @@ describe("the ACT tab", () => {
         await openActivity(h);
         await h.shows("+- Actividad · 3 ");
         const view = h.sidebar();
-        expect(view).toContain("+- Filtro ");
-        expect(view).toContain("| > Última hora");
+        expect(view).toContain("| 1h | | 1d | | Rango | | Todo |");
+        expect(view).toContain("| > Actualizar");
         expect(view).not.toMatch(/[╭╮╰╯─│▸▼▶▣]/u);
         expect(new Set(h.rows().map(textWidth))).toEqual(new Set([RAIL_BODY_WIDTH + 1]));
       });
@@ -374,45 +415,48 @@ describe("the ACT tab", () => {
 
 describe("the buttons of the ACT tab", () => {
   it.each([
-    ["Última hora", ["--since", "1h"]],
-    ["Último día", ["--since", "1d"]],
-  ])("«%s» reads the events again, filtered, and the filter card says so", async (label, flags) => {
-    installProject();
-    await withConsole(async (h) => {
-      await openActivity(h);
-      await h.shows("╭─ Actividad · 3 ");
-      h.clickRow(`▸ ${label}`);
-      await waitFor(() => expect(h.eventCalls()).toHaveLength(2));
-      expect(h.eventCalls()[1]).toEqual([
-        "events",
-        "--project",
-        "demo",
-        "--limit",
-        "50",
-        ...flags,
-        "--json",
-      ]);
-      await waitFor(() =>
-        expect(h.sidebar()).toContain(
-          label === "Última hora" ? "│ Última hora (desde " : "│ Último día (desde ",
-        ),
-      );
-    });
-  });
+    ["Última hora", "1h", ["--since", "1h"]],
+    ["Último día", "1d", ["--since", "1d"]],
+  ])(
+    "«%s» (the %s chip) reads the events again, filtered, and the filter card says so",
+    async (label, chip, flags) => {
+      installProject();
+      await withConsole(async (h) => {
+        await openActivity(h);
+        await h.shows("╭─ Actividad · 3 ");
+        h.clickChip(chip);
+        await waitFor(() => expect(h.eventCalls()).toHaveLength(2));
+        expect(h.eventCalls()[1]).toEqual([
+          "events",
+          "--project",
+          "demo",
+          "--limit",
+          "50",
+          ...flags,
+          "--json",
+        ]);
+        await waitFor(() =>
+          expect(h.sidebar()).toContain(
+            label === "Última hora" ? "│ Última hora (desde " : "│ Último día (desde ",
+          ),
+        );
+      });
+    },
+  );
 
   it("«Todo» goes back to every event, and «Actualizar» reads the same range again", async () => {
     installProject();
     await withConsole(async (h) => {
       await openActivity(h);
       await h.shows("╭─ Actividad · 3 ");
-      h.clickRow("▸ Última hora");
+      h.clickChip("1h");
       await waitFor(() => expect(h.eventCalls()).toHaveLength(2));
       await h.shows("▸ Actualizar");
       h.clickRow("▸ Actualizar");
       await waitFor(() => expect(h.eventCalls()).toHaveLength(3));
       expect(h.eventCalls()[2]).toEqual(h.eventCalls()[1]);
-      await h.shows("▸ Todo");
-      h.clickRow("▸ Todo");
+      await h.shows("│ Todo │");
+      h.clickChip("Todo");
       await waitFor(() => expect(h.eventCalls()).toHaveLength(4));
       expect(h.eventCalls()[3]).toEqual(["events", "--project", "demo", "--limit", "50", "--json"]);
     });
@@ -426,20 +470,116 @@ describe("the buttons of the ACT tab", () => {
       // The text of the filter card: nothing to run.
       expect(h.clickRow("Actualizado ")).toBeUndefined();
       expect(h.eventCalls()).toHaveLength(1);
+      // «Actualizar» is a whole-row button: its three rows run it, the card's bottom border does not.
       for (const [index, offset] of [-1, 0, 1].entries()) {
-        await h.shows("▸ Último día");
-        expect(h.clickRow("▸ Último día", offset), `offset ${offset}`).toEqual({
+        await h.shows("▸ Actualizar");
+        expect(h.clickRow("▸ Actualizar", offset), `offset ${offset}`).toEqual({
           handled: true,
           render: true,
         });
         await waitFor(() => expect(h.eventCalls()).toHaveLength(2 + index));
-        await waitFor(() => expect(h.sidebar()).toContain("▸ Último día"));
+        await waitFor(() => expect(h.sidebar()).toContain("▸ Actualizar"));
       }
-      // The card's own bottom border, one row further, is not the button.
       const before = h.eventCalls().length;
       expect(h.clickRow("▸ Actualizar", 2)).toBeUndefined();
       expect(h.eventCalls()).toHaveLength(before);
     });
+  });
+
+  it("run a chip from any of its three rows and any of its columns, and nothing from a gap or a border", async () => {
+    installProject();
+    await withConsole(async (h) => {
+      await openActivity(h);
+      await h.shows("╭─ Actividad · 3 ");
+      const reads = () => h.eventCalls().length;
+      // The day chip, `│ 1d │`: its border column, its label and its other border, on the three rows of the chip.
+      const first = h.chipColumn("1d") - 2;
+      for (const [index, [offset, column]] of [
+        [-1, first],
+        [0, first + 1],
+        [1, first + 2],
+        [-1, first + 3],
+        [0, first + 4],
+        [1, first + 5],
+      ].entries()) {
+        await h.shows("│ 1d │");
+        expect(
+          h.clickAt("│ 1d │", column as number, offset as number),
+          `${offset},${column}`,
+        ).toEqual({
+          handled: true,
+          render: true,
+        });
+        await waitFor(() => expect(reads()).toBe(2 + index));
+        expect(h.eventCalls()[1 + index]).toContain("1d");
+        await h.shows("│ 1d │");
+        await waitFor(() => expect(h.sidebar()).not.toContain("Cargando"));
+      }
+      // The gap between two chips, the spare columns after the last one and the card's own border run nothing.
+      const before = reads();
+      const gap = first - 1;
+      const lastChip = h.chipColumn("Todo") + "Todo".length + 2;
+      for (const column of [gap, lastChip + 1, lastChip + 2, 1, 2, 3, 38, 39]) {
+        for (const offset of [-1, 0, 1]) {
+          expect(h.clickAt("│ 1d │", column, offset), `${offset},${column}`).toBeUndefined();
+        }
+      }
+      expect(reads()).toBe(before);
+      // The card's top border, one row above the chips, and the button's, one row below them, are not chips.
+      expect(h.clickAt("│ 1d │", first + 1, -2)).toBeUndefined();
+      expect(reads()).toBe(before);
+    });
+  });
+
+  it("run the action of the chip under the click, one for each chip", async () => {
+    installProject();
+    await withConsole(async (h) => {
+      await openActivity(h);
+      await h.shows("╭─ Actividad · 3 ");
+      h.clickChip("1h");
+      await waitFor(() => expect(h.eventCalls()).toHaveLength(2));
+      expect(h.eventCalls()[1]).toContain("1h");
+      await h.shows("│ Todo │");
+      h.clickChip("1d", 1, 1);
+      await waitFor(() => expect(h.eventCalls()).toHaveLength(3));
+      expect(h.eventCalls()[2]).toContain("1d");
+      await h.shows("│ Todo │");
+      h.clickChip("Todo", -1, -1);
+      await waitFor(() => expect(h.eventCalls()).toHaveLength(4));
+      expect(h.eventCalls()[3]).not.toContain("--since");
+    });
+  });
+
+  it("highlight the chip of the range in force", async () => {
+    const saved = { noColor: process.env.NO_COLOR, term: process.env.TERM };
+    delete process.env.NO_COLOR;
+    process.env.TERM = "xterm-256color";
+    try {
+      installProject();
+      await withConsole(async (h) => {
+        await openActivity(h);
+        await h.shows("╭─ Actividad · 3 ");
+        const yellow = "38;2;231;207;117m";
+        const middle = (label: string): string =>
+          h.raw().find((row) => stripAnsi(row).includes(`│ ${label} │`)) ?? "";
+        // «Todo» is in force at first: its border and label are yellow, the others' are not.
+        expect(middle("Todo")).toContain(`${yellow}│ `);
+        expect(middle("Todo")).toContain(`${yellow}Todo`);
+        expect(middle("1h")).not.toContain(`${yellow}1h`);
+        h.clickChip("1h");
+        await waitFor(() => expect(h.eventCalls()).toHaveLength(2));
+        await h.shows("│ 1h │");
+        await waitFor(() => expect(h.sidebar()).not.toContain("Cargando"));
+        // The highlight followed the range: now it is the 1h chip's.
+        expect(middle("1h")).toContain(`${yellow}1h`);
+        expect(middle("Todo")).not.toContain(`${yellow}Todo`);
+        expect(middle("1d")).not.toContain(`${yellow}1d`);
+      });
+    } finally {
+      if (saved.noColor !== undefined) process.env.NO_COLOR = saved.noColor;
+      if (saved.term === undefined) delete process.env.TERM;
+      else process.env.TERM = saved.term;
+    }
   });
 
   it("show «Cargando…» in place of the buttons while the events are read, then the new events", async () => {
@@ -448,13 +588,13 @@ describe("the buttons of the ACT tab", () => {
       await openActivity(h);
       await h.shows("╭─ Actividad · 3 ");
       cli.answer("events", { stdout: eventsList(2), delayMs: 400 });
-      h.clickRow("▸ Última hora");
+      h.clickChip("1h");
       await h.shows("… Cargando…");
-      expect(h.sidebar()).not.toContain("▸ Rango…");
+      expect(h.sidebar()).not.toContain("│ Rango │");
       // The events it already had stay on screen meanwhile.
       expect(h.sidebar()).toContain("╭─ Actividad · 3 ");
       await h.shows("╭─ Actividad · 2 ");
-      expect(h.sidebar()).toContain("▸ Rango…");
+      expect(h.sidebar()).toContain("│ Rango │");
       expect(h.sidebar()).not.toContain("Cargando");
     });
   });
@@ -464,9 +604,9 @@ describe("the buttons of the ACT tab", () => {
     await withConsole(async (h) => {
       await openActivity(h);
       await h.shows("╭─ Actividad · 3 ");
-      h.clickRow("▸ Última hora");
+      h.clickChip("1h");
       await waitFor(() => expect(h.eventCalls()).toHaveLength(2));
-      await h.shows("▸ Rango…");
+      await h.shows("│ Rango │");
       // MAIN has no command to run, so the way back is the only CLI call of the round trip.
       await h.command("haril-plugin", "main");
       await h.shows("[1:MAIN]");
@@ -479,19 +619,19 @@ describe("the buttons of the ACT tab", () => {
 });
 
 describe("«Rango…» in the console", () => {
-  it("asks twice with the input dialog and filters by what it was given", async () => {
+  const HINT = "Escribe el rango en el cuadro de abajo (Esc cancela).";
+  const TITLE = "Actividad · rango (ej. 3h, 2d, 29/10 08:00 .. 29/10 12:00)";
+
+  it("asks one question with the input dialog and filters by «desde .. hasta»", async () => {
     installProject();
-    const answers = ["2026-10-30T08:00:00Z", "2026-10-30T12:00:00Z"];
+    const answers = ["2026-10-30T08:00:00Z .. 2026-10-30T12:00:00Z"];
     await withConsole(
       async (h) => {
         await openActivity(h);
         await h.shows("╭─ Actividad · 3 ");
-        h.clickRow("▸ Rango…");
+        h.clickChip("Rango");
         await waitFor(() => expect(h.eventCalls()).toHaveLength(2));
-        expect(h.input.mock.calls.map(([title]) => title)).toEqual([
-          "Actividad · desde (3h, 2d o fecha ISO)",
-          "Actividad · hasta (vacío = ahora)",
-        ]);
+        expect(h.input.mock.calls).toEqual([[TITLE, "3h, 2d, 29/10 08:00 .. 29/10 12:00"]]);
         expect(h.eventCalls()[1]).toEqual([
           "events",
           "--project",
@@ -510,14 +650,14 @@ describe("«Rango…» in the console", () => {
     );
   });
 
-  it("takes a duration and an empty end, as «hasta ahora»", async () => {
+  it("takes a duration, and «desde ..» as until now", async () => {
     installProject();
-    const answers = ["3h", ""];
+    const answers = ["3h"];
     await withConsole(
       async (h) => {
         await openActivity(h);
         await h.shows("╭─ Actividad · 3 ");
-        h.clickRow("▸ Rango…");
+        h.clickChip("Rango");
         await waitFor(() => expect(h.eventCalls()).toHaveLength(2));
         const args = h.eventCalls()[1] ?? [];
         expect(args.slice(0, 5)).toEqual(["events", "--project", "demo", "--limit", "50"]);
@@ -533,17 +673,17 @@ describe("«Rango…» in the console", () => {
 
   it("says in a notice what it cannot read, and leaves the tab as it was", async () => {
     installProject();
-    const answers = ["ayer", ""];
+    const answers = ["ayer"];
     await withConsole(
       async (h) => {
         await openActivity(h);
         await h.shows("╭─ Actividad · 3 ");
         const before = h.sidebar();
-        h.clickRow("▸ Rango…");
+        h.clickChip("Rango");
         await waitFor(() => expect(h.notes()).toContain("«Desde» no es válido"));
         expect(h.ctx.notes.at(-1)?.[1]).toBe("warning");
         expect(h.eventCalls()).toHaveLength(1);
-        expect(h.sidebar()).toBe(before);
+        await waitFor(() => expect(h.sidebar()).toBe(before));
       },
       { input: () => answers.shift() },
     );
@@ -555,15 +695,66 @@ describe("«Rango…» in the console", () => {
       async (h) => {
         await openActivity(h);
         await h.shows("╭─ Actividad · 3 ");
-        // The console says some things of its own at start (the models, for one): what matters is that the dialog adds none.
-        const before = h.notes();
-        h.clickRow("▸ Rango…");
+        const before = h.sidebar();
+        const notes = h.ctx.notes.length;
+        h.clickChip("Rango");
         await waitFor(() => expect(h.input).toHaveBeenCalledTimes(1));
+        await waitFor(() => expect(h.sidebar()).toBe(before));
         await new Promise((resolve) => setTimeout(resolve, 100));
         expect(h.eventCalls()).toHaveLength(1);
-        expect(h.notes()).toBe(before);
+        // Only the notice that says where to type: no warning and no error.
+        expect(h.ctx.notes.slice(notes)).toEqual([[HINT, "info"]]);
       },
       { input: () => undefined },
+    );
+  });
+
+  it("shows the chip waiting and says where to type while the dialog is open, then goes back", async () => {
+    installProject();
+    let answer: ((value: string | undefined) => void) | undefined;
+    await withConsole(
+      async (h) => {
+        await openActivity(h);
+        await h.shows("╭─ Actividad · 3 ");
+        const notes = h.ctx.notes.length;
+        h.clickChip("Rango");
+        await h.shows("│ Espera │");
+        expect(h.sidebar()).not.toContain("│ Rango │");
+        expect(h.sidebar()).not.toContain("Cargando");
+        expect(h.ctx.notes.slice(notes)).toEqual([[HINT, "info"]]);
+        // A second press finds the box open: it says where it is again and opens no other.
+        h.clickChip("Espera");
+        await waitFor(() => expect(h.ctx.notes.slice(notes)).toHaveLength(2));
+        expect(h.ctx.notes.at(-1)).toEqual([HINT, "info"]);
+        expect(h.input).toHaveBeenCalledTimes(1);
+        answer?.(undefined);
+        await h.shows("│ Rango │");
+        expect(h.sidebar()).not.toContain("Espera");
+        expect(h.eventCalls()).toHaveLength(1);
+      },
+      { input: () => new Promise<string | undefined>((resolve) => (answer = resolve)) },
+    );
+  });
+
+  it("shows an error notice, never silence, when the dialog cannot open", async () => {
+    installProject();
+    await withConsole(
+      async (h) => {
+        await openActivity(h);
+        await h.shows("╭─ Actividad · 3 ");
+        h.clickChip("Rango");
+        await waitFor(() =>
+          expect(h.notes()).toContain("No se pudo abrir el cuadro del rango: no editor"),
+        );
+        expect(h.ctx.notes.at(-1)?.[1]).toBe("error");
+        await h.shows("│ Rango │");
+        expect(h.eventCalls()).toHaveLength(1);
+      },
+      {
+        input: () => {
+          throw new Error("no editor");
+        },
+      },
     );
   });
 });

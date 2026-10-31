@@ -4,6 +4,35 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.23.17
+
+- **Fecha:** 2026-10-31
+- **Estado:** `ACT` usa fichas compactas para el rango, «Rango» responde de forma visible con un solo cuadro y la pestaña `MEM` se llama `TOOLS`.
+
+### Añadido
+
+- `tools` es otro nombre del espacio que `haril.json` guarda como `memory`, en `haril plugins show|hide|move` y en `/haril-plugin`.
+- Las filas del panel pueden llevar clics por columna; las fichas los usan y un clic en el hueco entre ellas no hace nada.
+
+### Cambiado
+
+- El recuadro superior de `ACT`, sin título, reúne el rango, una fila de fichas (`1h`, `1d`, `Rango` y `Todo`, con la vigente en amarillo) y el botón ancho «Actualizar»; ya no hay tarjeta «Acciones» en esa pestaña.
+- El título bajo la cabecera de `ACT` es «Actividad».
+- `MEM` pasa a `TOOLS` en las pestañas, la cabecera, `Alt+K`, `Alt+L` y `haril plugins`; el id guardado sigue siendo `memory`. Con el nombre más largo, las cinco pestañas se reparten 3+2 en dos filas.
+
+### Corregido
+
+- «Rango…» no daba ninguna reacción visible: Pi dibuja su cuadro en el centro de la pantalla, y un segundo clic se descartaba en silencio. Ahora es un solo cuadro (`3h`, `2d`, `desde .. hasta` o `desde ..`), con el ejemplo en el título porque Pi 1.2.0 no dibuja el texto de ayuda; la ficha dice «Espera», un aviso indica dónde escribir, un segundo clic repite el aviso y un fallo del cuadro se avisa.
+
+### Verificación
+
+- Pruebas de fichas, columnas y «Rango» escritas antes del código: 72 de 194 en rojo y luego todas correctas. El cambio de nombre se probó después del código, sin rojo propio.
+- `vitest` de `integrations/pi-console`, `packages/contracts`, `plugins-cli` y `cli`: 1176 pruebas correctas, dos veces seguidas; `npm run check` correcto.
+- Dibujo con el código real de la consola sobre un Pi simulado, en Unicode y ASCII: ninguna fila distinta de 40 columnas.
+- No verificado: el Pi real (clic en las columnas de las fichas y el cuadro de «Rango» en una terminal), que en 0.23.15 no reaccionaba para el usuario. La causa se dedujo leyendo el código de Pi 1.2.0, sin ejecutarlo.
+
+---
+
 ## 0.23.16
 
 - **Fecha:** 2026-10-31

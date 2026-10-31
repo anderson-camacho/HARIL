@@ -14,7 +14,7 @@ import type {
   ToolView,
 } from "./tools-model.js";
 
-// The MEM tab of the right panel: Engram, the memory process and gentle-ai, then the actions that act on them, each
+// The TOOLS tab of the right panel: Engram, the memory process and gentle-ai, then the actions that act on them, each
 // section a card. It is built only from what the HARIL CLI printed (tools-model.ts parses it); nothing here reads a
 // file or runs a command.
 
@@ -461,5 +461,5 @@ export function memRows(data: MemData, options: MemOptions): MemRows {
   } else if (!cannotAct(data)) {
     cards.push({ title: actions, rows: [], buttons: actionLabels(data, say) });
   }
-  return { status: say("Memory and tools", "Memoria y herramientas"), cards };
+  return { status: say("Tools", "Tools"), cards };
 }

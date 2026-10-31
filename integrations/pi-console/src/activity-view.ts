@@ -4,7 +4,7 @@ import type { DashboardTone } from "./dashboard-theme.js";
 import { localized, type UiLocale } from "./locale.js";
 import { ago } from "./orchestration-draw.js";
 import { CARD_CONTENT_WIDTH } from "./rail-metrics.js";
-import type { DockCard } from "./rail-view.js";
+import type { DockCard, DockChip } from "./rail-view.js";
 import { plainText, textWidth, truncate, wrap } from "./text.js";
 
 // The ACT tab: the project's recent events, filtered by a time range. What it asks `haril events` for, what it keeps of
@@ -56,6 +56,8 @@ export interface ActivityOptions {
   readonly range: ActivityRange;
   // The events are being read: the buttons give way to a «Cargando…» row.
   readonly busy: boolean;
+  // The «Rango…» dialog is open and waiting for the user: its chip says so and is lit.
+  readonly waiting?: boolean;
 }
 
 export interface ActivityRows {
@@ -217,35 +219,50 @@ function activityCard(data: ActivityData, say: Say, locale: UiLocale): DockCard 
   }
 }
 
-// The tab as cards: the range it filters by, the buttons that change it, and the events. The buttons come before the
-// events so they stay in reach whatever the list is: it can be fifty rows long.
+// The chips that choose the range, the one in force lit. While the «Rango…» dialog is open its chip is the lit one (and
+// says it is waiting), whatever the range in force: the user is in the middle of choosing another.
+function rangeChips(options: ActivityOptions, say: Say): DockChip[] {
+  const lit =
+    options.waiting === true || options.range.kind === "custom" ? "range" : options.range.kind;
+  const chip = (key: typeof lit, label: string, name: string, action: string): DockChip => ({
+    label,
+    name,
+    action,
+    active: lit === key,
+  });
+  return [
+    chip("hour", "1h", say("Last hour", "Última hora"), ACTIVITY_ACTIONS.hour),
+    chip("day", "1d", say("Last day", "Último día"), ACTIVITY_ACTIONS.day),
+    chip(
+      "range",
+      options.waiting === true ? say("Waiting", "Espera") : say("Range", "Rango"),
+      say("Range…", "Rango…"),
+      ACTIVITY_ACTIONS.range,
+    ),
+    chip("all", say("All", "Todo"), say("All", "Todo"), ACTIVITY_ACTIONS.all),
+  ];
+}
+
+// The tab as cards: the range it filters by, the chips and the button that change it, and the events. The chips come
+// before the events so they stay in reach whatever the list is: it can be fifty rows long.
 export function activityRows(data: ActivityData, options: ActivityOptions): ActivityRows {
   const say: Say = (english, spanish) => localized(options.locale, english, spanish);
-  const cards: DockCard[] = [
-    {
-      title: say("Filter", "Filtro"),
-      rows: [
-        ...wrap(describeRange(options.range, data.loadedAt, options.locale), CARD_CONTENT_WIDTH),
-        say(`Updated ${clockText(data.loadedAt)}`, `Actualizado ${clockText(data.loadedAt)}`),
-      ],
-    },
+  const rows = [
+    ...wrap(describeRange(options.range, data.loadedAt, options.locale), CARD_CONTENT_WIDTH),
+    say(`Updated ${clockText(data.loadedAt)}`, `Actualizado ${clockText(data.loadedAt)}`),
   ];
-  const actions = say("Actions", "Acciones");
-  if (options.busy) {
-    cards.push({ title: actions, rows: [say("… Loading…", "… Cargando…")] });
-  } else if (!(data.kind === "failed" && data.reason === NOT_LAUNCHED)) {
-    cards.push({
-      title: actions,
-      rows: [],
-      buttons: [
-        { label: say("Last hour", "Última hora"), action: ACTIVITY_ACTIONS.hour },
-        { label: say("Last day", "Último día"), action: ACTIVITY_ACTIONS.day },
-        { label: say("Range…", "Rango…"), action: ACTIVITY_ACTIONS.range },
-        { label: say("All", "Todo"), action: ACTIVITY_ACTIONS.all },
-        { label: say("Refresh", "Actualizar"), action: ACTIVITY_ACTIONS.refresh },
-      ],
-    });
-  }
-  cards.push(activityCard(data, say, options.locale));
-  return { status: say("Recent activity", "Actividad reciente"), cards };
+  const filter: DockCard = options.busy
+    ? { title: "", rows: [...rows, say("… Loading…", "… Cargando…")] }
+    : data.kind === "failed" && data.reason === NOT_LAUNCHED
+      ? { title: "", rows }
+      : {
+          title: "",
+          rows,
+          chips: rangeChips(options, say),
+          buttons: [{ label: say("Refresh", "Actualizar"), action: ACTIVITY_ACTIONS.refresh }],
+        };
+  return {
+    status: say("Activity", "Actividad"),
+    cards: [filter, activityCard(data, say, options.locale)],
+  };
 }

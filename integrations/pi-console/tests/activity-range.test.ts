@@ -5,6 +5,7 @@ import {
   parseDuration,
   parseInstant,
   parseRange,
+  parseRangeText,
   rangeFlags,
 } from "../src/activity-range.js";
 
@@ -179,7 +180,7 @@ describe("parseRange (what the «Rango…» dialog collected)", () => {
     ["ayer", "", "Desde"],
     ["", "", "Desde"],
     ["3h", "mañana", "Hasta"],
-    ["30/10", "", "Desde"],
+    ["31/04", "", "Desde"],
     ["9999999999999999", "", "Desde"],
   ])("refuses %j / %j and says which end is wrong", (from, to, end) => {
     const result = parseRange(from, to, NOW, "es");
@@ -209,5 +210,134 @@ describe("parseRange (what the «Rango…» dialog collected)", () => {
     const reversed = parseRange("1h", "3h", NOW, "en");
     expect(reversed.ok).toBe(false);
     if (!reversed.ok) expect(reversed.reason).toContain("before");
+  });
+
+  it("names the forms it accepts, with a date written as the card writes it in that language", () => {
+    const es = parseRange("ayer", "", NOW, "es");
+    const en = parseRange("yesterday", "", NOW, "en");
+    expect(es.ok ? "" : es.reason).toBe(
+      "«Desde» no es válido: usa 3h, 2d o una fecha como 29/10 08:00",
+    );
+    expect(en.ok ? "" : en.reason).toBe(
+      '"From" is not valid: use 3h, 2d or a date such as 10/29 08:00',
+    );
+  });
+});
+
+// A date written the way the Filtro card prints it: «29/10 08:00» («10/29 08:00» in English), on the local clock.
+describe("a date as the card writes it", () => {
+  const local = (month: number, day: number, hour = 0, minute = 0, year = 2026): number =>
+    new Date(year, month - 1, day, hour, minute).getTime();
+  const from = (text: string, locale: "es" | "en" = "es") => {
+    const result = parseRange(text, "", NOW, locale);
+    return result.ok && result.range.kind === "custom" ? result.range.from : result;
+  };
+
+  it("reads day/month and the time in Spanish, month/day in English, on the local clock", () => {
+    expect(from("29/10 08:00")).toBe(local(10, 29, 8, 0));
+    expect(from("29/10 8:05")).toBe(local(10, 29, 8, 5));
+    expect(from("10/29 08:00", "en")).toBe(local(10, 29, 8, 0));
+    expect(from("  29/10   23:59 ")).toBe(local(10, 29, 23, 59));
+  });
+
+  it("reads a date alone as midnight, and takes the year of now unless one is given", () => {
+    expect(from("29/10")).toBe(local(10, 29));
+    expect(from("9/1")).toBe(local(1, 9));
+    expect(from("29/10/2025 08:00")).toBe(local(10, 29, 8, 0, 2025));
+    expect(from("10/29/2025", "en")).toBe(local(10, 29, 0, 0, 2025));
+  });
+
+  it.each([
+    "31/04 08:00",
+    "29/13",
+    "00/10",
+    "29/00",
+    "29/10 24:00",
+    "29/10 08:60",
+    "29/10 8",
+    "29-10 08:00",
+    "29/10/25",
+    "29/10 08:00 pm",
+  ])("does not read %j", (text) => {
+    const result = parseRange(text, "", NOW, "es");
+    expect(result.ok, text).toBe(false);
+  });
+
+  it("does not read the Spanish order in English, nor the English order in Spanish, when it is impossible", () => {
+    // 29 is no month.
+    expect(parseRange("29/10", "", NOW, "en").ok).toBe(false);
+    expect(parseRange("10/29", "", NOW, "es").ok).toBe(false);
+  });
+});
+
+// The single answer of the «Rango…» dialog: «3h», «2d» or «desde .. hasta».
+describe("parseRangeText (what the «Rango…» dialog collects)", () => {
+  const range = (text: string, locale: "es" | "en" = "es") => parseRangeText(text, NOW, locale);
+
+  it("reads a duration as the last N, until now", () => {
+    expect(range("3h")).toEqual({ ok: true, range: { kind: "custom", from: NOW - 3 * HOUR } });
+    expect(range(" 2d ")).toEqual({
+      ok: true,
+      range: { kind: "custom", from: NOW - 2 * 86_400_000 },
+    });
+  });
+
+  it("reads two instants separated by « .. », ISO or as the card writes them", () => {
+    expect(range("2026-10-30T08:00:00Z .. 2026-10-30T12:00:00Z")).toEqual({
+      ok: true,
+      range: { kind: "custom", from: Date.UTC(2026, 9, 30, 8), to: Date.UTC(2026, 9, 30, 12) },
+    });
+    expect(range("29/10 08:00 .. 29/10 12:00")).toEqual({
+      ok: true,
+      range: {
+        kind: "custom",
+        from: new Date(2026, 9, 29, 8).getTime(),
+        to: new Date(2026, 9, 29, 12).getTime(),
+      },
+    });
+    expect(range("10/29 08:00 .. 10/29 12:00", "en")).toEqual(range("29/10 08:00 .. 29/10 12:00"));
+  });
+
+  it("reads an empty end as now, with or without a space before the dots", () => {
+    const open = {
+      ok: true,
+      range: { kind: "custom", from: new Date(2026, 9, 29, 8).getTime() },
+    };
+    expect(range("29/10 08:00 ..")).toEqual(open);
+    expect(range("29/10 08:00..")).toEqual(open);
+    expect(range("29/10 08:00 ..  ")).toEqual(open);
+    expect(range("3h ..")).toEqual({ ok: true, range: { kind: "custom", from: NOW - 3 * HOUR } });
+  });
+
+  it("reads durations at both ends and tolerates no spaces around the dots", () => {
+    const both = { ok: true, range: { kind: "custom", from: NOW - 3 * HOUR, to: NOW - HOUR } };
+    expect(range("3h .. 1h")).toEqual(both);
+    expect(range("3h..1h")).toEqual(both);
+  });
+
+  it.each([
+    ["ayer", "«Desde»"],
+    ["", "«Desde»"],
+    [".. 1h", "«Desde»"],
+    ["3h .. mañana", "«Hasta»"],
+    ["3h .. 1h .. 30m", "Demasiados"],
+  ])("refuses %j and says what is wrong", (text, words) => {
+    const result = range(text);
+    expect(result.ok, text).toBe(false);
+    if (!result.ok) expect(result.reason).toContain(words);
+  });
+
+  it("says too many dots in English too", () => {
+    const result = range("3h .. 1h .. 30m", "en");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("Too many");
+  });
+
+  it("refuses an end that is not after the start", () => {
+    for (const text of ["1h .. 3h", "2h .. 2h", "2026-10-30T12:00:00Z .. 2026-10-30T08:00:00Z"]) {
+      const result = range(text);
+      expect(result.ok, text).toBe(false);
+      if (!result.ok) expect(result.reason).toContain("anterior");
+    }
   });
 });

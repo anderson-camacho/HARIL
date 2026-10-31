@@ -12,7 +12,9 @@ describe("the dock registry of the console", () => {
 
   it("opens on MAIN: it is the first slot", () => {
     expect(DOCK_LABELS[0].id).toBe("main");
-    expect(DOCK_LABELS.map((slot) => slot.tab)).toEqual(["MAIN", "MEM", "DOCS", "ACT", "ACC"]);
+    expect(DOCK_LABELS.map((slot) => slot.tab)).toEqual(["MAIN", "TOOLS", "DOCS", "ACT", "ACC"]);
+    // The memory slot is Tools in both languages, and keeps its id so an existing haril.json validates.
+    expect(DOCK_LABELS[1]).toMatchObject({ id: "memory", label: "Tools", labelEn: "Tools" });
     expect(DOCK_LABELS.at(-1)).toMatchObject({
       id: "actions",
       label: "Acciones",

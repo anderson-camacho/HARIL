@@ -1,14 +1,14 @@
-import { type ActivityRange, ALL_RANGE, parseRange } from "./activity-range.js";
+import { type ActivityRange, ALL_RANGE, parseRangeText } from "./activity-range.js";
 import { ACTIVITY_ACTIONS, type ActivityData, loadActivity } from "./activity-view.js";
 import type { CliResult } from "./cli.js";
 import { activityDetails, type DockDetails } from "./dock-details.js";
 import { localized, type UiLocale } from "./locale.js";
 
 // What the console does for the ACT tab besides drawing it: it holds the range for the session, reads the events again
-// when a button changes it (or asks for a refresh), asks for a range of the user's own in two questions, and tells in a
-// notice what the user typed that cannot be read. Every command goes through the HARIL CLI, in the background; none
-// is waited for by the console, and nothing that goes wrong reaches the user as anything but a line in the tab or a
-// notice.
+// when a button changes it (or asks for a refresh), asks for a range of the user's own in one question, and tells in a
+// notice where to type it and what the user typed that cannot be read. Every command goes through the HARIL CLI, in the
+// background; none is waited for by the console, and nothing that goes wrong reaches the user as anything but a line in
+// the tab or a notice.
 
 const LOAD_TIMEOUT_MS = 8_000;
 
@@ -43,6 +43,8 @@ export interface ActivityPanel {
   range(): ActivityRange;
   // The events are being read.
   busy(): boolean;
+  // The «Rango…» dialog is open, waiting for the user to type the range.
+  waiting(): boolean;
   // The session ended: the range goes back to every event, and whatever is still being read or asked is dropped.
   reset(): void;
 }
@@ -68,7 +70,7 @@ export function createActivityPanel(host: ActivityHost): ActivityPanel {
       host.locale(),
     );
   const details = (data: ActivityData, working: boolean): DockDetails =>
-    activityDetails(data, { locale: host.locale(), range, busy: working });
+    activityDetails(data, { locale: host.locale(), range, busy: working, waiting: asking });
 
   // Reads the events again: the tab shows «Cargando…» with the events it has, then what was found.
   async function reload(): Promise<void> {
@@ -82,33 +84,61 @@ export function createActivityPanel(host: ActivityHost): ActivityPanel {
     host.repaint();
   }
 
-  // The two questions of «Rango…». Cancelling either, or leaving the first empty, changes nothing; an answer that cannot
-  // be read is a notice and changes nothing either. Returns whether the range changed.
+  // The question of «Rango…»: one answer, «3h», «2d» or «desde .. hasta». Pi draws the box in the editor's place (the
+  // centre of the screen, not the rail), so the rail shows the chip as waiting and a notice says where to type; pressing
+  // «Rango…» again while the box is open says it again and opens no other. Cancelling, or an empty answer, changes
+  // nothing; an answer that cannot be read is a warning and changes nothing either; a box that cannot be opened is an
+  // error. Returns whether the range changed.
   async function askRange(): Promise<boolean> {
     const ui = host.ui();
-    if (ui === undefined || asking) return false;
+    if (ui === undefined) return false;
+    const where = say(
+      "Type the range in the box below (Esc cancels).",
+      "Escribe el rango en el cuadro de abajo (Esc cancela).",
+    );
+    if (asking) {
+      ui.notify(where, "info");
+      return false;
+    }
     asking = true;
     const session = generation;
+    host.repaint();
     try {
-      const from = await ui.input(
-        say("Activity · from (3h, 2d or an ISO date)", "Actividad · desde (3h, 2d o fecha ISO)"),
-        "",
+      ui.notify(where, "info");
+      const example = say(
+        "3h, 2d, 10/29 08:00 .. 10/29 12:00",
+        "3h, 2d, 29/10 08:00 .. 29/10 12:00",
       );
-      if (from === undefined || from.trim() === "" || session !== generation) return false;
-      const to = await ui.input(
-        say("Activity · to (empty = now)", "Actividad · hasta (vacío = ahora)"),
-        "",
+      const answer = await ui.input(
+        say(`Activity · range (e.g. ${example})`, `Actividad · rango (ej. ${example})`),
+        example,
       );
-      if (to === undefined || session !== generation) return false;
-      const parsed = parseRange(from, to, host.now(), host.locale());
+      if (answer === undefined || answer.trim() === "" || session !== generation) return false;
+      const parsed = parseRangeText(answer, host.now(), host.locale());
       if (!parsed.ok) {
         ui.notify(parsed.reason, "warning");
         return false;
       }
       range = parsed.range;
       return true;
+    } catch (error) {
+      if (session === generation) {
+        const reason = error instanceof Error ? error.message : String(error);
+        ui.notify(
+          say(
+            `Could not open the range box: ${reason}`,
+            `No se pudo abrir el cuadro del rango: ${reason}`,
+          ),
+          "error",
+        );
+      }
+      return false;
     } finally {
-      asking = false;
+      // A box of a session that ended says nothing to the next one, and does not close what the next one opened.
+      if (session === generation) {
+        asking = false;
+        host.repaint();
+      }
     }
   }
 
@@ -148,6 +178,7 @@ export function createActivityPanel(host: ActivityHost): ActivityPanel {
     },
     range: () => range,
     busy: () => busy,
+    waiting: () => asking,
     reset() {
       generation++;
       readSeq++;

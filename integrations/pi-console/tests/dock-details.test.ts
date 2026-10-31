@@ -6,7 +6,7 @@ import { textWidth } from "../src/text.js";
 import { type FakeCli, installFakeCli } from "./fake-cli.js";
 
 describe("plugin views backed by read-only sources", () => {
-  // The MEM tab is covered, state by state, in tools-view.test.ts; this is the plain fact that it reads the JSON of the
+  // The TOOLS tab is covered, state by state, in tools-view.test.ts; this is the plain fact that it reads the JSON of the
   // two commands and that a part that fails shows why without hiding the other.
   it("shows the HARIL memory diagnostics from `haril memory status --json`", async () => {
     const memory = await loadDockDetails("memory", ".", {
@@ -26,13 +26,13 @@ describe("plugin views backed by read-only sources", () => {
       }),
     });
     expect(memory.lines).toContain("  Proveedor: engram · persistente");
-    expect(memory.status).toBe("Memoria y herramientas");
+    expect(memory.status).toBe("Tools");
     const english = await loadDockDetails("memory", ".", {
       locale: "en",
       tools: async () => ({ ok: false, stdout: "", stderr: "tools down" }),
       memory: async () => ({ ok: false, stdout: "", stderr: "memory store locked" }),
     });
-    expect(english.status).toBe("Memory and tools");
+    expect(english.status).toBe("Tools");
     expect(english.lines).toContain("Memory process · not available");
     expect(english.lines).toContain("  memory store locked");
     expect(english.lines).toContain("  tools down");
@@ -53,7 +53,7 @@ describe("plugin views backed by read-only sources", () => {
       });
       const text = [details.status, ...details.lines].join("\n");
       expect(text, id).not.toMatch(/Paleta|palette|YouTube|\/yt|CAMBIOS|HISTORIAL/);
-      // MAIN has no rows to run; MEM and DOCS declare theirs.
+      // MAIN has no rows to run; TOOLS and DOCS declare theirs.
       if (id === "main") expect(details.actions, id).toBeUndefined();
     }
   });
@@ -340,7 +340,7 @@ describe("the ACT view", () => {
     ]);
     expect(details.id).toBe("activity");
     expect(details.title).toBe("Actividad");
-    expect(details.status).toBe("Actividad reciente");
+    expect(details.status).toBe("Actividad");
     expect(details.lines).toContain("Actividad · 2");
     expect(details.lines).toContain("  #375 watchdog.closed · hace 3 min");
     expect(details.lines).toContain("  #373 workflow.failed · hace 9 min");
@@ -355,11 +355,7 @@ describe("the ACT view", () => {
       "Todo",
       "Actualizar",
     ]);
-    expect(details.cards?.map((card) => card.title)).toEqual([
-      "Filtro",
-      "Acciones",
-      "Actividad · 2",
-    ]);
+    expect(details.cards?.map((card) => card.title)).toEqual(["", "Actividad · 2"]);
   });
 
   it("defaults to every event, in the interface language", async () => {
@@ -374,7 +370,7 @@ describe("the ACT view", () => {
       },
     });
     expect(calls).toEqual([["events", "--project", "demo", "--limit", "50", "--json"]]);
-    expect(details.status).toBe("Recent activity");
+    expect(details.status).toBe("Activity");
     expect(details.lines).toContain("  #375 watchdog.closed · 3 min ago");
     expect(details.actions?.map((action) => action.label)).toContain("Last hour");
   });

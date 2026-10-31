@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createDockPicker, dockSlotAt } from "../src/dock-navigation.js";
+import { createDockPicker, dockIdFromWord, dockSlotAt } from "../src/dock-navigation.js";
 import { initialPaneSettings } from "../src/native-panes.js";
 import { stripAnsi, textWidth } from "../src/text.js";
 
@@ -14,6 +14,15 @@ describe("HARIL dock shortcuts", () => {
     expect(dockSlotAt(slots, 2)?.id).toBe("docs");
     expect(dockSlotAt(slots, 3)).toBeUndefined();
     expect(dockSlotAt(slots, 0)).toBeUndefined();
+  });
+
+  it("names a slot by its id or by an alias: «tools» is the slot stored as «memory»", () => {
+    expect(dockIdFromWord("tools")).toBe("memory");
+    expect(dockIdFromWord("memory")).toBe("memory");
+    for (const id of ["main", "docs", "activity", "actions"]) expect(dockIdFromWord(id)).toBe(id);
+    for (const word of ["", "mem", "TOOLS", "youtube", "constructor", "__proto__", "details"]) {
+      expect(dockIdFromWord(word), word).toBeUndefined();
+    }
   });
 
   it("Alt+L overlay captures a digit or arrow+Enter and never writes into Pi's editor", () => {
@@ -60,7 +69,7 @@ describe("HARIL dock shortcuts", () => {
     const tui = { requestRender: vi.fn() };
     const picker = createDockPicker(initialPaneSettings().slots, "main", selected, tui);
     picker.handleInput(down);
-    expect(picker.render(48).map(stripAnsi).join("\n")).toContain("▸ 2. Memoria");
+    expect(picker.render(48).map(stripAnsi).join("\n")).toContain("▸ 2. Tools");
     picker.handleInput(up);
     expect(picker.render(48).map(stripAnsi).join("\n")).toContain("▸ 1. Principal");
     picker.handleInput(up);
@@ -77,7 +86,7 @@ describe("HARIL dock shortcuts", () => {
     const names = text
       .filter((line) => /\d\. /.test(line))
       .map((line) => line.replace(/[│▸ ]+/gu, " ").trim());
-    expect(names).toEqual(["1. Main", "2. Memory", "3. Docs", "4. Activity", "5. Actions"]);
+    expect(names).toEqual(["1. Main", "2. Tools", "3. Docs", "4. Activity", "5. Actions"]);
     // A hidden slot is not offered and the digits count the visible ones.
     const hidden = createDockPicker(
       [
@@ -90,7 +99,7 @@ describe("HARIL dock shortcuts", () => {
       "main",
       vi.fn(),
     );
-    expect(hidden.render(48).map(stripAnsi).join("\n")).not.toContain("Memoria");
+    expect(hidden.render(48).map(stripAnsi).join("\n")).not.toContain("Tools");
     expect(
       dockSlotAt(
         [

@@ -5,7 +5,7 @@ import { CARD_TEXT_X, RAIL_WIDTH } from "../src/rail-metrics.js";
 import { stripAnsi, textWidth } from "../src/text.js";
 import { engram, gentle, install, memoryJson, statusJson } from "./tools-fixtures.js";
 
-// The right panel as cards: the header box, and the MEM and DOCS views drawn through the real native pane. A row of
+// The right panel as cards: the header box, and the TOOLS and DOCS views drawn through the real native pane. A row of
 // the rail is exactly RAIL_WIDTH columns wide in every view, language and glyph set, and a button answers a click on
 // each of its three rows.
 
@@ -123,10 +123,10 @@ describe("every row of the right rail is exactly RAIL_WIDTH columns wide", () =>
     (locale: "es" | "en") => Promise<DockDetails | undefined>,
   ][] = [
     ["the header box over MAIN", "main", async () => undefined],
-    ["MEM with everything in order", "memory", (locale) => mem({ locale })],
-    ["MEM with every problem at once", "memory", (locale) => dense(locale)],
-    ["MEM while something runs", "memory", (locale) => mem({ locale, busy: "update" })],
-    ["MEM when both commands fail", "memory", (locale) => unreachable(locale)],
+    ["TOOLS with everything in order", "memory", (locale) => mem({ locale })],
+    ["TOOLS with every problem at once", "memory", (locale) => dense(locale)],
+    ["TOOLS while something runs", "memory", (locale) => mem({ locale, busy: "update" })],
+    ["TOOLS when both commands fail", "memory", (locale) => unreachable(locale)],
     ["DOCS with no folder", "docs", (locale) => docs({ locale })],
     [
       "DOCS with a folder and its notes",
@@ -187,12 +187,12 @@ describe("every row of the right rail is exactly RAIL_WIDTH columns wide", () =>
 describe("the header box", () => {
   it("holds the space and the tabs, and closes the header with its own border", () => {
     const { rows } = paneFor("main", undefined);
-    // Five tabs: four fill the first row exactly, the fifth goes on a second one.
+    // Five tabs: three fill the first row (TOOLS is wider than the old MEM), the other two go on a second one.
     expect(rows().slice(0, 6)).toEqual([
       `│ ╭${"─".repeat(35)}╮ `,
       `│ │ ${"▼ Espacio: Principal · Alt+L".padEnd(33)} │ `,
-      `│ │ ${"[1:MAIN]  2:MEM   3:DOCS   4:ACT".padEnd(33)} │ `,
-      `│ │ ${" 5:ACC".padEnd(33)} │ `,
+      `│ │ ${"[1:MAIN]  2:TOOLS   3:DOCS".padEnd(33)} │ `,
+      `│ │ ${" 4:ACT   5:ACC".padEnd(33)} │ `,
       `│ ╰${"─".repeat(35)}╯ `,
       `│${" ".repeat(39)}`,
     ]);
@@ -202,9 +202,9 @@ describe("the header box", () => {
     const { rows } = paneFor("memory", undefined, true);
     expect(rows().slice(0, 5)).toEqual([
       `| +${"-".repeat(35)}+ `,
-      `| | ${"v Espacio: Memoria · Alt+L".padEnd(33)} | `,
-      `| | ${" 1:MAIN  [2:MEM]  3:DOCS   4:ACT".padEnd(33)} | `,
-      `| | ${" 5:ACC".padEnd(33)} | `,
+      `| | ${"v Espacio: Tools · Alt+L".padEnd(33)} | `,
+      `| | ${" 1:MAIN  [2:TOOLS]  3:DOCS".padEnd(33)} | `,
+      `| | ${" 4:ACT   5:ACC".padEnd(33)} | `,
       `| +${"-".repeat(35)}+ `,
     ]);
   });
@@ -233,11 +233,15 @@ describe("the header box", () => {
     expect(click(2, CARD_TEXT_X + 10)).toEqual({ handled: true, render: true });
     expect(select).toHaveBeenCalledWith("memory");
     expect(state.dockExpanded).toBe(true);
-    // The second row of tabs selects the fifth one, on the columns it is drawn on, and only there.
+    // The second row of tabs, « 4:ACT   5:ACC», selects the fourth and the fifth on the columns each is drawn on, and
+    // nothing on the gap between them or after them.
     expect(click(3, CARD_TEXT_X + 2)).toEqual({ handled: true, render: true });
+    expect(select).toHaveBeenLastCalledWith("activity");
+    expect(click(3, CARD_TEXT_X + 10)).toEqual({ handled: true, render: true });
     expect(select).toHaveBeenLastCalledWith("actions");
     select.mockClear();
-    expect(click(3, CARD_TEXT_X + 9)).toBeUndefined();
+    expect(click(3, CARD_TEXT_X + 7)).toBeUndefined();
+    expect(click(3, CARD_TEXT_X + 15)).toBeUndefined();
     expect(select).not.toHaveBeenCalled();
     // The bottom border of the box is the one row that does nothing.
     expect(click(4)).toBeUndefined();
@@ -250,7 +254,7 @@ describe("the header box", () => {
       for (const ascii of [false, true]) {
         const { rows } = paneFor(selected, undefined, ascii);
         const text = rows().slice(2, 4);
-        expect(text.join("\n"), selected).toMatch(/1:MAIN.*2:MEM.*3:DOCS.*4:ACT/su);
+        expect(text.join("\n"), selected).toMatch(/1:MAIN.*2:TOOLS.*3:DOCS.*4:ACT/su);
         expect(text[1], selected).toContain("5:ACC");
         // The selected tab is the one in brackets (or the one the ASCII mode brackets too), and only one is.
         expect(text.join("").match(/\[\d:[A-Z]+\]/gu), selected).toHaveLength(1);
@@ -260,7 +264,7 @@ describe("the header box", () => {
   });
 });
 
-describe("the buttons of the MEM tab", () => {
+describe("the buttons of the TOOLS tab", () => {
   it("run their action from each of their three rows, and only from those", async () => {
     const detail = await mem();
     const { pane, rows, activate } = paneFor("memory", detail);
@@ -335,7 +339,7 @@ describe("a view taller than the pane", () => {
     // Fewer rows than the card stack needs: the header and the first cards show, the Acciones card does not.
     const first = rows();
     expect(first).toHaveLength(ROWS);
-    expect(first[1]).toContain("▼ Espacio: Memoria");
+    expect(first[1]).toContain("▼ Espacio: Tools");
     const scrolled = (): string[] => {
       pane.handleMouse?.({ type: "wheel", button: "none", y: 3, x: 6, wheelDelta: 100 } as never);
       return rows();
