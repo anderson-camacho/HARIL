@@ -2,6 +2,8 @@ import { cliAvailable, runHaril } from "./cli.js";
 import { type DocsScan, scanDocsFolder, tailFit } from "./docs-folder.js";
 import { localized, type UiLocale } from "./locale.js";
 import { DOCK_LABELS, type DockId } from "./native-panes.js";
+import { CARD_CONTENT_WIDTH } from "./rail-metrics.js";
+import { type DockAction, type DockCard, flatView } from "./rail-view.js";
 import { plainText, textWidth, wrap } from "./text.js";
 import { type MemoryView, parseMemoryStatus, parseToolsStatus } from "./tools-model.js";
 import {
@@ -13,18 +15,21 @@ import {
 } from "./tools-view.js";
 
 const MAX_LINES = 140;
-// Columns a row of the right panel has for its text: the panel is 40 wide, less its border and the margin of each row.
-// A row is one line of the view, so what is wider is cut by the pane; the DOCS view wraps or shortens its own rows
-// instead.
-const ROW_WIDTH = 38;
+// Columns a row of a card of the right panel has for its text. A row is one line of the view, so what is wider is cut
+// by the card; the DOCS view wraps or shortens its own rows instead.
+const ROW_WIDTH = CARD_CONTENT_WIDTH;
 
 export interface DockDetails {
   readonly id: DockId;
   readonly title: string;
   readonly status: string;
+  // The view as plain lines (the left dock and the inline details draw these).
   readonly lines: readonly string[];
-  // A click on a detail row runs the action declared for its line. The pane reads this for whichever tab is selected.
-  readonly actions?: readonly { line: number; action: string }[];
+  // The action each button of the view runs, by the line it is on in `lines`, with the words it reads as. The pane
+  // reads it for whichever tab is selected; the keyboard menu lists these labels.
+  readonly actions?: readonly DockAction[];
+  // The same view as sections: the right panel draws one card for each, a button for each of its actions.
+  readonly cards?: readonly DockCard[];
 }
 
 // What a command printed.
@@ -58,18 +63,16 @@ function linesOf(input: string): string[] {
     .slice(0, MAX_LINES);
 }
 
-function view(
-  id: DockId,
-  status: string,
-  lines: readonly string[],
-  actions?: readonly { line: number; action: string }[],
-): DockDetails {
+function view(id: DockId, status: string, cards: readonly DockCard[]): DockDetails {
+  const { lines, actions } = flatView(cards);
+  const kept = actions.filter((action) => action.line < MAX_LINES);
   return {
     id,
     title: DOCK_LABELS.find((slot) => slot.id === id)?.label ?? id,
     status,
     lines: lines.slice(0, MAX_LINES),
-    ...(actions === undefined ? {} : { actions }),
+    ...(kept.length === 0 ? {} : { actions: kept }),
+    ...(cards.length === 0 ? {} : { cards }),
   };
 }
 
@@ -111,63 +114,79 @@ async function docsDetails(id: DockId, cwd: string, source: DockSource): Promise
   const status = say("Documentation · read-only", "Documentación · solo lectura");
   const path = await (source.docsPath ?? (() => readDocsPath(cwd)))();
 
-  const lines: string[] = [];
-  const actions: { line: number; action: string }[] = [];
-  const addAction = (label: string, action: string): void => {
-    actions.push({ line: lines.length, action });
-    lines.push(`▸ ${label}`);
-  };
+  const folder = say("Folder", "Carpeta");
+  const actions = say("Actions", "Acciones");
 
   if (path === undefined) {
-    lines.push(say("No folder connected.", "Sin carpeta conectada."));
-    lines.push(
-      ...wrap(
-        say(
-          "Connect your documentation folder (for example your Obsidian vault).",
-          "Conecta tu carpeta de documentación (por ejemplo la bóveda de Obsidian).",
-        ),
-        ROW_WIDTH,
-      ),
-    );
-    lines.push("");
-    addAction(say("Set folder…", "Definir carpeta…"), "docs:set");
-    return view(id, status, lines, actions);
+    return view(id, status, [
+      {
+        title: folder,
+        rows: [
+          say("No folder connected.", "Sin carpeta conectada."),
+          ...wrap(
+            say(
+              "Connect your documentation folder (for example your Obsidian vault).",
+              "Conecta tu carpeta de documentación (por ejemplo la bóveda de Obsidian).",
+            ),
+            ROW_WIDTH,
+          ),
+        ],
+      },
+      {
+        title: actions,
+        rows: [],
+        buttons: [{ label: say("Set folder…", "Definir carpeta…"), action: "docs:set" }],
+      },
+    ]);
   }
 
+  const cards: DockCard[] = [];
   const scanned = await (source.scanDocs ?? scanDocsFolder)(path);
   if (!scanned.exists || !scanned.isDirectory) {
     const message = scanned.exists
       ? say("Not a folder:", "No es una carpeta:")
       : say("Folder not found:", "Carpeta no encontrada:");
-    if (textWidth(`${message} ${path}`) <= ROW_WIDTH) {
-      lines.push(`${message} ${path}`);
-    } else {
-      lines.push(message, tailFit(path, ROW_WIDTH));
-    }
+    cards.push({
+      title: folder,
+      rows:
+        textWidth(`${message} ${path}`) <= ROW_WIDTH
+          ? [`${message} ${path}`]
+          : [message, tailFit(path, ROW_WIDTH)],
+    });
   } else {
     const count = `${scanned.noteCount}${scanned.truncated ? "+" : ""}`;
     const single = scanned.noteCount === 1 && !scanned.truncated;
-    lines.push(tailFit(path, ROW_WIDTH));
-    lines.push(
+    const rows = [
+      tailFit(path, ROW_WIDTH),
       locale === "es"
         ? `${count} ${single ? "nota" : "notas"} .md`
         : `${count} .md ${single ? "note" : "notes"}`,
-    );
-    lines.push("");
+    ];
     if (scanned.latest.length === 0) {
-      lines.push(say("No .md notes yet.", "Sin notas .md todavía."));
+      cards.push({
+        title: folder,
+        rows: [...rows, "", say("No .md notes yet.", "Sin notas .md todavía.")],
+      });
     } else {
-      lines.push(say("Latest notes:", "Últimas notas:"));
-      for (const note of scanned.latest) {
-        const date = noteDate(note.mtimeMs, locale);
-        lines.push(`${date} ${tailFit(note.rel, ROW_WIDTH - textWidth(date) - 1)}`);
-      }
+      cards.push({ title: folder, rows });
+      cards.push({
+        title: say("Latest notes", "Últimas notas"),
+        rows: scanned.latest.map((note) => {
+          const date = noteDate(note.mtimeMs, locale);
+          return `${date} ${tailFit(note.rel, ROW_WIDTH - textWidth(date) - 1)}`;
+        }),
+      });
     }
   }
-  lines.push("");
-  addAction(say("Change folder…", "Cambiar carpeta…"), "docs:set");
-  addAction(say("Disconnect", "Desconectar"), "docs:clear");
-  return view(id, status, lines, actions);
+  cards.push({
+    title: actions,
+    rows: [],
+    buttons: [
+      { label: say("Change folder…", "Cambiar carpeta…"), action: "docs:set" },
+      { label: say("Disconnect", "Desconectar"), action: "docs:clear" },
+    ],
+  });
+  return view(id, status, cards);
 }
 
 // One of the two commands of the MEM tab: its answer parsed, or the reason there is none. The exit code does not decide
@@ -215,12 +234,7 @@ export async function loadMemData(cwd: string, source: DockSource = {}): Promise
 // The MEM tab from what was loaded; the console draws it again from the same data when only its busy state changes.
 export function memDetails(data: MemData, options: MemOptions): DockDetails {
   const rows = memRows(data, options);
-  return view(
-    "memory",
-    rows.status,
-    rows.lines,
-    rows.actions.length === 0 ? undefined : rows.actions,
-  );
+  return view("memory", rows.status, rows.cards);
 }
 
 export async function loadDockDetails(
@@ -247,10 +261,11 @@ export async function loadDockDetails(
     }
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    return view(
-      id,
-      en ? "Could not read" : "No se pudo leer",
-      linesOf(reason).flatMap((line) => wrap(line, ROW_WIDTH)),
-    );
+    return view(id, en ? "Could not read" : "No se pudo leer", [
+      {
+        title: en ? "Reason" : "Motivo",
+        rows: linesOf(reason).flatMap((line) => wrap(line, ROW_WIDTH)),
+      },
+    ]);
   }
 }

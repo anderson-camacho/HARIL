@@ -215,14 +215,20 @@ describe("a click on the right rail body", () => {
 
   it("keeps the header and the tab row working as before", () => {
     const pane = setup();
-    const tabsRow = pane.rows()[1] ?? "";
+    // The header is a box: its first row is the border, then the space, then the tabs.
+    const tabsRow = pane.rows()[2] ?? "";
     expect(tabsRow).toContain("[1:MAIN]");
-    pane.click(1, tabsRow.indexOf("2:MEM"));
+    pane.click(2, tabsRow.indexOf("2:MEM"));
     expect(pane.select).toHaveBeenCalledWith("memory");
     expect(pane.railAction).not.toHaveBeenCalled();
     expect(pane.state.dockExpanded).toBe(true);
+    // The border and the space row toggle the dock; the bottom border of the box does nothing.
+    expect(pane.click(3)).toBeUndefined();
+    expect(pane.state.dockExpanded).toBe(true);
     expect(pane.click(0)).toEqual({ handled: true, render: true });
     expect(pane.state.dockExpanded).toBe(false);
+    expect(pane.click(1)).toEqual({ handled: true, render: true });
+    expect(pane.state.dockExpanded).toBe(true);
   });
 });
 
@@ -454,6 +460,8 @@ describe("the console's rails", () => {
       };
 
       expect(render().find((row) => row.includes("AVISOS"))).toContain("▼");
+      // The classic header keeps its own look: the cards and the header box belong to the native pane only.
+      expect(render().join("\n")).not.toMatch(/[╭╮╰╯]/u);
       expect(click("AVISOS")).toEqual({ handled: true, render: true });
       expect(render().find((row) => row.includes("AVISOS"))).toContain("▶");
       click("cambiar");

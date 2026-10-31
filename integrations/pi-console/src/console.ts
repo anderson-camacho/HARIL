@@ -858,6 +858,7 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
       project: () => current.cwd,
       effortLevel: () => modelLevelOf(current).level,
       locale: () => current.locale,
+      ascii: () => orchestrationGlyphs() === ASCII_GLYPHS,
       right: (width) => railContent(current, width),
       select(id) {
         void openDockSlot(current, id);
@@ -1396,10 +1397,11 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
       return [];
     }
     const tab = DOCK_LABELS.find((slot) => slot.id === detail.id)?.tab ?? detail.id;
-    return detail.actions.flatMap(({ line, action }) => {
-      const text = detail.lines[line];
-      if (text === undefined) return [];
-      return [{ label: `${tab} · ${text.replace(/^▸\s*/u, "").trim()}`, dock: detail.id, action }];
+    return detail.actions.flatMap(({ line, action, label }) => {
+      // The label is carried by the action; a view that declares only the line has its words read from that line.
+      const text = label ?? detail.lines[line]?.replace(/^▸\s*/u, "").trim();
+      if (text === undefined || text === "") return [];
+      return [{ label: `${tab} · ${text}`, dock: detail.id, action }];
     });
   }
 

@@ -11,6 +11,7 @@ import {
   renderRightDock,
   statusInSidebar,
 } from "../src/native-panes.js";
+import { CARD_TEXT_X, RAIL_WIDTH } from "../src/rail-metrics.js";
 import { stripAnsi, textWidth } from "../src/text.js";
 
 const LAYOUT_NODE = Symbol.for("@earendil-works/pi-tui/layout-node");
@@ -67,7 +68,7 @@ describe("Pi's native split-pane adapter", () => {
     const layout = (root[LAYOUT_NODE] as () => NativeLayout)();
     expect(layout.type).toBe("hstack");
     expect(layout.entries).toHaveLength(2);
-    expect(layout.entries.map((entry) => entry.basis)).toEqual([0, 40]);
+    expect(layout.entries.map((entry) => entry.basis)).toEqual([0, RAIL_WIDTH]);
     const [centre, right] = layout.entries;
     if (!centre || !right) throw new Error("Expected Pi panes");
     expect((centre.component[LAYOUT_NODE] as () => unknown)()).toEqual(
@@ -80,7 +81,7 @@ describe("Pi's native split-pane adapter", () => {
     expect(dock).toContain("STATUS");
     expect(right.component.render(40)).toHaveLength(tui.terminal.rows);
 
-    right.component.handleMouse?.({ type: "click", button: "left", y: 1, x: 3 });
+    right.component.handleMouse?.({ type: "click", button: "left", y: 2, x: CARD_TEXT_X });
     expect(select).toHaveBeenCalledWith("main");
     state.rightVisible = false;
     expect((root[LAYOUT_NODE] as () => unknown)()).toEqual(original());
@@ -187,11 +188,17 @@ describe("Pi's native split-pane adapter", () => {
     });
     const layout = (root[LAYOUT_NODE] as () => NativeLayout)();
     const right = layout.entries[1]?.component;
-    const tabRows = right?.render(40).map(stripAnsi);
-    expect(tabRows?.[1]).toContain("1:MAIN");
-    expect(tabRows?.[1]).toContain("2:MEM");
-    expect(tabRows?.[1]).toContain("3:DOCS");
-    right?.handleMouse?.({ type: "click", button: "left", y: 1, x: 11 });
+    const tabRows = right?.render(RAIL_WIDTH).map(stripAnsi);
+    // The tabs sit in the header box, under its first row (the space).
+    expect(tabRows?.[2]).toContain("1:MAIN");
+    expect(tabRows?.[2]).toContain("2:MEM");
+    expect(tabRows?.[2]).toContain("3:DOCS");
+    right?.handleMouse?.({
+      type: "click",
+      button: "left",
+      y: 2,
+      x: (tabRows?.[2] ?? "").indexOf("2:MEM"),
+    });
     expect(select).toHaveBeenCalledWith("memory");
 
     // A detail row of a view without actions is plain text: a click on it is left unhandled.
@@ -240,7 +247,8 @@ describe("Pi's native split-pane adapter", () => {
     };
     const stale = right?.render(40).map(stripAnsi) ?? [];
     expect(stale.some((row) => row.includes("abrir carpeta"))).toBe(false);
-    right?.handleMouse?.({ type: "click", button: "left", y: 6, x: 4 });
+    // Row 7 is where the option would be if the view of the other tab were drawn.
+    right?.handleMouse?.({ type: "click", button: "left", y: 7, x: 4 });
     expect(activate).not.toHaveBeenCalled();
     panel.close();
   });
@@ -254,18 +262,18 @@ describe("Pi's native split-pane adapter", () => {
       select,
     });
     const right = (root[LAYOUT_NODE] as () => NativeLayout)().entries[1]?.component;
-    const row = stripAnsi(right?.render(40)[1] ?? "");
+    const row = stripAnsi(right?.render(40)[2] ?? "");
     const clickAt = (x: number) => {
       select.mockClear();
-      right?.handleMouse?.({ type: "click", button: "left", y: 1, x });
+      right?.handleMouse?.({ type: "click", button: "left", y: 2, x });
       return select.mock.calls.map((call) => call[0]);
     };
-    // Drawn as "│ [1:MAIN]  2:MEM   3:DOCS ...": the dock's "│", a space, then the tab text.
-    // An unselected tab keeps one padding space on each side of its text.
+    // Drawn as "│ │ [1:MAIN]  2:MEM   3:DOCS ...": the dock's "│", the margin, the box's "│" and its padding, then the
+    // tab text. An unselected tab keeps one padding space on each side of its text.
     const main = row.indexOf("[1:MAIN]");
     const memory = row.indexOf("2:MEM") - 1;
     const memoryLast = memory + " 2:MEM ".length - 1;
-    expect(main).toBe(2);
+    expect(main).toBe(CARD_TEXT_X);
     expect(clickAt(main)).toEqual(["main"]);
     expect(clickAt(main + "[1:MAIN]".length - 1)).toEqual(["main"]);
     expect(clickAt(main - 1)).toEqual([]);
@@ -328,16 +336,19 @@ describe("the status block belongs to the MAIN tab", () => {
     lines: ["Provider: Engram", "Ready"],
   };
 
-  it("draws the tabs, a separator and then the block under MAIN, with nothing to load in between", () => {
+  it("draws the header box and then the block under MAIN, with nothing to load in between", () => {
     const { rows, state } = pane();
     // A stale view of another tab, or none at all, must not leave "Cargando vista…" or old rows under MAIN.
     state.detail = memoryDetail;
     const lines = rows();
-    expect(lines[0]).toContain("▼ Espacio: Principal · Alt+L");
-    expect(lines[1]).toContain("[1:MAIN]");
-    expect(lines[2]).toContain("────");
-    expect(lines[3]).toContain("DASH ROW 0");
-    expect(lines[4]).toContain("DASH ROW 1");
+    // The box closes the header, so there is no rule under the tabs any more.
+    expect(lines[0]).toContain("╭");
+    expect(lines[1]).toContain("▼ Espacio: Principal · Alt+L");
+    expect(lines[2]).toContain("[1:MAIN]");
+    expect(lines[3]).toContain("╰");
+    expect(lines[4]?.trim()).toBe("│");
+    expect(lines[5]).toContain("DASH ROW 0");
+    expect(lines[6]).toContain("DASH ROW 1");
     const text = lines.join("\n");
     expect(text).not.toContain("Cargando vista");
     expect(text).not.toContain("Ready");
@@ -369,9 +380,10 @@ describe("the status block belongs to the MAIN tab", () => {
     for (let y = 0; y < tui.terminal.rows; y++) {
       for (const x of [2, 8, 30]) {
         const result = right.handleMouse?.({ type: "click", button: "left", y, x });
-        // The header toggles the block, a tab selects and a view row without actions is left alone: no rail hit.
+        // The header box toggles the block (its first two rows), a tab selects and a view row without actions is
+        // left alone: no rail hit.
         expect(railAction, `y=${y} x=${x}`).not.toHaveBeenCalled();
-        if (y > 1) expect(result, `y=${y} x=${x}`).toBeUndefined();
+        if (y > 2) expect(result, `y=${y} x=${x}`).toBeUndefined();
       }
     }
     right.handleMouse?.({ type: "wheel", button: "none", y: 3, x: 6, wheelDelta: 1 });
@@ -398,24 +410,26 @@ describe("the status block belongs to the MAIN tab", () => {
   it("keeps a header and the tabs when the dock is collapsed, on any tab", () => {
     const { rows, state } = pane({ ...initialPaneSettings(), dockExpanded: false });
     const main = rows();
-    expect(main[0]).toContain("▶ Espacio: Principal · Alt+L");
-    expect(main[1]).toContain("DASH ROW 0");
+    // Collapsed, the box holds only the space row.
+    expect(main[1]).toContain("▶ Espacio: Principal · Alt+L");
+    expect(main[2]).toContain("╰");
+    expect(main[4]).toContain("DASH ROW 0");
     state.selected = "memory";
     state.detail = memoryDetail;
     const memory = rows();
-    expect(memory[0]).toContain("▶ Espacio: Memoria · Alt+L");
+    expect(memory[1]).toContain("▶ Espacio: Memoria · Alt+L");
     expect(memory.join("\n")).not.toContain("DASH ROW");
     // Not a blank rail: the header says where the user is and that the dock can be opened.
-    expect(memory[0]?.trim().length).toBeGreaterThan(10);
+    expect(memory[1]?.trim().length).toBeGreaterThan(10);
   });
 
   it("shows the block beside the left dock only under MAIN", () => {
     const { rows, state } = pane({ ...initialPaneSettings(), leftVisible: true });
-    expect(rows()[0]).toContain("▣ Espacio: Principal");
-    expect(rows()[1]).toContain("DASH ROW 0");
+    expect(rows()[1]).toContain("▣ Espacio: Principal");
+    expect(rows()[4]).toContain("DASH ROW 0");
     state.selected = "docs";
     const docs = rows();
-    expect(docs[0]).toContain("▣ Espacio: Documentación");
+    expect(docs[1]).toContain("▣ Espacio: Documentación");
     expect(docs.join("\n")).not.toContain("DASH ROW");
   });
 

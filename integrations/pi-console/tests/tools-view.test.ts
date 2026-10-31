@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { NOT_LAUNCHED } from "../src/cli.js";
 import { type DockDetails, type DockSource, loadDockDetails } from "../src/dock-details.js";
+import { CARD_CONTENT_WIDTH } from "../src/rail-metrics.js";
 import { textWidth } from "../src/text.js";
 import {
   COPY,
@@ -16,8 +17,8 @@ import {
 // The MEM tab: what `haril tools status --json` and `haril memory status --json` say, as the 40-column right panel
 // shows it. The two commands are the only source; these tests give the view the JSON they print.
 
-// The panel gives a row 38 columns after its border and margin.
-const FITS = 38;
+// A card gives a row CARD_CONTENT_WIDTH columns; the plain lines of the left dock indent a row by two more.
+const FITS = CARD_CONTENT_WIDTH + 2;
 const answer = (stdout: string) => async () => ({ ok: true, stdout, stderr: "" });
 const failure = (stderr: string) => async () => ({ ok: false, stdout: "", stderr });
 
@@ -31,6 +32,17 @@ async function mem(src: DockSource): Promise<DockDetails> {
 
 function expectRowsToFit(details: DockDetails): void {
   for (const line of details.lines) expect([line, textWidth(line) <= FITS]).toEqual([line, true]);
+  for (const card of details.cards ?? []) {
+    for (const row of card.rows) {
+      expect([row, textWidth(row) <= CARD_CONTENT_WIDTH]).toEqual([row, true]);
+    }
+    for (const button of card.buttons ?? []) {
+      expect([button.label, textWidth(button.label) <= CARD_CONTENT_WIDTH - 4]).toEqual([
+        button.label,
+        true,
+      ]);
+    }
+  }
 }
 
 function rowOf(details: DockDetails, action: string): string | undefined {
@@ -415,7 +427,8 @@ describe("the memory process in the MEM view", () => {
     );
     expect(details.lines).toContain("  Runtime: parado");
     expect(details.lines).toContain("  Salud: sin comprobar");
-    expect(text(details)).toContain("Degradada: sí (engram_unreachable)");
+    // The row wraps inside its card: it is the same words, in two rows.
+    expect(text(details).replace(/\s+/g, " ")).toContain("Degradada: sí (engram_unreachable)");
     expect(details.lines).toContain("  Cola: 3 por entregar");
     expectRowsToFit(details);
   });
@@ -516,7 +529,9 @@ describe("the MEM view while something runs", () => {
     ["update", "… Compilando gentle-ai con Go"],
   ] as const)("shows %s as a busy row instead of the actions", async (busy, row) => {
     const details = await mem(ready({ busy }));
-    expect(details.lines.some((line) => line.startsWith(row))).toBe(true);
+    // A busy row wider than the card goes on in a second row: it reads the same once the rows are joined.
+    expect(text(details).replace(/\s+/g, " ")).toContain(row);
+    expect(details.lines.some((line) => line.trim().startsWith("… "))).toBe(true);
     expect(details.actions).toBeUndefined();
     expect(text(details)).not.toContain("▸");
     expect(details.lines).toContain("Engram · ok");
