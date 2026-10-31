@@ -2,7 +2,8 @@
 
 ## Estado actual
 
-- **Versión actual:** 0.23.21.
+- **Versión actual:** 0.23.22.
+- **Estado (0.23.22):** TOOLS lista skills y servidores MCP con su resumen, inserta sus comandos reales en el editor y puede guardar `enabled` en el `mcp.json` global; logo HARIL pequeño en el panel o en el chat. «conectado» solo significa que Pi registró herramientas en esta sesión. No verificado: Pi real ni terminal real.
 - **Estado (0.23.21):** consola más limpia: el fondo del terminal se ve a través del chat y del panel, la información de arranque pasa al panel y a `/haril-status`, una sola barra sin duplicados, y Alt+C busca en todos los comandos. Sin verificar en Pi real ni en un terminal real.
 - **Estado (0.23.20):** nace la paleta azul `future` con líneas finas naranjas, y es la predeterminada de la consola y de la shell cuando no se configura nada. Un `ui.theme` guardado se respeta. No verificado: el aspecto en un Pi real y en Windows Terminal.
 - **Estado (0.23.19):** nace el catálogo de perfiles de terminal y `haril theme list|preview|apply|status`. `apply` solo guarda la selección en `<raíz>/config/terminal.json`: no cambia Windows Terminal, `$PROFILE` ni las fuentes, ni instala nada, y lo dice al terminar.
@@ -89,4 +90,4 @@ Las versiones 0.x son preliminares: pueden cambiar sin compatibilidad hacia atr�
 
 Más reciente primero. Cada carpeta contiene el archivo de cambios de su versión mayor, con las versiones menores y de parche, la más nueva arriba.
 
-- [v0](v0/CHANGELOG.md): versiones 0.1.0 a 0.23.21.
+- [v0](v0/CHANGELOG.md): versiones 0.1.0 a 0.23.22.

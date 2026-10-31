@@ -34,6 +34,13 @@ export interface DockCard {
   readonly tones?: readonly (DashboardTone | undefined)[];
   readonly chips?: readonly DockChip[];
   readonly buttons?: readonly DockButton[];
+  // What a click on a text row runs, by its index in `rows`. A row with a label is also an entry of the keyboard menu.
+  readonly rowActions?: readonly (DockRowAction | undefined)[];
+}
+
+export interface DockRowAction {
+  readonly action: string;
+  readonly label?: string;
 }
 
 export interface DockAction {
@@ -54,7 +61,13 @@ export function flatView(cards: readonly DockCard[]): {
   for (const [index, card] of cards.entries()) {
     if (index > 0) lines.push("");
     if (card.title !== "") lines.push(card.title);
-    for (const row of card.rows) lines.push(row === "" ? "" : `  ${row}`);
+    for (const [rowIndex, row] of card.rows.entries()) {
+      const rowAction = card.rowActions?.[rowIndex];
+      if (rowAction?.label !== undefined) {
+        actions.push({ line: lines.length, action: rowAction.action, label: rowAction.label });
+      }
+      lines.push(row === "" ? "" : `  ${row}`);
+    }
     // A chip reads as a line of its own, with the words of its menu entry.
     for (const { name, action } of card.chips ?? []) {
       actions.push({ line: lines.length, action, label: name });
@@ -128,7 +141,9 @@ function drawCard(
   const inner: string[] = card.rows.map((row, index) =>
     textRow(row, card.tones?.[index] ?? "text"),
   );
-  const innerHits: RailHit[] = card.rows.map((_row, index) => textHits[index]);
+  const innerHits: RailHit[] = card.rows.map(
+    (_row, index) => textHits[index] ?? card.rowActions?.[index]?.action,
+  );
   if (card.chips !== undefined && card.chips.length > 0) {
     const drawn = chipRow(card.chips, { ascii });
     // The three rows of the chips share their cells: each chip answers a click on any of its rows and columns.

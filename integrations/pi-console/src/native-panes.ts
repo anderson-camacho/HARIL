@@ -18,6 +18,7 @@ import {
   readDockSlots,
 } from "./dock-registry.js";
 import type { UiLocale } from "./locale.js";
+import { withPinnedLogo } from "./mini-logo.js";
 import type { ConsoleMouseEvent, ConsoleTui } from "./pi-types.js";
 import { type BoxRow, blankRow, inset, plainBox, railGlyphs } from "./rail-cards.js";
 import { CARD_CONTENT_WIDTH, CARD_TEXT_X, RAIL_BODY_WIDTH, RAIL_WIDTH } from "./rail-metrics.js";
@@ -450,11 +451,13 @@ export function attachNativePanes(
         options.ascii?.() ?? false,
       );
       scrollTop = Math.min(scrollTop, Math.max(0, structure.lines.length - height));
+      const ascii = options.ascii?.() ?? false;
+      // The small logo takes free rows only; it never pushes or covers a row of the panel.
       return renderRightDock(
         width,
         height,
-        structure.lines.slice(scrollTop),
-        options.ascii?.() ?? false,
+        withPinnedLogo(structure.lines.slice(scrollTop), height, width - 1, ascii),
+        ascii,
       );
     },
     handleMouse(event: ConsoleMouseEvent) {

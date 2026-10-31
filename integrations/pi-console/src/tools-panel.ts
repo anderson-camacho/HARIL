@@ -1,8 +1,22 @@
 import type { CliResult } from "./cli.js";
-import { type DockDetails, type DockSource, loadMemData, memDetails } from "./dock-details.js";
+import {
+  type DockDetails,
+  type DockSource,
+  loadMemData,
+  memDetails,
+  toolsCatalogDetails,
+} from "./dock-details.js";
 import { localized, type UiLocale } from "./locale.js";
 import type { ExtensionEntry } from "./status-info.js";
 import { plainText } from "./text.js";
+import { type Catalog, setMcpEnabled } from "./tools-catalog.js";
+import {
+  CATALOG_ACTIONS,
+  type CatalogRoute,
+  canInsertName,
+  catalogEntryCard,
+  catalogView,
+} from "./tools-catalog-view.js";
 import {
   type EnsureView,
   parseEnsure,
@@ -38,11 +52,15 @@ export interface ToolsHost {
   env(): Readonly<Record<string, string | undefined>>;
   locale(): UiLocale;
   extensions?(): readonly ExtensionEntry[];
+  // The skills and MCP servers as they are now; read again every time they are drawn.
+  catalog?(): Catalog;
   // The session's notices and questions; undefined when there is no session to talk to.
   ui():
     | {
         notify(message: string, level?: Level): void;
         confirm(title: string, message: string): Promise<boolean>;
+        setEditorText?(text: string): void;
+        input?(title: string, placeholder?: string): Promise<string | undefined>;
       }
     | undefined;
   // The TOOLS tab is the one on screen.
@@ -298,6 +316,9 @@ export function createToolsPanel(host: ToolsHost, options: ToolsPanelOptions = {
   let busy: BusyKind | undefined;
   let checkError: string | undefined;
   let lastData: MemData | undefined;
+  // Which view of the tab is on screen: undefined is the first one. The list's filter survives a visit to a summary.
+  let route: CatalogRoute | undefined;
+  let listFilter = "";
   let checkStarted = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const seen = new Set<string>();
@@ -333,7 +354,17 @@ export function createToolsPanel(host: ToolsHost, options: ToolsPanelOptions = {
     busy,
     checkError,
     extensions: host.extensions?.(),
+    catalogCard:
+      host.catalog === undefined || busy !== undefined
+        ? undefined
+        : catalogEntryCard(host.catalog(), host.locale()),
   });
+
+  // The view of the route on screen; undefined on the first view, or when the session has no catalog to read.
+  const catalogDetails = (): DockDetails | undefined =>
+    route === undefined || host.catalog === undefined
+      ? undefined
+      : toolsCatalogDetails(catalogView(host.catalog(), route, host.locale()));
 
   const dockSource: DockSource = {
     tools: () => exec(["tools", "status", "--json"], LOAD_TIMEOUT_MS),
@@ -473,6 +504,105 @@ export function createToolsPanel(host: ToolsHost, options: ToolsPanelOptions = {
     settle(notice !== undefined);
   }
 
+  const go = (next: CatalogRoute | undefined): void => {
+    route = next;
+    host.repaint();
+  };
+
+  // Puts a real command in the editor, for the user to run: the extension API cannot run another extension's command.
+  function insert(text: string): void {
+    const ui = host.ui();
+    if (ui?.setEditorText === undefined) return;
+    ui.setEditorText(text);
+    tell({
+      text: say(
+        `In the editor: ${text.trim()}. Enter runs it.`,
+        `En el editor: ${text.trim()}. Enter lo ejecuta.`,
+      ),
+      level: "info",
+    });
+  }
+
+  async function chooseFilter(): Promise<void> {
+    const typed = await host
+      .ui()
+      ?.input?.(say("Filter skills and MCP", "Filtrar skills y MCP"), listFilter);
+    if (typed === undefined) return;
+    listFilter = typed.trim();
+    go({ kind: "list", filter: listFilter });
+  }
+
+  async function toggleServer(name: string): Promise<void> {
+    const server = host.catalog?.().servers.find((item) => item.name === name);
+    if (
+      server === undefined ||
+      server.scope !== "global" ||
+      server.managed ||
+      server.file === undefined
+    )
+      return;
+    const enable = server.state === "disabled";
+    const ui = host.ui();
+    const word = enable ? say("Enable", "Activar") : say("Disable", "Desactivar");
+    const proceed =
+      ui !== undefined &&
+      (await ui.confirm(
+        `${word} ${name}`,
+        say(
+          `Saves it in ${server.file}. It applies at the next start or /reload; /mcp applies it now. Proceed?`,
+          `Se guarda en ${server.file}. Aplica al próximo inicio o con /reload; /mcp lo aplica ya. ¿Continuar?`,
+        ),
+      ));
+    if (!proceed) return;
+    const result = setMcpEnabled(server.file, name, enable);
+    tell(
+      result.ok
+        ? {
+            text: say(
+              `${name} saved as ${enable ? "enabled" : "disabled"}. It applies at the next start or /reload.`,
+              `${name} guardado como ${enable ? "activado" : "desactivado"}. Aplica al próximo inicio o con /reload.`,
+            ),
+            level: "info",
+          }
+        : {
+            text: say(
+              `Nothing was changed: mcp.json could not be updated (${result.reason}).`,
+              `No se cambió nada: no se pudo actualizar mcp.json (${result.reason}).`,
+            ),
+            level: "error",
+          },
+    );
+    host.repaint();
+  }
+
+  // The rows of the list and the summaries. Moving between views runs no command, so it works while the tab is busy.
+  async function catalogAct(action: string): Promise<void> {
+    const named = (prefix: string): string | undefined =>
+      action.startsWith(prefix) ? action.slice(prefix.length) : undefined;
+    if (action === CATALOG_ACTIONS.list) return go({ kind: "list", filter: listFilter });
+    if (action === CATALOG_ACTIONS.back) {
+      return go(
+        route?.kind === "list" || route === undefined
+          ? undefined
+          : { kind: "list", filter: listFilter },
+      );
+    }
+    if (action === CATALOG_ACTIONS.filter) return chooseFilter();
+    if (action === CATALOG_ACTIONS.mcpManager) return insert("/mcp");
+    const use = named(CATALOG_ACTIONS.useSkill);
+    if (use !== undefined) return canInsertName(use) ? insert(`/skill:${use} `) : undefined;
+    const reconnect = named(CATALOG_ACTIONS.mcpReconnect);
+    if (reconnect !== undefined) {
+      return canInsertName(reconnect) ? insert(`/mcp reconnect ${reconnect}`) : undefined;
+    }
+    const toggle = named(CATALOG_ACTIONS.mcpToggle);
+    if (toggle !== undefined) return toggleServer(toggle);
+    const skill = named(CATALOG_ACTIONS.skill);
+    if (skill !== undefined) return go({ kind: "skill", name: skill });
+    const server = named(CATALOG_ACTIONS.mcp);
+    if (server !== undefined) return go({ kind: "mcp", name: server });
+  }
+
   const handlers: Record<string, () => Promise<void>> = {
     [TOOLS_ACTIONS.ensure]: () => ensure(false),
     [TOOLS_ACTIONS.force]: () => ensure(true),
@@ -484,12 +614,21 @@ export function createToolsPanel(host: ToolsHost, options: ToolsPanelOptions = {
     async load() {
       const data = await loadMemData("", dockSource);
       lastData = data;
-      return memDetails(data, memOptions());
+      return catalogDetails() ?? memDetails(data, memOptions());
     },
     view() {
-      return lastData === undefined ? undefined : memDetails(lastData, memOptions());
+      if (lastData === undefined) return undefined;
+      return catalogDetails() ?? memDetails(lastData, memOptions());
     },
     async act(action) {
+      if (action.startsWith("catalog:")) {
+        try {
+          await catalogAct(action);
+        } catch (error) {
+          tell({ text: error instanceof Error ? error.message : String(error), level: "error" });
+        }
+        return;
+      }
       const handler = Object.hasOwn(handlers, action) ? handlers[action] : undefined;
       if (handler === undefined) return;
       if (busy !== undefined) {

@@ -55,6 +55,7 @@ import {
 import { stopAll } from "./emergency.js";
 import { createGitSummaryCache, type GitSummary } from "./git-summary.js";
 import { DEFAULT_UI_LOCALE, localized, readConsoleLocale, type UiLocale } from "./locale.js";
+import { miniLogo } from "./mini-logo.js";
 import { installModes } from "./mode-controller.js";
 import { levelLabel } from "./model-levels.js";
 import { chooseLevel, chooseModel, createLevelMemory, type LevelMemory } from "./model-picker.js";
@@ -115,6 +116,7 @@ import {
 } from "./status-info.js";
 import { createTabPicker, type TabPickerResult } from "./tab-picker.js";
 import { clipText, plainText } from "./text.js";
+import { buildCatalog, type Catalog } from "./tools-catalog.js";
 import { createToolsPanel, type ToolsHost } from "./tools-panel.js";
 import {
   type BarFacts,
@@ -241,6 +243,14 @@ export interface ConsoleOptions {
   };
 }
 
+function catalogCounts(catalog: Catalog) {
+  return {
+    skills: catalog.skills.length,
+    servers: catalog.servers.length,
+    connected: catalog.servers.filter(({ state }) => state === "connected").length,
+  };
+}
+
 export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}): void {
   // The shortcuts as they are registered, so the command list and /haril-status read them instead of a copy.
   const shortcuts: {
@@ -299,6 +309,7 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
       env: () => process.env,
       locale: () => session?.locale ?? DEFAULT_UI_LOCALE,
       extensions: () => loadedExtensions(),
+      catalog: () => loadedCatalog(session),
       ui: () =>
         session === undefined || session.closed || !session.ctx.hasUI ? undefined : session.ctx.ui,
       memoryOpen: () =>
@@ -432,6 +443,18 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
       current.cwd,
       process.env.PI_CODING_AGENT_DIR,
     );
+  }
+
+  // The skills and MCP servers of the TOOLS tab: what Pi reports now and what its mcp.json files say. Never throws.
+  function loadedCatalog(current: Session | undefined): Catalog {
+    return buildCatalog({
+      commands: safely(() => pi.getCommands(), []),
+      tools: safely(() => pi.getAllTools(), []),
+      registered: safely(() => pi.getMcpServers(), []),
+      promptSkills: safely(() => current?.ctx.getSystemPromptOptions?.().skills, undefined),
+      agentDir: process.env.PI_CODING_AGENT_DIR,
+      cwd: current?.cwd ?? process.cwd(),
+    });
   }
 
   function loadedExtensions(): ExtensionEntry[] {
@@ -856,7 +879,10 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
           })
         ) {
           headerLayout = { lines: [], tabHits: [] };
-          return [];
+          // The panel draws the small logo while it is open; closed, it opens the chat instead.
+          return current.dock.rightVisible
+            ? []
+            : miniLogo(width, { ascii: orchestrationGlyphs() === ASCII_GLYPHS });
         }
         headerLayout = renderHeaderLayout(
           version === "" ? undefined : version,
@@ -1757,6 +1783,7 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
           memory: facts.memory,
           warnings: railWarnings(facts),
           extensions: loadedExtensions(),
+          catalog: catalogCounts(loadedCatalog(current)),
           contextFiles: contextFiles(
             safely(() => ctx.getSystemPromptOptions?.().contextFiles, undefined),
             current.cwd,
