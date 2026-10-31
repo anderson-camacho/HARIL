@@ -53,6 +53,9 @@ import {
   dockSlotAt,
 } from "./dock-navigation.js";
 import { stopAll } from "./emergency.js";
+import { factoryGlyphs } from "./factory-kit.js";
+import { openFactoryOverlay } from "./factory-overlay.js";
+import { type FactoryState, initialFactoryState } from "./factory-state.js";
 import { createGitSummaryCache, type GitSummary } from "./git-summary.js";
 import { DEFAULT_UI_LOCALE, localized, readConsoleLocale, type UiLocale } from "./locale.js";
 import { miniLogo } from "./mini-logo.js";
@@ -172,6 +175,10 @@ interface Session extends CommandHost {
   // children haril workflow watch and tail (orchestration-feed.ts).
   orchestration: OrchestrationState;
   orchestrationOpen: boolean;
+  // The factory view (factory-state.ts) and whether its overlay is open: it only views, so it holds nothing else.
+  factory: FactoryState;
+  factoryOpen: boolean;
+  openFactoryView(ctx: ConsoleContext): Promise<void>;
   readonly feed: WorkflowFeed;
   orchestrationDemo(): boolean;
   runtime(): string;
@@ -639,6 +646,8 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
       dashboardRefresh: undefined,
       orchestration: initialOrchestrationState(),
       orchestrationOpen: false,
+      factory: initialFactoryState(),
+      factoryOpen: false,
       feed: createWorkflowFeed({
         cwd: () => current.cwd,
         projectSlug: () => current.project?.slug,
@@ -705,6 +714,27 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
         if (effect === "emergency-stop") await runStopAll(viewCtx);
         else if (effect === "pick-workflow" && (await current.pickWorkflow(viewCtx)))
           await current.openOrchestrationView(viewCtx);
+      },
+      async openFactoryView(viewCtx) {
+        if (!viewCtx.hasUI || viewCtx.mode !== "tui") {
+          if (viewCtx.hasUI)
+            viewCtx.ui.notify("La fábrica necesita la consola interactiva.", "warning");
+          return;
+        }
+        if (current.factoryOpen) return;
+        current.factoryOpen = true;
+        try {
+          await openFactoryOverlay(viewCtx, {
+            get: () => current.factory,
+            set: (state) => {
+              current.factory = state;
+            },
+            glyphs: factoryGlyphs(),
+          });
+        } finally {
+          current.factoryOpen = false;
+          redraw();
+        }
       },
       async pickWorkflow(pickCtx) {
         if (!cliAvailable()) {
@@ -1979,6 +2009,12 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
   pi.registerCommand("haril-panel", {
     description: "Open the HARIL right-panel menu: its sections and actions, with arrows and Enter",
     handler: async (_args, ctx) => openRailMenu(ctx),
+  });
+  pi.registerCommand("haril-factory", {
+    description: "HARIL: abrir la fábrica: avance, actividades, tablero, agentes y modelos",
+    handler: async (_args, ctx) => {
+      await session?.openFactoryView(ctx);
+    },
   });
   // Alt+F belongs to Pi's editor.cursorWordRight; never override a built-in shortcut.
   pi.registerCommand("haril-focus", {

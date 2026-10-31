@@ -132,13 +132,13 @@ export function aiEyeTone(level: string | undefined): DashboardTone {
       : "teal";
 }
 
-function colorMode(): { readonly enabled: boolean; readonly trueColor: boolean } {
+export function colorMode(): { readonly enabled: boolean; readonly trueColor: boolean } {
   const env = process.env;
   const enabled = env.NO_COLOR === undefined && env.TERM?.toLowerCase() !== "dumb";
   return { enabled, trueColor: env.PI_TRUE_COLOR !== "0" };
 }
 
-function sequence(
+export function sequence(
   rgb: readonly [number, number, number],
   background: boolean,
   trueColor: boolean,

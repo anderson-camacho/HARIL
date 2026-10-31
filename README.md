@@ -782,6 +782,7 @@ Las preferencias quedan en `ui.plugins` de `haril.json`, sin borrar otras opcion
 
 #### Catálogo de comandos (0.22.5)
 
+- `/haril-factory`: abre la fábrica a pantalla completa, con las pestañas Avance, Actividades, Tablero, Agentes, Conexiones, Modelos y Sistema. Solo muestra; funciona en los cuatro modos. Por ahora ninguna pestaña tiene datos conectados y cada una lo dice.
 - `Alt+C` o `/haril-commands`: abre un visor desplazable con los **comandos que las extensiones realmente registraron** en la sesión Pi, diferenciando los de HARIL de los de otras extensiones (como `/yt` si está disponible). Incluye los atajos propios de HARIL. Esta API no enumera necesariamente todos los comandos nativos de Pi: usa `/hotkeys` para consultar los atajos reales de Pi y `haril help` en PowerShell para las opciones completas de CLI.
 
 #### Navegación de menús en Windows Terminal (0.22.6)
@@ -1077,7 +1078,7 @@ Los dossiers de `docs/research/` se leen solo bajo demanda, cuando un documento 
 
 ## Versiones
 
-Versión actual: **0.23.22**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
+Versión actual: **0.23.23**. El estado del proyecto y el historial de cambios están en [`versions/README.md`](versions/README.md).
 
 ## Licencia
 

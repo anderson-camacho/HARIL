@@ -50,6 +50,10 @@ const CONSOLE_COMMANDS: readonly CommandDescription[] = [
   { name: "haril-panel", description: "Abrir el menú de teclado del panel derecho" },
   { name: "haril-docs", description: "Conectar la carpeta de documentación (Obsidian)" },
   { name: "haril-commands", description: "Buscar en todos los comandos y atajos" },
+  {
+    name: "haril-factory",
+    description: "Abrir la fábrica: avance, actividades, tablero, agentes y modelos",
+  },
   ...DASHBOARD_AREAS.map((area) => ({ name: area, description: `Abrir área ${area}` })),
 ];
 
