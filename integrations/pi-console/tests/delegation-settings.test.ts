@@ -36,6 +36,10 @@ const FIXTURE = readFileSync(
 );
 const THEME: ConsoleTheme = { fg: (_color, text) => text, bold: (text) => text };
 
+// vi.waitFor's default of 1 s is not enough when the whole suite runs in parallel; it returns as soon as the assertion holds.
+const waitFor = <T>(assertion: () => T | Promise<T>): Promise<T> =>
+  vi.waitFor(assertion, { timeout: 15_000, interval: 25 });
+
 function view(): DelegationView {
   const decoded = decodeDelegationView(JSON.parse(FIXTURE) as unknown);
   if (decoded === undefined) throw new Error("fixture does not decode");
@@ -521,7 +525,7 @@ describe("editing a delegation setting", () => {
         });
 
       const opening = openDelegationSettings(ctx, {});
-      await vi.waitFor(() => expect(handleInput).toBeDefined());
+      await waitFor(() => expect(handleInput).toBeDefined());
       handleInput?.(input);
       await opening;
       expect(sets()).toEqual([]);
@@ -555,10 +559,10 @@ describe("editing a delegation setting", () => {
     ui.input = async () => undefined;
 
     const opening = openDelegationSettings(ctx, {});
-    await vi.waitFor(() => expect(panels).toHaveLength(1));
+    await waitFor(() => expect(panels).toHaveLength(1));
     panels[0]?.handleInput("\u001b[B");
     panels[0]?.handleInput("\r");
-    await vi.waitFor(() => expect(panels).toHaveLength(2));
+    await waitFor(() => expect(panels).toHaveLength(2));
     const returned = panels[1];
     expect(returned?.overlay).toBe(true);
     expect(returned?.render(100).map(stripAnsi).join("\n")).toMatch(

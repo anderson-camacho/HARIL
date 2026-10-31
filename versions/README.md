@@ -2,7 +2,8 @@
 
 ## Estado actual
 
-- **Versión actual:** 0.23.13.
+- **Versión actual:** 0.23.14.
+- **Estado (0.23.14):** Engram conectado al runtime: con `memory.provider = "engram"` en `haril.json` el runtime recupera contexto de Engram 3.6.0 para los prompts de las tareas y guarda un resumen de cada tarea real completada; `npm run memory:install` lo instala con verificación SHA-256. Sin esa clave sigue el proveedor `null`.
 - **Estado (0.23.13):** propuesta de plan editable de integración sobre la main 0.23.12, con decisiones explícitas, etapas, dependencias y criterios de aceptación. Sin cambios funcionales.
 - **Estado (0.23.12):** el panel derecho tiene tres pestañas, MAIN, MEM y DOCS (se retiran GIT, YT y THEME); el bloque de estado solo vive en MAIN y la barra inferior lo muestra cuando el panel no lo hace; `docs.path` y `/haril-docs` conectan una carpeta de documentación de solo lectura (Obsidian la administra). Una configuración antigua de pestañas sigue siendo válida.
 - **Estado (0.23.11):** el espacio TREE se retira del dock (quedan GIT, YT, MEM y THEME); el panel derecho responde al clic en secciones, acciones y «cambiar», y el menú `Alt+K` o `/haril-panel` da acceso por teclado con flechas y Enter. Una configuración antigua con `explorer` sigue siendo válida.
@@ -81,4 +82,4 @@ Las versiones 0.x son preliminares: pueden cambiar sin compatibilidad hacia atr�
 
 Más reciente primero. Cada carpeta contiene el archivo de cambios de su versión mayor, con las versiones menores y de parche, la más nueva arriba.
 
-- [v0](v0/CHANGELOG.md): versiones 0.1.0 a 0.23.13.
+- [v0](v0/CHANGELOG.md): versiones 0.1.0 a 0.23.14.

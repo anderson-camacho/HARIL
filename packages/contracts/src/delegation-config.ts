@@ -12,6 +12,7 @@ export const HARIL_CONFIG_TOP_LEVEL_KEYS: readonly string[] = Object.freeze([
   "ui",
   "delegation",
   "docs",
+  "memory",
 ]);
 
 export const DELEGATION_LAYERS = ["orchestrator", "delegator", "executor", "auditor"] as const;

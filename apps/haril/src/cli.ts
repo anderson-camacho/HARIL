@@ -23,6 +23,7 @@ import { states } from "./commands/states.js";
 import { status } from "./commands/status.js";
 import { stop } from "./commands/stop.js";
 import { task } from "./commands/task.js";
+import { tools } from "./commands/tools.js";
 import { update } from "./commands/update.js";
 import { usage } from "./commands/usage.js";
 import { workflow } from "./commands/workflow.js";
@@ -108,6 +109,12 @@ const HELP_LINES = [
   "  haril metrics [--project <slug>] [--json]   runs, retries and success rate from the event log",
   "  haril events [--project <slug>] [--task <id>] [--limit <n>] [--json]   the newest events, oldest first",
   "  haril memory status [--json]     the memory provider, its health, whether memory is degraded and the outbox depth",
+  "  haril tools status [--json] [--refresh]   where engram and gentle-ai are installed, their real versions and the",
+  "    latest published ones (cached for 24 h; --refresh asks GitHub now); read-only",
+  "  haril tools ensure [engram|gentle-ai] [--json] [--force]   install or repair HARIL's own Engram (SHA-256, version and",
+  "    health checked before it replaces anything); for gentle-ai it only detects",
+  "  haril tools update gentle-ai [--yes] [--json]   install or update gentle-ai with go install at the latest release",
+  "    (needs Go; shows the plan and asks first, --yes skips the question), then check the version it left behind",
   "  haril workflow start <goal> --model <ref> [--autonomous | --stop-at <stops>] [--agent <ref>] [--json]",
   "    queue a three-layer workflow (orchestrator, delegators, executors, auditors) that haril start runs; it stops",
   "    after the first plan unless --autonomous or --stop-at; --agent defaults to fake:orchestrate (simulated agents)",
@@ -215,6 +222,8 @@ function dispatch(argv: readonly string[], io: CliIo, host: HostInfo): number | 
       return events(rest, io, host);
     case "memory":
       return memory(rest, io, host);
+    case "tools":
+      return tools(rest, io, host);
     case "usage":
       return usage(rest, io, host);
     case "workflow":

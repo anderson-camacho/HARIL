@@ -93,7 +93,7 @@ Las pestañas están en la parte alta del panel derecho: `[1:MAIN]  2:MEM  3:DOC
 | Pestaña | Qué significa | Qué puedes hacer | Límite |
 | --- | --- | --- | --- |
 | **MAIN / Principal** | El estado de la consola: ubicación, modo, proyecto, modelo, áreas, avisos, extensiones, sesión, acciones y actividad reciente (sección 5) | Todo lo de la sección 5 | Es la única pestaña que dibuja ese bloque; siempre va primera y siempre está visible |
-| **MEM / Memoria** | Estado de salud del proveedor de memoria | Inspeccionar disponibilidad/errores | No implica que Engram esté conectado |
+| **MEM / Memoria** | Engram (estado, versión, ruta), el proceso de memoria (proveedor, salud, cola) y gentle-ai | Ver qué copia usa HARIL; clic en **▸ Comprobar e instalar Engram**, **▸ Reinstalar Engram (forzar)**, **▸ Comprobar versiones ahora** o **▸ Actualizar gentle-ai…** | Un proveedor `null` no guarda nada: la ficha lo marca y dice cómo activar Engram. Instalar o actualizar solo ocurre con tu clic (o su aviso al abrir, que solo informa) |
 | **DOCS / Documentación** | Tu carpeta de documentación conectada (por ejemplo una bóveda de Obsidian): la ruta, cuántas notas `.md` tiene y las 10 últimas | Clic en **▸ Definir carpeta…**, **▸ Cambiar carpeta…** o **▸ Desconectar**; o `/haril-docs` | Solo lectura: HARIL no escribe en la carpeta, la administras tú (con Obsidian) |
 
 ### Conectar tu documentación (DOCS)
@@ -103,6 +103,46 @@ La carpeta de documentación se administra **fuera de HARIL**; HARIL solo guarda
 Con una carpeta conectada, `DOCS` muestra la ruta (si no cabe, su final), el número de notas `.md` (con `+` si el recorrido llegó a su límite de 2000, por ejemplo «2000+ notas .md») y las 10 últimas con su fecha. Si la carpeta desaparece (un disco que no está conectado), `DOCS` dice «Carpeta no encontrada» y puedes cambiarla o desconectarla; HARIL sigue funcionando y `haril doctor` lo marca solo como advertencia. El recorrido omite lo que empieza por punto (`.obsidian`, `.git`, `.trash`), `node_modules` y las carpetas del sistema de Windows, y no sigue enlaces.
 
 Desde la consola con el teclado: `/haril-docs` (abre la entrada), `/haril-docs <ruta>` (conecta esa carpeta) y `/haril-docs clear` (desconecta). Fuera de la consola, en PowerShell: `haril config set docs.path "<ruta>"`, `haril config get docs.path` y `haril config set docs.path --reset`. Ninguna de estas órdenes toca el contenido de la carpeta.
+
+### Engram y gentle-ai (MEM)
+
+`MEM` lee dos órdenes a la vez, `haril tools status --json` y `haril memory status --json`; si una falla, la otra se sigue viendo y la que falló dice por qué. Ejemplo (40 columnas, Engram bien, proveedor `engram`):
+
+```text
+Engram · ok
+  3.6.0 · copia de HARIL
+  …time\vendor\engram\3.6.0\engram.exe
+  Probada por HARIL: 3.6.0
+  Última publicada: 3.6.0
+  Otras copias, que HARIL no usa:
+    3.3.2 · PATH + go/bin
+    C:\Users\ana\go\bin\engram.exe
+
+Proceso de memoria
+  Proveedor: engram · persistente
+  Runtime: en marcha
+  Salud: active
+  Degradada: no
+  Cola: 0 por entregar
+
+gentle-ai · desactualizado
+  4.0.0 · PATH + go/bin
+  C:\Users\ana\go\bin\gentle-ai.exe
+  Última publicada: 4.3.1
+  Hay una versión más nueva: usa
+  «Actualizar gentle-ai».
+
+▸ Comprobar e instalar Engram
+▸ Reinstalar Engram (forzar)
+▸ Comprobar versiones ahora
+▸ Actualizar gentle-ai…
+```
+
+- **Engram** es siempre la copia propia de HARIL (`<raíz>\vendor\engram\<versión>`); nunca se usa la de `go\bin` ni la de `~/.engram`, que se listan como «no usadas». Los estados son `ok`, `falta`, `desactualizado` y `desconocido`. Si la última instalación falló y Engram no está bien, la ficha dice el motivo y cuándo HARIL lo reintenta solo (6 horas); **Reinstalar Engram (forzar)** reintenta ya.
+- **Proceso de memoria**: con el proveedor `null` la ficha dice «NO GUARDA». Si Engram aún no está listo, para activarlo usa **Comprobar e instalar Engram** (o `haril tools ensure` en PowerShell) y **reinicia el runtime**; si ya está `ok`, solo falta reiniciar el runtime («Engram está listo: reinicia el runtime para que lo use»), porque el runtime lee su configuración al arrancar y `memory.provider` debe ser `engram` en `haril.json`.
+- **gentle-ai** no tiene binarios para Windows: **Actualizar gentle-ai…** (o **Instalar gentle-ai…** si falta) abre una confirmación con el plan exacto (`go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v<versión>`, la carpeta donde queda y la versión de Go) y solo si aceptas lo ejecuta. Necesita Go y puede tardar unos minutos la primera vez.
+- Mientras una acción corre, la ficha muestra «… Comprobando e instalando Engram» (o la que toque) en lugar de las filas; una sola operación a la vez. Al terminar sale un aviso con el resultado y la ficha se carga de nuevo. Las mismas filas están en `Alt+K` (o `/haril-panel`) como «MEM · …».
+- **Al abrir `haril`**, la consola lanza en segundo plano `haril tools ensure --json` (hasta 5 minutos, sin frenar nada): instala o repara Engram y refresca las últimas versiones. Solo si pasó algo o queda algo pendiente aparece **un aviso**; con todo al día no dice nada. Para omitirla, define `HARIL_TOOLS_CHECK=off` (también `0` o `false`) antes de abrir `haril`. Si la comprobación falla, la ficha `MEM` lo dice en «Comprobación al arrancar».
 
 ### Ocultar, mostrar o reordenar espacios
 
@@ -233,7 +273,7 @@ Si solo tienes Claude Code, instala la extensión una vez con `haril extensions 
 | **Alt+L** | Selector de las pestañas del panel: **1–3**, `↑/↓`, `Enter`, `Esc` |
 | **Alt+H** | Selector de las cinco áreas: `↑/↓`, `Enter`, `Esc` |
 | **Alt+I** | Mostrar/ocultar panel derecho; en terminal compacta abre acciones |
-| **Alt+K** | Menú del panel derecho (también `/haril-panel`): `↑/↓`, `Enter`, `Esc` |
+| **Alt+K** | Menú del panel derecho (también `/haril-panel`): primero las filas de la ficha abierta (`MEM · …`, `DOCS · …`), luego las del panel; `↑/↓`, `Enter`, `Esc` |
 | **Alt+C** | Catálogo de comandos Pi/HARIL disponibles |
 | **Alt+M** | Siguiente modo de consola |
 | **Alt+O** | Vista de orquestación |
@@ -370,7 +410,8 @@ HARIL usa una **instancia privada de Pi**: sus extensiones y sesiones no se copi
 | Chat, modelos, temas e idioma | Disponibles si los proveedores y Pi responden |
 | Paneles | Nativos en Pi y terminal compatibles; en tamaños pequeños se compactan |
 | MAIN | El estado vivo de la consola; la única pestaña con ese bloque |
-| MEM y DOCS | Fichas de solo lectura; DOCS lee la carpeta conectada con `docs.path` y nunca escribe en ella |
+| MEM | Ficha de Engram, memoria y gentle-ai; instalar o actualizar solo con tu clic o su confirmación |
+| DOCS | Lee la carpeta conectada con `docs.path` y nunca escribe en ella |
 | AGENTS | Agentes observados en tareas; **no** catálogo universal de perfiles |
 | AUTOMATION | Cola y runtime; **no** un calendario de tareas recurrentes |
 | ORCHESTRATION demo | **Simulada**, no invoca agentes reales |

@@ -10,7 +10,7 @@ import { agentRuntimeFor, clockFor } from "../host.js";
 import { createDelegationTools } from "../runtime/delegation-tools.js";
 import type { HostCommandSettings } from "../runtime/host-commands.js";
 import { createLiveModels } from "../runtime/live-models.js";
-import { memoryLeftLine } from "../runtime/memory.js";
+import { configuredRuntimeMemory, memoryLeftLine } from "../runtime/memory.js";
 import { withStoreState } from "../runtime/model-context.js";
 import { createPlanProposals } from "../runtime/plan-proposals.js";
 import { killTrees } from "../runtime/processes.js";
@@ -115,6 +115,16 @@ async function serve(
     io.err(`haril: ${NOT_INITIALIZED}`);
     return EXIT_USAGE;
   }
+  let memory: ReturnType<typeof configuredRuntimeMemory>;
+  try {
+    memory = configuredRuntimeMemory(host, dataDir, clockFor(host));
+  } catch (error) {
+    store.close();
+    io.err(
+      `haril: memory configuration: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return EXIT_USAGE;
+  }
   // The host handler of haril_propose_plan (LD-T4): a plan task's proposal becomes a requested approval. Both lanes get
   // the same handler, so the run loop opens one attempt window whichever runtime serves the plan task.
   const planProposals = createPlanProposals(store);
@@ -197,6 +207,7 @@ async function serve(
       clock: clockFor(host),
       pid,
       nodeVersion: host.nodeVersion,
+      memory,
       realAgents,
       planProposals,
       delegationTools,
@@ -253,6 +264,7 @@ async function serve(
     detach();
     await realAgents.close();
     await liveModels.close();
+    await memory.close?.();
     store.close();
   }
 }

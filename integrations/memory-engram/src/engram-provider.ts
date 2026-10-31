@@ -200,7 +200,10 @@ export class EngramMemoryProvider implements MemoryProvider {
       const read = await this.send(connected.value, budget, {
         method: "GET",
         path: "/search",
-        query: { q: "haril health", project: HEALTH_PROJECT, scope: "project", limit: "1" },
+        query:
+          this.options.engramVersion === "3.6.0"
+            ? { q: "haril health", all_projects: "true", scope: "project", limit: "1" }
+            : { q: "haril health", project: HEALTH_PROJECT, scope: "project", limit: "1" },
       });
       const readOk =
         read.kind === "answer" && read.status === 200 && readSearch(read.body) !== undefined;
@@ -361,8 +364,9 @@ export class EngramMemoryProvider implements MemoryProvider {
       for (const type of typesOf(kinds) ?? [undefined]) {
         const answer = await this.send(endpoint, budget, {
           method: "GET",
-          path: "/context",
+          path: this.options.engramVersion === "3.6.0" ? "/observations/recent" : "/context",
           query: {
+            limit: "50",
             project,
             scope: accepted.scope.visibility,
             max_bytes: String(MAX_RECALL_BYTES),
@@ -370,8 +374,18 @@ export class EngramMemoryProvider implements MemoryProvider {
             type,
           },
         });
+        const recent =
+          answer.kind === "answer" &&
+          answer.status === 200 &&
+          this.options.engramVersion === "3.6.0"
+            ? readSearch(answer.body)
+            : undefined;
         const context =
-          answer.kind === "answer" && answer.status === 200 ? readContext(answer.body) : undefined;
+          recent === undefined
+            ? answer.kind === "answer" && answer.status === 200
+              ? readContext(answer.body)
+              : undefined
+            : { observations: recent, total: recent.length };
         if (context === undefined) return failureOfExchange(answer);
         universe += context.total;
         for (const observation of context.observations) {

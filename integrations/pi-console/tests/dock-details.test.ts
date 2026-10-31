@@ -5,18 +5,36 @@ import { textWidth } from "../src/text.js";
 import { type FakeCli, installFakeCli } from "./fake-cli.js";
 
 describe("plugin views backed by read-only sources", () => {
-  it("shows the HARIL memory diagnostics", async () => {
+  // The MEM tab is covered, state by state, in tools-view.test.ts; this is the plain fact that it reads the JSON of the
+  // two commands and that a part that fails shows why without hiding the other.
+  it("shows the HARIL memory diagnostics from `haril memory status --json`", async () => {
     const memory = await loadDockDetails("memory", ".", {
-      memory: async () => ({ ok: true, stdout: "Memory provider: Engram\nReady", stderr: "" }),
+      tools: async () => ({ ok: false, stdout: "", stderr: "tools down" }),
+      memory: async () => ({
+        ok: true,
+        stdout: JSON.stringify({
+          initialized: true,
+          runtime: "running",
+          provider: "engram",
+          persistent: true,
+          health: "active",
+          degraded: false,
+          outbox: { depth: 0 },
+        }),
+        stderr: "",
+      }),
     });
-    expect(memory.lines).toContain("Ready");
-    expect(memory.status).toBe("Estado de memoria HARIL");
+    expect(memory.lines).toContain("  Proveedor: engram · persistente");
+    expect(memory.status).toBe("Memoria y herramientas");
     const english = await loadDockDetails("memory", ".", {
       locale: "en",
+      tools: async () => ({ ok: false, stdout: "", stderr: "tools down" }),
       memory: async () => ({ ok: false, stdout: "", stderr: "memory store locked" }),
     });
-    expect(english.status).toBe("Memory unavailable");
-    expect(english.lines).toEqual(["memory store locked"]);
+    expect(english.status).toBe("Memory and tools");
+    expect(english.lines).toContain("Memory process · not available");
+    expect(english.lines).toContain("  memory store locked");
+    expect(english.lines).toContain("  tools down");
   });
 
   it("has nothing to load for MAIN: its content is the status block, drawn from live facts", async () => {
@@ -34,7 +52,8 @@ describe("plugin views backed by read-only sources", () => {
       });
       const text = [details.status, ...details.lines].join("\n");
       expect(text, id).not.toMatch(/Paleta|palette|YouTube|\/yt|CAMBIOS|HISTORIAL/);
-      if (id !== "docs") expect(details.actions, id).toBeUndefined();
+      // MAIN has no rows to run; MEM and DOCS declare theirs.
+      if (id === "main") expect(details.actions, id).toBeUndefined();
     }
   });
 });

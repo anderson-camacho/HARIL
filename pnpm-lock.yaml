@@ -208,6 +208,9 @@ importers:
       '@haril/git':
         specifier: workspace:*
         version: link:../../integrations/git
+      '@haril/memory-engram':
+        specifier: workspace:*
+        version: link:../../integrations/memory-engram
       '@haril/os':
         specifier: workspace:*
         version: link:../../integrations/os

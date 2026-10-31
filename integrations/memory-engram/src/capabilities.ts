@@ -23,11 +23,11 @@ export function capabilitiesOf(
   return {
     schemaVersion: 1,
     provider: PROVIDER,
-    providerVersion: known ? version : null,
+    providerVersion: known || version === "3.6.0" ? version : null,
     persistent: true,
     sessionTracking: true,
-    supportsOperationId: known,
-    topicKeyUpsert: known,
+    supportsOperationId: known || version === "3.6.0",
+    topicKeyUpsert: known || version === "3.6.0",
     // That the history exists over HTTP is NOT VERIFIED (memory.md 4.2), so it is not declared.
     versionHistory: false,
     // mem_consolidate exists only on main, not in 3.4.0 (memory.md 4.2).
