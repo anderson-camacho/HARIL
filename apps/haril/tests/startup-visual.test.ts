@@ -87,6 +87,30 @@ describe("full-terminal Matrix startup", () => {
     expect(delays).toEqual([...Array(32).fill(55), ...Array(14).fill(75), 1_600]);
   });
 
+  it("shows only the logo on the Future palette, with no character rain", async () => {
+    const output: string[] = [];
+    const delays: number[] = [];
+    let externalCalls = 0;
+    await playHarilStartup({
+      out: { columns: 120, rows: 30, write: (piece) => output.push(piece) },
+      env: {},
+      cwd: ".",
+      platform: "win32",
+      palette: "future",
+      runExternalMatrix: async () => {
+        externalCalls += 1;
+        return false;
+      },
+      wait: async (ms) => {
+        delays.push(ms);
+      },
+    });
+    expect(externalCalls).toBe(0);
+    expect(delays).toEqual([1_600]);
+    expect(output.join("")).toContain("SYSTEM ONLINE");
+    expect(output.join("").split("\u001b[2J")).toHaveLength(2);
+  });
+
   it("uses TTE's own rain when present and still shows HARIL for three seconds", async () => {
     const output: string[] = [];
     const delays: number[] = [];

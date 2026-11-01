@@ -4,7 +4,7 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
-## 0.23.23
+## 0.23.24
 
 - **Fecha:** 2026-10-31
 - **Estado:** publicada en rama; pendiente de revisión
@@ -70,6 +70,29 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 - Pruebas de `haril factory` y de las explicaciones con el almacén real y agentes simulados; prueba gemela de los tipos de la consola contra los contratos.
 - Prueba de punta a punta de «hazme una página» con almacén, bucle y repositorio git reales y agentes simulados: plan, consultor, diseñador y frontend, tester que falla y vuelve a su padre, fixer, tester que pasa, product-owner y git pidiendo permiso; el empuje se simula.
 - No verificado: Pi real, un terminal real, clics reales, una publicación real, ni una actualización real.
+
+---
+
+## 0.23.23
+
+- **Fecha:** 2026-10-31
+- **Estado:** la bienvenida del tema azul `future` ya no muestra la lluvia de caracteres: va directa al logo con `SYSTEM ONLINE`. El tema `matrix` conserva su lluvia.
+
+### Añadido
+
+- Nada.
+
+### Cambiado
+
+- Con la paleta `future`, `playHarilStartup` no ejecuta TerminalTextEffects ni la lluvia interna.
+
+### Corregido
+
+- Nada.
+
+### Verificación
+
+- `apps/haril/tests/startup-visual.test.ts`: prueba nueva, en rojo antes del cambio y en verde después. Build, tipos, biome, knip, pruebas y `check:version`. No verificado: el resultado en una terminal real.
 
 ---
 

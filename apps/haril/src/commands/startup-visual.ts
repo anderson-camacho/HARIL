@@ -476,13 +476,16 @@ export async function playHarilStartup(options: {
     const background = WELCOME_TONES[palette].background;
     options.out.write(`\u001b[?1049h\u001b[?25l${background}\u001b[2J\u001b[H`);
     try {
-      const playedExternal =
-        settings.engine !== "built-in" &&
-        (await (
-          options.runExternalMatrix ??
-          (() => matrixTte(options.out, options.env, options.platform, palette))
-        )());
-      if (!playedExternal) await matrixBuiltIn(options.out, wait, palette);
+      // The character rain belongs to Matrix: Future goes straight to the logo.
+      if (palette !== "future") {
+        const playedExternal =
+          settings.engine !== "built-in" &&
+          (await (
+            options.runExternalMatrix ??
+            (() => matrixTte(options.out, options.env, options.platform, palette))
+          )());
+        if (!playedExternal) await matrixBuiltIn(options.out, wait, palette);
+      }
       // Whole rows over the last frame of either engine: the logo stays, nothing is erased first.
       const { width, height } = terminalSize(options.out);
       const final = welcomeFinal(width, height, palette);
