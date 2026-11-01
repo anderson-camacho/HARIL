@@ -148,15 +148,36 @@ const ADDED: Readonly<Record<string, string>> = {
   GIT_TERMINAL_PROMPT: "0",
 };
 
+// What a git action a person granted needs on top: to reach a remote with the person's own credentials. Nothing else of
+// the runtime's environment comes along, gateway keys among it.
+export const GRANT_ENV: readonly string[] = [
+  "SSH_AUTH_SOCK",
+  "SSH_AGENT_PID",
+  "GIT_SSH",
+  "GIT_SSH_COMMAND",
+  "GIT_ASKPASS",
+  "SSH_ASKPASS",
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+  "GH_ENTERPRISE_TOKEN",
+  "GITHUB_ENTERPRISE_TOKEN",
+  "GH_HOST",
+  "GH_CONFIG_DIR",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
+];
+
 export function cleanEnvironment(
   env: NodeJS.ProcessEnv,
   platform: string = process.platform,
+  keep: readonly string[] = [],
 ): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [name, value] of Object.entries(env)) {
     if (value === undefined) continue;
     const key = platform === "win32" ? name.toUpperCase() : name;
-    if (KEPT.has(key)) out[name] = value;
+    if (KEPT.has(key) || keep.includes(key)) out[name] = value;
   }
   return { ...out, ...ADDED };
 }
@@ -286,6 +307,9 @@ export interface HostCommandRequest {
   readonly classified?: boolean;
   // The environment the clean one is taken from; defaults to this process's.
   readonly env?: NodeJS.ProcessEnv;
+  // Names kept from it beyond the clean list (a person's grant), and variables set on top.
+  readonly keepEnv?: readonly string[];
+  readonly extraEnv?: Readonly<Record<string, string>>;
   readonly platform?: string;
   // Kills the command's whole tree when its time passes (the host's verified tree kill). Without it, the process (and
   // its group on POSIX) is killed.
@@ -355,7 +379,10 @@ export function runHostCommand(request: HostCommandRequest): Promise<HostCommand
   if (request.signal?.aborted === true) {
     return Promise.resolve({ ok: false, reason: "the turn ended; the command was not started" });
   }
-  const env = cleanEnvironment(request.env ?? process.env, platform);
+  const env = {
+    ...cleanEnvironment(request.env ?? process.env, platform, request.keepEnv),
+    ...request.extraEnv,
+  };
   const program = resolveProgram(request.command, env, platform);
   if (!program.ok) return Promise.resolve(program);
   return new Promise((resolve) => {

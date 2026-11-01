@@ -3,7 +3,7 @@ import type { RunEvent } from "@haril/core";
 import type { Store } from "@haril/core/ports";
 import { StoreError } from "@haril/state-sqlite";
 import { planSubmitCommand } from "../plan-submit.js";
-import { applyHumanRequest, type GitActionRunner, runGitAction } from "./human-requests.js";
+import { applyHumanRequest, type HumanGrants } from "./human-requests.js";
 
 // The runtime's name as the decider of the plans it denies (LD-T4).
 const RUNTIME_DECIDER = "runtime";
@@ -40,22 +40,13 @@ export function applyDecidedApprovals(
   store: Store,
   epoch: number,
   emit: (event: RunEvent) => void,
-  humanAction: GitActionRunner = runGitAction,
+  grants: HumanGrants = {},
   wake: () => void = () => undefined,
 ): number {
   let applied = 0;
   for (const approval of store.approvals.listUnapplied()) {
     if (approval.kind === HUMAN_REQUEST_KIND) {
-      const marked = store.approvals.markApplied(approval.approvalId, epoch);
-      if (marked) {
-        applyHumanRequest(
-          store,
-          approval,
-          humanAction,
-          (projectId) => store.projects.list().find((row) => row.projectId === projectId)?.rootPath,
-          wake,
-        );
-      }
+      applyHumanRequest(store, epoch, approval, grants, wake);
       emit({
         type: "approval.applied",
         approvalId: approval.approvalId,

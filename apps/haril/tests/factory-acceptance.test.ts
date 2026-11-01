@@ -1,7 +1,8 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import type { HumanRequest } from "@haril/contracts";
 import {
   canonicalJson,
   canTransition,
@@ -35,8 +36,10 @@ vi.setConfig({ testTimeout: 120_000, hookTimeout: 60_000 });
 
 const HAS_GIT = spawnSync("git", ["--version"], { windowsHide: true }).status === 0;
 
+// A person may take hours to answer: a test moves this forward.
+let later = 0;
 const clock: Clock = {
-  now: () => Date.now(),
+  now: () => Date.now() + later,
   schedule: (ms, fn) => {
     const timer = setTimeout(fn, ms);
     return () => clearTimeout(timer);
@@ -110,6 +113,7 @@ function git(...args: string[]): string {
 }
 
 beforeEach(() => {
+  later = 0;
   sb = makeSandbox();
   repo = join(sb.root, "project");
   mkdirSync(join(repo, "src"), { recursive: true });
@@ -296,7 +300,7 @@ function script(seen: Seen) {
   };
 }
 
-async function run(seen: Seen, gitAction: GitActionRunner): Promise<void> {
+async function run(seen: Seen, gitAction?: GitActionRunner): Promise<void> {
   const workspaces = createWorkspaces({
     root: join(sb.root, "wt"),
     commands: { allow: ["npm test"], timeoutMs: 60_000, outputMaxBytes: 4_096 },
@@ -321,7 +325,7 @@ async function run(seen: Seen, gitAction: GitActionRunner): Promise<void> {
     delegationTools: tools,
     delegation: OPTIONS,
     workspaces,
-    gitAction,
+    ...(gitAction === undefined ? {} : { gitAction }),
   });
 }
 
@@ -459,7 +463,7 @@ describe.skipIf(!HAS_GIT)('"hazme una página"', () => {
     store.approvals.decide({
       approvalId: request?.id ?? "",
       outcome: "granted",
-      decidedBy: "ander",
+      decidedBy: "persona",
     });
 
     await run(seen, gitAction);
@@ -480,5 +484,192 @@ describe.skipIf(!HAS_GIT)('"hazme una página"', () => {
     // main is untouched: nothing was merged to it.
     expect(git("log", "--oneline", "main")).toContain("first");
     expect(git("log", "--oneline", "main").split("\n")).toHaveLength(1);
+  });
+
+  // The workflow as the first run leaves it: git asked to publish, and a person has not answered.
+  async function askedToPublish() {
+    const projectId = store.projects.register({
+      slug: "demo",
+      name: "Demo",
+      rootPath: repo,
+    }).projectId;
+    store.commands.enqueue({
+      type: "workflow.start",
+      projectId,
+      args: {
+        intake: workflowIntake(repo),
+        goal: "Hazme una página",
+        model: ORCHESTRATOR,
+        agent: "fake:orchestrate",
+        autonomy: { mode: "autonomous", stops: [] },
+        limits: LIMITS,
+        budgetTokens: 200_000,
+        timeoutMs: 60_000,
+        baseBranch: "main",
+        baseSha: git("rev-parse", "main"),
+      },
+      idempotencyKey: "hazme",
+      requestHash: "hazme",
+    });
+    const seen: Seen = {
+      plan: null,
+      reportedFailure: null,
+      gitReply: null,
+      gitStatus: null,
+      mergeRefused: [],
+      answer: null,
+    };
+    const calls: { args: string[]; root: string }[] = [];
+    const gitAction: GitActionRunner = async (action, workspace) => {
+      calls.push({ args: [action.program, ...action.args], root: workspace.root });
+      return { exitCode: 0, output: "ok" };
+    };
+    await run(seen, gitAction);
+    const [workflow] = store.workflows.list();
+    const workflowId = workflow?.workflowId ?? "";
+    const [approval] = store.approvals.list({ status: "requested" });
+    const asked = approval?.subject as unknown as HumanRequest;
+    const task = store.workflows.tasks(workflowId).find((row) => row.taskId === asked.taskId);
+    const worktree = store.worktrees
+      .list({ workflowId, kind: "executor", state: "active" })
+      .find((row) => row.threadId === task?.threadId);
+    if (approval === undefined || worktree === undefined) throw new Error("no request to answer");
+    const ask = (args: string[]): string => {
+      const raised = store.approvals.requestHuman({
+        projectId,
+        requestedBy: approval.requestedBy,
+        request: { ...asked, action: { program: "git", args }, needs: args.join(" ") },
+      });
+      if (!raised.ok) throw new Error(raised.error.message);
+      return raised.value.approval.approvalId;
+    };
+    const grant = (approvalId: string): void => {
+      store.approvals.decide({ approvalId, outcome: "granted", decidedBy: "persona" });
+    };
+    return { seen, calls, gitAction, workflowId, approval, asked, worktree, ask, grant };
+  }
+
+  function gitEvents(taskId: string): Record<string, unknown>[] {
+    return store.events
+      .list({ aggregateId: taskId })
+      .filter((event) => event.type === "git.action")
+      .map((event) => event.payload as Record<string, unknown>);
+  }
+
+  it("runs a grant in the worktree of the agent that asked, never in the person's checkout", async () => {
+    const { seen, calls, gitAction, approval, worktree, grant } = await askedToPublish();
+    grant(approval.approvalId);
+    await run(seen, gitAction);
+    expect(calls).toEqual([{ args: ["git", "push", "origin", "web"], root: worktree.path }]);
+    expect(calls[0]?.root).not.toBe(repo);
+  });
+
+  it("judges a grant again when it runs, and records what it refused", async () => {
+    const { seen, calls, gitAction, approval, asked, ask, grant } = await askedToPublish();
+    const toMain = ask(["push", "origin", "main"]);
+    const everything = ask(["push", "--all", "origin"]);
+    const relabelled = ask(["push", "--force", "origin", "web"]);
+    for (const id of [toMain, everything, relabelled, approval.approvalId]) grant(id);
+    await run(seen, gitAction);
+    expect(calls.map((call) => call.args)).toEqual([["git", "push", "origin", "web"]]);
+    const refused = gitEvents(asked.taskId).filter((row) => row.outcome === "refused");
+    expect(refused.map((row) => row.command).sort()).toEqual([
+      "git push --all origin",
+      "git push --force origin web",
+      "git push origin main",
+    ]);
+    for (const row of refused) {
+      expect(row.why).toEqual(expect.any(String));
+      expect(row.exitCode).toBeNull();
+    }
+  });
+
+  it("refuses a grant whose worktree is gone", async () => {
+    const { seen, calls, gitAction, approval, asked, worktree, grant } = await askedToPublish();
+    rmSync(worktree.path, { recursive: true, force: true });
+    grant(approval.approvalId);
+    await run(seen, gitAction);
+    expect(calls).toEqual([]);
+    const rows = gitEvents(asked.taskId).filter((row) => row.approvalId === approval.approvalId);
+    expect(rows.map((row) => row.outcome)).toEqual(["refused"]);
+    expect(rows[0]?.why).toContain("worktree");
+  });
+
+  it("refuses a grant whose worktree stands on main", async () => {
+    const { seen, calls, gitAction, approval, asked, worktree, grant } = await askedToPublish();
+    const pointer = join(repo, ".git", "worktrees");
+    const admin = readdirSync(pointer).find((name) =>
+      readFileSync(join(pointer, name, "gitdir"), "utf8").includes(
+        worktree.path.replaceAll("\\", "/").split("/").pop() ?? "",
+      ),
+    );
+    writeFileSync(join(pointer, admin ?? "", "HEAD"), "ref: refs/heads/main\n");
+    grant(approval.approvalId);
+    await run(seen, gitAction);
+    expect(calls).toEqual([]);
+    const [onMain] = gitEvents(asked.taskId).filter((row) => row.outcome === "refused");
+    expect(onMain?.why).toContain("main");
+    expect(git("symbolic-ref", "HEAD")).toBe("refs/heads/main");
+    expect(git("log", "--oneline", "main").split("\n")).toHaveLength(1);
+  });
+
+  it("pushes a grant for real from the worktree's branch and leaves the checkout alone", async () => {
+    const remote = join(sb.root, "remote.git");
+    execFileSync("git", ["init", "--quiet", "--bare", remote], { windowsHide: true, env });
+    git("remote", "add", "origin", remote);
+    const { seen, approval, asked, worktree, ask, grant } = await askedToPublish();
+    const branch = ask(["push", "origin", worktree.branch]);
+    grant(branch);
+    grant(approval.approvalId);
+    await run(seen);
+    const pushed = execFileSync(
+      "git",
+      ["--git-dir", remote, "for-each-ref", "--format=%(refname)"],
+      { windowsHide: true, encoding: "utf8", env },
+    );
+    expect(pushed).toContain(`refs/heads/${worktree.branch}`);
+    expect(pushed).not.toContain("refs/heads/main");
+    expect(git("symbolic-ref", "HEAD")).toBe("refs/heads/main");
+    const rows = gitEvents(asked.taskId).filter((row) => row.outcome === "ran");
+    expect(rows.find((row) => String(row.command).includes(worktree.branch))?.exitCode).toBe(0);
+  });
+
+  it("recovers a crash between marking a grant applied and closing it, without running it twice", async () => {
+    const { seen, calls, gitAction, approval, asked, grant } = await askedToPublish();
+    grant(approval.approvalId);
+    // The crash: the decision is marked and the runtime dies before the action or its close.
+    const lease = store.runtime.acquire({
+      pid: process.pid,
+      nodeVersion: process.version,
+      sqliteVersion: store.info().sqliteVersion,
+      ttlMs: 60_000,
+    });
+    if (!lease.ok) throw new Error("no lease");
+    expect(store.approvals.markApplied(approval.approvalId, lease.value.epoch)).toBe(true);
+    store.runtime.release(lease.value.epoch, false);
+
+    await run(seen, gitAction);
+
+    expect(calls).toEqual([]);
+    const rows = gitEvents(asked.taskId).filter((row) => row.approvalId === approval.approvalId);
+    expect(rows.map((row) => row.outcome)).toEqual(["interrupted"]);
+    expect(seen.answer).toContain("no se sabe");
+    const [workflow] = store.workflows.list();
+    expect(workflow?.stopReason === "human_request").toBe(false);
+    expect(workflow?.state).toBe("completed");
+  });
+
+  it("keeps waiting for a person past the wall time, and goes on when they answer", async () => {
+    const { seen, gitAction, approval, grant } = await askedToPublish();
+    later = LIMITS.maxWorkflowWallMs + 60_000;
+    await run(seen, gitAction);
+    const [waiting] = store.workflows.list();
+    expect(waiting?.state).toBe("awaiting_human");
+    expect(waiting?.stopReason).toBe("human_request");
+    grant(approval.approvalId);
+    await run(seen, gitAction);
+    const [ended] = store.workflows.list();
+    expect(ended?.state).toBe("completed");
+    expect(ended?.stopReason === "wall_time").toBe(false);
   });
 });

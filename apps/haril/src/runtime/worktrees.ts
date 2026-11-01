@@ -33,6 +33,7 @@ import {
 } from "@haril/git";
 import { readConfinedFile, writeConfinedFile } from "@haril/os";
 import {
+  GRANT_ENV,
   type HostCommandProcess,
   type HostCommandResult,
   type HostCommandSettings,
@@ -157,6 +158,8 @@ interface CommandHooks {
   readonly signal?: AbortSignal;
   readonly onSpawn?: (process: HostCommandProcess) => void;
   readonly onExit?: (process: HostCommandProcess) => void;
+  // A grant from a person: the variables a push needs for the person's credentials come along (GRANT_ENV).
+  readonly credentials?: boolean;
 }
 
 export type WorkspaceReply =
@@ -288,7 +291,7 @@ export interface Workspaces {
   // The git role's git or gh, already classified by the Core (classifyGitCommand): not on the allow list, with the
   // repository named so a command cannot be pointed at another one.
   runGit(
-    workspace: TurnWorkspace,
+    workspace: Pick<TurnWorkspace, "gitDir" | "root">,
     program: "git" | "gh",
     args: readonly string[],
     hooks?: CommandHooks,
@@ -968,6 +971,11 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
       cwd: workspace.root,
       settings: settings.commands,
       classified: true,
+      // gh runs git by itself: it gets the same repository the argv names for git.
+      ...(program === "gh"
+        ? { extraEnv: { GIT_DIR: workspace.gitDir, GIT_WORK_TREE: workspace.root } }
+        : {}),
+      ...(hooks.credentials === true ? { keepEnv: GRANT_ENV } : {}),
       ...(settings.env === undefined ? {} : { env: settings.env }),
       ...(settings.killTree === undefined ? {} : { killTree: settings.killTree }),
       ...(hooks.signal === undefined ? {} : { signal: hooks.signal }),

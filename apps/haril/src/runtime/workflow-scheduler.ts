@@ -164,6 +164,25 @@ export interface WorkflowEnded {
 // complete (after its at_end stop, which the human may have continued from); otherwise it stalled and fails. A workflow
 // past its wall time fails too (its attempts in flight close normally and nothing follows them). The watchdog of 3.16
 // (phase F3) adds the finer checks.
+// How long a workflow has run, without the time it stood waiting for a person: an answer given hours later continues the
+// work; it does not end it for having taken long. The events are only read once the plain elapsed time passed the limit.
+function workflowActiveMs(
+  store: Pick<Store, "events">,
+  workflow: WorkflowRecord,
+  now: number,
+): number {
+  let waited = 0;
+  let since: number | null = null;
+  for (const event of store.events.list({ aggregateId: workflow.workflowId })) {
+    if (event.type === "workflow.awaiting_human") since = event.ts;
+    if (event.type === "workflow.continued" && since !== null) {
+      waited += event.ts - since;
+      since = null;
+    }
+  }
+  return now - workflow.createdAt - waited;
+}
+
 export function settleWorkflows(
   store: Store,
   epoch: number,
@@ -179,7 +198,8 @@ export function settleWorkflows(
     let state: Exclude<WorkflowState, "running"> | null = null;
     if (
       limits.maxWorkflowWallMs > 0 &&
-      clock.now() - workflow.createdAt > limits.maxWorkflowWallMs
+      clock.now() - workflow.createdAt > limits.maxWorkflowWallMs &&
+      workflowActiveMs(store, workflow, clock.now()) > limits.maxWorkflowWallMs
     ) {
       state = "failed";
       reason = "wall_time";

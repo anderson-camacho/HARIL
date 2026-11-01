@@ -49,7 +49,7 @@ import {
   recordHandoff,
   successorOf,
 } from "./handoff.js";
-import type { GitActionRunner } from "./human-requests.js";
+import { type GitActionRunner, type HumanGrants, recoverHumanRequests } from "./human-requests.js";
 import { unmergedSteps } from "./integration.js";
 import {
   backoffJitter,
@@ -225,6 +225,7 @@ export async function runUntilIdle(given: RunLoopOptions): Promise<RunLoopResult
         denyPlansOfFailedTask(store, recovered.taskId, "infra_restarts_exhausted");
       }
     }
+    recoverHumanRequests(store);
     // The lease heartbeat runs before memory starts: memory calls it before each provider call (MC-T4 fix).
     const beat = leaseHeartbeat(store, options.clock, epoch, ttlMs);
     beat();
@@ -448,6 +449,18 @@ async function serve(
       attempt.kill();
     }
   };
+  // The granted git actions in flight: the runtime waits for them, and a stop ends them.
+  const grantsRunning = new Set<Promise<void>>();
+  const grantsStop = new AbortController();
+  const grants: HumanGrants = {
+    ...(options.gitAction === undefined ? {} : { runner: options.gitAction }),
+    ...(options.workspaces === undefined ? {} : { workspaces: options.workspaces }),
+    signal: grantsStop.signal,
+    track: (work) => {
+      grantsRunning.add(work);
+      void work.finally(() => grantsRunning.delete(work));
+    },
+  };
   for (;;) {
     beat();
     // 3.14: a stop queued while attempts settled applies before they close. The agents it was meant to end (killed by
@@ -472,11 +485,15 @@ async function serve(
     // Decisions first: a granted plan is queued in this turn and applied by the queue step right after it (LD-T3).
     const decided = standaloneBusy
       ? 0
-      : applyDecidedApprovals(store, epoch, emit, options.gitAction);
+      : applyDecidedApprovals(store, epoch, emit, grants, () => wake?.());
     const applied = early + decided + applyQueuedCommands(store, epoch, emit, shutdown, live);
     if (shutdown.requested) {
       // ARCH 4.2: each attempt in flight was aborted when the stop was requested; the lease goes once they all closed.
       // A nudge ends the wait too, so an emergency stop queued meanwhile is applied at once (3.14).
+      if (grantsRunning.size > 0) {
+        grantsStop.abort();
+        await Promise.allSettled(grantsRunning);
+      }
       if (live.size > 0) {
         await waitForAttempts(clock, pollMs, onNudge, (resolve) => {
           wake = done.length > 0 ? null : resolve;
@@ -567,8 +584,8 @@ async function serve(
       continue;
     }
 
-    if (applied > 0 || hasSubscribers()) idleSince = clock.now();
-    if (clock.now() - idleSince >= idleExitMs) {
+    if (applied > 0 || hasSubscribers() || grantsRunning.size > 0) idleSince = clock.now();
+    if (clock.now() - idleSince >= idleExitMs && grantsRunning.size === 0) {
       // The queue check and the release are one transaction (ARCH 4.2). A command that arrived meanwhile keeps the
       // lease, and the next turn applies it.
       if (store.runtime.releaseIfIdle(epoch)) return "idle";
