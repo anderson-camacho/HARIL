@@ -82,21 +82,25 @@ function everyView(): FactoryState[] {
 }
 
 describe("the factory's tabs stay inside the window", () => {
+  // 13,650 renders, about 5s alone: the views are built once, one expect closes the sweep, and only this test gets a
+  // longer timeout, because a loaded machine multiplies that time while the full suite runs in parallel.
   it("no line exceeds the width and the height is exact, at every size", () => {
+    const views = everyView();
+    const faults: string[] = [];
     for (const width of [1, 2, 3, 10, 20, 40, 59, 60, 69, 70, 80, 95, 96, 120, 200]) {
       for (const rows of [1, 2, 4, 5, 6, 8, 12, 14, 18, 24, 30, 40, 60]) {
-        for (const state of everyView()) {
+        for (const state of views) {
           for (const g of [UNICODE_FACTORY_GLYPHS, ASCII_FACTORY_GLYPHS]) {
             const out = lines(state, width, rows, g);
             const where = `${state.tab} ${width}x${rows}`;
-            expect(out.length, where).toBe(rows);
-            for (const line of out)
-              expect(textWidth(line), `${where}: ${line}`).toBeLessThanOrEqual(width);
+            if (out.length !== rows) faults.push(`${where}: ${out.length} rows`);
+            for (const line of out) if (textWidth(line) > width) faults.push(`${where}: ${line}`);
           }
         }
       }
     }
-  });
+    expect(faults).toEqual([]);
+  }, 60_000);
 
   it("frames each tab at 40, 80 and 120: the same right border on every row", () => {
     for (const width of [40, 80, 120]) {
