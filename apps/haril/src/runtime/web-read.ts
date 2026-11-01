@@ -68,7 +68,7 @@ export function isPublicAddress(address: string): boolean {
 // Every address a name answers; an empty answer is no answer.
 export type WebLookup = (hostname: string) => Promise<readonly string[]>;
 
-export interface WebAnswer {
+interface WebAnswer {
   readonly status: number;
   readonly headers: { get(name: string): string | null };
   readonly body: AsyncIterable<Uint8Array> | null;
