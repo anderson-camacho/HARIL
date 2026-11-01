@@ -112,7 +112,8 @@ function agentOk(value: unknown): boolean {
     (row.elapsedMs === null || finite(row.elapsedMs)) &&
     fillOk(row.context, "used", "threshold") &&
     textOrNull(row.parent) &&
-    finite(row.depth)
+    finite(row.depth) &&
+    allOk(row.waitingFor, text)
   );
 }
 
@@ -145,6 +146,19 @@ function requestOk(value: unknown): boolean {
 function edgeOk(value: unknown): boolean {
   const row = record(value);
   return row !== undefined && text(row.workflowId) && text(row.parent) && text(row.child);
+}
+
+function handoffOk(value: unknown): boolean {
+  const row = record(value);
+  return (
+    row !== undefined &&
+    finite(row.at) &&
+    text(row.workflowId) &&
+    textOrNull(row.agent) &&
+    (row.kind === "model" || row.kind === "agent") &&
+    text(row.from) &&
+    text(row.to)
+  );
 }
 
 function readingOk(value: unknown): boolean {
@@ -247,6 +261,7 @@ export function parseFactoryLine(line: string): FactoryModel | undefined {
     !allOk(model.edges, edgeOk) ||
     !allOk(model.events, eventOk) ||
     !allOk(model.humanRequests, requestOk) ||
+    !allOk(model.handoffs, handoffOk) ||
     !quotaOk(model.quota)
   ) {
     return undefined;

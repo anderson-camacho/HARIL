@@ -68,6 +68,7 @@ export interface FactoryAgent {
   readonly context: ContextFill | null;
   readonly parent: string | null;
   readonly depth: number;
+  readonly waitingFor: readonly string[];
 }
 
 export interface FactoryEvent {
@@ -76,6 +77,15 @@ export interface FactoryEvent {
   readonly text: string;
   readonly workflowId: string | null;
   readonly agent: string | null;
+}
+
+export interface FactoryHandoff {
+  readonly at: number;
+  readonly workflowId: string;
+  readonly agent: string | null;
+  readonly kind: "model" | "agent";
+  readonly from: string;
+  readonly to: string;
 }
 
 export interface FactoryHumanRequest {
@@ -152,6 +162,7 @@ export interface FactoryModel {
     readonly child: string;
   }[];
   readonly events: readonly FactoryEvent[];
+  readonly handoffs: readonly FactoryHandoff[];
   readonly quota: FactoryQuota;
   readonly humanRequests: readonly FactoryHumanRequest[];
 }

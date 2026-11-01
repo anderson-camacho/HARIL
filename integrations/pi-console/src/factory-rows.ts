@@ -99,6 +99,14 @@ export function agentRows(state: FactoryState): FactoryAgent[] {
   return state.agentsTree ? rows : [...rows].sort((a, b) => b.tokens - a.tokens);
 }
 
+export function connectionAgents(state: FactoryState): FactoryAgent[] {
+  const { model } = state;
+  if (model === null) return [];
+  return model.agents.filter((agent) =>
+    matches(state.filter.conexiones, agent.code, agent.role, agent.task, agent.status),
+  );
+}
+
 export function quotaAccounts(state: FactoryState): FactoryQuotaAccount[] {
   const { model } = state;
   if (model === null) return [];
@@ -308,6 +316,14 @@ export function selectedRowId(state: FactoryState, tab: FactoryTab): SelectedRow
         rows.map((row) => row.id),
         0,
         rows[index]?.workflowId,
+      );
+    }
+    case "conexiones": {
+      const agents = connectionAgents(state);
+      return out(
+        agents.map((row) => `${row.workflowId}/${row.code}`),
+        0,
+        agents[index]?.workflowId,
       );
     }
     case "modelos": {

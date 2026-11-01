@@ -133,6 +133,27 @@ function fallbackExplanation(snapshot: WorkflowSnapshot): WaitExplanation {
   );
 }
 
+// The agents whose open turns this turn depends on.
+function waitedAgents(
+  latest: WorkflowTaskRecord,
+  turns: readonly WorkflowTaskRecord[],
+  nodes: readonly WorkflowNode[],
+): string[] {
+  const open = new Set(["pending", "ready", "running", "blocked"]);
+  const threads = latest.dependsOn.flatMap((dependency) => {
+    const turn = turns.find((row) => row.taskId === dependency.taskId);
+    return turn !== undefined && open.has(turn.state) ? [turn.threadId] : [];
+  });
+  return [
+    ...new Set(
+      threads.flatMap((threadId) => {
+        const node = nodes.find((row) => row.threadId === threadId);
+        return node === undefined ? [] : [node.id];
+      }),
+    ),
+  ];
+}
+
 interface Built {
   readonly workflow: FactoryModel["workflows"][number];
   readonly tasks: FactoryModel["tasks"];
@@ -206,6 +227,7 @@ function buildWorkflow(
       context: node.context,
       parent: node.parentId,
       depth: node.depth,
+      waitingFor: waitedAgents(latest, turns, snapshot.nodes),
     });
     if (node.parentId !== null) {
       edges.push({ workflowId: record.workflowId, parent: node.parentId, child: node.id });
@@ -319,6 +341,44 @@ function eventsOf(
     .slice(-RECENT_EVENTS);
 }
 
+// Who moved where: a turn's model replaced by another, and any handoff an agent recorded.
+function handoffsOf(
+  store: Store,
+  projectIds: readonly string[],
+  built: readonly Built[],
+): FactoryModel["handoffs"] {
+  const shown = new Set(built.map((item) => item.workflow.id));
+  const agentOfTask = new Map(built.flatMap((item) => [...item.agentOfTask]));
+  return projectIds
+    .flatMap((projectId) => store.events.list({ projectId, limit: RECENT_EVENTS }))
+    .flatMap((event) => {
+      const kind =
+        event.type === "model.substituted"
+          ? ("model" as const)
+          : event.type.includes("handoff")
+            ? ("agent" as const)
+            : null;
+      if (kind === null) return [];
+      const payload = event.payload as Readonly<Record<string, unknown>>;
+      const workflowId =
+        typeof payload.workflowId === "string" ? payload.workflowId : event.aggregateId;
+      const { from, to, taskId } = payload;
+      if (!shown.has(workflowId) || typeof from !== "string" || typeof to !== "string") return [];
+      const task = event.taskId ?? (typeof taskId === "string" ? taskId : null);
+      return [
+        {
+          at: event.ts,
+          workflowId,
+          agent: task === null ? null : (agentOfTask.get(task) ?? null),
+          kind,
+          from,
+          to,
+        },
+      ];
+    })
+    .sort((a, b) => a.at - b.at);
+}
+
 export function buildFactoryModel(store: Store, options: FactoryModelOptions): FactoryModel {
   const { project } = options;
   const projects = project === undefined ? store.projects.list() : [project];
@@ -344,6 +404,11 @@ export function buildFactoryModel(store: Store, options: FactoryModelOptions): F
     agents,
     edges: built.flatMap((item) => item.edges),
     events: eventsOf(
+      store,
+      projects.map((item) => item.projectId),
+      built,
+    ),
+    handoffs: handoffsOf(
       store,
       projects.map((item) => item.projectId),
       built,

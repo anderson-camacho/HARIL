@@ -26,12 +26,14 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 - Cuota por grupo: una cuenta con grupos de modelos (Antigravity: «Gemini», «Claude and GPT») guarda las ventanas de cada grupo (migración 0019). Una cuenta al 90 % en Gemini y al 5 % en Claude/GPT sigue disponible para Claude y GPT. Un modelo sin grupo conocido conserva la regla de la peor ventana: nada se afloja sin datos. Las filas antiguas y los proveedores sin grupos siguen valiendo.
 - Modelos: una tarjeta por cuenta con plan si se conoce, cada grupo con sus modelos, barras de 5 horas y semana con su reinicio, éxitos y fallos, agentes que la usan, estado explicado y antigüedad del dato. `[`/`]` cambian a Monitor (barras como `htop`), Historial (línea con el umbral en rojo) y Caché de prompts. `r` vuelve a leer la cuota.
 - Cada lectura dice de dónde sale: del proveedor, estimada con `~` a partir de los tokens del registro de uso (un conteo, nunca un porcentaje) o de ninguna parte, y entonces por qué: `El proveedor no permite ver este dato`, `Sin lectura: <motivo>` (conservando el último valor, marcado como antiguo) o `No aplica`. Las direcciones de correo no viajan: se usa el prefijo o una referencia opaca.
+- Conexiones: cinco vistas con `[`/`]`. Cadena del agente elegido en cajas redondeadas con enlaces `·` y `•`, línea de acción `▶` y traza; árbol de delegación con el camino iluminado; red con los mensajes en curso; secuencia de eventos del agente; y relevo, solo si hubo uno. Debajo siempre dice a quién espera el agente y por qué. Sin ancho o alto suficientes se reduce a un árbol con sangría.
 - `delegation.quota.colorWarnPercent` y `colorDangerPercent` fijan el color de las barras, aparte de los umbrales que deciden qué modelo corre.
 
 ### Limitaciones
 
 - El atajo es `Alt+G` y no `Alt+F`, que es de Pi (`tui.editor.cursorWordRight`): la consola no sobrescribe atajos propios de Pi.
-- Conexiones y Sistema aún no tienen datos y lo dicen con «Sin datos conectados todavía».
+- Sistema aún no tiene datos y lo dice con «Sin datos conectados todavía».
+- La secuencia de Conexiones sale de los eventos guardados, que no dicen a quién iba cada mensaje: una respuesta se dibuja hacia el padre y el resto queda en la línea del propio agente. Los relevos que hoy existen son cambios de modelo: el relevo entre agentes llega con la entrega al 80 %.
 - La vista incluye todos los flujos activos y los 10 terminados más recientes. Los eventos no tienen duración, así que el registro no dibuja la cascada de la pieza de referencia.
 
 ### Verificación

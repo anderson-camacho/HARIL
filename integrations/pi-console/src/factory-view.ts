@@ -1,6 +1,7 @@
 import { activityBody, searchField } from "./factory-activity.js";
 import { agentsBody } from "./factory-agents.js";
 import { type BodyLine, boardBody } from "./factory-board.js";
+import { conexionesBody } from "./factory-connections.js";
 import { detailBody } from "./factory-detail.js";
 import {
   type FactoryGlyphs,
@@ -117,7 +118,8 @@ function dataTab(state: FactoryState): boolean {
       state.tab === "actividades" ||
       state.tab === "tablero" ||
       state.tab === "agentes" ||
-      state.tab === "modelos")
+      state.tab === "modelos" ||
+      state.tab === "conexiones")
   );
 }
 
@@ -136,6 +138,7 @@ function tabHints(state: FactoryState): Hint[] {
       out.push({ key: "e", action: state.eventLog ? "bandeja" : "eventos", keep: 1 });
     }
     if (state.tab === "avance") out.push({ key: "[/]", action: "vista", keep: 1 });
+    if (state.tab === "conexiones") out.push({ key: "[/]", action: "vista", keep: 1 });
     if (state.tab === "modelos") {
       out.push({ key: "[/]", action: "vista", keep: 1 }, { key: "r", action: "releer", keep: 3 });
     }
@@ -242,6 +245,8 @@ function tabBody(state: FactoryState, width: number, height: number, g: FactoryG
   switch (state.tab) {
     case "modelos":
       return modelosBody(state, width, height, g);
+    case "conexiones":
+      return conexionesBody(state, width, height, g);
     case "tablero":
       return boardBody(state, width, height, g);
     case "actividades":

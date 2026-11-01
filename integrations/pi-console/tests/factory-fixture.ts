@@ -96,6 +96,7 @@ function agentOf(row: FactoryTask, depth: number): FactoryAgent {
     context: row.context,
     parent: row.delegatedBy,
     depth,
+    waitingFor: [],
   };
 }
 
@@ -368,6 +369,7 @@ export function model(overrides: Partial<FactoryModel> = {}): FactoryModel {
       { workflowId: "wf-stop", parent: "d1", child: "e1" },
     ],
     events: EVENTS,
+    handoffs: [],
     quota: QUOTA,
     humanRequests: [APPROVAL, STOP],
     ...overrides,

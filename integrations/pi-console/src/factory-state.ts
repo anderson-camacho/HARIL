@@ -30,6 +30,9 @@ export type ActivityView = (typeof ACTIVITY_VIEWS)[number];
 export const MODELOS_VIEWS = ["cuentas", "monitor", "historial", "cache"] as const;
 export type ModelosView = (typeof MODELOS_VIEWS)[number];
 
+export const CONEXIONES_VIEWS = ["cadena", "arbol", "red", "secuencia", "relevo"] as const;
+export type ConexionesView = (typeof CONEXIONES_VIEWS)[number];
+
 export const AVANCE_SCOPES = ["proyecto", "tarea", "agente", "modelo"] as const;
 export type AvanceScope = (typeof AVANCE_SCOPES)[number];
 
@@ -67,6 +70,7 @@ export interface FactoryState {
   readonly agentsTree: boolean;
   readonly avanceScope: AvanceScope;
   readonly modelosView: ModelosView;
+  readonly conexionesView: ConexionesView;
   // The text each tab is filtered by, and whether `/` is taking it right now.
   readonly filter: Readonly<Record<FactoryTab, string>>;
   readonly filtering: boolean;
@@ -109,6 +113,7 @@ export function initialFactoryState(): FactoryState {
     agentsTree: true,
     avanceScope: "proyecto",
     modelosView: "cuentas",
+    conexionesView: "cadena",
     filter: perTab(""),
     filtering: false,
     seen: {},
@@ -119,7 +124,14 @@ export function initialFactoryState(): FactoryState {
 
 // The rows of the tabs with data, as selectedRowId and the views read them. Lives here so a change of filter or sub-view
 // recounts in one place.
-const DATA_TABS: readonly FactoryTab[] = ["avance", "actividades", "tablero", "agentes", "modelos"];
+const DATA_TABS: readonly FactoryTab[] = [
+  "avance",
+  "actividades",
+  "tablero",
+  "agentes",
+  "modelos",
+  "conexiones",
+];
 
 function recount(state: FactoryState): FactoryState {
   if (state.model === null) return state;
@@ -312,6 +324,12 @@ function tabKey(state: FactoryState, key: string): FactoryTransition | undefined
       }
       if (state.tab === "modelos") {
         return handled({ ...state, modelosView: cycle(MODELOS_VIEWS, state.modelosView, step) });
+      }
+      if (state.tab === "conexiones") {
+        return handled({
+          ...state,
+          conexionesView: cycle(CONEXIONES_VIEWS, state.conexionesView, step),
+        });
       }
       if (state.tab === "actividades" && !state.eventLog) {
         return handled(

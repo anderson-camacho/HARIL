@@ -7,6 +7,7 @@ import {
   activityTasks,
   agentRows,
   boardTasks,
+  connectionAgents,
   eventRows,
   humanRequests,
   progressRows,
@@ -105,8 +106,9 @@ export function detailBody(state: FactoryState, width: number): BodyLine[] {
       const task = activityTasks(model, state.activityView, filter)[index];
       return task === undefined ? [] : taskDetail(task, width);
     }
+    case "conexiones":
     case "agentes": {
-      const agent = agentRows(state)[index];
+      const agent = (state.tab === "agentes" ? agentRows(state) : connectionAgents(state))[index];
       if (agent === undefined) return [];
       const task = model.tasks.find((row) => row.id === agent.taskId);
       return [

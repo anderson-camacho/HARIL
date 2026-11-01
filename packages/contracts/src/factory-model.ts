@@ -179,6 +179,8 @@ export const FactoryModelSchema = Type.Object(
           context: Context,
           parent: Nullable(Type.String()),
           depth: Count,
+          // The agents whose work it waits for; empty when it waits for no agent.
+          waitingFor: Type.Array(Type.String()),
         },
         { additionalProperties: false },
       ),
@@ -197,6 +199,20 @@ export const FactoryModelSchema = Type.Object(
           text: Type.String(),
           workflowId: Nullable(Type.String()),
           agent: Nullable(Type.String()),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    // A running turn that moved to another model or agent, oldest first.
+    handoffs: Type.Array(
+      Type.Object(
+        {
+          at: Type.Number(),
+          workflowId: Type.String(),
+          agent: Nullable(Type.String()),
+          kind: Type.Union([Type.Literal("model"), Type.Literal("agent")]),
+          from: Type.String(),
+          to: Type.String(),
         },
         { additionalProperties: false },
       ),
