@@ -89,7 +89,10 @@ export const FUTURE_PI_THEME = {
 // `ui.theme` is unset until someone chooses, so "unset" is the managed default and every stored value is a choice.
 // A choice other than Future keeps the Pi theme it has always had: Matrix.
 export function managedPiThemeName(configured: unknown): "haril-future" | "haril-matrix" {
-  return configured === undefined || configured === "future" || configured === "haril-future"
+  return configured === undefined ||
+    configured === "magic" ||
+    configured === "future" ||
+    configured === "haril-future"
     ? "haril-future"
     : "haril-matrix";
 }

@@ -229,7 +229,7 @@ describe("the settings screen", () => {
 
   it("moves between views with [ and ]", () => {
     expect(factoryKey(opened("mapa"), "]").state.sistemaView).toBe("inventario");
-    expect(factoryKey(opened("mapa"), "[").state.sistemaView).toBe("ajustes");
+    expect(factoryKey(opened("mapa"), "[").state.sistemaView).toBe("publicacion");
   });
 });
 

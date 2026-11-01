@@ -752,3 +752,25 @@ describe("the classic header and the keyboard menu keep their text", () => {
     ]);
   });
 });
+
+describe("what the rail adds for the person", () => {
+  const titles = (over: Partial<DashboardFacts>) => text(cards(over)).join("\n");
+
+  it("shows Te necesitan only when something waits", () => {
+    expect(titles({ locale: "es", needsYou: ["web/git: Permiso"] })).toContain("Te necesitan 1");
+    expect(titles({ locale: "es", needsYou: ["web/git: Permiso"] })).toContain("web/git: Permiso");
+    expect(titles({ locale: "es", needsYou: [] })).not.toContain("Te necesitan");
+    expect(titles({ locale: "es" })).not.toContain("Te necesitan");
+  });
+
+  it("keeps everything it showed", () => {
+    const without = titles({ locale: "es" });
+    const withRequest = titles({ locale: "es", needsYou: ["x"] });
+    for (const line of without
+      .split("\n")
+      .filter((row) => row.trim() !== "")
+      .slice(0, 12)) {
+      expect(withRequest).toContain(line.trim());
+    }
+  });
+});

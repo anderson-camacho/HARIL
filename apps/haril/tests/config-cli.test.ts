@@ -75,8 +75,8 @@ describe("haril config get", () => {
     const path = writeConfig("{}");
     expect(parseJson((await cli(["config", "get", "ui.theme", "--json"], path)).out)).toMatchObject(
       {
-        value: "future",
-        default: "future",
+        value: "magic",
+        default: "magic",
         source: "default",
       },
     );

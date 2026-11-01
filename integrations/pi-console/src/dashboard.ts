@@ -34,6 +34,8 @@ export interface DashboardFacts {
   readonly runtime: string;
   readonly runtimeAvailable: boolean;
   readonly pending: number | undefined;
+  // What waits for a person; the card shows only when there is something.
+  readonly needsYou?: readonly string[];
   readonly context: string;
   readonly cost: string;
   readonly activeTools: readonly string[];
@@ -522,7 +524,17 @@ function railCards(
   ];
 
   const [modelName, modelLevel] = splitModelLevel(facts.modelLevel);
+  const asked = facts.needsYou ?? [];
   const cards: MainCard<RailHitAction>[] = [
+    ...(asked.length === 0
+      ? []
+      : [
+          {
+            title: `${tr("Needs you", "Te necesitan")} ${asked.length}`,
+            titleTone: "yellow" as const,
+            rows: asked.slice(0, 2).map((text) => ({ text, tone: "text" as const })),
+          },
+        ]),
     {
       title: `HARIL · ${LABELS[currentArea]}`,
       titleTone: "cyan",

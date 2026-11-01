@@ -49,6 +49,27 @@ export interface DashboardData {
   // of `errors`: the project's data does not depend on them.
   readonly delegation?: DelegationView;
   readonly delegationError?: string;
+  // What waits for a person (haril factory requests), which the rail adds when there is any.
+  readonly needsYou?: readonly NeedsYouRow[];
+}
+
+interface NeedsYouRow {
+  readonly id: string;
+  readonly group: string;
+  readonly title: string;
+}
+
+function needsYouOf(value: unknown): readonly NeedsYouRow[] {
+  const list = (value as { requests?: unknown } | null | undefined)?.requests;
+  if (!Array.isArray(list)) return [];
+  return list.flatMap((row: unknown) => {
+    const item = row as { id?: unknown; group?: unknown; title?: unknown } | null;
+    return typeof item?.id === "string" &&
+      typeof item.group === "string" &&
+      typeof item.title === "string"
+      ? [{ id: item.id, group: item.group, title: item.title }]
+      : [];
+  });
 }
 
 // The memory line of the panel. "null" is the name of the provider that keeps nothing, and the runtime records the one in
@@ -159,12 +180,14 @@ export async function loadDashboardData(projectSlug: string | undefined): Promis
     };
   }
   const scope = ["--project", projectSlug];
-  const [statusResult, approvalsResult, eventsResult, methodsResult] = await Promise.all([
-    readJson(["status", ...scope, "--json"], "Project status", true),
-    readJson(["approvals", ...scope, "--json"], "Approvals", true),
-    readJson(["events", ...scope, "--limit", "20", "--json"], "Events", true),
-    methodsPromise,
-  ]);
+  const [statusResult, approvalsResult, eventsResult, methodsResult, needsResult] =
+    await Promise.all([
+      readJson(["status", ...scope, "--json"], "Project status", true),
+      readJson(["approvals", ...scope, "--json"], "Approvals", true),
+      readJson(["events", ...scope, "--limit", "20", "--json"], "Events", true),
+      methodsPromise,
+      readJson(["factory", "requests", ...scope, "--json"], "Requests", true),
+    ]);
   const status = record(statusResult.value);
   const lease = record(status?.runtime);
   const leaseState = lease?.status;
@@ -226,6 +249,7 @@ export async function loadDashboardData(projectSlug: string | undefined): Promis
       ];
     }),
     approvalsAvailable: approvalsResult.error === undefined && approvals !== undefined,
+    needsYou: needsYouOf(needsResult.value),
     events: (events ?? []).flatMap((row) => {
       if (typeof row.seq !== "number" || typeof row.type !== "string") return [];
       return [

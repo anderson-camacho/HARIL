@@ -39,11 +39,14 @@ type ModelosView = (typeof MODELOS_VIEWS)[number];
 const CONEXIONES_VIEWS = ["cadena", "arbol", "red", "secuencia", "relevo"] as const;
 type ConexionesView = (typeof CONEXIONES_VIEWS)[number];
 
-const SISTEMA_VIEWS = ["mapa", "inventario", "ajustes"] as const;
+const SISTEMA_VIEWS = ["mapa", "inventario", "ajustes", "publicacion"] as const;
 type SistemaView = (typeof SISTEMA_VIEWS)[number];
 
-export const AVANCE_SCOPES = ["proyecto", "tarea", "agente", "modelo"] as const;
+export const AVANCE_SCOPES = ["proyecto", "tarea", "agente", "modelo", "compuertas"] as const;
 export type AvanceScope = (typeof AVANCE_SCOPES)[number];
+
+const TABLERO_VIEWS = ["columnas", "mapa"] as const;
+type TableroView = (typeof TABLERO_VIEWS)[number];
 
 // What a key can ask the console to do through the CLI, after the person confirmed it.
 export type FactoryAction =
@@ -60,6 +63,22 @@ export type FactoryAction =
     }
   // Reads the quota again; it only records what the providers answer, so it asks nothing.
   | { readonly kind: "reread"; readonly label: string }
+  // A person's message to an agent, through haril factory message.
+  | {
+      readonly kind: "message";
+      readonly taskId: string;
+      readonly text: string;
+      readonly urgent: boolean;
+      readonly label: string;
+    }
+  // A person's answer to an agent's request, through haril factory answer.
+  | {
+      readonly kind: "answer";
+      readonly requestId: string;
+      readonly answer: "approve" | "deny" | "write";
+      readonly text: string | null;
+      readonly label: string;
+    }
   // Writes one setting through haril config set.
   | {
       readonly kind: "setting";
@@ -104,6 +123,13 @@ export interface FactoryState {
   // The moment each row was last read, by its id: a row that changed after it shows the unread dot.
   readonly seen: Readonly<Record<string, number>>;
   readonly confirm: FactoryAction | null;
+  // The agent the chat is open with, what is typed for it, and whether it interrupts.
+  readonly chat: { readonly workflowId: string; readonly code: string } | null;
+  readonly chatDraft: string;
+  readonly chatUrgent: boolean;
+  // A written answer to a request, being typed.
+  readonly answerDraft: { readonly id: string; readonly text: string } | null;
+  readonly tableroView: TableroView;
   // The answer to the last action, or why it was refused.
   readonly notice: string | null;
 }
@@ -151,6 +177,11 @@ export function initialFactoryState(): FactoryState {
     filtering: false,
     seen: {},
     confirm: null,
+    chat: null,
+    chatDraft: "",
+    chatUrgent: false,
+    answerDraft: null,
+    tableroView: "columnas",
     notice: null,
   };
 }
@@ -226,7 +257,16 @@ function handled(state: FactoryState, effect?: FactoryEffect): FactoryTransition
 }
 
 function setTab(state: FactoryState, tab: FactoryTab): FactoryTransition {
-  return handled({ ...state, tab, detail: false, filtering: false, confirm: null, notice: null });
+  return handled({
+    ...state,
+    tab,
+    detail: false,
+    filtering: false,
+    confirm: null,
+    chat: null,
+    answerDraft: null,
+    notice: null,
+  });
 }
 
 function stepTab(state: FactoryState, step: number): FactoryTransition {
@@ -320,6 +360,14 @@ export function continueTarget(state: FactoryState): FactoryAction | null {
   };
 }
 
+// The agent's request the selected row is, in the Te necesitan view.
+export function requestTarget(state: FactoryState): { id: string; title: string } | null {
+  if (state.model === null || state.tab !== "actividades" || state.eventLog) return null;
+  if (state.activityView !== "te_necesitan") return null;
+  const { request } = selectedRowId(state, "actividades");
+  return request === undefined ? null : { id: request.id, title: request.title };
+}
+
 // The approval the selected row is, in the Te necesitan view.
 export function approvalTarget(state: FactoryState): { id: string; title: string } | null {
   if (state.model === null || state.tab !== "actividades" || state.eventLog) return null;
@@ -404,6 +452,74 @@ function settingEditKey(
   );
 }
 
+function openChat(state: FactoryState): FactoryTransition {
+  const { id } = selectedRowId(state, "agentes");
+  const agent = state.model?.agents.find((row) => `${row.workflowId}/${row.code}` === id);
+  if (agent === undefined) return handled(state);
+  return handled({
+    ...markSeen(state),
+    chat: { workflowId: agent.workflowId, code: agent.code },
+    chatDraft: "",
+    chatUrgent: false,
+    notice: null,
+  });
+}
+
+function textInput(current: string, data: string): string {
+  if (data === "\u007f" || data === "\b") return Array.from(current).slice(0, -1).join("");
+  const printable =
+    data !== "" && Array.from(data).every((char) => char >= " " && char !== "\u007f");
+  return printable ? `${current}${data}` : current;
+}
+
+function chatKey(state: FactoryState, data: string, key: string | undefined): FactoryTransition {
+  const chat = state.chat;
+  if (chat === null) return handled(state);
+  if (key === "escape") return handled({ ...state, chat: null, chatDraft: "", notice: null });
+  if (key === "tab") return handled({ ...state, chatUrgent: !state.chatUrgent });
+  if (key === "enter") {
+    const text = state.chatDraft.trim();
+    if (text === "") return handled(state);
+    if (state.readOnly) return handled({ ...state, notice: READ_ONLY });
+    const agent = state.model?.agents.find(
+      (row) => row.workflowId === chat.workflowId && row.code === chat.code,
+    );
+    if (agent === undefined) return handled(state);
+    return handled(
+      { ...state, chatDraft: "", chatUrgent: false, notice: "Enviando…" },
+      {
+        kind: "message",
+        taskId: agent.taskId,
+        text,
+        urgent: state.chatUrgent,
+        label: `escribir a ${agent.code}`,
+      },
+    );
+  }
+  return handled({ ...state, chatDraft: textInput(state.chatDraft, data) });
+}
+
+function answerKey(state: FactoryState, data: string, key: string | undefined): FactoryTransition {
+  const draft = state.answerDraft;
+  if (draft === null) return handled(state);
+  if (key === "escape") return handled({ ...state, answerDraft: null });
+  if (key === "enter") {
+    const text = draft.text.trim();
+    if (text === "") return handled(state);
+    return handled(
+      { ...state, answerDraft: null, notice: "Enviando…" },
+      {
+        kind: "answer",
+        requestId: draft.id,
+        answer: "write",
+        text,
+        label: "responder",
+      },
+    );
+  }
+  return handled({ ...state, answerDraft: { ...draft, text: textInput(draft.text, data) } });
+}
+
 function ask(state: FactoryState, action: FactoryAction | null): FactoryTransition {
   if (action === null) return { state, handled: false };
   if (state.readOnly) return handled({ ...state, notice: READ_ONLY });
@@ -430,6 +546,9 @@ function tabKey(state: FactoryState, key: string): FactoryTransition | undefined
     case "[":
     case "]": {
       const step = key === "]" ? 1 : -1;
+      if (state.tab === "tablero") {
+        return handled({ ...state, tableroView: cycle(TABLERO_VIEWS, state.tableroView, step) });
+      }
       if (state.tab === "avance") {
         return handled(
           recount({
@@ -478,6 +597,12 @@ function tabKey(state: FactoryState, key: string): FactoryTransition | undefined
             }),
           )
         : undefined;
+    case "c":
+      return state.tab === "agentes" && state.rowCounts.agentes > 0 ? openChat(state) : undefined;
+    case "i":
+      return state.tab === "agentes" && state.rowCounts.agentes > 0
+        ? handled({ ...markSeen(state), detail: true })
+        : undefined;
     case "t":
       return state.tab === "agentes"
         ? handled(recount({ ...state, agentsTree: !state.agentsTree }))
@@ -503,6 +628,20 @@ function actionKey(state: FactoryState, key: string): FactoryTransition | undefi
     const action = continueTarget(state);
     return action === null ? undefined : ask(state, action);
   }
+  const asked = requestTarget(state);
+  if (asked !== null && (key === "a" || key === "d")) {
+    return ask(state, {
+      kind: "answer",
+      requestId: asked.id,
+      answer: key === "a" ? "approve" : "deny",
+      text: null,
+      label: `${key === "a" ? "aprobar" : "negar"} «${asked.title}»`,
+    });
+  }
+  if (asked !== null && key === "w") {
+    if (state.readOnly) return handled({ ...state, notice: READ_ONLY });
+    return handled({ ...state, answerDraft: { id: asked.id, text: "" }, notice: null });
+  }
   if (key !== "a" && key !== "d") return undefined;
   const approval = approvalTarget(state);
   if (approval === null) return undefined;
@@ -516,6 +655,8 @@ function actionKey(state: FactoryState, key: string): FactoryTransition | undefi
 export function factoryKey(state: FactoryState, data: string): FactoryTransition {
   const key = keyOf(data);
   if (state.confirm !== null) return confirmKey(state, key);
+  if (state.chat !== null) return chatKey(state, data, key);
+  if (state.answerDraft !== null) return answerKey(state, data, key);
   if (state.filtering) return filterKey(state, data, key);
   if (state.settingEdit !== null) return settingEditKey(state, data, key);
   switch (key) {
@@ -536,6 +677,7 @@ export function factoryKey(state: FactoryState, data: string): FactoryTransition
     case "enter": {
       const setting = settingEnter(state);
       if (setting !== undefined) return setting;
+      if (state.tab === "agentes" && state.rowCounts.agentes > 0) return openChat(state);
       return handled(state.rowCounts[state.tab] > 0 ? { ...markSeen(state), detail: true } : state);
     }
     case "escape":

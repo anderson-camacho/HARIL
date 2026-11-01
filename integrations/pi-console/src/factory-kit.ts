@@ -49,6 +49,12 @@ export interface FactoryGlyphs {
   readonly pointer: string;
   readonly barMid: string;
   readonly heavy: string;
+  // The heavy box a selected or active thing wears in the references.
+  readonly heavyV: string;
+  readonly heavyTopLeft: string;
+  readonly heavyTopRight: string;
+  readonly heavyBottomLeft: string;
+  readonly heavyBottomRight: string;
   readonly branch: string;
   readonly lastBranch: string;
   readonly point: string;
@@ -86,6 +92,11 @@ export const UNICODE_FACTORY_GLYPHS: FactoryGlyphs = {
   pointer: "›",
   barMid: "▒",
   heavy: "━",
+  heavyV: "┃",
+  heavyTopLeft: "┏",
+  heavyTopRight: "┓",
+  heavyBottomLeft: "┗",
+  heavyBottomRight: "┛",
   branch: "├─",
   lastBranch: "└─",
   point: "•",
@@ -122,6 +133,11 @@ export const ASCII_FACTORY_GLYPHS: FactoryGlyphs = {
   pointer: ">",
   barMid: "+",
   heavy: "=",
+  heavyV: "|",
+  heavyTopLeft: "+",
+  heavyTopRight: "+",
+  heavyBottomLeft: "+",
+  heavyBottomRight: "+",
   branch: "|-",
   lastBranch: "`-",
   point: "o",

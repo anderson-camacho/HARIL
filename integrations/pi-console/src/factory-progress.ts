@@ -1,5 +1,12 @@
 import type { BodyLine } from "./factory-board.js";
-import { type FactoryGlyphs, FactoryGrid, type FactoryToken, factoryCell } from "./factory-kit.js";
+import { gatesBody } from "./factory-gates.js";
+import {
+  type FactoryGlyphs,
+  FactoryGrid,
+  type FactoryToken,
+  factoryCell,
+  factorySegsWidth,
+} from "./factory-kit.js";
 import { type ProgressRow, progressRows } from "./factory-rows.js";
 import { AVANCE_SCOPES, type AvanceScope, type FactoryState } from "./factory-state.js";
 import type { FactoryModel, FactoryWorkflow } from "./factory-types.js";
@@ -23,6 +30,7 @@ const SCOPE_LABEL: Readonly<Record<AvanceScope, string>> = {
   tarea: "Tarea",
   agente: "Agente",
   modelo: "Modelo",
+  compuertas: "Compuertas",
 };
 
 // The reference's thresholds.
@@ -356,10 +364,10 @@ function coverageBody(
   const header: BodyLine = [
     factoryCell("  Nombre", 2 + labelWidth, "text"),
     ...(subWidth > 0 ? [factoryCell<never>("Hecho", subWidth, "text")] : []),
-    factoryCell("Avance", percentWidth, "text"),
+    factoryCell(`Avance ${ORDER_MARK}`, percentWidth, "blue"),
     ...(barWidth > 0 ? [factoryCell<never>("Barra", barWidth, "text")] : []),
   ];
-  const room = Math.max(1, height - 3);
+  const room = Math.max(1, height - 4);
   const start = Math.max(0, Math.min(selected - room + 1, rows.length - room));
   const lines = rows.slice(start, start + room).map((row, offset): BodyLine => {
     const token: FactoryToken = row.ratio === null ? "dim" : ratioToken(row.ratio);
@@ -384,12 +392,43 @@ function coverageBody(
       : `Total: ${judged.length} de ${rows.length} con pruebas · media ${Math.round(
           (judged.reduce((sum, row) => sum + (row.ratio ?? 0), 0) / judged.length) * 100,
         )}%`;
+  const mean =
+    judged.length === 0
+      ? null
+      : judged.reduce((sum, row) => sum + (row.ratio ?? 0), 0) / judged.length;
+  const verdict: BodyLine =
+    mean === null
+      ? []
+      : mean >= PASS_RATIO
+        ? [{ text: "✓ ", token: "green" }]
+        : [{ text: "✗ ", token: "red" }];
   return [
     header,
     [{ text: g.h.repeat(width), token: "line" }],
     ...lines,
-    [factoryCell(summary, width, "muted")],
+    [...verdict, factoryCell(summary, Math.max(0, width - 2), "muted")],
+    legendLine(width),
   ];
+}
+
+const ORDER_MARK = "▲";
+const PASS_RATIO = 0.7;
+
+// What the colors of the bars mean, as the reference's legend says it.
+function legendLine(width: number): BodyLine {
+  const items: readonly (readonly [string, FactoryToken])[] = [
+    [">=90", "green"],
+    [">=70", "yellow"],
+    [">=50", "orange"],
+    ["<50", "red"],
+  ];
+  const line = items.flatMap(
+    ([label, token]): BodyLine => [
+      { text: "■ ", token },
+      { text: `${label}  `, token: "muted" },
+    ],
+  );
+  return factorySegsWidth(line) <= width ? line : [];
 }
 
 export function progressBody(
@@ -403,8 +442,10 @@ export function progressBody(
   const bar = scopeBar(state, width);
   const room = Math.max(0, height - 1);
   const body =
-    state.avanceScope === "proyecto"
-      ? projectBody(state, model, width, room, g)
-      : coverageBody(state, width, room, g);
+    state.avanceScope === "compuertas"
+      ? gatesBody(state, width, room, g)
+      : state.avanceScope === "proyecto"
+        ? projectBody(state, model, width, room, g)
+        : coverageBody(state, width, room, g);
   return [bar, ...body];
 }

@@ -78,10 +78,13 @@ export function activityTasks(
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
+// Requests of the same kind stay together.
 export function humanRequests(model: FactoryModel, filter: string): FactoryHumanRequest[] {
-  return model.humanRequests.filter((request) =>
-    matches(filter, request.title, request.explanation.what),
-  );
+  const group = (row: FactoryHumanRequest): string => row.request?.reason ?? row.kind;
+  const order = [...new Set(model.humanRequests.map(group))];
+  return model.humanRequests
+    .filter((request) => matches(filter, request.title, request.explanation.what))
+    .sort((a, b) => order.indexOf(group(a)) - order.indexOf(group(b)));
 }
 
 export function eventRows(model: FactoryModel, filter: string): FactoryEvent[] {
@@ -149,6 +152,7 @@ export function progressRows(state: FactoryState): ProgressRow[] {
   const filter = state.filter.avance;
   const live = new Set(model.workflows.filter(workflowLive).map((row) => row.id));
   switch (state.avanceScope) {
+    case "compuertas":
     case "proyecto": {
       const total = model.workflows.reduce((sum, row) => sum + row.totalTasks, 0);
       const closed = model.workflows.reduce((sum, row) => sum + row.closedTasks, 0);
@@ -248,6 +252,7 @@ export interface SelectedRow {
   readonly updatedAt: number;
   readonly workflowId?: string;
   readonly approval?: FactoryHumanRequest;
+  readonly request?: FactoryHumanRequest;
   readonly tasks: readonly FactoryTask[];
 }
 
@@ -301,7 +306,11 @@ export function selectedRowId(state: FactoryState, tab: FactoryTab): SelectedRow
           requests.map((row) => row.id),
           request?.at ?? 0,
           request?.workflowId,
-          request?.kind === "approval" ? { approval: request } : {},
+          request?.kind === "approval"
+            ? { approval: request }
+            : request?.kind === "human"
+              ? { request }
+              : {},
         );
       }
       const tasks = activityTasks(model, state.activityView, filter);

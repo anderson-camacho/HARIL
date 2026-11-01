@@ -57,6 +57,9 @@ export async function openFactoryOverlay(
     settingDraft: null,
     settingEdit: null,
     savedPath: null,
+    chat: null,
+    chatDraft: "",
+    answerDraft: null,
   });
   try {
     return await ctx.ui.custom<FactoryOverlayResult>(

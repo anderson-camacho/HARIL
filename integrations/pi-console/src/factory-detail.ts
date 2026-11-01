@@ -99,6 +99,21 @@ export function detailBody(state: FactoryState, width: number): BodyLine[] {
           : [
               ...field("Pide", request.title, width),
               ...field("Proyecto", request.projectSlug, width),
+              ...(request.request === null
+                ? []
+                : [
+                    ...field("Quién", request.request.who, width),
+                    ...field("Lo delegó", request.request.delegatedBy, width),
+                    ...field("Tarea", request.request.task, width),
+                    ...field("Hace", request.request.doing, width),
+                    ...field("Necesita", request.request.needs, width),
+                    ...field("Por qué", request.request.why, width),
+                    ...field("Si niegas", request.request.ifRefused, width),
+                    ...field("Bloquea a", request.request.blocks.join(", "), width),
+                    ...(request.request.action === null
+                      ? []
+                      : field("Ejecutará", request.request.action, width)),
+                  ]),
               [],
               ...explanationLines(request.explanation, width),
             ];

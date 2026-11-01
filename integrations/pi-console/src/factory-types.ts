@@ -103,7 +103,7 @@ export interface FactoryMessage {
   readonly state: "waiting" | "delivered" | "applied";
 }
 
-export interface FactoryGitAction {
+interface FactoryGitAction {
   readonly at: number;
   readonly workflowId: string | null;
   readonly agent: string | null;
@@ -113,7 +113,7 @@ export interface FactoryGitAction {
   readonly output: string;
 }
 
-export interface FactoryRequestRecord {
+interface FactoryRequestRecord {
   readonly reason: string;
   readonly who: string;
   readonly delegatedBy: string;

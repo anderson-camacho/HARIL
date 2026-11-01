@@ -1,6 +1,7 @@
 import { activityBody, searchField } from "./factory-activity.js";
 import { agentsBody } from "./factory-agents.js";
 import { type BodyLine, boardBody } from "./factory-board.js";
+import { chatBody } from "./factory-chat.js";
 import { conexionesBody } from "./factory-connections.js";
 import { detailBody } from "./factory-detail.js";
 import {
@@ -23,6 +24,7 @@ import {
   type FactoryState,
   type FactoryTab,
   type FactoryTarget,
+  requestTarget,
   selectedSetting,
 } from "./factory-state.js";
 import { sistemaBody } from "./factory-system.js";
@@ -136,6 +138,7 @@ function tabHints(state: FactoryState): Hint[] {
     if (state.tab === "tablero") {
       if (state.rowCounts.tablero > 0) out.push({ key: "h/l", action: "columna", keep: 1 });
       if (!state.readOnly) out.push({ key: "n", action: "nueva", keep: 1 });
+      out.push({ key: "[/]", action: state.tableroView === "mapa" ? "columnas" : "mapa", keep: 1 });
     }
     if (state.tab === "actividades") {
       if (!state.eventLog) out.push({ key: "[/]", action: "vista", keep: 1 });
@@ -147,10 +150,21 @@ function tabHints(state: FactoryState): Hint[] {
     if (state.tab === "modelos") {
       out.push({ key: "[/]", action: "vista", keep: 1 }, { key: "r", action: "releer", keep: 3 });
     }
-    if (state.tab === "agentes")
+    if (state.tab === "agentes") {
       out.push({ key: "t", action: state.agentsTree ? "lista" : "árbol", keep: 1 });
+      if (state.rowCounts.agentes > 0) {
+        out.push({ key: "c", action: "chat", keep: 3 }, { key: "i", action: "detalle", keep: 1 });
+      }
+    }
   }
   if (!state.readOnly) {
+    if (requestTarget(state) !== null) {
+      out.push(
+        { key: "a", action: "aprobar", keep: 3 },
+        { key: "d", action: "negar", keep: 3 },
+        { key: "w", action: "responder", keep: 3 },
+      );
+    }
     if (approvalTarget(state) !== null) {
       out.push({ key: "a", action: "aprobar", keep: 3 }, { key: "d", action: "negar", keep: 3 });
     }
@@ -164,6 +178,19 @@ function hintsOf(state: FactoryState, g: FactoryGlyphs): Hint[] {
     return [
       { key: "s", action: "confirmar", keep: 4 },
       { key: "n", action: "cancelar", keep: 4 },
+    ];
+  }
+  if (state.chat !== null) {
+    return [
+      { key: "Enter", action: "enviar", keep: 4 },
+      { key: "Tab", action: state.chatUrgent ? "esperar turno" : "interrumpir", keep: 4 },
+      { key: "Esc", action: "volver", keep: 4, target: { kind: "back" } },
+    ];
+  }
+  if (state.answerDraft !== null) {
+    return [
+      { key: "Enter", action: "enviar", keep: 4 },
+      { key: "Esc", action: "cancelar", keep: 4 },
     ];
   }
   if (state.filtering) {
@@ -254,6 +281,7 @@ function tabBody(state: FactoryState, width: number, height: number, g: FactoryG
     // A blank row above the text when there is room for it.
     return height >= messages.length + 1 ? [[], ...messages] : messages;
   }
+  if (state.chat !== null) return chatBody(state, width, height, g);
   if (state.detail) {
     return state.tab === "modelos" ? modelosDetail(state, width, g) : detailBody(state, width);
   }
@@ -279,6 +307,9 @@ function tabBody(state: FactoryState, width: number, height: number, g: FactoryG
 function statusLine(state: FactoryState): BodyLine | undefined {
   if (state.confirm !== null) {
     return [{ text: ` ¿${state.confirm.label}? s/n`, token: "yellow" }];
+  }
+  if (state.answerDraft !== null) {
+    return [{ text: ` Tu respuesta: ${state.answerDraft.text}_`, token: "blue" }];
   }
   return state.notice === null ? undefined : [{ text: ` ${state.notice}`, token: "orange" }];
 }
@@ -312,7 +343,12 @@ export function renderFactoryScreen(
   } else {
     const label = FACTORY_TAB_LABELS[state.tab];
     lines.push(
-      factoryFrameTop(width, state.detail ? `${label} · detalle` : label, frameRight(state), g),
+      factoryFrameTop(
+        width,
+        state.chat !== null ? `${label} · chat` : state.detail ? `${label} · detalle` : label,
+        frameRight(state),
+        g,
+      ),
     );
     const inner = bodyRows - 2;
     const room = status === undefined ? inner : Math.max(0, inner - 1);

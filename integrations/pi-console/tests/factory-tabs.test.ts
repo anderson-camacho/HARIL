@@ -344,8 +344,8 @@ describe("Agentes", () => {
     expect(flat.indexOf("e1")).toBeLessThan(flat.indexOf(" o1"));
   });
 
-  it("opens an agent with its task's explanation", () => {
-    expect(text(press(on("agentes"), "\r"))).toContain("Qué pasa");
+  it("opens an agent with its task's explanation on i", () => {
+    expect(text(press(on("agentes"), "i"))).toContain("Qué pasa");
   });
 });
 

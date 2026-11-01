@@ -45,18 +45,28 @@ function contrast(a: Rgb, b: Rgb): number {
   return (light + 0.05) / (dark + 0.05);
 }
 
-describe("Future default and optional HARIL palettes with compact AI eye", () => {
-  it("defaults to Future and keeps Matrix and the soft palettes selectable", () => {
-    expect(HARIL_PALETTES).toEqual(["future", "matrix", "violet", "rose", "amber", "obsidian"]);
-    expect(getHarilPalette()).toBe("future");
+describe("Magic default and optional HARIL palettes with compact AI eye", () => {
+  it("defaults to Magic and keeps Future, Matrix and the soft palettes selectable", () => {
+    expect(HARIL_PALETTES).toEqual([
+      "magic",
+      "future",
+      "matrix",
+      "violet",
+      "rose",
+      "amber",
+      "obsidian",
+    ]);
+    expect(setHarilPalette(undefined)).toBe("magic");
+    expect(getHarilPalette()).toBe("magic");
+    expect(foreground(visualText("!", "text"))).toEqual([230, 237, 243]);
     setHarilPalette("matrix");
     const matrix = visualText("HARIL", "cyan", "panel");
     expect(matrix).toContain("38;2;38;238;104m");
     expect(getHarilPalette()).toBe("matrix");
     setHarilPalette("rose");
     expect(visualText("HARIL", "cyan", "panel")).not.toBe(matrix);
-    expect(setHarilPalette("external-code")).toBe("future");
-    expect(getHarilPalette()).toBe("future");
+    expect(setHarilPalette("external-code")).toBe("magic");
+    expect(getHarilPalette()).toBe("magic");
   });
 
   it("paints Future blue without a background, except on the selected surface", () => {
@@ -85,7 +95,7 @@ describe("Future default and optional HARIL palettes with compact AI eye", () =>
   });
 
   it("leaves the lines of every other palette in the tone they already had", () => {
-    for (const palette of HARIL_PALETTES.filter((name) => name !== "future")) {
+    for (const palette of HARIL_PALETTES.filter((name) => name !== "future" && name !== "magic")) {
       setHarilPalette(palette);
       for (const legacy of ["cyan", "teal", "muted", "dim"] as const) {
         expect(lineTone(legacy)).toBe(legacy);

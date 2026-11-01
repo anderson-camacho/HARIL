@@ -348,7 +348,10 @@ function sequenceBody(
   const room = Math.floor(rows / 2);
   const grid = new FactoryGrid(width, room * 2);
   for (const code of codes) {
-    for (let row = 0; row < room * 2; row++) grid.text(columnOf(code), row, g.lifeline, "line");
+    const active = code === selected.code;
+    for (let row = 0; row < room * 2; row++) {
+      grid.text(columnOf(code), row, active ? g.heavyV : g.lifeline, active ? "blue" : "line");
+    }
   }
   events.slice(-room).forEach((event, index) => {
     const from = event.agent as string;

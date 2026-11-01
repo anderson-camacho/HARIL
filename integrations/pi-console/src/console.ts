@@ -58,6 +58,12 @@ import { runFactoryAction } from "./factory-actions.js";
 import { startFactoryFeed } from "./factory-feed.js";
 import { factoryGlyphs } from "./factory-kit.js";
 import { openFactoryOverlay } from "./factory-overlay.js";
+import {
+  NO_REMINDERS,
+  quotaOfRead,
+  type ReminderState,
+  reminderPass,
+} from "./factory-reminders.js";
 import { loadFactorySystem } from "./factory-settings.js";
 import { type FactoryState, initialFactoryState } from "./factory-state.js";
 import { createGitSummaryCache, type GitSummary } from "./git-summary.js";
@@ -182,6 +188,9 @@ interface Session extends CommandHost {
   // The factory view (factory-state.ts) and whether its overlay is open. Its data child runs only while it is open.
   factory: FactoryState;
   factoryOpen: boolean;
+  // How far the reminders of what waits for the person went, and the ACTION model already warned of.
+  reminders: ReminderState;
+  quotaWarned: string | undefined;
   openFactoryView(ctx: ConsoleContext): Promise<void>;
   readonly feed: WorkflowFeed;
   orchestrationDemo(): boolean;
@@ -498,6 +507,7 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
       runtime: runtimeState(current),
       runtimeAvailable: current.runtimeStatusAvailable && current.dashboardData.runtimeAvailable,
       pending: current.pendingAvailable ? current.pending.length : undefined,
+      needsYou: (current.dashboardData.needsYou ?? []).map((row) => row.title),
       context:
         usage === undefined
           ? "unavailable"
@@ -570,6 +580,40 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
     );
   }
 
+  // 1, 5 and 15 minutes after a request first shows; silent while the factory is in front of the person.
+  function remindOfRequests(current: Session, data: DashboardData): void {
+    const pass = reminderPass(
+      current.reminders,
+      data.needsYou ?? [],
+      Date.now(),
+      current.factoryOpen,
+    );
+    current.reminders = pass.state;
+    if (!current.ctx.hasUI) return;
+    for (const line of pass.lines) current.ctx.ui.notify(line, "warning");
+  }
+
+  // ACTION mode never changes the person's model: at the threshold it says so, once per model, and they accept with /model.
+  async function warnOfQuota(current: Session): Promise<void> {
+    if (modes.mode() !== "action" || !current.ctx.hasUI) return;
+    const model = safely(() => current.ctx.model, undefined);
+    if (model === undefined) return;
+    const ref = `${model.provider}/${model.id}`;
+    if (current.quotaWarned === ref) return;
+    const read = await runHaril(["factory", "requests", "--model", ref, "--json"], {
+      cwd: current.cwd,
+      timeoutMs: 10_000,
+    });
+    if (!read.ok) return;
+    const quota = quotaOfRead(read.stdout);
+    if (quota === null || quota.usedPct < quota.switchAt) return;
+    current.quotaWarned = ref;
+    current.ctx.ui.notify(
+      `La cuenta de ${model.id} va por ${Math.round(quota.usedPct)} % de sus 5 horas. HARIL no cambia de modelo en ACTION: si quieres, usa /model.`,
+      "warning",
+    );
+  }
+
   async function refreshDashboard(current: Session): Promise<void> {
     if (current.dashboardRefresh !== undefined) return current.dashboardRefresh;
     current.dashboardLoading = true;
@@ -584,6 +628,8 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
           } else {
             current.dashboardData = { ...data, approvals: current.pending };
           }
+          remindOfRequests(current, data);
+          void warnOfQuota(current);
         }
       })
       .finally(() => {
@@ -652,6 +698,8 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
       orchestrationOpen: false,
       factory: initialFactoryState(),
       factoryOpen: false,
+      reminders: NO_REMINDERS,
+      quotaWarned: undefined,
       feed: createWorkflowFeed({
         cwd: () => current.cwd,
         projectSlug: () => current.project?.slug,

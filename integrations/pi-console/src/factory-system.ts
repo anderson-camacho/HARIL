@@ -7,6 +7,7 @@ import {
   type FactoryToken,
   factoryCell,
 } from "./factory-kit.js";
+import { releaseBody } from "./factory-release.js";
 import { settingRows } from "./factory-rows.js";
 import {
   displayValue,
@@ -351,5 +352,7 @@ export function sistemaBody(
       return inventoryBody(state, width, g);
     case "ajustes":
       return settingsBody(state, width, height, g);
+    case "publicacion":
+      return releaseBody(state, width, height, g);
   }
 }

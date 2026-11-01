@@ -165,10 +165,25 @@ function requestRow(
   width: number,
   g: FactoryGlyphs,
 ): BodyLine[] {
-  const who = row.kind === "approval" ? "plan" : row.kind === "stop" ? "flujo" : "tarea";
+  const who =
+    row.kind === "approval"
+      ? "plan"
+      : row.kind === "stop"
+        ? "flujo"
+        : row.kind === "human"
+          ? "pide"
+          : "tarea";
+  const asked = row.request;
+  const sameKind =
+    asked === null
+      ? 0
+      : (state.model?.humanRequests.filter((other) => other.request?.reason === asked.reason)
+          .length ?? 0);
   return inboxRow(
     { who, title: row.title, at: row.at },
-    row.explanation.systemAction,
+    asked === null
+      ? row.explanation.systemAction
+      : `${sameKind > 1 ? `${sameKind} de este tipo · ` : ""}${asked.why} · bloquea a ${asked.blocks.join(", ")}`,
     "yellow",
     (state.seen[row.id] ?? 0) < row.at,
     selected,

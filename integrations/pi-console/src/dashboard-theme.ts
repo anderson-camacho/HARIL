@@ -6,7 +6,15 @@ type LineColorTone = "line" | "lineAccent";
 export type DashboardTone = BaseTone | LineColorTone;
 
 const RESET = "\u001b[0m";
-export const HARIL_PALETTES = ["future", "matrix", "violet", "rose", "amber", "obsidian"] as const;
+export const HARIL_PALETTES = [
+  "magic",
+  "future",
+  "matrix",
+  "violet",
+  "rose",
+  "amber",
+  "obsidian",
+] as const;
 export type HarilPalette = (typeof HARIL_PALETTES)[number];
 type Color = readonly [number, number, number];
 type BackgroundTone = "base" | "panel" | "selected";
@@ -20,9 +28,24 @@ interface Palette {
   readonly lines?: Record<LineColorTone, Color>;
 }
 
-const DEFAULT_PALETTE: HarilPalette = "future";
+const DEFAULT_PALETTE: HarilPalette = "magic";
 
 const PALETTES: Record<HarilPalette, Palette> = {
+  // The tokens of the factory's references (ascii-magic-art, MIT), so the rail and the factory read as one.
+  magic: {
+    unpaintedSurfaces: true,
+    foreground: {
+      cyan: [121, 192, 255], // blue #79c0ff
+      teal: [126, 231, 135], // green #7ee787
+      yellow: [242, 204, 96], // #f2cc60
+      text: [230, 237, 243], // #e6edf3
+      muted: [139, 148, 158], // #8b949e
+      dim: [72, 79, 88], // #484f58
+      error: [255, 123, 114], // red #ff7b72
+    },
+    background: { base: [13, 17, 23], panel: [22, 27, 34], selected: [48, 54, 61] },
+    lines: { line: [48, 54, 61], lineAccent: [255, 166, 87] }, // #30363d, orange #ffa657
+  },
   future: {
     unpaintedSurfaces: true,
     foreground: {

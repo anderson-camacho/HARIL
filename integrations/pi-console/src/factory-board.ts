@@ -18,6 +18,9 @@ type Seg = FactorySeg<FactoryTarget>;
 export type BodyLine = readonly Seg[];
 
 const BOARD_MIN_WIDTH = 70;
+
+import { mindMapBody } from "./factory-mindmap.js";
+
 const ROLLOUT_MIN_ROWS = 18;
 // A framed card takes this many rows, and a bare one this many.
 const CARD_ROWS = 5;
@@ -74,20 +77,28 @@ function cardLines(
 ): BodyLine[] {
   const inner = Math.max(0, width - 2);
   const edge: FactoryToken = selected ? "blue" : "dim";
+  const side = selected ? g.heavyV : g.v;
   const titleRoom = Math.max(0, inner - 2);
   const row = (segs: readonly Seg[]): BodyLine => {
     const used = factorySegsWidth(segs);
     return [
-      { text: g.v, token: edge },
+      { text: side, token: edge },
       ...segs,
       { text: " ".repeat(Math.max(0, inner - used)), token: "dim" },
-      { text: g.v, token: edge },
+      { text: side, token: edge },
     ];
   };
   const codeRoom = textWidth(plainText(task.agent)) + 1;
   const roleRoom = Math.max(0, inner - 3 - codeRoom);
   return [
-    [{ text: `${g.topLeft}${g.h.repeat(inner)}${g.topRight}`, token: edge }],
+    [
+      {
+        text: selected
+          ? `${g.heavyTopLeft}${g.heavy.repeat(inner)}${g.heavyTopRight}`
+          : `${g.topLeft}${g.h.repeat(inner)}${g.topRight}`,
+        token: edge,
+      },
+    ],
     row([
       { text: selected ? g.pointer : " ", token: "blue" },
       { text: " ", token: "dim" },
@@ -99,7 +110,14 @@ function cardLines(
       factoryCell(task.agent, codeRoom, "muted", true),
     ]),
     row([{ text: "  ", token: "dim" }, factoryCell(delegatedText(task), titleRoom, "muted")]),
-    [{ text: `${g.bottomLeft}${g.h.repeat(inner)}${g.bottomRight}`, token: edge }],
+    [
+      {
+        text: selected
+          ? `${g.heavyBottomLeft}${g.heavy.repeat(inner)}${g.heavyBottomRight}`
+          : `${g.bottomLeft}${g.h.repeat(inner)}${g.bottomRight}`,
+        token: edge,
+      },
+    ],
   ];
 }
 
@@ -374,6 +392,21 @@ export function boardBody(
   if (model === null || model.tasks.length === 0) {
     return [[factoryCell("  Sin tareas todavía. Pulsa n para delegar una.", width, "muted")]];
   }
+  const asked = model.humanRequests.length;
+  if (asked > 0 && height >= 3) {
+    const head: BodyLine = [{ text: ` Te necesitan ${asked}`, token: "yellow" }];
+    return [head, ...boardRows(state, width, height - 1, g)];
+  }
+  return boardRows(state, width, height, g);
+}
+
+function boardRows(
+  state: FactoryState,
+  width: number,
+  height: number,
+  g: FactoryGlyphs,
+): BodyLine[] {
+  if (state.tableroView === "mapa") return mindMapBody(state, width, height, g);
   // Below the full plan only its bar is left, with what the person must do when it is stopped.
   const rollout = height >= ROLLOUT_MIN_ROWS ? Math.floor(height * 0.45) : Math.floor(height / 3);
   const lower = rolloutLines(state, width, rollout, g);
