@@ -1,6 +1,6 @@
 import { chooseModel, type ModelRequest } from "@haril/core";
 import type { AgentOutcome, ProviderFailure, Store } from "@haril/core/ports";
-import { quotaByKey, quotaKeyOf } from "../quota-view.js";
+import { groupIndex, quotaByKey, quotaKeyFor, quotaKeyOf } from "../quota-view.js";
 import type { TurnWindowReport } from "./delegation-tools.js";
 import { QUOTA_FRESH_MS } from "./model-context.js";
 import type { Task, WorkflowSettings, WorkflowView } from "./workflow-view.js";
@@ -113,7 +113,8 @@ function cooldownEnd(
     return now + provider.retryAfterMs;
   if (provider.kind === "quota") {
     const policy = settings.models(now).policy;
-    const sample = quotaByKey(store.quota.latest(now - QUOTA_FRESH_MS), policy)[quotaKeyOf(model)];
+    const records = store.quota.latest(now - QUOTA_FRESH_MS);
+    const sample = quotaByKey(records, policy)[quotaKeyFor(model, groupIndex(records))];
     if (sample?.available === true) {
       const resets = [
         sample.weeklyUsedPct !== null && sample.weeklyUsedPct > policy.stopAtPercentWeekly

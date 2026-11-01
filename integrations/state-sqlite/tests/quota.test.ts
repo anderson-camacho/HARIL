@@ -77,6 +77,63 @@ const SAMPLED: QuotaSnapshot = {
   ],
 };
 
+describe("quota samples by group", () => {
+  const GROUPED: QuotaSnapshot = {
+    ok: true,
+    sampledAt: 1_000,
+    source: "cliproxyapi-management/v8",
+    accounts: [
+      {
+        credentialRef: "acct-111111111111",
+        kind: "antigravity",
+        prefix: "Anti1",
+        plan: "ultra",
+        windows: [
+          { name: "5h", usedPct: 90, resetsAt: 100 },
+          { name: "5h", usedPct: 90, resetsAt: 100, group: "Gemini", models: ["gemini-3-flash"] },
+          { name: "5h", usedPct: 5, resetsAt: 200, group: "Claude and GPT" },
+        ],
+        note: null,
+      },
+    ],
+  };
+
+  it("keeps each group's window apart from the account's worst one", () => {
+    clock.set(1_000);
+    store.quota.recordSnapshot("cliproxy", GROUPED);
+    const rows = store.quota.latest(0);
+    expect(rows.filter((row) => row.group === undefined).map((row) => row.window)).toEqual([
+      "5h",
+      "7d",
+    ]);
+    const grouped = rows.filter((row) => row.group !== undefined);
+    expect(grouped.map((row) => [row.group, row.window, row.usedPct, row.groupModels])).toEqual([
+      ["Gemini", "5h", 90, ["gemini-3-flash"]],
+      ["Claude and GPT", "5h", 5, undefined],
+    ]);
+    expect(rows[0]?.plan).toBe("ultra");
+  });
+
+  it("gives the known values of every batch since a moment, oldest first", () => {
+    clock.set(1_000);
+    store.quota.recordSnapshot("cliproxy", GROUPED);
+    clock.set(2_000);
+    store.quota.recordSnapshot("cliproxy", { ...SAMPLED, sampledAt: 2_000 });
+    store.quota.recordSnapshot("other", {
+      ok: false,
+      sampledAt: 3_000,
+      reason: "unreachable",
+      detail: "down",
+    });
+    const rows = store.quota.history(1_500);
+    expect(rows.map((row) => [row.sampledAt, row.window, row.usedPct])).toEqual([
+      [2_000, "5h", 83],
+      [2_000, "7d", 40],
+    ]);
+    expect(store.quota.history(0).at(0)?.sampledAt).toBe(1_000);
+  });
+});
+
 describe("quota samples", () => {
   it("records one batch per sampling and returns each provider's newest batch while it is fresh", () => {
     clock.set(1_000);

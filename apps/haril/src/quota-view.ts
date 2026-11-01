@@ -11,6 +11,13 @@ export interface QuotaWindowView {
   readonly resetsAt: number | null;
 }
 
+export interface QuotaGroupView {
+  readonly name: string;
+  readonly models: readonly string[];
+  readonly window5h: QuotaWindowView;
+  readonly weekly: QuotaWindowView;
+}
+
 export interface QuotaAccountView {
   readonly provider: string;
   // Opaque: never an e-mail or a file name.
@@ -21,6 +28,10 @@ export interface QuotaAccountView {
   readonly prefix: string | null;
   readonly window5h: QuotaWindowView;
   readonly weekly: QuotaWindowView;
+  // The pools of models the provider reports for this account; empty when it reports none.
+  readonly groups: readonly QuotaGroupView[];
+  // The account's plan, when the gateway names one.
+  readonly plan: string | null;
   // What the rule says (avoided, not used, no large task), or why it says nothing ("sin dato: ...").
   readonly note: string;
   readonly sampledAt: number;
@@ -74,12 +85,13 @@ export function accountViews(
   }
   return [...accounts.values()].map((rows) => {
     const first = rows[0] as QuotaSampleRecord;
-    const windowOf = (name: "5h" | "7d"): QuotaWindowView => {
-      const row = rows.find((item) => item.window === name);
+    const windowOf = (name: "5h" | "7d", group?: string): QuotaWindowView => {
+      const row = rows.find((item) => item.window === name && item.group === group);
       return { usedPct: row?.usedPct ?? null, resetsAt: row?.resetsAt ?? null };
     };
     const window5h = windowOf("5h");
     const weekly = windowOf("7d");
+    const names = [...new Set(rows.flatMap((row) => (row.group === undefined ? [] : [row.group])))];
     const credential = first.credentialRef as string;
     return {
       provider: first.provider,
@@ -89,6 +101,17 @@ export function accountViews(
       prefix: first.prefix,
       window5h,
       weekly,
+      groups: names.map((name) => ({
+        name,
+        models: [
+          ...new Set(
+            rows.filter((row) => row.group === name).flatMap((row) => row.groupModels ?? []),
+          ),
+        ],
+        window5h: windowOf("5h", name),
+        weekly: windowOf("7d", name),
+      })),
+      plan: first.plan ?? null,
       note: noteOf(window5h, weekly, first.note, policy),
       sampledAt: first.sampledAt,
       source: first.source,
@@ -106,11 +129,71 @@ export function quotaByKey(
   const out: Record<string, QuotaSample> = {};
   for (const account of accountViews(records, policy)) {
     const sample = sampleOf(account.window5h, account.weekly);
-    if (account.prefix !== null) out[`${account.provider}/${account.prefix}`] = sample;
+    if (account.prefix !== null) {
+      const key = `${account.provider}/${account.prefix}`;
+      out[key] = sample;
+      for (const group of account.groups) {
+        out[`${key}#${group.name}`] = sampleOf(group.window5h, group.weekly);
+      }
+    }
     byProvider.set(account.provider, [...(byProvider.get(account.provider) ?? []), sample]);
   }
   for (const [provider, samples] of byProvider) out[provider] = worstQuota(samples);
   return out;
+}
+
+// The pools each account reports, by the account's quota key. Only accounts with a prefix: a model without one counts as
+// its provider's worst account (P4), which pools do not change.
+export type QuotaGroupIndex = ReadonlyMap<
+  string,
+  readonly { readonly name: string; readonly models: readonly string[] }[]
+>;
+
+export function groupIndex(records: readonly QuotaSampleRecord[]): QuotaGroupIndex {
+  const index = new Map<string, { name: string; models: string[] }[]>();
+  for (const row of records) {
+    if (row.group === undefined || row.prefix === null) continue;
+    const key = `${row.provider}/${row.prefix}`;
+    const groups = index.get(key) ?? [];
+    let group = groups.find((item) => item.name === row.group);
+    if (group === undefined) {
+      group = { name: row.group, models: [] };
+      groups.push(group);
+    }
+    for (const model of row.groupModels ?? []) {
+      if (!group.models.includes(model)) group.models.push(model);
+    }
+    index.set(key, groups);
+  }
+  return index;
+}
+
+// The pool a model spends: the group whose model list names it, else the only group whose name holds the model's family
+// ("gemini-3-flash" -> "Gemini"; "gpt-6.1-sol" -> "Claude and GPT"), else null: the worst window still applies to it.
+export function quotaGroupOf(
+  modelId: string,
+  groups: readonly { readonly name: string; readonly models: readonly string[] }[],
+): string | null {
+  const id = modelId.toLowerCase();
+  const listed = groups.find((group) => group.models.some((model) => model.toLowerCase() === id));
+  if (listed !== undefined) return listed.name;
+  const family = id.split(/[-_.]/)[0] ?? id;
+  const named = groups.filter((group) =>
+    group.name
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .includes(family),
+  );
+  return named.length === 1 ? (named[0]?.name ?? null) : null;
+}
+
+// The key whose quota holds a model back: its pool's on an account that reports pools, else its account's.
+export function quotaKeyFor(ref: string, groups: QuotaGroupIndex): string {
+  const account = quotaKeyOf(ref);
+  const pools = groups.get(account);
+  if (pools === undefined) return account;
+  const group = quotaGroupOf(ref.split("/").slice(2).join("/"), pools);
+  return group === null ? account : `${account}#${group}`;
 }
 
 // The quota key of a model reference "<provider>/<model id>": the account prefix when the model id names one

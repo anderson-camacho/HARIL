@@ -23,6 +23,7 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 - Cada tarea explica ahora por qué está donde está: qué pasa, por qué, qué hace el sistema, si te necesita y hasta cuándo. Cubre todos los motivos de bloqueo y estados, y el compilador rechaza uno nuevo sin explicación. Se escribe con datos guardados, nunca con un modelo.
 - `haril workflow show` y `watch` añaden `stopReason` y `explanation` al flujo y a cada nodo, sin cambiar la versión del formato. Con `after_plan` dicen qué ejecutar: `haril workflow continue <id>`, o pulsar `c` en la fábrica.
 - `haril factory show [--json]` y `haril factory watch` dan una vista de todos los flujos recientes, o de uno con `--project`: tareas por columna (por hacer, en curso, detenidas, errores, hechas), agentes, quién delegó a quién, eventos y lo que te espera. Una tarea fallida dice a quién se le devolvió, y nada entra en detenidas sin explicación. Para levantar una parada se sigue usando `haril workflow continue`.
+- Cuota por grupo: una cuenta con grupos de modelos (Antigravity: «Gemini», «Claude and GPT») guarda las ventanas de cada grupo (migración 0019). Una cuenta al 90 % en Gemini y al 5 % en Claude/GPT sigue disponible para Claude y GPT. Un modelo sin grupo conocido conserva la regla de la peor ventana: nada se afloja sin datos. Las filas antiguas y los proveedores sin grupos siguen valiendo.
 
 ### Limitaciones
 

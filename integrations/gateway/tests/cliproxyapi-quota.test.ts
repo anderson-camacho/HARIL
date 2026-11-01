@@ -172,9 +172,30 @@ describe("the CLIProxyAPI quota adapter", () => {
     ]);
     // The worst bucket of each window counts.
     expect(gemini).toMatchObject({ kind: "antigravity", prefix: "Gemini1" });
-    expect(gemini?.windows).toEqual([
+    expect(gemini?.windows.filter((item) => item.group === undefined)).toEqual([
       { name: "5h", usedPct: 83, resetsAt: Date.parse("2026-10-18T13:00:00Z") },
       { name: "7d", usedPct: 40, resetsAt: Date.parse("2026-10-23T00:00:00Z") },
+    ]);
+    // Every named group keeps its own windows, so one spent group does not hold back the others.
+    expect(gemini?.windows.filter((item) => item.group !== undefined)).toEqual([
+      {
+        name: "5h",
+        usedPct: 83,
+        resetsAt: Date.parse("2026-10-18T13:00:00Z"),
+        group: "Gemini",
+      },
+      {
+        name: "7d",
+        usedPct: 40,
+        resetsAt: Date.parse("2026-10-23T00:00:00Z"),
+        group: "Gemini",
+      },
+      {
+        name: "5h",
+        usedPct: 50,
+        resetsAt: Date.parse("2026-10-18T11:00:00Z"),
+        group: "Claude",
+      },
     ]);
     expect(codex?.windows).toEqual([
       { name: "5h", usedPct: 12, resetsAt: NOW + 600_000 },

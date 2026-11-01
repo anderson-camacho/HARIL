@@ -128,7 +128,7 @@ describe("migration 0006 (memory_outbox, memory_refs)", () => {
 
     const opened = openStore({ dataDir: dir, clock, ids: sequentialIds(), rules: testRules });
     try {
-      expect(opened.info().schemaVersion).toBe(18);
+      expect(opened.info().schemaVersion).toBe(19);
       expect(opened.projects.list().map((project) => project.slug)).toEqual(["old"]);
       expect(opened.memory.status()).toEqual({
         provider: null,
