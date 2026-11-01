@@ -67,6 +67,8 @@ describe("delegation tool names", () => {
       "haril_merge",
       "haril_merge_continue",
       "haril_merge_abort",
+      "haril_git",
+      "haril_web",
     ]);
   });
 

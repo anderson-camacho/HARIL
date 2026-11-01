@@ -29,7 +29,10 @@ export function projectTestCommand(
 }
 
 type EvidenceStore = { readonly events: Pick<Store["events"], "list"> };
-type Turn = Pick<WorkflowTaskRecord, "taskId" | "attempt" | "auditedTaskId" | "role">;
+type Turn = Pick<
+  WorkflowTaskRecord,
+  "taskId" | "attempt" | "auditedTaskId" | "role" | "surfaceWrite"
+>;
 
 interface ExecutorEvidence {
   readonly ok: true;
@@ -164,9 +167,18 @@ export function workflowEvidence(
     if (executor === undefined || auditor === undefined) {
       return { ok: false, reason: `approved executor ${audit.subjectTaskId} has no bound auditor` };
     }
+    // A step that writes nothing (a consultor, a product-owner, git) has no change to show.
+    if (executor.surfaceWrite.length === 0) continue;
     const observed = executorEvidence(store, executor, auditor);
     if (!observed.ok) return observed;
     evidence.push(observed);
+  }
+  if (evidence.length === 0) {
+    return {
+      ok: false,
+      reason:
+        "implementation has no approved executor with host-observed changed files and a project test",
+    };
   }
   return { ok: true, mode: "implementation", executors: evidence };
 }

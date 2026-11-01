@@ -11,6 +11,11 @@ export interface QuotaWindowReading {
   readonly usedPct: number | null;
   // When the window starts over (epoch ms), or null.
   readonly resetsAt: number | null;
+  // The pool of models this reading is about, as the provider names it ("Gemini", "Claude and GPT"). Absent: the
+  // account's worst reading of the window, which a model with no known group counts against.
+  readonly group?: string;
+  // The models the provider says spend that pool, when it says so.
+  readonly models?: readonly string[];
 }
 
 export interface QuotaAccountReading {
@@ -20,7 +25,10 @@ export interface QuotaAccountReading {
   readonly kind: string;
   // The model prefix that routes requests to this account (S2, P25: "Gemini1/..."), or null.
   readonly prefix: string | null;
-  // The windows the provider reported; a missing window is "sin dato" for it.
+  // The account's plan, when the gateway names one.
+  readonly plan?: string;
+  // The windows the provider reported; a missing window is "sin dato" for it. One reading without a group per window,
+  // the account's worst, and one per window of each named group.
   readonly windows: readonly QuotaWindowReading[];
   // Why a window is missing (no usage probe for this kind, the usage endpoint refused...), or null.
   readonly note: string | null;
@@ -70,6 +78,10 @@ export interface QuotaSampleRecord {
   readonly sampledAt: number;
   readonly source: string;
   readonly note: string | null;
+  // Present only on the row of a named group, and on an account whose plan is known. Rows from before schema 19 lack them.
+  readonly group?: string;
+  readonly groupModels?: readonly string[];
+  readonly plan?: string;
 }
 
 // A model (or an account, keyed "quota:<quota key>") that may not be used before `until` (epoch ms): a 402 or 429
@@ -89,6 +101,9 @@ export interface QuotaStorePort {
   // The rows of each provider's newest batch, when that batch was sampled at or after `since`; an older batch is no
   // longer evidence ("sin dato").
   latest(since: number): readonly QuotaSampleRecord[];
+  // Every known value sampled at or after `since`, oldest first and bounded to the newest rows: the views' history and the
+  // last value of an account that can no longer be read.
+  history(since: number): readonly QuotaSampleRecord[];
   // Starts or extends a cooldown: an active cooldown is never shortened by a later, shorter one.
   setCooldown(input: ModelCooldownRecord): ModelCooldownRecord;
   // The cooldowns still active at `now`.

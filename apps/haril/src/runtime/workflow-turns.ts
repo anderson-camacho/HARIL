@@ -1,5 +1,5 @@
 import type { WorkflowState } from "@haril/contracts";
-import { type DelegationArchetype, evaluateQuota } from "@haril/core";
+import { type DelegationArchetype, evaluateQuota, SYNTHESIZER_ROLE } from "@haril/core";
 import type {
   AgentOutcome,
   CancelReason,
@@ -170,6 +170,8 @@ export function buildTurnInput(
     siblings: siblingsOf(view, task),
     capacity: capacityOf(view, task, settings, now),
     workspace,
+    roleName: view.roleOf(task),
+    ...(view.roleOf(task) === SYNTHESIZER_ROLE ? { opinions: view.opinionsFor(task) } : {}),
   } satisfies DelegationTurnInput;
   switch (task.role) {
     case "orchestrator":
@@ -261,6 +263,35 @@ export interface CommitDeps {
   readonly epoch: number;
   readonly clock: Clock;
   readonly options?: DelegationOptions;
+}
+
+// A turn that goes round again without counting as a failure of its task: a person's urgent message, or a handoff. Its run
+// closes with its own code (RetryTurnInput.runCode), so the one provider retry stays unspent, and its usage row says why.
+export function restartWorkflowTurn(
+  deps: Pick<CommitDeps, "store" | "clock" | "epoch">,
+  attempt: WorkflowAttempt,
+  input: {
+    readonly model: string;
+    readonly cooldownUntil: number | null;
+    readonly runCode: string;
+    readonly message: string;
+    readonly outcome: string;
+  },
+): void {
+  retryWorkflowTurn(
+    deps,
+    attempt,
+    { status: "failed", code: input.runCode, message: input.message },
+    {
+      kind: "retry",
+      model: input.model,
+      cooldownUntil: input.cooldownUntil,
+      retryReason: "transient",
+      substitutedFrom: null,
+      outcome: input.outcome,
+    },
+    input.runCode,
+  );
 }
 
 export interface CommitResult {
@@ -412,7 +443,10 @@ export function retryWorkflowTurn(
   deps: Pick<CommitDeps, "store" | "clock" | "epoch">,
   attempt: WorkflowAttempt,
   outcome: Extract<AgentOutcome, { status: "failed" }>,
-  decision: Extract<RetryDecision, { kind: "retry" }>,
+  decision: Omit<Extract<RetryDecision, { kind: "retry" }>, "outcome"> & {
+    readonly outcome: string;
+  },
+  runCode?: string,
 ): void {
   const { store, clock, epoch } = deps;
   const view = WorkflowView.load(store, attempt.workflowId);
@@ -430,6 +464,7 @@ export function retryWorkflowTurn(
       cooldownUntil: decision.cooldownUntil,
       retryReason: decision.retryReason,
       error: { code: outcome.code, message: outcome.message.slice(0, 500) },
+      ...(runCode === undefined ? {} : { runCode }),
     });
     // What it spent, its open calls settled with the run.
     const ledger = store.budgets.usageSummary({ runId: attempt.claimed.runId });

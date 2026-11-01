@@ -19,6 +19,7 @@ import {
   deleteBranch,
   discardChanges,
   type GitOptions,
+  HARIL_AUTHOR,
   headBranch,
   headCommit,
   isAncestor,
@@ -32,6 +33,7 @@ import {
 } from "@haril/git";
 import { readConfinedFile, writeConfinedFile } from "@haril/os";
 import {
+  GRANT_ENV,
   type HostCommandProcess,
   type HostCommandResult,
   type HostCommandSettings,
@@ -156,6 +158,8 @@ interface CommandHooks {
   readonly signal?: AbortSignal;
   readonly onSpawn?: (process: HostCommandProcess) => void;
   readonly onExit?: (process: HostCommandProcess) => void;
+  // A grant from a person: the variables a push needs for the person's credentials come along (GRANT_ENV).
+  readonly credentials?: boolean;
 }
 
 export type WorkspaceReply =
@@ -281,6 +285,14 @@ export interface Workspaces {
   run(
     workspace: TurnWorkspace,
     command: string,
+    args: readonly string[],
+    hooks?: CommandHooks,
+  ): Promise<HostCommandResult>;
+  // The git role's git or gh, already classified by the Core (classifyGitCommand): not on the allow list, with the
+  // repository named so a command cannot be pointed at another one.
+  runGit(
+    workspace: Pick<TurnWorkspace, "gitDir" | "root">,
+    program: "git" | "gh",
     args: readonly string[],
     hooks?: CommandHooks,
   ): Promise<HostCommandResult>;
@@ -938,6 +950,40 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
       ...(hooks.onExit === undefined ? {} : { onExit: hooks.onExit }),
     });
 
+  const runGit: Workspaces["runGit"] = (workspace, program, args, hooks = {}) => {
+    const named =
+      program === "git"
+        ? [
+            `--git-dir=${workspace.gitDir}`,
+            `--work-tree=${workspace.root}`,
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            `user.name=${HARIL_AUTHOR.name}`,
+            "-c",
+            `user.email=${HARIL_AUTHOR.email}`,
+            ...args,
+          ]
+        : [...args];
+    return runHostCommand({
+      command: program,
+      args: named,
+      cwd: workspace.root,
+      settings: settings.commands,
+      classified: true,
+      // gh runs git by itself: it gets the same repository the argv names for git.
+      ...(program === "gh"
+        ? { extraEnv: { GIT_DIR: workspace.gitDir, GIT_WORK_TREE: workspace.root } }
+        : {}),
+      ...(hooks.credentials === true ? { keepEnv: GRANT_ENV } : {}),
+      ...(settings.env === undefined ? {} : { env: settings.env }),
+      ...(settings.killTree === undefined ? {} : { killTree: settings.killTree }),
+      ...(hooks.signal === undefined ? {} : { signal: hooks.signal }),
+      ...(hooks.onSpawn === undefined ? {} : { onSpawn: hooks.onSpawn }),
+      ...(hooks.onExit === undefined ? {} : { onExit: hooks.onExit }),
+    });
+  };
+
   const retireExecutor: Workspaces["retireExecutor"] = async (store, epoch, record, repo) => {
     const removed = await removeWorktree(repo, record.path, git);
     if (!removed.ok) return;
@@ -992,6 +1038,7 @@ export function createWorkspaces(settings: WorkspaceSettings): Workspaces {
     write,
     edit,
     run,
+    runGit,
     withRepository,
     verifiedHead: verifiedOf,
     recordMerge: (workspace, sha) => {

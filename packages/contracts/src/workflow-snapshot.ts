@@ -44,6 +44,21 @@ export const ModelSourceSchema = Type.Union([
   Type.Literal("table"),
 ]);
 
+// Why something is where it is, in words for the person (core's explainWait). Built from stored facts only.
+export const WaitExplanationSchema = Type.Object(
+  {
+    code: Type.String(),
+    what: Type.String(),
+    why: Type.String(),
+    systemAction: Type.String(),
+    needsHuman: Type.Boolean(),
+    // When the wait ends by itself, if that is known.
+    until: Nullable(Type.Number()),
+  },
+  { additionalProperties: false },
+);
+export type WaitExplanation = Static<typeof WaitExplanationSchema>;
+
 const WorkflowNodeSchema = Type.Object(
   {
     id: Type.String(),
@@ -93,6 +108,7 @@ const WorkflowNodeSchema = Type.Object(
       ),
     ),
     waitingReason: Nullable(Type.String()),
+    explanation: Type.Optional(WaitExplanationSchema),
     turn: Nullable(Type.Object({ index: Count, of: Count }, { additionalProperties: false })),
   },
   { additionalProperties: false },
@@ -141,6 +157,9 @@ export const WorkflowSnapshotSchema = Type.Object(
           { additionalProperties: false },
         ),
         orchestratorModel: Type.String(),
+        // The stop or the failure it is in; additive, a reader that does not know them still reads v1.
+        stopReason: Type.Optional(Nullable(Type.String())),
+        explanation: Type.Optional(WaitExplanationSchema),
       },
       { additionalProperties: false },
     ),

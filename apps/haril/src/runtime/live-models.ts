@@ -1,6 +1,6 @@
 import { CLAUDE_BRIDGE_PROVIDER } from "@haril/agent-pi";
-import { DELEGATION_LAYERS } from "@haril/contracts";
-import type { QuotaPolicy } from "@haril/core";
+import { DELEGATION_LAYERS, ROLE_NAMES } from "@haril/contracts";
+import { expandRoleList, type QuotaPolicy, type RoleSelection } from "@haril/core";
 import type { Clock, Store, WorkflowRecord } from "@haril/core/ports";
 import type { HostInfo } from "../context.js";
 import { loadDelegationSettings } from "../delegation-config.js";
@@ -142,6 +142,7 @@ export function createLiveModels(deps: LiveModelsDeps): LiveModels {
     switchAtPercent5h: value.quota.switchAtPercent5h,
     stopAtPercentWeekly: value.quota.stopAtPercentWeekly,
     minRemainingPercentForLargeTask: value.quota.minRemainingPercentForLargeTask,
+    reservePercent: value.quota.reservePercent,
     maxWaitMs: value.quota.maxWaitMs,
   });
 
@@ -161,6 +162,26 @@ export function createLiveModels(deps: LiveModelsDeps): LiveModels {
     ),
     auditorDistinctFromExecutor: value.models.auditorDistinctFromExecutor,
   });
+
+  // The role profiles that are on, their lists expanded against the catalog (feature haril-factory, F6).
+  const rolesOf = (
+    value: DelegationSettings,
+    refs: readonly string[],
+  ): Record<string, RoleSelection> =>
+    Object.fromEntries(
+      ROLE_NAMES.filter((name) => value.roles[name].enabled).map((name) => {
+        const profile = value.roles[name];
+        return [
+          name,
+          {
+            archetype: profile.archetype,
+            floor: profile.floor,
+            order: expandRoleList(profile.models, refs),
+            maxLevel: value.models.layers[profile.archetype].level === "max",
+          },
+        ];
+      }),
+    );
 
   // The claude-bridge models a real workflow names (its orchestrator's, and haril.json's pinned and allowed refs): no
   // provider's catalog lists them, so they join it as served, all under the claude-bridge quota key (claude-bridge.ts).
@@ -211,6 +232,7 @@ export function createLiveModels(deps: LiveModelsDeps): LiveModels {
         ...bridged.filter((entry) => !refs.includes(entry.ref)),
       ],
       ...choices,
+      roles: rolesOf(current, refs),
       quota: {},
       table: tableFor(table, refs),
       stats: table.stats,

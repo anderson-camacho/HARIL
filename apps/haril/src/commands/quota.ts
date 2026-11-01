@@ -39,24 +39,45 @@ function windowText(name: string, window: QuotaWindowView): string {
 // The rows a snapshot becomes in the store, for the views of this one reading.
 function recordsOf(providerId: string, snapshot: QuotaSnapshot): QuotaSampleRecord[] {
   if (!snapshot.ok) return [];
-  return snapshot.accounts.flatMap((account) =>
-    (["5h", "7d"] as const).map((window) => {
-      const reading = account.windows.find((item) => item.name === window);
+  return snapshot.accounts.flatMap((account) => {
+    const shared = {
+      provider: providerId,
+      batchId: "",
+      credentialRef: account.credentialRef,
+      kind: account.kind,
+      prefix: account.prefix,
+      sampledAt: snapshot.sampledAt,
+      source: snapshot.source,
+      note: account.note,
+      ...(account.plan === undefined ? {} : { plan: account.plan }),
+    };
+    const worst = (["5h", "7d"] as const).map((window) => {
+      const reading = account.windows.find(
+        (item) => item.name === window && item.group === undefined,
+      );
       return {
-        provider: providerId,
-        batchId: "",
-        credentialRef: account.credentialRef,
-        kind: account.kind,
-        prefix: account.prefix,
+        ...shared,
         window,
         usedPct: reading?.usedPct ?? null,
         resetsAt: reading?.resetsAt ?? null,
-        sampledAt: snapshot.sampledAt,
-        source: snapshot.source,
-        note: account.note,
       };
-    }),
-  );
+    });
+    const grouped = account.windows.flatMap((reading) =>
+      reading.group === undefined
+        ? []
+        : [
+            {
+              ...shared,
+              window: reading.name,
+              usedPct: reading.usedPct,
+              resetsAt: reading.resetsAt,
+              group: reading.group,
+              ...(reading.models === undefined ? {} : { groupModels: reading.models }),
+            },
+          ],
+    );
+    return [...worst, ...grouped];
+  });
 }
 
 interface ProviderReport {
@@ -93,6 +114,7 @@ export async function quota(args: readonly string[], io: CliIo, host: HostInfo):
     switchAtPercent5h: settings.quota.switchAtPercent5h,
     stopAtPercentWeekly: settings.quota.stopAtPercentWeekly,
     minRemainingPercentForLargeTask: settings.quota.minRemainingPercentForLargeTask,
+    reservePercent: settings.quota.reservePercent,
     maxWaitMs: settings.quota.maxWaitMs,
   };
   const clock = clockFor(host);

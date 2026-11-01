@@ -59,6 +59,7 @@ describe("archetypes", () => {
       "haril_merge",
       "haril_merge_continue",
       "haril_merge_abort",
+      "haril_git",
     ]);
     for (const archetype of DELEGATION_ARCHETYPES) {
       const announced = archetypeTools(archetype, { writes: false });
@@ -119,6 +120,7 @@ describe("archetypes", () => {
       "haril_merge",
       "haril_merge_continue",
       "haril_merge_abort",
+      "haril_git",
     ]);
     expect(isDecidingTool("haril_report")).toBe(true);
     expect(isDecidingTool("haril_merge")).toBe(false);
@@ -186,6 +188,8 @@ describe("DEFAULT_DELEGATION_LIMITS", () => {
       largeTaskTokens: 50_000,
       attemptTimeoutMs: 3_600_000,
       minAuditorTokens: 60_000,
+      maxCouncillors: 5,
+      maxHandoffsPerTask: 3,
     });
   });
 

@@ -39,6 +39,48 @@ export interface DelegationChildOutcome {
   readonly escalations: number;
   // This thread already reassigned it once (a reformulation, or the reassignment of a blocked step).
   readonly reassigned: boolean;
+  // What a parent needs to decide after a failure; absent or null when the child did not fail.
+  readonly failure?: DelegationFailurePackage | null;
+}
+
+// A failed child, returned to its parent: the error, what was tried and what was done.
+export interface DelegationFailurePackage {
+  readonly code: string;
+  readonly message: string;
+  readonly tried: readonly {
+    readonly model: string | null;
+    readonly outcome: string;
+  }[];
+  readonly done: string | null;
+}
+
+// A person's message to an agent (haril factory message), as its next turn reads it. Written by a person, so it is an
+// instruction to this agent; the prompt tells it to report the correction to its parent.
+export interface DelegationMessageView {
+  readonly id: string;
+  readonly text: string;
+  readonly urgent: boolean;
+}
+
+// What an agent left when another one took its task over (feature haril-factory, F7).
+export interface DelegationHandoffView {
+  readonly from: string;
+  readonly reason: string;
+  readonly objective: string;
+  readonly done: string | null;
+  readonly pending: readonly string[];
+  readonly decisions: string | null;
+  readonly filesTouched: readonly string[];
+  readonly diffSummary: string | null;
+  // Where the whole conversation of the agent that left is kept; null when the runtime has none.
+  readonly transcript: string | null;
+}
+
+// One councillor's opinion, as the sintetizador reads it: it has no tools, so everything comes in its prompt.
+export interface DelegationOpinionView {
+  readonly localId: string;
+  readonly model: string | null;
+  readonly text: string;
 }
 
 // What the orchestrator said when it asked for the final audit (haril_request_audit): its summary and what it knows is
@@ -150,6 +192,11 @@ export interface DelegationTurnInput {
   readonly capacity: DelegationCapacity;
   // A turn of a workflow that writes (phase F8); absent or null for a read-only workflow.
   readonly workspace?: DelegationWorkspaceView | null;
+  // The role profile its proposal named (delegation.roles); absent or null when it named none.
+  readonly roleName?: string | null;
+  readonly messages?: readonly DelegationMessageView[];
+  readonly handoff?: DelegationHandoffView | null;
+  readonly opinions?: readonly DelegationOpinionView[];
 }
 
 // The run a tool call comes from: only a workflow turn the runtime opened may call, and only for itself.

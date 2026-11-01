@@ -88,7 +88,7 @@ function uiThemeField(document: Record<string, unknown>): {
 } {
   const configured = valueAt(document, ["ui", "theme"]);
   return configured === undefined
-    ? { value: "future", source: "default" }
+    ? { value: "magic", source: "default" }
     : { value: configured, source: "file" };
 }
 
@@ -132,7 +132,7 @@ function configGet(args: readonly string[], io: CliIo, host: HostInfo): number {
       return EXIT_USAGE;
     }
     const preference = path === "ui.locale" ? uiLocaleField(document) : uiThemeField(document);
-    const fallback = path === "ui.locale" ? DEFAULT_UI_LOCALE : "future";
+    const fallback = path === "ui.locale" ? DEFAULT_UI_LOCALE : "magic";
     if (json) {
       io.out(JSON.stringify({ path, ...preference, default: fallback, configPath }));
     } else {

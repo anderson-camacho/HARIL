@@ -48,6 +48,15 @@ describe("the complete command catalog", () => {
     expect(list.find((entry) => entry.name === "alt+x")?.kind).toBe("shortcut");
   });
 
+  it("describes /haril-factory in Spanish once Pi reports it", () => {
+    const list = catalogEntries([{ name: "haril-factory", source: "extension" }], [], []);
+    expect(list.find((entry) => entry.name === "haril-factory")).toMatchObject({
+      group: "HARIL",
+      kind: "command",
+    });
+    expect(filterCatalog(list, "fábrica").map((entry) => entry.name)).toContain("haril-factory");
+  });
+
   it("finds the status command in Spanish and in English", () => {
     for (const word of ["estado", "avisos", "extensiones", "contexto", "status"]) {
       expect(filterCatalog(entries(), word).map((entry) => entry.name)).toContain("haril-status");

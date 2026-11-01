@@ -47,7 +47,10 @@ export function approvals(args: readonly string[], io: CliIo, host: HostInfo): n
     const slugs = new Map(
       (store?.projects.list() ?? []).map((item) => [item.projectId, item.slug]),
     );
-    const listing = (rows ?? []).map((approval) => toRow(approval, slugs));
+    // A request to a person is answered in the factory or with haril factory answer; it is no plan to review.
+    const listing = (rows ?? [])
+      .filter((approval) => all || approval.kind === "plan")
+      .map((approval) => toRow(approval, slugs));
     if (json) {
       io.out(JSON.stringify(listing));
       return EXIT_OK;
@@ -188,7 +191,7 @@ function decide(
   }
 }
 
-function decidedByOf(host: HostInfo): string {
+export function decidedByOf(host: HostInfo): string {
   const user = host.user?.trim();
   return user === undefined || user === "" ? "unknown" : user;
 }

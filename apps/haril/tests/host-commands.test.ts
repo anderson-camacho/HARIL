@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   allowedCommand,
   cleanEnvironment,
+  GRANT_ENV,
   resolveProgram,
   runHostCommand,
 } from "../src/runtime/host-commands.js";
@@ -196,6 +197,27 @@ describe("allowedCommand", () => {
 });
 
 describe("cleanEnvironment", () => {
+  it("keeps only the credentials' names for a grant, never the runtime's keys", () => {
+    const env = cleanEnvironment(
+      {
+        PATH: "/bin",
+        GH_TOKEN: "token",
+        SSH_AUTH_SOCK: "/sock",
+        CLIPROXY_API_KEY: "secret",
+        ANTHROPIC_API_KEY: "secret",
+        GIT_DIR: "/somewhere/else",
+      },
+      "linux",
+      GRANT_ENV,
+    );
+    expect(env.GH_TOKEN).toBe("token");
+    expect(env.SSH_AUTH_SOCK).toBe("/sock");
+    expect(env.CLIPROXY_API_KEY).toBeUndefined();
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.GIT_DIR).toBeUndefined();
+    expect(cleanEnvironment({ GH_TOKEN: "token" }, "linux").GH_TOKEN).toBeUndefined();
+  });
+
   it("keeps the variables a program needs to start and drops everything else, keys first", () => {
     const env = cleanEnvironment(
       {

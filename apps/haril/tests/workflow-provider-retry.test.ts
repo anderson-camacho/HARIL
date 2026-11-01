@@ -27,7 +27,7 @@ import { makeSandbox, type Sandbox, workflowIntake } from "./helpers.js";
 // answer a scripted provider error ([fake:provider=<target>:<status>] in the goal) and the real loop and store decide. A
 // 402 or 429 cools the model down and retries the turn once on another eligible model or account; a transient error is
 // retried once on the same model; nothing is retried after the turn's deciding call was accepted; a pinned model is never
-// replaced (it waits); and with no eligible model the workflow fails with no_capacity.
+// replaced (it waits); and with no eligible model the turn stops, explained, until capacity returns.
 
 const clock: Clock = {
   now: () => Date.now(),
@@ -216,7 +216,7 @@ describe("a provider error in a workflow turn", () => {
     expect((root?.cooldownUntil ?? 0) - Date.now()).toBeGreaterThan(50_000);
   });
 
-  it("fails the workflow with no_capacity when no model can run and none frees up in time", async () => {
+  it("stops the turn instead of failing the workflow when no model can run and none frees up in time", async () => {
     const store = open();
     startWorkflow(store, "Report [fake:parts=1] [fake:steps=1] [fake:provider=part-1:402]");
     // A single account, and no wait allowed: once its model cools down nothing else can run.
@@ -231,8 +231,12 @@ describe("a provider error in a workflow turn", () => {
     };
     await run(store, single);
     const [workflow] = store.workflows.list();
-    expect(workflow?.state).toBe("failed");
-    expect(workflow?.stopReason).toMatch(/^no_capacity: /);
+    expect(workflow?.state).toBe("running");
+    expect(workflow?.stopReason).toBeNull();
+    const part = store.workflows
+      .tasks(workflow?.workflowId ?? "")
+      .find((task) => task.localId === "part-1");
+    expect(part).toMatchObject({ state: "blocked", blockReason: "cooldown" });
     // A 402 cools the model and its account down.
     expect(
       store.quota

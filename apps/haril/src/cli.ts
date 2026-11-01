@@ -8,6 +8,7 @@ import { difficulty } from "./commands/difficulty.js";
 import { doctor } from "./commands/doctor.js";
 import { events } from "./commands/events.js";
 import { extensions } from "./commands/extensions.js";
+import { factory } from "./commands/factory-command.js";
 import { memory } from "./commands/memory.js";
 import { methodology } from "./commands/methodology.js";
 import { metrics } from "./commands/metrics.js";
@@ -132,6 +133,8 @@ const HELP_LINES = [
   "  haril workflow tail <workflowId> <node> [--follow] [--json]   what a node's agent writes and calls (its Pi session)",
   "  haril workflow continue <workflowId> [--remove-stop <stop>]...   lift the stop a workflow waits at",
   "  haril workflow stop <workflowId> [--json]   stop one workflow now: its turns cancelled, its agents killed",
+  "  haril factory show [--json] [--project <slug>]   every workflow's tasks by column, its agents and what waits for you",
+  "  haril factory watch [--project <slug>]   the same as JSON lines: one now and one per change, until it is stopped",
   "  haril workflow demo [--seed <n>] [--delegators <n>] [--executors <n>] [--stop-at <stops>] [--json]",
   "    run a simulated three-layer workflow with fake agents on a temporary store and print its tree and totals;",
   "    --data-dir <path> keeps its rows there (the default data dir only with --allow-real-data-dir); no model is called",
@@ -239,6 +242,8 @@ function dispatch(argv: readonly string[], io: CliIo, host: HostInfo): number | 
       return usage(rest, io, host);
     case "workflow":
       return workflow(rest, io, host);
+    case "factory":
+      return factory(rest, io, host);
     case "start":
       return start(rest, io, host);
     case "run":

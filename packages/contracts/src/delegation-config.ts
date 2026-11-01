@@ -1,4 +1,11 @@
 import { isStop, type Stop } from "./delegation.js";
+import {
+  MODEL_TIERS,
+  ROLE_NAMES,
+  ROLE_PROFILES,
+  type RoleName,
+  type RoleProfile,
+} from "./role-profiles.js";
 
 // The `delegation` section of haril.json (docs/modos-y-delegacion.md 5, 3.11, 3.12, 3.13, 3.16, 7.7, 7.10; phase F7).
 // One table of fields drives everything that reads or writes the section: the validation (every value checked with its
@@ -30,6 +37,7 @@ export type DelegationGroup =
   | "context"
   | "limits"
   | "models"
+  | "roles"
   | "quota"
   | "watchdog"
   | "autonomy"
@@ -43,7 +51,8 @@ export type DelegationEffect =
   | "next model choice"
   | "next agent launch"
   | "next runtime start"
-  | "next research file";
+  | "next research file"
+  | "next view refresh";
 
 export type DelegationFieldKind =
   // A whole number in [min, max]. `inherits`: absent means "the value of that field" (a per-layer override).
@@ -191,6 +200,47 @@ function modelFields(): DelegationField[] {
   return fields;
 }
 
+// One role's four settings; its defaults are the profile's (role-profiles.ts).
+function roleFields(): DelegationField[] {
+  return ROLE_NAMES.flatMap((name): DelegationField[] => {
+    const profile = ROLE_PROFILES[name];
+    return [
+      {
+        path: `roles.${name}.enabled`,
+        group: "roles",
+        label: `Role ${name}: on`,
+        kind: { type: "boolean" },
+        default: profile.enabled,
+        effect: "next model choice",
+      },
+      {
+        path: `roles.${name}.archetype`,
+        group: "roles",
+        label: `Role ${name}: runs as`,
+        kind: { type: "enum", values: DELEGATION_LAYERS },
+        default: profile.archetype,
+        effect: "next model choice",
+      },
+      {
+        path: `roles.${name}.models`,
+        group: "roles",
+        label: `Role ${name}: models, in order`,
+        kind: { type: "model-list" },
+        default: profile.models,
+        effect: "next model choice",
+      },
+      {
+        path: `roles.${name}.floor`,
+        group: "roles",
+        label: `Role ${name}: lowest tier`,
+        kind: { type: "enum", values: MODEL_TIERS },
+        default: profile.floor,
+        effect: "next model choice",
+      },
+    ];
+  });
+}
+
 // Every field of the section, in the order the console shows them. Section 5's values are the defaults.
 export const DELEGATION_FIELDS: readonly DelegationField[] = Object.freeze([
   {
@@ -333,6 +383,22 @@ export const DELEGATION_FIELDS: readonly DelegationField[] = Object.freeze([
     effect: "new workflows",
   },
   {
+    path: "limits.maxCouncillors",
+    group: "limits",
+    label: "Max councillors in one discussion (its minimum, 3, is fixed)",
+    kind: int(3, 20, "count"),
+    default: 5,
+    effect: "new workflows",
+  },
+  {
+    path: "limits.maxHandoffsPerTask",
+    group: "limits",
+    label: "Handoffs of one task before it stops with an explanation",
+    kind: int(0, 20, "count"),
+    default: 3,
+    effect: "new workflows",
+  },
+  {
     // M2-D5: every model call of a real agent of the project is charged to it, over the project's whole life.
     path: "limits.projectTokens",
     group: "limits",
@@ -342,6 +408,7 @@ export const DELEGATION_FIELDS: readonly DelegationField[] = Object.freeze([
     effect: "next agent launch",
   },
   ...modelFields(),
+  ...roleFields(),
   {
     path: "quota.source",
     group: "quota",
@@ -399,6 +466,30 @@ export const DELEGATION_FIELDS: readonly DelegationField[] = Object.freeze([
     effect: "next model choice",
   },
   {
+    path: "quota.reservePercent",
+    group: "quota",
+    label: "Left untouched in every window",
+    kind: { type: "percent" },
+    default: 10,
+    effect: "next model choice",
+  },
+  {
+    path: "quota.colorWarnPercent",
+    group: "quota",
+    label: "Paint a quota bar yellow from",
+    kind: { type: "percent" },
+    default: 70,
+    effect: "next view refresh",
+  },
+  {
+    path: "quota.colorDangerPercent",
+    group: "quota",
+    label: "Paint a quota bar red from",
+    kind: { type: "percent" },
+    default: 90,
+    effect: "next view refresh",
+  },
+  {
     path: "watchdog.intervalMs",
     group: "watchdog",
     label: "Check every",
@@ -412,6 +503,14 @@ export const DELEGATION_FIELDS: readonly DelegationField[] = Object.freeze([
     label: "Checks without progress before closing",
     kind: int(1, 10, "count"),
     default: 1,
+    effect: "next runtime start",
+  },
+  {
+    path: "watchdog.vigilanteAnalysis",
+    group: "watchdog",
+    label: "The vigilante also asks a model to analyse what it found (costs tokens)",
+    kind: { type: "boolean" },
+    default: false,
     effect: "next runtime start",
   },
   {
@@ -761,6 +860,8 @@ export interface DelegationSettings {
     readonly largeTaskTokens: number;
     readonly attemptTimeoutMs: number;
     readonly minAuditorTokens: number;
+    readonly maxCouncillors: number;
+    readonly maxHandoffsPerTask: number;
     // The project's budget, not a workflow's: real agents read it at each launch.
     readonly projectTokens: number;
   };
@@ -777,12 +878,18 @@ export interface DelegationSettings {
     readonly stopAtPercentWeekly: number;
     readonly minRemainingPercentForLargeTask: number;
     readonly maxWaitMs: number;
+    readonly reservePercent: number;
+    // Only the color of a quota bar: the rule above decides which models run.
+    readonly colorWarnPercent: number;
+    readonly colorDangerPercent: number;
   };
   readonly models: {
     readonly layers: Readonly<Record<DelegationLayer, LayerModel>>;
     readonly allow: Readonly<Record<"delegator" | "executor" | "auditor", readonly string[]>>;
     readonly auditorDistinctFromExecutor: boolean;
   };
+  // A role's profile; it applies to a task that names the role, while it is on.
+  readonly roles: Readonly<Record<RoleName, RoleProfile>>;
   // haril_run's allow list, the longest a command may run (its tree is killed then) and how many bytes of the end of each
   // output stream come back (phase F8).
   readonly commands: {
@@ -795,6 +902,7 @@ export interface DelegationSettings {
   // `haril workflow start --base` wins over it.
   readonly git: { readonly baseBranch: string | null };
   readonly watchdog: {
+    readonly vigilanteAnalysis: boolean;
     readonly intervalMs: number;
     readonly idleStrikesToClose: number;
     readonly closeResidualImmediately: true;

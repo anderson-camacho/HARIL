@@ -1,5 +1,16 @@
-import type { WorkflowGit, WorkflowNode, WorkflowSnapshot } from "@haril/contracts";
-import { visibleText } from "@haril/core";
+import type {
+  WaitExplanation,
+  WorkflowGit,
+  WorkflowNode,
+  WorkflowSnapshot,
+} from "@haril/contracts";
+import {
+  type CapacityWait,
+  explainWait,
+  explainWorkflow,
+  visibleText,
+  type WaitSettled,
+} from "@haril/core";
 import type {
   AuditRecord,
   Store,
@@ -126,6 +137,12 @@ interface NodeContext {
   // The compaction threshold each real attempt was launched with, by task (event run.started, phase F7).
   readonly compactAts: ReadonlyMap<string, number>;
   readonly options: SnapshotOptions;
+  readonly store: Store;
+  readonly tasks: readonly WorkflowTaskRecord[];
+  readonly cooldowns: readonly { model: string; until: number; reason: string }[];
+  readonly runtimeAlive: boolean;
+  // The turns stopped because no model could run them, with what the last check found.
+  readonly capacityWaits: ReadonlyMap<string, CapacityWait>;
 }
 
 function proposalKey(delegationId: string, localId: string): string {
@@ -211,6 +228,97 @@ function contextOf(
   const used =
     fromSession ?? (last.tokensIn === null ? null : last.tokensIn + (last.tokensOut ?? 0));
   return threshold === null || used === null ? null : { used, threshold };
+}
+
+// How a turn that ended sits in its delegation, read from the state nodeOf gave its thread.
+function settledOf(
+  thread: ThreadView,
+  latest: WorkflowTaskRecord,
+  state: WorkflowNode["state"],
+  waitingReason: string | null,
+): WaitSettled | null {
+  if (state === "closed") return "closed_idle";
+  if (latest.state === "failed" && state === "done") return "audit_rejected";
+  if (latest.state !== "completed") return null;
+  if (state === "failed") return "audit_failed";
+  if (state !== "waiting") return null;
+  if (thread.role === "orchestrator") return "waits_final_audit";
+  return waitingReason === "waits for its audit" ? "waits_audit" : "escalated";
+}
+
+// The agent running in this workflow that writes a surface this turn wants to write too. Surfaces are globs, so only the
+// same glob counts as a certain hold; another overlap has no named holder.
+function surfaceHolder(
+  latest: WorkflowTaskRecord,
+  context: NodeContext,
+): { readonly code: string; readonly model: string | null } | null {
+  const wanted = new Set(latest.surfaceWrite);
+  const holder = context.tasks.find(
+    (task) =>
+      task.taskId !== latest.taskId &&
+      task.state === "running" &&
+      task.surfaceWrite.some((surface) => wanted.has(surface)),
+  );
+  const thread = holder === undefined ? undefined : context.threadOfTask.get(holder.taskId);
+  return thread === undefined || holder === undefined
+    ? null
+    : { code: thread.code, model: holder.model };
+}
+
+function capacityOf(
+  role: WorkflowTaskRecord["role"],
+  context: NodeContext,
+): { readonly live: number; readonly max: number } | null {
+  const key = { executor: "executors", auditor: "auditors", delegator: "delegators" } as const;
+  if (role === "orchestrator") return null;
+  const max = limitOf(context.workflow.limits as Readonly<Record<string, unknown>>, [
+    "maxConcurrent",
+    key[role],
+  ]);
+  if (max === null) return null;
+  const live = context.tasks.filter((task) => task.role === role && task.state === "running");
+  return { live: live.length, max };
+}
+
+function explanationOf(
+  thread: ThreadView,
+  latest: WorkflowTaskRecord,
+  settled: WaitSettled | null,
+  context: NodeContext,
+): WaitExplanation {
+  const { workflow, threads, threadOfTask, options } = context;
+  const detail = context.store.tasks.get(latest.taskId);
+  const byId = new Map(context.tasks.map((task) => [task.taskId, task]));
+  return explainWait({
+    task: {
+      state: latest.state,
+      blockReason: latest.blockReason,
+      cooldownUntil: latest.cooldownUntil,
+      retryReason: detail?.retryReason ?? null,
+      attempt: latest.attempt,
+      maxAttempts: detail?.maxAttempts ?? null,
+      model: latest.model,
+      parentCode:
+        thread.parentThreadId === null ? null : (threads.get(thread.parentThreadId)?.code ?? null),
+      failure: detail?.error?.code ?? detail?.failureReason ?? null,
+      settled,
+    },
+    workflow: { id: workflow.workflowId, state: workflow.state, stopReason: workflow.stopReason },
+    dependencies: latest.dependsOn.flatMap((dependency) => {
+      const task = byId.get(dependency.taskId);
+      const owner = threadOfTask.get(dependency.taskId);
+      return task === undefined || owner === undefined
+        ? []
+        : [{ code: owner.code, state: task.state }];
+    }),
+    cooldowns: context.cooldowns,
+    holder: latest.blockReason === "surface_conflict" ? surfaceHolder(latest, context) : null,
+    capacity: capacityOf(thread.role, context),
+    runtimeAlive: context.runtimeAlive,
+    capacityWait:
+      latest.state === "blocked" ? (context.capacityWaits.get(latest.taskId) ?? null) : null,
+    now: options.now,
+  });
 }
 
 function nodeOf(thread: ThreadView, context: NodeContext): WorkflowNode {
@@ -304,6 +412,7 @@ function nodeOf(thread: ThreadView, context: NodeContext): WorkflowNode {
       state = "cancelled";
   }
 
+  const settled = settledOf(thread, latest, state, waitingReason);
   // The latest turn that ran (a turn that never ran, such as the auditor of a closed attempt, is skipped).
   const lastStarted = thread.turns.reduce(
     (found, turn, index) => (turn.attempt > 0 ? index + 1 : found),
@@ -354,13 +463,14 @@ function nodeOf(thread: ThreadView, context: NodeContext): WorkflowNode {
             retries: retriesOf(thread, audits),
           },
     waitingReason,
+    explanation: explanationOf(thread, latest, settled, context),
     turn: { index: lastStarted, of: thread.turns.length },
   };
 }
 
 // An event that carries its own line (a watchdog verdict, 3.16: "e1 active, continues") is shown as that line, which
 // starts with the node's id as the console's detail view reads it; any other event lists its fields.
-function eventText(payload: Readonly<Record<string, unknown>>): string {
+export function eventText(payload: Readonly<Record<string, unknown>>): string {
   if (typeof payload.text === "string") return payload.text;
   return Object.entries(payload)
     .filter(([key]) => key !== "workflowId")
@@ -386,6 +496,12 @@ function gitOf(store: Store, workflow: WorkflowRecord): WorkflowGit | null {
       .map((record) => record.branch),
     worktrees: worktrees.filter((record) => record.state === "active").length,
   };
+}
+
+// Whether a runtime holds the lease now. Without one, nothing in the queue starts.
+function runtimeAliveOf(store: Store, now: number): boolean {
+  const lease = store.runtime.leaseSummary();
+  return lease.status === "active" && lease.expiresAt > now;
 }
 
 export function buildWorkflowSnapshot(
@@ -421,7 +537,15 @@ export function buildWorkflowSnapshot(
   const projectEvents = store.events.list({ projectId: workflow.projectId });
   const levels = new Map<string, string | null>();
   const compactAts = new Map<string, number>();
+  const capacityWaits = new Map<string, CapacityWait>();
   for (const event of projectEvents) {
+    // A later block is a plain one, unless the runtime's check writes its own line right after it.
+    if (event.taskId !== null && event.taskId !== undefined) {
+      if (event.type === "task.blocked") capacityWaits.delete(event.taskId);
+      if (event.type === "capacity.waiting") {
+        capacityWaits.set(event.taskId, event.payload as unknown as CapacityWait);
+      }
+    }
     const payload = event.payload as {
       workflowId?: unknown;
       thinkingLevel?: unknown;
@@ -453,6 +577,11 @@ export function buildWorkflowSnapshot(
     levels,
     compactAts,
     options,
+    store,
+    tasks,
+    cooldowns: store.quota.cooldowns(options.now),
+    runtimeAlive: runtimeAliveOf(store, options.now),
+    capacityWaits,
   };
 
   // Depth-first: each thread followed by its children, in creation order.
@@ -482,6 +611,11 @@ export function buildWorkflowSnapshot(
     .slice(-40)
     .map((event) => ({ at: event.ts, type: event.type, text: eventText(event.payload) }));
 
+  // A flow that cannot go on until a model frees says so, whatever else it still has running.
+  const noCapacity = nodes
+    .map((node) => node.explanation)
+    .find((item) => item?.code === "blocked_no_capacity");
+
   return {
     schemaVersion: 1,
     demo: workflow.simulated,
@@ -493,6 +627,15 @@ export function buildWorkflowSnapshot(
       elapsedMs: Math.max(0, (workflow.endedAt ?? options.now) - workflow.createdAt),
       autonomy: { mode: workflow.autonomy.mode, stops: [...workflow.autonomy.stops] },
       orchestratorModel: workflow.orchestratorModel,
+      stopReason: workflow.stopReason,
+      explanation:
+        workflow.state === "running" && noCapacity !== undefined
+          ? noCapacity
+          : explainWorkflow({
+              id: workflow.workflowId,
+              state: workflow.state,
+              stopReason: workflow.stopReason,
+            }),
     },
     git: gitOf(store, workflow),
     totals: {

@@ -34,6 +34,10 @@ export interface DelegationLimits {
   // The least an auditor's turn may hold. An auditor gets a third of its executor's budget, but every model call
   // carries the whole context again, so a small third ends the audit before its verdict.
   readonly minAuditorTokens: number;
+  // The most councillors one discussion may have; its minimum, 3, is the user's rule and no setting (council.ts).
+  readonly maxCouncillors: number;
+  // Handoffs of one task before it stops with an explanation.
+  readonly maxHandoffsPerTask: number;
 }
 
 export const DEFAULT_DELEGATION_LIMITS: DelegationLimits = Object.freeze({
@@ -50,6 +54,8 @@ export const DEFAULT_DELEGATION_LIMITS: DelegationLimits = Object.freeze({
   largeTaskTokens: 50_000,
   attemptTimeoutMs: 3_600_000,
   minAuditorTokens: 60_000,
+  maxCouncillors: 5,
+  maxHandoffsPerTask: 3,
 });
 
 // The token budget of the auditor of an executor with `executorTokens`: a third of it, never below minAuditorTokens.

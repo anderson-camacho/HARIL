@@ -18,6 +18,8 @@ export const DELEGATION_TOOL_NAMES = [
   "haril_merge",
   "haril_merge_continue",
   "haril_merge_abort",
+  "haril_git",
+  "haril_web",
 ] as const;
 export type DelegationToolName = (typeof DELEGATION_TOOL_NAMES)[number];
 
@@ -79,6 +81,15 @@ const SurfaceSchema = Type.Array(GlobSchema, { maxItems: SURFACE_MAX_ITEMS });
 const ModelPreferenceSchema = Type.Optional(
   Type.Union([Type.String({ minLength: 1 }), Type.Null()]),
 );
+// The child's role profile (delegation.roles in haril.json): its model comes from that role's list. Absent: no role.
+const RoleSchema = Type.Optional(
+  Type.String({
+    minLength: 1,
+    maxLength: 40,
+    description:
+      "Optional role: arquitecto, sintetizador, auditor, seguridad, consejero, product-owner, backend, frontend, disenador, tester, fixer, investigador, consultor, sanitizador, documentador, git or vigilante.",
+  }),
+);
 const ChildBudgetSchema = Type.Object(
   { maxTokens: Type.Integer({ minimum: 1 }) },
   { additionalProperties: false },
@@ -99,6 +110,7 @@ export const DelegationSchema = Type.Object(
     priority: Type.Integer({ minimum: 0, maximum: 9 }),
     acceptanceCriteria: AcceptanceCriteriaSchema,
     model: ModelPreferenceSchema,
+    role: RoleSchema,
     budget: ChildBudgetSchema,
   },
   { additionalProperties: false },
@@ -133,6 +145,9 @@ export const AssignmentSchema = Type.Object(
     difficultyReason: NonEmptyText,
     dependsOn: Type.Array(LocalIdSchema),
     model: ModelPreferenceSchema,
+    role: RoleSchema,
+    // The role of the auditor created with this executor.
+    auditorRole: RoleSchema,
     budget: ChildBudgetSchema,
   },
   { additionalProperties: false },
@@ -220,6 +235,29 @@ export type MergeContinueInput = Static<typeof MergeContinueInputSchema>;
 export const MergeAbortInputSchema = Type.Object({}, { additionalProperties: false });
 export type MergeAbortInput = Static<typeof MergeAbortInputSchema>;
 
+// haril_git: the git role's only way to git and gh, run by the host in the turn's worktree. argv only. The Core gives the
+// action its level (classifyGitCommand): free and local run; publish and destructive raise a human request and run only
+// if a person grants it; merging to main is refused always. `why` is what that person reads.
+export const GitInputSchema = Type.Object(
+  {
+    command: Type.Union([Type.Literal("git"), Type.Literal("gh")]),
+    args: Type.Array(Type.String({ maxLength: RUN_ARG_MAX_LENGTH }), {
+      minItems: 1,
+      maxItems: RUN_ARGS_MAX_ITEMS,
+    }),
+    why: Type.String({ minLength: 1, maxLength: 500 }),
+  },
+  { additionalProperties: false },
+);
+export type GitInput = Static<typeof GitInputSchema>;
+
+// haril_web: the investigador's one read of a public web page. The host fetches it, refusing private addresses.
+export const WebInputSchema = Type.Object(
+  { url: Type.String({ minLength: 8, maxLength: 2000 }) },
+  { additionalProperties: false },
+);
+export type WebInput = Static<typeof WebInputSchema>;
+
 const TOOL_SCHEMAS = {
   haril_delegate: DelegateInputSchema,
   haril_assign: AssignInputSchema,
@@ -231,6 +269,8 @@ const TOOL_SCHEMAS = {
   haril_merge: MergeInputSchema,
   haril_merge_continue: MergeContinueInputSchema,
   haril_merge_abort: MergeAbortInputSchema,
+  haril_git: GitInputSchema,
+  haril_web: WebInputSchema,
 } as const;
 
 export type DelegationToolInputs = {

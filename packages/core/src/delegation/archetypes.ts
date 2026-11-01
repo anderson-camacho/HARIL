@@ -83,6 +83,7 @@ export const HOST_COMMAND_TOOLS: readonly AgentTool[] = Object.freeze([
   "haril_merge",
   "haril_merge_continue",
   "haril_merge_abort",
+  "haril_git",
 ]);
 
 // The calls that decide a turn (3.5): a turn makes exactly one accepted deciding call, and its result is applied when the

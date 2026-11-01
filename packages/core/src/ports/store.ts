@@ -80,7 +80,7 @@ export type PlanCheck =
 
 // Approvals (LD-T3, ARCH 4.3, 9.5, schemas 16). A decision is an admin write (approvals.decide), never a command. Only
 // `plan` exists as a kind; the runtime applies a granted plan as the same plan.submit that `haril plan import` queues.
-export type ApprovalKind = "plan";
+export type ApprovalKind = "plan" | "human";
 export type ApprovalStatus = "requested" | "granted" | "denied";
 export type ApprovalOutcome = "granted" | "denied";
 
@@ -137,7 +137,18 @@ export interface DecideApprovalInput {
   readonly reason?: string;
 }
 
+export interface RequestHumanInput {
+  readonly projectId: string;
+  // The run that asked.
+  readonly requestedBy: string;
+  // Untrusted until it passes validateHumanRequest.
+  readonly request: unknown;
+}
+
 export interface ApprovalsPort {
+  // A request to a person (kind "human"): refused with what is missing when any field of the record is. The same request
+  // while it is still open is the same approval.
+  requestHuman(input: RequestHumanInput): Result<ProposePlanResult, HarilError>;
   // Validates the plan with the plan.submit rules; an invalid plan is a plan.invalid error that carries the same reason.
   // A blank model is a model.invalid error. Neither stores anything.
   proposePlan(input: ProposePlanInput): Result<ProposePlanResult, HarilError>;

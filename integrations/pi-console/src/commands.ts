@@ -146,7 +146,7 @@ function askForId(
 
 // Starts a runtime when none holds the lease and the console did not just start one (LD-T6, as haril shell does).
 // Returns what the notification adds: nothing when a runtime already runs.
-async function ensureRuntime(host: CommandHost): Promise<string | undefined> {
+export async function ensureRuntime(host: CommandHost): Promise<string | undefined> {
   const alive = await readRuntimeAlive(host.project?.slug);
   if (alive === true) return undefined;
   if (host.started?.running === true) return `runtime starting (pid ${host.started.pid})`;

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { HUMAN_REQUEST_KIND, validateHumanRequest } from "@haril/contracts";
 import type {
   AppendEventInput,
   ApprovalFilter,
@@ -117,6 +118,55 @@ export function createApprovalsFacet(options: ApprovalFacetOptions): ApprovalsPo
             ...(model === null ? {} : { model }),
           },
           projectId: input.projectId,
+        });
+        return { approval: requireOne(approvalId), created: true };
+      });
+      return { ok: true, value };
+    },
+
+    requestHuman(input) {
+      const check = validateHumanRequest(input.request);
+      if (!check.ok) {
+        return {
+          ok: false,
+          error: {
+            code: "human_request.invalid",
+            message: `a request to a person needs every field: ${check.errors.join("; ")}`,
+          },
+        };
+      }
+      const subject = rules.canonicalJson(check.request);
+      const subjectSha256 = sha256(subject);
+      const value = transaction(() => {
+        const pending = db
+          .prepare(
+            `SELECT ${APPROVAL_COLUMNS} FROM approvals WHERE project_id = ? AND kind = ? AND subject_sha256 = ? AND status = 'requested'`,
+          )
+          .get(input.projectId, HUMAN_REQUEST_KIND, subjectSha256) as unknown as
+          | ApprovalRow
+          | undefined;
+        if (pending !== undefined) return { approval: toRecord(pending), created: false };
+        const approvalId = options.ids.next();
+        db.prepare(
+          "INSERT INTO approvals (approval_id, project_id, kind, subject, subject_sha256, status, requested_at, requested_by, model) VALUES (?, ?, ?, ?, ?, 'requested', ?, ?, NULL)",
+        ).run(
+          approvalId,
+          input.projectId,
+          HUMAN_REQUEST_KIND,
+          subject,
+          subjectSha256,
+          clock.now(),
+          input.requestedBy,
+        );
+        appendEvent({
+          aggregateType: "approval",
+          aggregateId: approvalId,
+          type: "approval.requested",
+          actorKind: "agent",
+          actorId: input.requestedBy,
+          payload: { kind: HUMAN_REQUEST_KIND, subjectSha256, reason: check.request.reason },
+          projectId: input.projectId,
+          taskId: check.request.taskId,
         });
         return { approval: requireOne(approvalId), created: true };
       });

@@ -5,6 +5,7 @@ import {
   checkAcceptance,
   checkPlanSubmission,
   checkTaskKind,
+  DEFAULT_AUTONOMY,
   DEFAULT_DELEGATION_LIMITS,
   type DelegationLimits,
   type RunEvent,
@@ -465,6 +466,63 @@ describe("a three-layer workflow through the runtime", () => {
     });
     await run(store);
     expect(onlyWorkflow(store).workflow.state).toBe("completed");
+  });
+
+  // Feature haril-factory, F0 and F2: the "the plan ran and now it just sits there" report. The default stop is reached
+  // on purpose and nothing failed; the snapshot says so and names the way out.
+  it("explains the stuck look: the default after_plan stop parks the plan's children and says how to continue", async () => {
+    const store = open();
+    startWorkflow(store, "Careful work [fake:parts=2] [fake:steps=1]", {
+      mode: DEFAULT_AUTONOMY.mode,
+      stops: [...DEFAULT_AUTONOMY.stops],
+    });
+    await run(store);
+
+    // The cause: the store says why it stopped. It is neither no_capacity nor a failed dependency.
+    const { workflow, view } = onlyWorkflow(store);
+    expect(workflow).toMatchObject({ state: "awaiting_human", stopReason: "after_plan" });
+    const children = view.tasks.filter((task) => task.role === "delegator");
+    expect(children.map((task) => ({ state: task.state, attempt: task.attempt }))).toEqual([
+      { state: "ready", attempt: 0 },
+      { state: "ready", attempt: 0 },
+    ]);
+    expect(view.tasks.some((task) => task.state === "failed" || task.state === "blocked")).toBe(
+      false,
+    );
+
+    // What the user sees: the children queued, and the orchestrator waiting for those same children, which looks like
+    // a deadlock. The queue also counts the orchestrator's own pending continuation.
+    const snapshot = buildWorkflowSnapshot(store, workflow.workflowId, { now: Date.now() });
+    expect(snapshot.workflow.state).toBe("awaiting_human");
+    expect(snapshot.totals.queued).toBe(3);
+    expect(snapshot.nodes.map((node) => [node.id, node.state, node.waitingReason])).toEqual([
+      ["o1", "waiting", "waits for its children"],
+      ["d1", "queued", "waits until the workflow continues"],
+      ["d2", "queued", "waits until the workflow continues"],
+    ]);
+
+    // The snapshot now names the stop and the way out, on the workflow and on each queued node.
+    expect(snapshot.events.at(-1)).toMatchObject({
+      type: "workflow.awaiting_human",
+      text: "reason=after_plan",
+    });
+    expect(snapshot.workflow.stopReason).toBe("after_plan");
+    expect(snapshot.workflow.explanation).toMatchObject({
+      code: "workflow_stop",
+      needsHuman: true,
+    });
+    expect(snapshot.workflow.explanation?.why).toContain("after_plan");
+    const continueHere = `haril workflow continue ${workflow.workflowId}`;
+    expect(snapshot.workflow.explanation?.systemAction).toContain(continueHere);
+    for (const node of snapshot.nodes) {
+      expect(node.explanation?.needsHuman, node.id).toBe(true);
+      expect(node.explanation?.systemAction, node.id).toContain(continueHere);
+    }
+    expect(snapshot.nodes.map((node) => node.explanation?.code)).toEqual([
+      "pending_stopped",
+      "ready_stopped",
+      "ready_stopped",
+    ]);
   });
 
   it("continues after a crash in the middle of the workflow with no work done twice and its rework counts kept", async () => {

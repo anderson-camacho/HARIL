@@ -1,10 +1,12 @@
-import type {
-  AssignInput,
-  CheckpointRequest,
-  DelegateInput,
-  DelegationToolName,
-  Difficulty,
-  WorkflowState,
+import {
+  type AssignInput,
+  type CheckpointRequest,
+  type DelegateInput,
+  type DelegationToolName,
+  type Difficulty,
+  isRoleName,
+  ROLE_NAMES,
+  type WorkflowState,
 } from "@haril/contracts";
 import {
   ARCHETYPES,
@@ -19,8 +21,10 @@ import {
   type ModelSelectionContext,
   modelPin,
 } from "./choose-model.js";
+import { councilProposalProblem } from "./council.js";
 import { surfacesMayOverlap } from "./globs.js";
 import type { DelegationLimits } from "./limits.js";
+import { roleMayWrite } from "./role-policy.js";
 
 // Validation of a delegation proposal (docs/modos-y-delegacion.md 3.6). Agents propose through haril_delegate and
 // haril_assign; this pure rule decides, and only an accepted proposal reaches the Runtime, which creates the tasks.
@@ -40,6 +44,7 @@ export interface ProposedChild {
   readonly difficulty: Difficulty;
   readonly budgetTokens: number;
   readonly model: string | null;
+  readonly role?: string | null;
   readonly writeSurface: readonly string[];
 }
 
@@ -64,6 +69,8 @@ export interface DelegationState {
     readonly queuedChildren: number;
     // Proposals of this thread that were applied.
     readonly proposals: number;
+    // Councillors it already proposed.
+    readonly councillors?: number;
   };
   readonly models: ModelSelectionContext;
 }
@@ -79,6 +86,9 @@ export type DelegationIssueCode =
   | "duplicate_task_id"
   | "unknown_dependency"
   | "cycle"
+  | "unknown_role"
+  | "role_cannot_write"
+  | "council_size"
   | ModelRejection
   | "checkpoint_removes_stop";
 
@@ -122,6 +132,7 @@ export function proposalFromDelegate(
       difficulty: delegation.difficulty,
       budgetTokens: delegation.budget.maxTokens,
       model: delegation.model ?? null,
+      ...(delegation.role === undefined ? {} : { role: delegation.role }),
       writeSurface: [],
     })),
     checkpoints: input.checkpoints ?? [],
@@ -141,6 +152,7 @@ export function proposalFromAssign(
       difficulty: assignment.difficulty,
       budgetTokens: assignment.budget.maxTokens,
       model: assignment.model ?? null,
+      ...(assignment.role === undefined ? {} : { role: assignment.role }),
       writeSurface: assignment.files.write,
     })),
     checkpoints: [],
@@ -189,6 +201,13 @@ export function checkDelegation(
 
   const graphIssues = graphIssuesOf(children);
   issues.push(...graphIssues);
+  issues.push(...roleIssues(children));
+  const council = councilProposalProblem(
+    children.map((item) => item.role),
+    limits,
+    state.thread.councillors ?? 0,
+  );
+  if (council !== null) issues.push({ code: "council_size", message: council });
   issues.push(...modelIssues(children, childArchetype, state.models));
 
   const change = checkpointChange(proposal.checkpoints);
@@ -237,6 +256,29 @@ function gateIssue(
     };
   }
   return null;
+}
+
+// A role names a profile, and a role that may not write gets no write surface: the host would refuse every write anyway.
+function roleIssues(children: readonly ProposedChild[]): DelegationIssue[] {
+  const issues: DelegationIssue[] = [];
+  for (const item of children) {
+    const role = item.role ?? null;
+    if (role === null) continue;
+    if (!isRoleName(role)) {
+      issues.push({
+        code: "unknown_role",
+        localId: item.localId,
+        message: `child "${item.localId}" names role "${role}"; the roles are ${ROLE_NAMES.join(", ")}`,
+      });
+    } else if (item.writeSurface.length > 0 && !roleMayWrite(role)) {
+      issues.push({
+        code: "role_cannot_write",
+        localId: item.localId,
+        message: `child "${item.localId}" is a ${role}, which may not write; leave its write surface empty or give the step to a role that writes`,
+      });
+    }
+  }
+  return issues;
 }
 
 // Duplicates, unknown dependencies and cycles among the proposal's local ids (the plan-graph rules, on this shape).
@@ -312,6 +354,7 @@ function modelIssues(
         budgetTokens: item.budgetTokens,
         phase: "propose",
         proposed: item.model,
+        role: item.role ?? null,
       },
       models,
     );

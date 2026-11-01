@@ -4,7 +4,7 @@ import type { Store } from "@haril/core/ports";
 import type { HostInfo } from "../context.js";
 import { loadDelegationSettings } from "../delegation-config.js";
 import { delegationSettingsOf } from "../delegation-section.js";
-import { accountViews, quotaByKey, quotaKeyOf } from "../quota-view.js";
+import { accountViews, groupIndex, quotaByKey, quotaKeyFor } from "../quota-view.js";
 import { QUOTA_FRESH_MS } from "../runtime/model-context.js";
 import type { SnapshotOptions } from "./workflow-snapshot.js";
 
@@ -23,6 +23,7 @@ export function storeQuota(
     switchAtPercent5h: settings.quota.switchAtPercent5h,
     stopAtPercentWeekly: settings.quota.stopAtPercentWeekly,
     minRemainingPercentForLargeTask: settings.quota.minRemainingPercentForLargeTask,
+    reservePercent: settings.quota.reservePercent,
     maxWaitMs: settings.quota.maxWaitMs,
   };
   const records = store.quota.latest(now - QUOTA_FRESH_MS);
@@ -51,10 +52,11 @@ export function storeQuota(
     });
   }
   const byKey = quotaByKey(records, policy);
+  const groups = groupIndex(records);
   return {
     quota: rows,
     quotaOf: (model) => {
-      const sample = byKey[quotaKeyOf(model)];
+      const sample = byKey[quotaKeyFor(model, groups)];
       return sample?.available === true
         ? { window5hPct: sample.window5hUsedPct, weeklyPct: sample.weeklyUsedPct }
         : null;

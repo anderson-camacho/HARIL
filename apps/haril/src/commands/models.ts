@@ -1,6 +1,8 @@
 import type { ModelDescriptor } from "@haril/contracts";
+import { roleVendorWarnings } from "@haril/core";
 import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_OK, EXIT_USAGE, EXIT_WARN, type HostInfo } from "../context.js";
+import { loadDelegationSettings } from "../delegation-config.js";
 import {
   listProviderModels,
   loadProviderConfig,
@@ -44,6 +46,14 @@ export async function models(args: readonly string[], io: CliIo, host: HostInfo)
   const listings = await Promise.all(selected.map((entry) => listProviderModels(entry, timeoutMs)));
   const answered = listings.filter((listing) => listing.status === "ok").length;
   const all = listings.flatMap((listing) => listing.models);
+  // A role that only one vendor can serve among what answered: said here, never a reason to refuse anything.
+  const delegation = loadDelegationSettings(host);
+  const roleWarnings = delegation.ok
+    ? roleVendorWarnings(
+        delegation.settings.roles,
+        all.map((model) => namespacedRef(model.providerId, model.id)),
+      )
+    : [];
 
   if (parsed.flags.has("--json")) {
     io.out(
@@ -51,6 +61,7 @@ export async function models(args: readonly string[], io: CliIo, host: HostInfo)
         config: { source: loaded.source, path: loaded.path },
         providers: listings.map(({ models: list, ...rest }) => ({ ...rest, models: list.length })),
         models: all,
+        roleWarnings,
       }),
     );
   } else {
@@ -58,6 +69,9 @@ export async function models(args: readonly string[], io: CliIo, host: HostInfo)
       io.out(`provider ${listing.id}  ${listing.status}  ${listing.detail}`);
     }
     printTable(all, io);
+    for (const warning of roleWarnings) {
+      io.out(`role ${warning.role}: only ${warning.vendor} among the connected models`);
+    }
   }
 
   if (answered === 0) {

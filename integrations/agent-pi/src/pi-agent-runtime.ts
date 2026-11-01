@@ -191,6 +191,7 @@ const DELEGATION_TOOLS: ReadonlySet<string> = new Set([
   "haril_verdict",
   "haril_request_audit",
   "haril_abort",
+  "haril_web",
 ]);
 // What a turn of a read-only workflow may be offered: read and the delegation tools. Nothing that writes, edits or runs
 // a command launches.
@@ -200,7 +201,7 @@ const WORKFLOW_TOOLS: ReadonlySet<string> = new Set(["read", ...DELEGATION_TOOLS
 // as the store mirrors the roles): the executor writes and runs commands, the delegator merges and resolves conflicts,
 // the auditor runs commands, the orchestrator none. The host checks every call again against the turn's archetype.
 const WORKSPACE_TOOLS_BY_ROLE: Readonly<Record<string, ReadonlySet<string>>> = {
-  executor: new Set(["write", "edit", "haril_run"]),
+  executor: new Set(["write", "edit", "haril_run", "haril_git"]),
   delegator: new Set([
     "haril_run",
     "haril_merge",
@@ -481,6 +482,7 @@ class PiRun implements PiAgentHandle {
   private finished = false;
   private failure: HarilError | undefined;
   private stopRequest: "abort" | "timeout" | undefined;
+  private readonly turnEndListeners: (() => void)[] = [];
   private helloDone = false;
   private promptStarted = false;
   private settledSeen = false;
@@ -626,6 +628,10 @@ class PiRun implements PiAgentHandle {
     this.finished = true;
     this.settledD.resolve({ status: "aborted" });
     this.exitedD.resolve();
+  }
+
+  onTurnEnd(listener: () => void): void {
+    this.turnEndListeners.push(listener);
   }
 
   prompt(text: string): Promise<Result<void, HarilError>> {
@@ -1051,7 +1057,9 @@ class PiRun implements PiAgentHandle {
         return;
       }
       case "agent_start":
+        return;
       case "turn_end":
+        for (const listener of this.turnEndListeners) listener();
         return;
       default:
         this.ignoredEvents++;

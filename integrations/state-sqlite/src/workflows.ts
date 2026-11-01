@@ -851,13 +851,13 @@ export function createWorkflowsFacet(options: WorkflowsFacetOptions): {
       ).run(
         now,
         JSON.stringify({
-          code: PROVIDER_RETRY_CODE,
+          code: input.runCode ?? PROVIDER_RETRY_CODE,
           message: input.error.message,
           cause: input.error.code,
         }),
         input.runId,
       );
-      options.endRunAuthority(input.runId, PROVIDER_RETRY_CODE);
+      options.endRunAuthority(input.runId, input.runCode ?? PROVIDER_RETRY_CODE);
       if (input.cooldownUntil === null) {
         options.transition("running", "ready");
         db.prepare(

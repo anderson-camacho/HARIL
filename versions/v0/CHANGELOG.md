@@ -4,6 +4,98 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ---
 
+## 0.23.24
+
+- **Fecha:** 2026-10-31
+- **Estado:** publicada en rama; pendiente de revisión
+
+### Añadido
+
+- `Alt+G` o `/haril-factory` abre la fábrica a pantalla completa, con siete pestañas: Avance, Actividades, Tablero, Agentes, Conexiones, Modelos y Sistema.
+- Tablero: cinco columnas (Por hacer, En curso, Detenidas, Errores, Hechas) con rol, agente y quién delegó; debajo, el plan de la tarjeta elegida con la explicación de cada fila detenida o fallida y su barra de avance. `h`/`l` cambian de columna, `Enter` abre la tarjeta, `n` prepara `/delegate` para añadir una tarea y `c` continúa un plan detenido.
+- Actividades: bandeja con Activas, En cola, Fallidas, Hechas y Te necesitan, punto de no leído y búsqueda; `e` abre el registro de eventos. Desde Te necesitan se aprueba o niega un plan con `a` o `d`.
+- Agentes: lista como `htop` con tokens exactos, contexto, tiempo, modelo y tarea; `t` alterna entre árbol y lista por tokens.
+- Avance: anillo, indicadores de Tareas, Agentes, Tokens y Calidad, historial de tareas cerradas y barras por tarea, agente y modelo (`[`/`]`). Los números salen de hechos; `~` marca un total que aún puede crecer, y sin datos dice `Sin pruebas`, nunca 0. En ventanas pequeñas todo se reduce a barras.
+- `/` busca en las cuatro pestañas con datos. Las acciones piden confirmación (`s`/`n`), usan los mismos comandos que `/continue`, `/approve` y `/deny`, y CONSULT las rechaza.
+- Teclas: `←`/`→` o `Tab` cambian de pestaña, `1`-`7` saltan a una, `Esc` sale de un detalle y luego cierra. El pie lista solo las teclas que funcionan en ese momento. Con el ratón, un clic en una pestaña la abre.
+- Kit visual de la fábrica: la paleta exacta de las piezas de referencia, cajas redondeadas con título, barra de progreso y punto de estado. Respeta `PI_TRUE_COLOR=0`, `NO_COLOR`, `TERM=dumb` y `HARIL_CONSOLE_ASCII`, y no pinta fondos.
+- Prueba que documenta por qué una delegación parece atascada: con la parada por defecto `after_plan` el flujo espera a la persona y sus hijos quedan en cola; nada falló.
+- Cada tarea explica ahora por qué está donde está: qué pasa, por qué, qué hace el sistema, si te necesita y hasta cuándo. Cubre todos los motivos de bloqueo y estados, y el compilador rechaza uno nuevo sin explicación. Se escribe con datos guardados, nunca con un modelo.
+- `haril workflow show` y `watch` añaden `stopReason` y `explanation` al flujo y a cada nodo, sin cambiar la versión del formato. Con `after_plan` dicen qué ejecutar: `haril workflow continue <id>`, o pulsar `c` en la fábrica.
+- `haril factory show [--json]` y `haril factory watch` dan una vista de todos los flujos recientes, o de uno con `--project`: tareas por columna (por hacer, en curso, detenidas, errores, hechas), agentes, quién delegó a quién, eventos y lo que te espera. Una tarea fallida dice a quién se le devolvió, y nada entra en detenidas sin explicación. Para levantar una parada se sigue usando `haril workflow continue`.
+- Cuota por grupo: una cuenta con grupos de modelos (Antigravity: «Gemini», «Claude and GPT») guarda las ventanas de cada grupo (migración 0019). Una cuenta al 90 % en Gemini y al 5 % en Claude/GPT sigue disponible para Claude y GPT. Un modelo sin grupo conocido conserva la regla de la peor ventana: nada se afloja sin datos. Las filas antiguas y los proveedores sin grupos siguen valiendo.
+- Modelos: una tarjeta por cuenta con plan si se conoce, cada grupo con sus modelos, barras de 5 horas y semana con su reinicio, éxitos y fallos, agentes que la usan, estado explicado y antigüedad del dato. `[`/`]` cambian a Monitor (barras como `htop`), Historial (línea con el umbral en rojo) y Caché de prompts. `r` vuelve a leer la cuota.
+- Cada lectura dice de dónde sale: del proveedor, estimada con `~` a partir de los tokens del registro de uso (un conteo, nunca un porcentaje) o de ninguna parte, y entonces por qué: `El proveedor no permite ver este dato`, `Sin lectura: <motivo>` (conservando el último valor, marcado como antiguo) o `No aplica`. Las direcciones de correo no viajan: se usa el prefijo o una referencia opaca.
+- Conexiones: cinco vistas con `[`/`]`. Cadena del agente elegido en cajas redondeadas con enlaces `·` y `•`, línea de acción `▶` y traza; árbol de delegación con el camino iluminado; red con los mensajes en curso; secuencia de eventos del agente; y relevo, solo si hubo uno. Debajo siempre dice a quién espera el agente y por qué. Sin ancho o alto suficientes se reduce a un árbol con sangría.
+- `delegation.quota.colorWarnPercent` y `colorDangerPercent` fijan el color de las barras, aparte de los umbrales que deciden qué modelo corre.
+- Perfiles de rol: 17 roles (arquitecto, sintetizador, auditor, seguridad, consejero, product-owner, backend, frontend, diseñador, tester, fixer, investigador, consultor, sanitizador, documentador, git y vigilante) como datos sobre los cuatro arquetipos, sin ampliar `tasks.role`. Cada uno tiene `archetype`, `models` en orden, `floor` y `enabled` en `delegation.roles.<rol>`, editables con `haril config set`. Las listas coinciden con cualquier prefijo de cuenta; ningún rol incluye Fable, y los modelos de imagen y `gpt-oss-*` quedan fuera salvo que la lista los pida.
+- Selector: una tarea con rol toma su modelo de la lista justo después de un modelo fijado, con las mismas reglas de cuota y enfriamiento. Se mantiene en el modelo de su hilo mientras siga elegible y, si se conoce el uso, pasa al menos usado del mismo nivel. Un rol nunca baja de su piso: arquitecto, sintetizador, auditor y seguridad rechazan Sonnet 4.6 y Flash, y no recurre a la tabla de dificultad. `model.selected` registra `role_order`. Una tarea sin rol se comporta como antes.
+- `haril models` avisa cuando un rol solo llega a un proveedor entre los modelos conectados.
+- `quota.reservePercent` (10 por defecto): la última parte de cada ventana que ninguna elección toma.
+- Sistema: mapa de arquitectura (consola, runtime, CLIProxy, cuentas, SQLite y Engram) con su salud real; inventario de skills, MCP, integraciones y plantillas, reutilizando la lista de TOOLS; y ajustes generados de `DELEGATION_FIELDS`, con interruptores, deslizadores con `←`/`→`, `Enter` para el valor exacto y la consecuencia de cada cambio. `✓ Guardado` aparece solo cuando `haril config set` escribió de verdad, CONSULT y PLAN lo rechazan, y un secreto nunca se muestra.
+
+- Roles con efecto real: el orquestador nunca ejecuta, escribe su plan en el memo y nombra un rol en cada tarea, sin secuencia fija; llamar al consejo es su criterio. Las instrucciones estables van primero para aprovechar la caché del proveedor y lo que cambia al final.
+- Herramientas por rol, en código: consultor, auditor, seguridad, consejero, product-owner, vigilante y arquitecto solo leen; investigador lee y usa `haril_web` (solo https públicas); sintetizador no tiene herramientas y recibe las opiniones en su mensaje; documentador escribe solo documentación; los que escriben siguen limitados a su worktree y superficie. El puente registra justo esa lista, el saludo la comprueba y el host rechaza lo demás. Un rol inexistente o una superficie de escritura para quien no escribe se rechazan al proponer.
+- Rol `git` con `haril_git`, el único con git: lectura y cambios locales corren; publicar y destruir generan una petición a una persona y solo corren si la concede; nada se fusiona ni se empuja a `main`.
+- Discusiones: al menos 3 opiniones válidas, comprobado en código. Una propuesta con menos se rechaza, y con menos respuestas el flujo se detiene y lo explica. Cada consejero toma otro modelo si puede, y un modelo repetido queda marcado. Un consejero vacío se reintenta en otro modelo. `limits.maxCouncillors` fija el máximo, 5 por defecto.
+- Seguridad revisa con dos proveedores cuando hay dos conectados; si no, la tarjeta dice que corrió con uno.
+- Vigilante en código: turno sin avance, tokens sin progreso, contexto alto y errores repetidos llegan al padre como evento. Solo con `watchdog.vigilanteAnalysis` se pide además un análisis a un modelo.
+- Una tarea fallida vuelve a su padre con el error, lo intentado y lo hecho. Decide reintentar, enviar un fixer, cambiar de modelo o replanear. Un tester que falla vuelve de inmediato, sin repetir la misma prueba. Sin propuestas restantes, la decisión pasa a una persona.
+- Relevo: al pasar `quota.switchAtPercent5h` en su cuenta y grupo, o al llenarse el contexto de un rol que escribe, el agente se detiene en el siguiente fin de turno, guarda su trabajo y otro sigue la misma tarea y worktree con un paquete de lo hecho, lo pendiente, las decisiones, los archivos y la conversación completa. Un 429 hace lo mismo desde el último punto guardado. Evento `handoff` con `from`, `to` y `reason`; `limits.maxHandoffsPerTask` lo limita (3); pasado el tope, o sin sucesor, se detiene y explica quién tiene los modelos. En ACTION solo avisa: tú aceptas con `/model`.
+- Peticiones a una persona: registro uniforme (quién, quién delegó, tarea, qué hace, qué necesita, por qué, si niegas y a quién bloquea) que se rechaza si falta un campo. Aparecen en Actividades > Te necesitan, en el tablero y en el panel lateral con su número. Se responden con aprobar, negar o texto (`a`, `d`, `w`, o `haril factory answer`). Las del mismo tipo se agrupan, y los recordatorios llegan a 1, 5 y 15 minutos, en silencio mientras la fábrica está abierta.
+- Chat directo: `haril factory message <tarea> "<texto>" [--urgent]` guarda el mensaje y lo entrega en el siguiente fin de turno, o con `--urgent` detiene el intento y lo reanuda con él; el agente debe contárselo a su padre. Estados: en espera del fin de turno, entregado y aplicado. En Agentes, `Enter` o `c` abre el chat e `i` el detalle; CONSULT lo rechaza.
+- Vistas nuevas: `Compuertas` en Avance, mapa mental en Tablero y `Publicación` en Sistema, con los comandos reales y notas de las tareas cerradas.
+- `haril update` muestra un registro por componente (HARIL, Engram, Skills, MCP, Gentle AI, Plantillas), marca ✓ solo tras verificar la versión, vuelve a la versión anterior si HARIL falla a medias, sigue con lo demás, termina con un resumen que dice qué pasó, cómo quedó y qué hacer, sale con error si algo falló y guarda el registro. Sin terminal da la misma información en líneas simples.
+- Paleta `magic` con los colores de las piezas de referencia, ahora la predeterminada. El panel lateral conserva sus datos y añade `Te necesitan` solo si hay algo.
+- Se revisaron 25 piezas contra su fuente: la tarjeta elegida del tablero y el redactor activo usan caja gruesa, la secuencia marca la línea activa, y la cobertura lleva orden, veredicto y leyenda.
+
+### Cambiado
+
+- En Agentes, `Enter` abre el chat; el detalle pasó a `i`.
+- `haril approvals` lista planes; las peticiones de los agentes salen con `--all` y en `haril factory requests`.
+- Sin capacidad un flujo ya no falla en silencio. Cuando ningún modelo puede correr una tarea, esta se detiene y explica qué modelos probó y por qué, quién los usa y cuándo se libera el primero (`capacity.waiting`, código `blocked_no_capacity`). Reintenta sola cuando se libera y, como mínimo, cada minuto, y sigue en cuanto haya capacidad. `limits.maxWorkflowWallMs` sigue siendo el tope: pasado, el flujo falla con `wall_time`.
+- La tabla de dificultad ya no pone `*flash-high` primero en `hard`: ahora es `*sonnet*`, `*flash-high`, `*pro`. Motivo: 19,1 % en Terminal-Bench 4.0, según una fuente secundaria.
+
+### Corregido
+
+- Mapa mental del Tablero: las líneas ya no quedan sueltas ni en diagonal. Cada parte queda en la fila de la meta o unida a ella con una línea en escuadra, sus hojas se ven todas las que caben y el resto se cuenta con «+ N más».
+- Conexiones: en Secuencia cada nombre queda sobre su propia línea de vida; en Cadena el rol sale en español y la edad de un evento se lee entera («hace un momento»).
+- Tablero: una columna llena del plan ya no se pega a la siguiente. Modelos: los medidores de 5 horas y de semana quedan separados, y la edad de una cuenta ya no se pega a la esquina del recuadro.
+
+- Permisos de git: una acción aprobada ya no se ejecuta en tu checkout. Corre en el worktree del agente que la pidió, con su git fijado (`--git-dir`, `--work-tree`) y solo las variables que hacen falta para tus credenciales, y se juzga otra vez al aprobarla con la rama real: si ya está prohibida, si el worktree no existe o si está en `main` o `master`, no corre, queda registrado y el padre recibe el motivo.
+- Niveles de git: cada subcomando tiene su lista cerrada de opciones por nombre exacto, también las abreviadas (`--outp`). Quedan fuera `--output`, `--upload-pack`, `--receive-pack`, `--exec`, `--ext-diff`, `--textconv`, `-O` y rutas fuera del worktree.
+- `git push` admite solo `<remoto> <ref>` con destino explícito, y `-u` como mucho: se rechazan `--all`, `--mirror`, `--tags`, comodines, `:` y un push sin destino o a `HEAD`. Ninguna orden mueve `main` o `master`, ni `branch -f main`.
+- Destructivas que pasaban por locales ahora piden permiso: `checkout .`, `restore .`, `switch -f`, `rm -rf .`, `stash drop`, `stash pop`, `reset --keep`, `clean` y `branch -f`, también con opciones cortas combinadas como `-fu`. `git checkout <nombre>` también lo pide, porque puede sobrescribir un archivo; para cambiar de rama está `git switch`.
+- `haril_web`: resuelve el nombre y rechaza direcciones privadas, de bucle local, enlace local, CGNAT, de pruebas, IPv4 en IPv6 y NAT64 en cada salto. La conexión usa solo las direcciones comprobadas, así que un cambio de DNS entre la comprobación y la conexión no entra. El cuerpo se corta mientras llega, y hay un solo límite de tiempo para toda la lectura.
+- El documentador escribe solo en `docs/`, `versions/` y archivos `README*` o `CHANGELOG*`: ya no toca `AGENTS.md`, `CLAUDE.md`, `.claude/`, `.github/`, `requirements.txt` ni `CMakeLists.txt`.
+- `haril update`: una reparación solo lleva ✓ si la herramienta pasa `verifyBinary`; si no, ✗ y salida distinta de cero. La vuelta atrás borra lo que la instalación añadió a `bin/`, comprueba lo restaurado y dice si fue parcial, y también lo que no deshace.
+- Cuota: el relevo y la elección de modelo usan la misma regla, con la semana y la reserva. Con exactamente el umbral ya no hay relevo que la elección devolvería al mismo modelo. Sin sucesor, la tarea espera cada vez más, lo registra con evento y, al agotar los intentos, se detiene y explica por qué.
+- Un sintetizador necesita al menos 3 opiniones válidas en todos los casos: se rechaza la propuesta con menos consejeros y, al lanzarlo sin consejo, el flujo se detiene con la explicación.
+- Una respuesta a una persona ya no deja el flujo esperando para siempre si el runtime cae: lo que no ejecuta nada se aplica en una transacción, y al arrancar se cierra lo que quedó a medias. Una acción interrumpida no se repite y se avisa de que no se sabe si llegó a ejecutarse.
+- Mapa mental: el pie ya no ofrece `↑/↓`, `Enter`, `h/l` ni `/`, que allí no hacen nada. Mapa de Sistema: `Cuentas` ya no sale en rojo con «3 leídas»; el estado de la pasarela se ve en su propia caja y en el detalle.
+
+### Limitaciones
+
+- El atajo es `Alt+G` y no `Alt+F`, que es de Pi (`tui.editor.cursorWordRight`): la consola no sobrescribe atajos propios de Pi.
+- `gpt-6.1-sol` cuenta como nivel alto solo si la capa del rol pide el razonamiento `max`; sin eso, un rol de piso alto salta a su siguiente modelo.
+- La salud de Engram sale de `haril memory status`, y la de CLIProxy de la última lectura de cuota guardada: no se hace ninguna llamada nueva para pintar el mapa. HARIL aún no tiene plantillas y la tarjeta lo dice.
+- La secuencia de Conexiones sale de los eventos guardados, que no dicen a quién iba cada mensaje: una respuesta se dibuja hacia el padre y el resto queda en la línea del propio agente.
+- La vista incluye todos los flujos activos y los 10 terminados más recientes. Los eventos no tienen duración, así que el registro no dibuja la cascada de la pieza de referencia.
+
+- Esperar a una persona no tiene tope: el tiempo máximo del flujo solo cuenta mientras corre, y lo esperado no se le cobra al seguir. Una petición no caduca sola.
+- La vuelta atrás de `haril update` cubre `app/current.json` y `bin/`; lo que el instalador ya escribió fuera de ahí se queda, sin usar.
+- Las acciones `gh` que publican o destruyen no tienen lista de opciones: las ve la persona que las aprueba, pero `--repo` sigue siendo posible.
+
+### Verificación
+
+- Pruebas de la consola con un Pi simulado: colores RGB exactos, alternativas 256, sin color y ASCII, reductor, ancho de 1 a 200 columnas y alto de 1 a 60 filas en todas las vistas, y apertura del overlay en los cuatro modos.
+- Pruebas de `haril factory` y de las explicaciones con el almacén real y agentes simulados; prueba gemela de los tipos de la consola contra los contratos.
+- Prueba de punta a punta de «hazme una página» con almacén, bucle y repositorio git reales y agentes simulados: plan, consultor, diseñador y frontend, tester que falla y vuelve a su padre, fixer, tester que pasa, product-owner y git pidiendo permiso; el empuje se simula.
+- `haril console` del build, en Pi 1.2.0 real dentro de una pseudoconsola de Windows (ConPTY) sin credenciales ni modelos: arranca, `/haril-factory` abre la fábrica, las pestañas responden, el mapa se dibuja y `/quit` sale con código 0 sin procesos sobrantes.
+- No verificado: Windows Terminal en persona, clics reales, un agente con modelo real, una publicación real, ni una actualización real.
+
+---
+
 ## 0.23.23
 
 - **Fecha:** 2026-10-31

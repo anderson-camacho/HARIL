@@ -110,6 +110,9 @@ export interface AgentHandle {
   kill?(): Promise<void>;
   // Idempotent. Settles the run as aborted if it has not settled yet.
   dispose(): Promise<void>;
+  // Tells when one of the agent's model turns ended: the safe point where it can stop without leaving a call open. An
+  // agent that cannot say has no safe point but the end of its attempt.
+  onTurnEnd?(listener: () => void): void;
 }
 
 export interface AgentRuntime {

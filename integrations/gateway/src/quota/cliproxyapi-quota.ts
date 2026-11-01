@@ -65,6 +65,7 @@ interface Account {
   readonly prefix: string | null;
   readonly projectId: string | null;
   readonly credentialRef: string;
+  readonly plan: string | null;
 }
 
 class Unavailable extends Error {
@@ -120,6 +121,12 @@ function kindOf(entry: Record<string, unknown>): string {
   return raw.toLowerCase().replace(/_/g, "-");
 }
 
+// The plan the gateway names, when it is a short word: anything else (an address, a file name) is not shown.
+function planOf(entry: Record<string, unknown>): string | null {
+  const plan = text(entry.plan) ?? text(entry.plan_type) ?? text(entry.account_type);
+  return plan !== null && /^[A-Za-z0-9 _.-]{1,32}$/.test(plan) ? plan : null;
+}
+
 function opaqueRef(providerId: string, authIndex: string): string {
   return `acct-${createHash("sha256").update(`${providerId}\u0000${authIndex}`, "utf8").digest("hex").slice(0, 12)}`;
 }
@@ -138,6 +145,7 @@ function accountsOf(providerId: string, body: unknown): Account[] {
       prefix: text(entry.prefix),
       projectId: text(entry.project_id),
       credentialRef: opaqueRef(providerId, authIndex),
+      plan: planOf(entry),
     });
   }
   return accounts;
@@ -168,30 +176,70 @@ function claudeWindows(body: unknown): QuotaWindowReading[] {
   return out;
 }
 
-// The most used bucket of each window: an account whose worst bucket passes a threshold is held back (P4's spirit).
+// A list of model ids as a usage answer may give it: strings, or objects that name the model.
+function modelIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    const id = isRecord(item)
+      ? (text(item.id) ?? text(item.modelId) ?? text(item.model) ?? text(item.name))
+      : text(item);
+    return id === null ? [] : [id];
+  });
+}
+
+function modelsOf(entry: Record<string, unknown>): string[] {
+  return [...modelIds(entry.models), ...modelIds(entry.modelIds)];
+}
+
+function groupName(group: Record<string, unknown>): string | null {
+  return (
+    text(group.displayName) ??
+    text(group.display_name) ??
+    text(group.name) ??
+    text(group.title) ??
+    text(group.label)
+  );
+}
+
+// Google's answer holds pools of models. The most used bucket of each window is the account's worst reading, which holds
+// back a model no group is known for (P4's spirit); each named group keeps its own readings as well.
 function googleWindows(body: unknown): QuotaWindowReading[] {
   if (!isRecord(body)) return [];
-  const buckets: unknown[] = [];
-  if (Array.isArray(body.buckets)) buckets.push(...body.buckets);
+  const buckets: { bucket: unknown; group: string | null; models: readonly string[] }[] = [];
+  if (Array.isArray(body.buckets)) {
+    for (const bucket of body.buckets) buckets.push({ bucket, group: null, models: [] });
+  }
   if (Array.isArray(body.groups)) {
     for (const group of body.groups) {
-      if (isRecord(group) && Array.isArray(group.buckets)) buckets.push(...group.buckets);
+      if (!isRecord(group) || !Array.isArray(group.buckets)) continue;
+      for (const bucket of group.buckets) {
+        buckets.push({ bucket, group: groupName(group), models: modelsOf(group) });
+      }
     }
   }
   const worst = new Map<QuotaWindowReading["name"], QuotaWindowReading>();
-  for (const bucket of buckets) {
+  const grouped = new Map<string, QuotaWindowReading>();
+  for (const { bucket, group, models } of buckets) {
     if (!isRecord(bucket)) continue;
     const label = text(bucket.window)?.toLowerCase();
     const name = label === "5h" ? "5h" : label === "weekly" || label === "7d" ? "7d" : null;
     const remaining = numberOf(bucket.remainingFraction);
     if (name === null || remaining === null || remaining < 0) continue;
     const used = Math.round((1 - Math.min(1, remaining)) * 10_000) / 100;
+    const reading = window(name, used, instant(bucket.resetTime));
     const current = worst.get(name);
-    if (current === undefined || used > (current.usedPct ?? -1)) {
-      worst.set(name, window(name, used, instant(bucket.resetTime)));
+    if (current === undefined || used > (current.usedPct ?? -1)) worst.set(name, reading);
+    if (group === null) continue;
+    const key = `${group}\u0000${name}`;
+    const own = grouped.get(key);
+    const known = [...new Set([...models, ...modelsOf(bucket), ...(own?.models ?? [])])];
+    if (own === undefined || used > (own.usedPct ?? -1)) {
+      grouped.set(key, { ...reading, group, ...(known.length === 0 ? {} : { models: known }) });
+    } else if (known.length > 0) {
+      grouped.set(key, { ...own, models: known });
     }
   }
-  return [...worst.values()];
+  return [...worst.values(), ...grouped.values()];
 }
 
 // Codex (unverified): primary and secondary slots; a slot names its length in window_minutes or limit_window_seconds
@@ -383,6 +431,7 @@ export function createCliProxyQuotaProvider(options: CliProxyQuotaOptions): Quot
       credentialRef: account.credentialRef,
       kind: account.kind,
       prefix: account.prefix,
+      ...(account.plan === null ? {} : { plan: account.plan }),
     };
     const done = (windows: QuotaWindowReading[], note: string | null): QuotaAccountReading => ({
       ...base,

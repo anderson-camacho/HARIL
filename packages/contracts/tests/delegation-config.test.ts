@@ -9,6 +9,7 @@ import {
   delegationValueProblem,
   resolveDelegationSettings,
 } from "../src/delegation-config.js";
+import { ROLE_PROFILES } from "../src/role-profiles.js";
 
 // The field table of haril.json's delegation section (phase F7): every default fits its own field, the defaults form a
 // valid section, and a layer's compaction threshold falls back to the general one.
@@ -23,6 +24,20 @@ describe("the delegation field table", () => {
         null,
       ]);
     }
+  });
+
+  it("gives every role its profile as defaults, and a file changes only what it names", () => {
+    const defaults = resolveDelegationSettings(undefined);
+    expect(defaults.roles.arquitecto).toEqual(ROLE_PROFILES.arquitecto);
+    expect(defaults.quota.reservePercent).toBe(10);
+    const changed = resolveDelegationSettings({ roles: { backend: { enabled: false } } });
+    expect(changed.roles.backend).toEqual({ ...ROLE_PROFILES.backend, enabled: false });
+    expect(delegationSectionErrors({ roles: { nobody: { enabled: true } } })).toEqual([
+      "/delegation/roles/nobody: unknown key",
+    ]);
+    expect(delegationSectionErrors({ roles: { backend: { floor: "ultra" } } })).toEqual([
+      '/delegation/roles/backend/floor: must be "low" or "mid" or "high"',
+    ]);
   });
 
   it("resolves to settings that are themselves a valid section", () => {

@@ -21,6 +21,7 @@ import { MIGRATION_0015 } from "./migrations/0015_run_commands.js";
 import { MIGRATION_0016 } from "./migrations/0016_worktree_verified.js";
 import { MIGRATION_0017 } from "./migrations/0017_audited_task.js";
 import { MIGRATION_0018 } from "./migrations/0018_workflow_intake.js";
+import { MIGRATION_0019 } from "./migrations/0019_quota_groups.js";
 import type { Migration } from "./migrations/types.js";
 
 // Known migrations, in order. Adding one is an additive change; never edit an applied one (INV-12).
@@ -43,6 +44,7 @@ const KNOWN_MIGRATIONS: readonly Migration[] = [
   MIGRATION_0016,
   MIGRATION_0017,
   MIGRATION_0018,
+  MIGRATION_0019,
 ];
 export const KNOWN_SCHEMA_VERSION = Math.max(...KNOWN_MIGRATIONS.map((m) => m.version));
 const STORE_RELEASE = "0.1.0";

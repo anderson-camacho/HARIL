@@ -15,6 +15,8 @@ Este archivo recoge el código de terceros que los paquetes distribuidos de HARI
 | `apps/shell/dist/shell.mjs` | get-east-asian-width | 1.6.0 | MIT | Copyright (c) Sindre Sorhus |
 | `apps/shell/dist/shell.mjs` | typebox | 1.3.27 | MIT | Copyright (c) 2017-2026 Haydn Paterson |
 
+La fábrica de la consola (`integrations/pi-console`) y `haril update` siguen los colores y las formas de las piezas de [ascii-magic-art](https://github.com/kailashsr38/ascii-magic-art): no se copia su código, solo datos (paleta, glifos y disposición). Su licencia está más abajo.
+
 Los `dist` se generan con tsdown, que incluye en el bundle los paquetes `@haril/*` (código propio) y `typebox`. Esta lista se obtuvo revisando a mano los bundles compilados de la versión 0.4.1: el de `haril.mjs` solo contiene `typebox@1.3.27` como dependencia de terceros.
 
 ### typebox 1.3.27
@@ -214,3 +216,31 @@ El instalador de HARIL (`npm run runtime:install`, o `haril-bootstrap install-ru
 - **Pi** (`@earendil-works/pi-coding-agent`), instalado desde el registro de npm. Licencia MIT, Copyright (c) 2025 Mario Zechner.
 
 Las dependencias de desarrollo (TypeScript, Vitest, Biome, knip, tsdown) no se incluyen en los paquetes distribuidos.
+
+### ascii-magic-art
+
+Referencia visual de la fábrica. Licencia copiada del archivo `LICENSE` del repositorio.
+
+```text
+MIT License
+
+Copyright (c) 2026 ASCII Magic (ascii-magic.com)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```

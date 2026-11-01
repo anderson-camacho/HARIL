@@ -92,6 +92,34 @@ describe("validateWorkflowSnapshot", () => {
     expect(validateWorkflowSnapshot(snapshot)).toEqual({ ok: true, snapshot });
   });
 
+  it("reads the additive stop reason and explanations, and still reads a snapshot without them", () => {
+    const explanation = {
+      code: "ready_stopped",
+      what: "Detenida",
+      why: "after_plan",
+      systemAction: "haril workflow continue wf-1",
+      needsHuman: true,
+      until: null,
+    };
+    const result = validateWorkflowSnapshot({
+      ...snapshot,
+      workflow: { ...snapshot.workflow, stopReason: "after_plan", explanation },
+      nodes: [{ ...node, explanation }],
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      snapshot: {
+        workflow: { stopReason: "after_plan", explanation: { needsHuman: true } },
+        nodes: [{ explanation: { code: "ready_stopped" } }],
+      },
+    });
+    const broken = validateWorkflowSnapshot({
+      ...snapshot,
+      workflow: { ...snapshot.workflow, explanation: { code: "x" } },
+    });
+    expect(broken.ok).toBe(false);
+  });
+
   it("carries an auditor target independently from its structural parent", () => {
     const auditor = { ...node, id: "a1", parentId: "d1", auditedId: "e1", role: "auditor" };
     const result = validateWorkflowSnapshot({ ...snapshot, nodes: [auditor] });

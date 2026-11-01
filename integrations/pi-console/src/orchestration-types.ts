@@ -23,6 +23,16 @@ type DifficultyLevel = "trivial" | "easy" | "medium" | "hard" | "expert";
 
 type UsageKind = "chat" | "agent_run";
 
+// Why something is where it is, in words for the person, as core's explainWait writes it.
+export interface WaitExplanation {
+  readonly code: string;
+  readonly what: string;
+  readonly why: string;
+  readonly systemAction: string;
+  readonly needsHuman: boolean;
+  readonly until: number | null;
+}
+
 export interface WorkflowNode {
   readonly id: string;
   readonly parentId: string | null;
@@ -52,6 +62,7 @@ export interface WorkflowNode {
     readonly retries: number;
   } | null;
   readonly waitingReason: string | null;
+  readonly explanation?: WaitExplanation;
   readonly turn: { readonly index: number; readonly of: number } | null;
 }
 
@@ -93,6 +104,8 @@ export interface WorkflowSnapshot {
     readonly elapsedMs: number;
     readonly autonomy: { readonly mode: "autonomous" | "stops"; readonly stops: readonly string[] };
     readonly orchestratorModel: string;
+    readonly stopReason?: string | null;
+    readonly explanation?: WaitExplanation;
   };
   readonly totals: {
     readonly tokensUsed: number;

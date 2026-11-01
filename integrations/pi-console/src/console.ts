@@ -18,6 +18,7 @@ import {
   type CommandHost,
   chooseMode,
   delegationHost,
+  ensureRuntime,
   harilCommandDescriptions,
   registerCommands,
 } from "./commands.js";
@@ -53,6 +54,18 @@ import {
   dockSlotAt,
 } from "./dock-navigation.js";
 import { stopAll } from "./emergency.js";
+import { runFactoryAction } from "./factory-actions.js";
+import { startFactoryFeed } from "./factory-feed.js";
+import { factoryGlyphs } from "./factory-kit.js";
+import { openFactoryOverlay } from "./factory-overlay.js";
+import {
+  NO_REMINDERS,
+  quotaOfRead,
+  type ReminderState,
+  reminderPass,
+} from "./factory-reminders.js";
+import { loadFactorySystem } from "./factory-settings.js";
+import { type FactoryState, initialFactoryState } from "./factory-state.js";
 import { createGitSummaryCache, type GitSummary } from "./git-summary.js";
 import { DEFAULT_UI_LOCALE, localized, readConsoleLocale, type UiLocale } from "./locale.js";
 import { miniLogo } from "./mini-logo.js";
@@ -65,7 +78,7 @@ import {
   registerHarilModels,
   restoreHarilModel,
 } from "./models.js";
-import { modeLabel } from "./modes.js";
+import { commandRefusal, modeLabel } from "./modes.js";
 import {
   attachNativePanes,
   DOCK_LABELS,
@@ -172,6 +185,13 @@ interface Session extends CommandHost {
   // children haril workflow watch and tail (orchestration-feed.ts).
   orchestration: OrchestrationState;
   orchestrationOpen: boolean;
+  // The factory view (factory-state.ts) and whether its overlay is open. Its data child runs only while it is open.
+  factory: FactoryState;
+  factoryOpen: boolean;
+  // How far the reminders of what waits for the person went, and the ACTION model already warned of.
+  reminders: ReminderState;
+  quotaWarned: string | undefined;
+  openFactoryView(ctx: ConsoleContext): Promise<void>;
   readonly feed: WorkflowFeed;
   orchestrationDemo(): boolean;
   runtime(): string;
@@ -487,6 +507,7 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
       runtime: runtimeState(current),
       runtimeAvailable: current.runtimeStatusAvailable && current.dashboardData.runtimeAvailable,
       pending: current.pendingAvailable ? current.pending.length : undefined,
+      needsYou: (current.dashboardData.needsYou ?? []).map((row) => row.title),
       context:
         usage === undefined
           ? "unavailable"
@@ -559,6 +580,40 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
     );
   }
 
+  // 1, 5 and 15 minutes after a request first shows; silent while the factory is in front of the person.
+  function remindOfRequests(current: Session, data: DashboardData): void {
+    const pass = reminderPass(
+      current.reminders,
+      data.needsYou ?? [],
+      Date.now(),
+      current.factoryOpen,
+    );
+    current.reminders = pass.state;
+    if (!current.ctx.hasUI) return;
+    for (const line of pass.lines) current.ctx.ui.notify(line, "warning");
+  }
+
+  // ACTION mode never changes the person's model: at the threshold it says so, once per model, and they accept with /model.
+  async function warnOfQuota(current: Session): Promise<void> {
+    if (modes.mode() !== "action" || !current.ctx.hasUI) return;
+    const model = safely(() => current.ctx.model, undefined);
+    if (model === undefined) return;
+    const ref = `${model.provider}/${model.id}`;
+    if (current.quotaWarned === ref) return;
+    const read = await runHaril(["factory", "requests", "--model", ref, "--json"], {
+      cwd: current.cwd,
+      timeoutMs: 10_000,
+    });
+    if (!read.ok) return;
+    const quota = quotaOfRead(read.stdout);
+    if (quota === null || quota.usedPct < quota.switchAt) return;
+    current.quotaWarned = ref;
+    current.ctx.ui.notify(
+      `La cuenta de ${model.id} va por ${Math.round(quota.usedPct)} % de sus 5 horas. HARIL no cambia de modelo en ACTION: si quieres, usa /model.`,
+      "warning",
+    );
+  }
+
   async function refreshDashboard(current: Session): Promise<void> {
     if (current.dashboardRefresh !== undefined) return current.dashboardRefresh;
     current.dashboardLoading = true;
@@ -573,6 +628,8 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
           } else {
             current.dashboardData = { ...data, approvals: current.pending };
           }
+          remindOfRequests(current, data);
+          void warnOfQuota(current);
         }
       })
       .finally(() => {
@@ -639,6 +696,10 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
       dashboardRefresh: undefined,
       orchestration: initialOrchestrationState(),
       orchestrationOpen: false,
+      factory: initialFactoryState(),
+      factoryOpen: false,
+      reminders: NO_REMINDERS,
+      quotaWarned: undefined,
       feed: createWorkflowFeed({
         cwd: () => current.cwd,
         projectSlug: () => current.project?.slug,
@@ -705,6 +766,56 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
         if (effect === "emergency-stop") await runStopAll(viewCtx);
         else if (effect === "pick-workflow" && (await current.pickWorkflow(viewCtx)))
           await current.openOrchestrationView(viewCtx);
+      },
+      async openFactoryView(viewCtx) {
+        if (!viewCtx.hasUI || viewCtx.mode !== "tui") {
+          if (viewCtx.hasUI)
+            viewCtx.ui.notify("La fábrica necesita la consola interactiva.", "warning");
+          return;
+        }
+        if (current.factoryOpen) return;
+        current.factoryOpen = true;
+        try {
+          const outcome = await openFactoryOverlay(viewCtx, {
+            get: () => current.factory,
+            set: (state) => {
+              current.factory = state;
+            },
+            glyphs: factoryGlyphs(),
+            readOnly: () => commandRefusal(modes.mode(), "continue") !== undefined,
+            startFeed: (listener) =>
+              startFactoryFeed({
+                cwd: () => current.cwd,
+                projectSlug: () => current.project?.slug,
+                ...listener,
+              }),
+            settingsLocked: () => modes.mode() === "consult" || modes.mode() === "plan",
+            loadSystem: () =>
+              loadFactorySystem({
+                run: (args) => runHaril(args, { cwd: current.cwd }),
+                catalog: () => loadedCatalog(current),
+              }),
+            act: (action) =>
+              runFactoryAction(action, {
+                run: (args) => runHaril(args, { cwd: current.cwd }),
+                ensureRuntime: () => ensureRuntime(current),
+                refusal: (command) =>
+                  command !== "config"
+                    ? commandRefusal(modes.mode(), command)
+                    : modes.mode() === "consult" || modes.mode() === "plan"
+                      ? "Este modo no cambia la configuración: cambia de modo con Alt+M."
+                      : undefined,
+              }),
+          });
+          // A workflow needs a goal, a plan and a methodology: /delegate asks for them, as it does in the chat.
+          if (outcome === "new-task") {
+            viewCtx.ui.setEditorText("/delegate ");
+            viewCtx.ui.notify("Escribe el objetivo de la nueva tarea y pulsa Enter.", "info");
+          }
+        } finally {
+          current.factoryOpen = false;
+          redraw();
+        }
       },
       async pickWorkflow(pickCtx) {
         if (!cliAvailable()) {
@@ -1980,6 +2091,12 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
     description: "Open the HARIL right-panel menu: its sections and actions, with arrows and Enter",
     handler: async (_args, ctx) => openRailMenu(ctx),
   });
+  pi.registerCommand("haril-factory", {
+    description: "HARIL: abrir la fábrica: avance, actividades, tablero, agentes y modelos",
+    handler: async (_args, ctx) => {
+      await session?.openFactoryView(ctx);
+    },
+  });
   // Alt+F belongs to Pi's editor.cursorWordRight; never override a built-in shortcut.
   pi.registerCommand("haril-focus", {
     description: "Open a focused view of the selected HARIL area",
@@ -1997,6 +2114,15 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
       if (session === undefined) return;
       session.openArea("orchestration");
       void session.openOrchestrationView(ctx);
+    },
+  });
+
+  // Alt+G is free in Pi 1.2.0's default keybindings; Alt+F, the obvious one, is Pi's cursorWordRight. It opens in every
+  // mode; a mode that refuses a command also refuses the key that would run it.
+  registerShortcut("alt+g", {
+    description: "Abrir la fábrica de HARIL",
+    handler: (ctx) => {
+      void session?.openFactoryView(ctx);
     },
   });
 

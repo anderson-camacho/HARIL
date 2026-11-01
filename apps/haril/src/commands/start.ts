@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { compactAtFor, type DelegationLayer, type DelegationSettings } from "@haril/contracts";
 import { type ControlServer, createControlServer } from "@haril/control";
 import { type DelegationLimits, type RunEvent, runExitCode, visibleText } from "@haril/core";
 import { createProcessControl } from "@haril/os";
@@ -21,6 +22,8 @@ import type { WatchdogSettings } from "../runtime/watchdog.js";
 import { workflowExitCode, workflowSummaryText } from "../runtime/workflow-summary.js";
 import { createWorkspaces } from "../runtime/worktrees.js";
 import { dataDirFor, failureReasonText, openExisting } from "./common.js";
+import { piContextUsed } from "./pi-context.js";
+import { sessionFileOf } from "./workflow-tail.js";
 
 // `haril start` (M1-T5, LD-T1): the foreground runtime. It applies the queue, runs the ready tasks and stays up for new
 // work until --idle-exit-sec of nothing to do (ARCH 4.2). `haril run` is start until idle: it exits as soon as the
@@ -44,6 +47,7 @@ const NOT_INITIALIZED =
 // warning that names its problems.
 export function runtimeDelegationOf(host: HostInfo): {
   readonly limits: DelegationLimits;
+  readonly settings: DelegationSettings;
   readonly watchdog: Required<WatchdogSettings>;
   readonly commands: HostCommandSettings;
   readonly warning?: string;
@@ -52,6 +56,7 @@ export function runtimeDelegationOf(host: HostInfo): {
   const settings = loaded.ok ? loaded.settings : delegationSettingsOf(undefined);
   return {
     limits: delegationLimitsOf(settings.limits),
+    settings,
     watchdog: {
       intervalMs: settings.watchdog.intervalMs,
       idleStrikesToClose: settings.watchdog.idleStrikesToClose,
@@ -134,7 +139,14 @@ async function serve(
   // Phase F7: haril.json's limits and watchdog cadence, read once at start.
   const configured = runtimeDelegationOf(host);
   if (configured.warning !== undefined) io.err(`haril: ${configured.warning}`);
-  const delegation = { ...liveModels.options, limits: configured.limits };
+  const delegation = {
+    ...liveModels.options,
+    limits: configured.limits,
+    contextUsedOf: (runId: string) => piContextUsed(dataDir, runId),
+    compactAtOf: (layer: DelegationLayer) => compactAtFor(configured.settings, layer),
+    transcriptOf: (runId: string) => sessionFileOf(dataDir, runId) ?? null,
+    vigilanteAnalysis: configured.settings.watchdog.vigilanteAnalysis,
+  };
   // The git worktrees of workflows that write (phase F8): under the data directory, short hashed folders (git refuses a
   // long worktree path on Windows). haril_run takes its allow list, time limit and output cap from haril.json's
   // delegation.commands (the defaults when it says nothing) and kills a command's tree through the verified tree kill.

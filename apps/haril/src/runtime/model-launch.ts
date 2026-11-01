@@ -1,15 +1,25 @@
-import { chooseModel, type ModelRequest } from "@haril/core";
+import {
+  COUNCIL_MIN_OPINIONS,
+  chooseModel,
+  councilStopReason,
+  isValidOpinion,
+  type ModelRequest,
+  SYNTHESIZER_ROLE,
+} from "@haril/core";
 import type { AgentOutcome, ProviderFailure, Store } from "@haril/core/ports";
-import { quotaByKey, quotaKeyOf } from "../quota-view.js";
+import { groupIndex, quotaByKey, quotaKeyFor, quotaKeyOf } from "../quota-view.js";
 import type { TurnWindowReport } from "./delegation-tools.js";
+import { recordHandoff } from "./handoff.js";
 import { QUOTA_FRESH_MS } from "./model-context.js";
-import type { Task, WorkflowSettings, WorkflowView } from "./workflow-view.js";
+import { type Task, type WorkflowSettings, WorkflowView } from "./workflow-view.js";
 
 // A workflow turn's model at its launch and after a provider error (docs/modos-y-delegacion.md 3.11, 8; phase F6).
 //   - At its launch: a model the user pinned runs as it is, or the turn waits (blocked with a cooldown) when its cooldown
 //     or quota holds it back; it is never replaced. A parent's or the table's model that no longer passes the rules is
 //     replaced by the next eligible one (model.substituted), or the turn waits for the earliest end of what holds the
-//     models back, within maxWaitMs. When nothing can run within maxWaitMs the workflow fails with no_capacity.
+//     models back, within maxWaitMs. When nothing can run within maxWaitMs the turn stops with what it tried, who holds it
+//     and when one frees (explainWait says so), and tries again by itself: when the first frees, and at least every
+//     CAPACITY_RECHECK_MS for what has no known end. limits.maxWorkflowWallMs stays the hard cap (settleWorkflows).
 //   - After a provider error: a 402 or 429 cools the model down (until the gateway's Retry-After, else the reset of its
 //     quota window when known, else a backoff; a 402 cools its whole account down too, keyed "quota:<quota key>"). Then
 //     the turn is retried once: on the next eligible model or account, or after the cooldown. A transient error (5xx,
@@ -20,8 +30,9 @@ import type { Task, WorkflowSettings, WorkflowView } from "./workflow-view.js";
 const RATE_LIMIT_BACKOFF_MS = 60_000;
 const QUOTA_BACKOFF_MS = 15 * 60_000;
 const ENDED = new Set(["completed", "failed", "stopped"]);
+const CAPACITY_RECHECK_MS = 60_000;
 
-function launchRequest(task: Task): ModelRequest {
+function launchRequest(task: Task, view: WorkflowView): ModelRequest {
   return {
     archetype: task.role,
     difficulty: task.difficulty ?? "medium",
@@ -29,20 +40,75 @@ function launchRequest(task: Task): ModelRequest {
     phase: "launch",
     explicit: task.modelPinned ? task.model : null,
     proposed: task.modelPinned ? null : task.model,
+    role: view.roleOf(task),
+    sticky: task.model,
   };
-}
-
-function capacityText(task: Task, view: WorkflowView, cause: string | null): string {
-  return `no model can run the ${task.role} ${view.label(task.threadId)} now or within the wait allowed${cause === null ? "" : ` (${cause})`}`;
 }
 
 export type LaunchVerdict =
   | { readonly kind: "run" }
-  | { readonly kind: "deferred"; readonly until: number }
-  | { readonly kind: "no_capacity"; readonly reason: string };
+  | { readonly kind: "deferred"; readonly until: number };
 
-// Checks a ready turn's model right before its claim, and writes what follows: a replaced model, a wait, or the
-// workflow's failure.
+// The agents running on the models it tried, in every running workflow.
+export function holdersOf(
+  store: Store,
+  tried: readonly { readonly model: string }[],
+): { readonly model: string; readonly agent: string }[] {
+  const models = new Set(tried.map((row) => row.model));
+  if (models.size === 0) return [];
+  return store.workflows.list({ state: "running" }).flatMap((workflow) => {
+    const view = WorkflowView.load(store, workflow.workflowId);
+    if (view === undefined) return [];
+    return view.tasks.flatMap((task) =>
+      task.state === "running" && task.model !== null && models.has(task.model)
+        ? [{ model: task.model, agent: view.label(task.threadId) }]
+        : [],
+    );
+  });
+}
+
+function earliestEnd(
+  tried: readonly { readonly until: number | null }[],
+  now: number,
+): number | null {
+  const ends = tried.flatMap((row) => (row.until !== null && row.until > now ? [row.until] : []));
+  return ends.length === 0 ? null : Math.min(...ends);
+}
+
+// A sintetizador whose council has fewer than its minimum of valid opinions does not run, an empty council or none at all
+// included: the workflow stops and says why. It never continues with two.
+function councilGate(store: Store, epoch: number, view: WorkflowView, task: Task): boolean {
+  if (view.roleOf(task) !== SYNTHESIZER_ROLE) return false;
+  const parent = view.parentThreadId(task.threadId);
+  const council = parent === null ? [] : view.councillors(parent);
+  const valid = council.filter((row) => isValidOpinion(row.text)).length;
+  if (valid >= COUNCIL_MIN_OPINIONS) return false;
+  store.transaction(() => {
+    store.events.append({
+      aggregateType: "workflow",
+      aggregateId: view.workflow.workflowId,
+      type: "council.below_minimum",
+      actorKind: "system",
+      actorId: "runtime",
+      payload: {
+        workflowId: view.workflow.workflowId,
+        valid,
+        minimum: COUNCIL_MIN_OPINIONS,
+        councillors: council.map((row) => row.localId),
+      },
+      projectId: view.workflow.projectId,
+      taskId: task.taskId,
+    });
+    store.workflows.setState(epoch, {
+      workflowId: view.workflow.workflowId,
+      state: "awaiting_human",
+      reason: councilStopReason(valid),
+    });
+  });
+  return true;
+}
+
+// Checks a ready turn's model right before its claim, and writes what follows: a replaced model, or a wait.
 export function checkLaunch(
   store: Store,
   epoch: number,
@@ -51,8 +117,26 @@ export function checkLaunch(
   settings: WorkflowSettings,
   now: number,
 ): LaunchVerdict {
-  const choice = chooseModel(launchRequest(task), settings.models(now));
+  if (councilGate(store, epoch, view, task)) return { kind: "deferred", until: now };
+  const choice = chooseModel(launchRequest(task, view), settings.models(now));
   if (choice.kind === "use" || choice.kind === "reject") {
+    if (choice.kind === "use" && choice.reason === "role_order") {
+      store.events.append({
+        aggregateType: "task",
+        aggregateId: task.taskId,
+        type: "model.selected",
+        actorKind: "system",
+        actorId: "runtime",
+        payload: {
+          workflowId: view.workflow.workflowId,
+          model: choice.model,
+          reason: choice.reason,
+          role: view.roleOf(task),
+        },
+        projectId: view.workflow.projectId,
+        taskId: task.taskId,
+      });
+    }
     if (choice.kind === "use" && choice.model !== task.model) {
       store.transaction(() => {
         store.workflows.setTurnModel(epoch, task.taskId, choice.model);
@@ -70,6 +154,15 @@ export function checkLaunch(
           },
           projectId: view.workflow.projectId,
         });
+        // A later turn of a thread is the same agent's work: on another model that is a handoff, with what it leaves.
+        if (task.model !== null && view.turns(task.threadId)[0]?.taskId !== task.taskId) {
+          recordHandoff(store, view, task, {
+            from: task.model,
+            to: choice.model,
+            reason: "quota",
+            transcript: null,
+          });
+        }
       });
     }
     return { kind: "run" };
@@ -78,13 +171,28 @@ export function checkLaunch(
     store.workflows.deferTurn(epoch, task.taskId, choice.until);
     return { kind: "deferred", until: choice.until };
   }
-  const reason = `no_capacity: ${capacityText(task, view, choice.cause)}`;
-  store.workflows.setState(epoch, {
-    workflowId: view.workflow.workflowId,
-    state: "failed",
-    reason,
+  const frees = earliestEnd(choice.tried, now);
+  const until = Math.min(frees ?? Number.POSITIVE_INFINITY, now + CAPACITY_RECHECK_MS);
+  store.transaction(() => {
+    store.workflows.deferTurn(epoch, task.taskId, until);
+    // Written after task.blocked: the snapshot reads the newer of the two to tell this stop from a plain cooldown.
+    store.events.append({
+      aggregateType: "task",
+      aggregateId: task.taskId,
+      type: "capacity.waiting",
+      actorKind: "system",
+      actorId: "runtime",
+      payload: {
+        workflowId: view.workflow.workflowId,
+        tried: choice.tried.map((row) => ({ ...row })),
+        holders: holdersOf(store, choice.tried),
+        frees,
+      },
+      projectId: view.workflow.projectId,
+      taskId: task.taskId,
+    });
   });
-  return { kind: "no_capacity", reason };
+  return { kind: "deferred", until };
 }
 
 export type RetryDecision =
@@ -97,7 +205,6 @@ export type RetryDecision =
       // What the attempt's usage row says.
       readonly outcome: "provider_retry" | "provider_wait";
     }
-  | { readonly kind: "no_capacity"; readonly reason: string }
   | { readonly kind: "none" };
 
 // When a cooldown ends: the gateway's Retry-After, else the reset of the model's quota window that passes its threshold,
@@ -113,7 +220,8 @@ function cooldownEnd(
     return now + provider.retryAfterMs;
   if (provider.kind === "quota") {
     const policy = settings.models(now).policy;
-    const sample = quotaByKey(store.quota.latest(now - QUOTA_FRESH_MS), policy)[quotaKeyOf(model)];
+    const records = store.quota.latest(now - QUOTA_FRESH_MS);
+    const sample = quotaByKey(records, policy)[quotaKeyFor(model, groupIndex(records))];
     if (sample?.available === true) {
       const resets = [
         sample.weeklyUsedPct !== null && sample.weeklyUsedPct > policy.stopAtPercentWeekly
@@ -174,7 +282,7 @@ export function decideProviderRetry(input: {
       outcome: "provider_retry",
     };
   }
-  const choice = chooseModel(launchRequest(task), settings.models(now));
+  const choice = chooseModel(launchRequest(task, view), settings.models(now));
   if (choice.kind === "use" || choice.kind === "reject") {
     const next = choice.kind === "use" ? choice.model : model;
     return {
@@ -196,5 +304,14 @@ export function decideProviderRetry(input: {
       outcome: "provider_wait",
     };
   }
-  return { kind: "no_capacity", reason: `no_capacity: ${capacityText(task, view, choice.cause)}` };
+  // Nothing can take it within the wait allowed: it returns to the queue after a while, and the check at its launch stops
+  // it with its explanation if nothing freed by then.
+  return {
+    kind: "retry",
+    model: choice.model ?? model,
+    cooldownUntil: now + CAPACITY_RECHECK_MS,
+    retryReason: "transient",
+    substitutedFrom: null,
+    outcome: "provider_wait",
+  };
 }

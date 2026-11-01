@@ -26,7 +26,8 @@ import { type ThreadView, threadsOf } from "../commands/workflow-snapshot.js";
 // The workflow's own check is settleWorkflows, every turn of the loop: a running workflow with nothing pending, ready or
 // running fails as stalled. The backstop for a capacity that never frees is the workflow's wall time
 // (limits.maxWorkflowWallMs, 2 hours by default): past it the workflow fails (wall_time) and every turn it left is
-// residual, cancelled at once by cancelStrandedTurns. Each verdict is a watchdog.checked or watchdog.closed event whose
+// residual, cancelled at once by cancelStrandedTurns. A workflow waiting for a person is under no such cap: it waits for
+// as long as the person takes, and that time is not charged to it when it goes on. Each verdict is a watchdog.checked or watchdog.closed event whose
 // text starts with the node's id, which the console's detail line reads.
 
 const LIVE = new Set(["pending", "ready", "running"]);
