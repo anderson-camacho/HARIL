@@ -340,6 +340,14 @@ function eventsOf(
       ];
     })
     .sort((a, b) => a.at - b.at)
+    .filter(
+      // A stop for capacity is checked every minute: only its last line says something.
+      (event, index, rows) =>
+        event.type !== "capacity.waiting" ||
+        !rows
+          .slice(index + 1)
+          .some((later) => later.type === event.type && later.agent === event.agent),
+    )
     .slice(-RECENT_EVENTS);
 }
 

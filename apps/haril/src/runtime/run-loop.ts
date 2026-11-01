@@ -525,7 +525,6 @@ async function serve(
           epoch,
           options.delegation,
           new Set(notRunnable),
-          (ended) => emit({ type: "workflow.state", ...ended }),
           clock.now(),
         );
     for (const turn of turns) {
@@ -879,7 +878,6 @@ function closeWorkflowTurn(
   const task = store.workflows.tasks(turn.workflowId).find((row) => row.taskId === claimed.taskId);
   // 3.11: a 402 or 429 cools the model down; the turn is retried once on another model or after the cooldown, a
   // transient error once on the same model, never after its deciding call was accepted.
-  let noCapacity: string | undefined;
   if (!closedIdle && outcome.status === "failed" && outcome.provider !== undefined) {
     const view = WorkflowView.load(store, turn.workflowId);
     const current = view?.task(claimed.taskId);
@@ -910,7 +908,6 @@ function closeWorkflowTurn(
         });
         return;
       }
-      if (decision.kind === "no_capacity") noCapacity = decision.reason;
     }
   }
   let taskState: "completed" | "failed";
@@ -948,9 +945,8 @@ function closeWorkflowTurn(
     taskState = "failed";
     outcomeText = `commit_failed: ${message}`;
   }
-  // No model can run the turn again within the wait allowed, or a command moved the base branch: the workflow ends (it
-  // never asks). Its running turns are then residual and killed.
-  const ending = noCapacity ?? (baseMoved === undefined ? undefined : `base_moved: ${baseMoved}`);
+  // A command moved the base branch: the workflow ends (it never asks). Its running turns are then residual and killed.
+  const ending = baseMoved === undefined ? undefined : `base_moved: ${baseMoved}`;
   if (ending !== undefined) {
     const current = store.workflows.get(turn.workflowId);
     if (current?.state === "running" || current?.state === "awaiting_human") {

@@ -93,14 +93,12 @@ function runningWriters(
 
 // Claims the turns selectClaims starts now in every running workflow, oldest workflow first. `exclude` names ready
 // turns that must wait (a real agent whose setup is missing, for instance). Each turn's model is checked right before
-// its claim (3.11, model-launch.ts): it may be replaced, the turn may wait for a cooldown, or the workflow may fail with
-// no_capacity, which `onEnded` hears.
+// its claim (3.11, model-launch.ts): it may be replaced, or the turn may wait.
 export function claimWorkflowTurns(
   store: Store,
   epoch: number,
   options: DelegationOptions | undefined,
   exclude: ReadonlySet<string> = new Set(),
-  onEnded: (ended: WorkflowEnded) => void = () => undefined,
   now: number = Date.now(),
 ): WorkflowClaim[] {
   const claims: WorkflowClaim[] = [];
@@ -142,10 +140,6 @@ export function claimWorkflowTurns(
       if (task === undefined) continue;
       const launch = checkLaunch(store, epoch, view, task, settings, now);
       if (launch.kind === "deferred") continue;
-      if (launch.kind === "no_capacity") {
-        onEnded({ workflowId: workflow.workflowId, state: "failed", reason: launch.reason });
-        break;
-      }
       const claimed = store.tasks.claimTask(epoch, plan.taskId);
       if (claimed === undefined) continue;
       claims.push({ claimed, workflowId: workflow.workflowId });

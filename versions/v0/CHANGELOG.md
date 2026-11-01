@@ -35,6 +35,7 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 ### Cambiado
 
+- Sin capacidad un flujo ya no falla en silencio. Cuando ningún modelo puede correr una tarea, esta se detiene y explica qué modelos probó y por qué, quién los usa y cuándo se libera el primero (`capacity.waiting`, código `blocked_no_capacity`). Reintenta sola cuando se libera y, como mínimo, cada minuto, y sigue en cuanto haya capacidad. `limits.maxWorkflowWallMs` sigue siendo el tope: pasado, el flujo falla con `wall_time`.
 - La tabla de dificultad ya no pone `*flash-high` primero en `hard`: ahora es `*sonnet*`, `*flash-high`, `*pro`. Motivo: 19,1 % en Terminal-Bench 4.0, según una fuente secundaria.
 
 ### Limitaciones

@@ -367,7 +367,7 @@ git diff main...haril/<workflow>/integration
 - si no, la tabla de dificultad: el modelo más barato cuya tasa de éxito medida cumple el mínimo de la clase, o el primero de la lista;
 - la regla de cuota: más del 80 % de la ventana de 5 horas, otro modelo o cuenta; más del 80 % de la semana, el modelo no se usa; con menos del 20 % restante, ninguna tarea grande (dificultad `hard` o más, o un presupuesto de 50 000 tokens o más). Una cuenta con prefijo (`cliproxy/Gemini1/…`) responde por sus modelos; un modelo sin prefijo cuenta como la peor cuenta del proveedor;
 - un 402 o 429 enfría el modelo hasta el `Retry-After` o el reinicio de su ventana, y el turno se reintenta una vez en otra cuenta o tras el enfriamiento; un error transitorio se reintenta una vez con el mismo modelo; nunca se reintenta después de una llamada decisiva aceptada;
-- sin ningún modelo que pueda correr a tiempo, el workflow termina `failed` con `no_capacity` y no pregunta.
+- sin ningún modelo que pueda correr a tiempo, la tarea se detiene y explica qué probó, quién lo usa y cuándo se libera el primero; reintenta sola, y solo `limits.maxWorkflowWallMs` termina el flujo.
 
 La tabla vive en `config/difficulty.json`, junto a `haril.json`. Por clase da la tasa de éxito mínima y los modelos en orden; por modelo, su nivel de costo; una entrada puede ser un patrón con `*` (`*flash` sigue al modelo en todas las cuentas). Lo que el archivo no dice toma valores por defecto provisionales:
 

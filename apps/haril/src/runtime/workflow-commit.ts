@@ -84,25 +84,25 @@ export function reachStop(
   return true;
 }
 
-// A model for a new turn (3.11), or null when none can run now or within maxWaitMs (the turn is then not created and the
-// workflow fails with no_capacity). A model held back until a known time within maxWaitMs is still given: the turn is
-// created with it, and the check at its launch makes it wait (model-launch.ts). A substitution is recorded as
-// model.substituted.
+// A model for a new turn (3.11). A model held back, within maxWaitMs or beyond it, is still given: the turn is created
+// with it, and the check at its launch makes it wait or stops it with an explanation until capacity returns
+// (model-launch.ts). A substitution is recorded as model.substituted.
 function pickModel(
   context: Pick<TurnContext, "store" | "clock" | "settings" | "view">,
   request: ModelRequest,
-): { readonly model: string; readonly pinned: boolean } | null {
+): { readonly model: string; readonly pinned: boolean } {
   const models = context.settings.models(context.clock.now());
   const choice = chooseModel(request, models);
-  if (choice.kind === "wait") {
+  if (choice.kind !== "use") {
+    const tried = choice.kind === "unavailable" ? choice.tried[0]?.model : undefined;
     const model =
       choice.model ??
       request.proposed ??
+      tried ??
       models.table.classes[request.difficulty].order[0] ??
       context.view.workflow.orchestratorModel;
     return { model, pinned: models.pinned[request.archetype] === model };
   }
-  if (choice.kind !== "use") return null;
   if (choice.substitutedFrom !== null) {
     context.store.events.append({
       aggregateType: "workflow",
@@ -298,12 +298,12 @@ function serializedAfter(check: Extract<DelegationCheck, { ok: true }>, localId:
   return check.serialize.filter((edge) => edge.localId === localId).map((edge) => edge.after);
 }
 
-// The delegators of an orchestrator's haril_delegate and its continuation, or null when a delegator has no model.
+// The delegators of an orchestrator's haril_delegate and its continuation.
 function delegateTurns(
   context: TurnContext,
   input: DelegateInput,
   check: Extract<DelegationCheck, { ok: true }>,
-): NewTurn[] | null {
+): NewTurn[] {
   const { view, task, settings } = context;
   const turns: NewTurn[] = [];
   for (const delegation of input.delegations) {
@@ -315,7 +315,6 @@ function delegateTurns(
       proposed: delegation.model ?? null,
       role: delegation.role ?? null,
     });
-    if (model === null) return null;
     turns.push({
       key: delegation.localId,
       threadId: null,
@@ -349,13 +348,13 @@ function delegateTurns(
   return turns;
 }
 
-// The executors and auditors of a delegator's haril_assign and its continuation, or null when one has no model. An
+// The executors and auditors of a delegator's haril_assign and its continuation. An
 // assignment that names an escalated or blocked step continues that step's threads (the reformulation of 3.8).
 function assignTurns(
   context: TurnContext,
   input: AssignInput,
   check: Extract<DelegationCheck, { ok: true }>,
-): NewTurn[] | null {
+): NewTurn[] {
   const { view, task, settings } = context;
   const steps = new Map(
     view
@@ -378,7 +377,6 @@ function assignTurns(
       role: assignment.role ?? null,
       sticky: latest?.model ?? null,
     });
-    if (executorModel === null) return null;
     const auditorModel = pickModel(context, {
       archetype: "auditor",
       difficulty: assignment.difficulty,
@@ -387,7 +385,6 @@ function assignTurns(
       avoid: executorModel.model,
       role: assignment.auditorRole ?? null,
     });
-    if (auditorModel === null) return null;
     const auditKey = `audit:${assignment.localId}`;
     turns.push({
       key: assignment.localId,
@@ -536,20 +533,16 @@ function orchestratorPlan(
   }
   if (action?.tool === "haril_delegate") {
     const check = recheck(context, action);
-    const turns = typeof check === "string" ? null : delegateTurns(context, action.input, check);
-    if (typeof check === "string" || turns === null) {
-      const reason = typeof check === "string" ? "refused_at_commit" : "no_capacity";
-      const detail = typeof check === "string" ? check : "no model can run a delegator now";
+    if (typeof check === "string") {
       return {
         before: [],
-        completion: failure(context, `delegation.${reason}`, detail),
-        outcome: reason,
+        completion: failure(context, "delegation.refused_at_commit", check),
+        outcome: "refused_at_commit",
         verdict: null,
-        after: [
-          setWorkflowFailed(context, reason === "no_capacity" ? `no_capacity: ${detail}` : reason),
-        ],
+        after: [setWorkflowFailed(context, "refused_at_commit")],
       };
     }
+    const turns = delegateTurns(context, action.input, check);
     const firstPlan = !view.delegations.some((row) => row.tool === "haril_delegate");
     return {
       before: [
@@ -581,19 +574,6 @@ function orchestratorPlan(
       phase: "launch",
       avoid: task.model,
     });
-    if (model === null) {
-      return {
-        before: [],
-        completion: failure(
-          context,
-          "delegation.no_capacity",
-          "no model can run the final auditor now",
-        ),
-        outcome: "no_capacity",
-        verdict: null,
-        after: [setWorkflowFailed(context, "no_capacity: no model can run the final auditor now")],
-      };
-    }
     const finalAuditor: NewTurn = {
       key: "final-audit",
       threadId: null,
@@ -681,21 +661,17 @@ function delegatorPlan(
   }
   if (action?.tool === "haril_assign") {
     const check = recheck(context, action);
-    const turns = typeof check === "string" ? null : assignTurns(context, action.input, check);
-    if (typeof check === "string" || turns === null) {
-      const reason = typeof check === "string" ? "refused_at_commit" : "no_capacity";
-      const detail =
-        typeof check === "string" ? check : "no model can run an executor or its auditor now";
+    if (typeof check === "string") {
+      // A refused proposal is the delegator's to answer.
       return {
         before: [],
-        completion: failure(context, `delegation.${reason}`, detail),
-        outcome: reason,
+        completion: failure(context, "delegation.refused_at_commit", check),
+        outcome: "refused_at_commit",
         verdict: null,
-        // No model at all ends the workflow (8: it never asks); a refused proposal is the delegator's to answer.
-        after:
-          reason === "no_capacity" ? [setWorkflowFailed(context, `no_capacity: ${detail}`)] : [],
+        after: [],
       };
     }
+    const turns = assignTurns(context, action.input, check);
     const continuation = view.turns(task.threadId)[0]?.taskId !== task.taskId;
     return {
       before: [

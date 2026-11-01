@@ -46,6 +46,48 @@ function input(overrides: {
 const blockReasons = BlockReasonSchema.anyOf.map((item) => String(item.const));
 const taskStates = TaskStateSchema.anyOf.map((item) => String(item.const));
 
+describe("explainWait with no capacity", () => {
+  const stopped = (capacityWait: Parameters<typeof explainWait>[0]["capacityWait"]) =>
+    explainWait(
+      input({
+        task: { state: "blocked", blockReason: "cooldown", cooldownUntil: NOW + 60_000 },
+        rest: { capacityWait },
+      }),
+    );
+
+  it("names what was tried, who holds it and when one frees", () => {
+    const out = stopped({
+      tried: [
+        { model: "a/one", cause: "cooldown", until: NOW + 1_800_000 },
+        { model: "b/two", cause: "window_5h", until: null },
+        { model: "c/three", cause: "below_floor", until: null },
+      ],
+      holders: [{ model: "a/one", agent: "e3" }],
+      frees: NOW + 1_800_000,
+    });
+    expect(out.code).toBe("blocked_no_capacity");
+    expect(out.why).toContain("a/one (en enfriamiento)");
+    expect(out.why).toContain("b/two (pasó su ventana de 5 horas)");
+    expect(out.why).toContain("c/three (por debajo del piso de su rol)");
+    expect(out.why).toContain("a/one lo usa e3");
+    expect(out.why).toContain("se libera en 30 min");
+    expect(out.until).toBe(NOW + 1_800_000);
+    expect(out.needsHuman).toBe(false);
+    expect(out.systemAction).toContain("tiempo máximo");
+  });
+
+  it("says when it knows neither a model nor an end", () => {
+    const out = stopped({ tried: [], holders: [], frees: null });
+    expect(out.why).toContain("Ninguno de sus modelos está conectado");
+    expect(out.why).toContain("No se sabe cuándo");
+    expect(out.until).toBeNull();
+  });
+
+  it("does not change a plain cooldown", () => {
+    expect(stopped(null).code).toBe("blocked_cooldown");
+  });
+});
+
 describe("explainWait", () => {
   it("explains every block reason, in words and with a code of its own", () => {
     const codes = new Set<string>();

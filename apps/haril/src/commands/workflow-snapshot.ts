@@ -4,7 +4,13 @@ import type {
   WorkflowNode,
   WorkflowSnapshot,
 } from "@haril/contracts";
-import { explainWait, explainWorkflow, visibleText, type WaitSettled } from "@haril/core";
+import {
+  type CapacityWait,
+  explainWait,
+  explainWorkflow,
+  visibleText,
+  type WaitSettled,
+} from "@haril/core";
 import type {
   AuditRecord,
   Store,
@@ -135,6 +141,8 @@ interface NodeContext {
   readonly tasks: readonly WorkflowTaskRecord[];
   readonly cooldowns: readonly { model: string; until: number; reason: string }[];
   readonly runtimeAlive: boolean;
+  // The turns stopped because no model could run them, with what the last check found.
+  readonly capacityWaits: ReadonlyMap<string, CapacityWait>;
 }
 
 function proposalKey(delegationId: string, localId: string): string {
@@ -307,6 +315,8 @@ function explanationOf(
     holder: latest.blockReason === "surface_conflict" ? surfaceHolder(latest, context) : null,
     capacity: capacityOf(thread.role, context),
     runtimeAlive: context.runtimeAlive,
+    capacityWait:
+      latest.state === "blocked" ? (context.capacityWaits.get(latest.taskId) ?? null) : null,
     now: options.now,
   });
 }
@@ -527,7 +537,15 @@ export function buildWorkflowSnapshot(
   const projectEvents = store.events.list({ projectId: workflow.projectId });
   const levels = new Map<string, string | null>();
   const compactAts = new Map<string, number>();
+  const capacityWaits = new Map<string, CapacityWait>();
   for (const event of projectEvents) {
+    // A later block is a plain one, unless the runtime's check writes its own line right after it.
+    if (event.taskId !== null && event.taskId !== undefined) {
+      if (event.type === "task.blocked") capacityWaits.delete(event.taskId);
+      if (event.type === "capacity.waiting") {
+        capacityWaits.set(event.taskId, event.payload as unknown as CapacityWait);
+      }
+    }
     const payload = event.payload as {
       workflowId?: unknown;
       thinkingLevel?: unknown;
@@ -563,6 +581,7 @@ export function buildWorkflowSnapshot(
     tasks,
     cooldowns: store.quota.cooldowns(options.now),
     runtimeAlive: runtimeAliveOf(store, options.now),
+    capacityWaits,
   };
 
   // Depth-first: each thread followed by its children, in creation order.
@@ -592,6 +611,11 @@ export function buildWorkflowSnapshot(
     .slice(-40)
     .map((event) => ({ at: event.ts, type: event.type, text: eventText(event.payload) }));
 
+  // A flow that cannot go on until a model frees says so, whatever else it still has running.
+  const noCapacity = nodes
+    .map((node) => node.explanation)
+    .find((item) => item?.code === "blocked_no_capacity");
+
   return {
     schemaVersion: 1,
     demo: workflow.simulated,
@@ -604,11 +628,14 @@ export function buildWorkflowSnapshot(
       autonomy: { mode: workflow.autonomy.mode, stops: [...workflow.autonomy.stops] },
       orchestratorModel: workflow.orchestratorModel,
       stopReason: workflow.stopReason,
-      explanation: explainWorkflow({
-        id: workflow.workflowId,
-        state: workflow.state,
-        stopReason: workflow.stopReason,
-      }),
+      explanation:
+        workflow.state === "running" && noCapacity !== undefined
+          ? noCapacity
+          : explainWorkflow({
+              id: workflow.workflowId,
+              state: workflow.state,
+              stopReason: workflow.stopReason,
+            }),
     },
     git: gitOf(store, workflow),
     totals: {

@@ -10,6 +10,7 @@ export const WAIT_CODES = [
   "blocked_needs_authorization",
   "blocked_budget",
   "blocked_cooldown",
+  "blocked_no_capacity",
   "blocked_surface_conflict",
   "blocked_dep_failed",
   "blocked_memory_unavailable",
@@ -61,6 +62,17 @@ export interface WaitWorkflowInput {
   readonly stopReason: string | null;
 }
 
+export interface CapacityWait {
+  readonly tried: readonly {
+    readonly model: string;
+    readonly cause: string;
+    readonly until: number | null;
+  }[];
+  readonly holders: readonly { readonly model: string; readonly agent: string }[];
+  // The earliest known moment one of them frees; null when none is known.
+  readonly frees: number | null;
+}
+
 export interface WaitInput {
   readonly task: {
     readonly state: TaskState;
@@ -90,6 +102,8 @@ export interface WaitInput {
   readonly capacity: { readonly live: number; readonly max: number } | null;
   // False when no runtime holds the lease, so nothing can start; null when unknown.
   readonly runtimeAlive: boolean | null;
+  // The last time the turn found no model that could run it: what it tried and who holds it. Absent or null otherwise.
+  readonly capacityWait?: CapacityWait | null;
   readonly now: number;
 }
 
@@ -139,8 +153,45 @@ function minutesLeft(until: number, now: number): string {
   return minutes <= 1 ? "en menos de 1 min" : `en ${minutes} min`;
 }
 
+const CAUSE_TEXT: Readonly<Record<string, string>> = {
+  not_allowed: "no permitido en esta capa",
+  not_in_catalog: "no está en el catálogo",
+  no_key: "su proveedor no tiene clave",
+  cooldown: "en enfriamiento",
+  window_5h: "pasó su ventana de 5 horas",
+  weekly: "pasó su semana",
+  large_task: "no le queda para una tarea grande",
+  below_floor: "por debajo del piso de su rol",
+};
+
+function capacityExplanation(wait: CapacityWait, now: number): WaitExplanation {
+  const tried = wait.tried.map((row) => `${row.model} (${CAUSE_TEXT[row.cause] ?? row.cause})`);
+  const holders = wait.holders.map((row) => `${row.model} lo usa ${row.agent}`);
+  const when =
+    wait.frees === null
+      ? "No se sabe cuándo se libera alguno."
+      : wait.frees <= now
+        ? "Uno ya debería estar libre."
+        : `El primero se libera ${minutesLeft(wait.frees, now)}.`;
+  return explanation(
+    "blocked_no_capacity",
+    "Sin modelo disponible",
+    [
+      tried.length === 0 ? "Ninguno de sus modelos está conectado." : `Probó ${tried.join(", ")}.`,
+      ...(holders.length === 0 ? [] : [`${holders.join(", ")}.`]),
+      when,
+    ].join(" "),
+    "Reintenta sola y sigue en cuanto haya un modelo; si no llega, el flujo falla al pasar su tiempo máximo.",
+    false,
+    wait.frees,
+  );
+}
+
 function cooldownExplanation(input: WaitInput): WaitExplanation {
   const { task, cooldowns, now } = input;
+  if (input.capacityWait !== undefined && input.capacityWait !== null) {
+    return capacityExplanation(input.capacityWait, now);
+  }
   const own = cooldowns.find((row) => row.model === task.model);
   const until = task.cooldownUntil ?? own?.until ?? null;
   const model = task.model ?? "su modelo";
