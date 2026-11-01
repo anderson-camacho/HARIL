@@ -4,6 +4,8 @@ import { visibleText } from "@haril/core";
 import type { ProjectRecord, Store } from "@haril/core/ports";
 import { argsProblem, lastValue, parseArgs } from "../args.js";
 import { type CliIo, EXIT_OK, EXIT_USAGE, type HostInfo } from "../context.js";
+import { loadDelegationSettings } from "../delegation-config.js";
+import { delegationSettingsOf } from "../delegation-section.js";
 import { clockFor } from "../host.js";
 import { dataDirFor, openExisting } from "./common.js";
 import { buildFactoryModel } from "./factory-model.js";
@@ -23,6 +25,7 @@ const USAGE = [
 ].join("\n");
 const DEFAULT_INTERVAL_MS = 1_000;
 const WAKE_INTERVAL_MS = 250;
+const SETTINGS_TTL_MS = 5_000;
 const NOT_INITIALIZED =
   "store not initialized (run haril project init <path> --name <name> --yes first)";
 const COLUMNS: readonly FactoryColumn[] = [
@@ -70,14 +73,25 @@ function reader(
   store: Store,
   dataDir: string,
   project: ProjectRecord | undefined,
+  host: HostInfo,
 ): (now: number) => FactoryModel {
   const endedSnapshots = new Map<string, WorkflowSnapshot>();
+  // haril.json is user-edited, and an invalid one leaves the defaults in effect, as for the runtime.
+  let settings: { value: ReturnType<typeof delegationSettingsOf>; at: number } | undefined;
+  const settingsAt = (now: number) => {
+    if (settings === undefined || now - settings.at > SETTINGS_TTL_MS) {
+      const loaded = loadDelegationSettings(host);
+      settings = { value: loaded.ok ? loaded.settings : delegationSettingsOf(undefined), at: now };
+    }
+    return settings.value;
+  };
   return (now) =>
     buildFactoryModel(store, {
       now,
       ...(project === undefined ? {} : { project }),
       contextUsedOf: (runId) => piContextUsed(dataDir, runId),
       endedSnapshots,
+      quotaSettings: settingsAt(now).quota,
     });
 }
 
@@ -89,7 +103,7 @@ function factoryShow(args: readonly string[], io: CliIo, host: HostInfo): number
   const open = opened(parsed, io, host);
   if (typeof open === "number") return open;
   try {
-    const model = reader(open.store, open.dataDir, open.project)(clockFor(host).now());
+    const model = reader(open.store, open.dataDir, open.project, host)(clockFor(host).now());
     if (parsed.flags.has("--json")) {
       io.out(JSON.stringify(model));
       return EXIT_OK;
@@ -145,7 +159,7 @@ function follow(
   const clock = clockFor(host);
   const connectControl = host.connectControl ?? connect;
   const signals = host.signals ?? process;
-  const read = reader(store, dataDir, project);
+  const read = reader(store, dataDir, project, host);
   let last = "";
   const print = (force: boolean): void => {
     const model = read(clock.now());

@@ -13,7 +13,7 @@ export interface FactoryActionDeps {
   refusal(command: "continue" | "approve" | "deny"): string | undefined;
 }
 
-function commandOf(action: FactoryAction): {
+function commandOf(action: Exclude<FactoryAction, { kind: "reread" }>): {
   readonly command: "continue" | "approve" | "deny";
   readonly args: readonly string[];
   readonly done: string;
@@ -45,6 +45,12 @@ export async function runFactoryAction(
   action: FactoryAction,
   deps: FactoryActionDeps,
 ): Promise<string> {
+  if (action.kind === "reread") {
+    const read = await deps.run(["quota", "--json"]);
+    return read.ok
+      ? "Cuota leída de nuevo."
+      : firstLine(read.stderr) || "No se pudo leer la cuota.";
+  }
   const { command, args, done } = commandOf(action);
   const refused = deps.refusal(command);
   if (refused !== undefined) return refused;

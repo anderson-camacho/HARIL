@@ -43,7 +43,8 @@ export type DelegationEffect =
   | "next model choice"
   | "next agent launch"
   | "next runtime start"
-  | "next research file";
+  | "next research file"
+  | "next view refresh";
 
 export type DelegationFieldKind =
   // A whole number in [min, max]. `inherits`: absent means "the value of that field" (a per-layer override).
@@ -397,6 +398,22 @@ export const DELEGATION_FIELDS: readonly DelegationField[] = Object.freeze([
     kind: int(0, WEEK_MS, "ms"),
     default: 18_000_000,
     effect: "next model choice",
+  },
+  {
+    path: "quota.colorWarnPercent",
+    group: "quota",
+    label: "Paint a quota bar yellow from",
+    kind: { type: "percent" },
+    default: 70,
+    effect: "next view refresh",
+  },
+  {
+    path: "quota.colorDangerPercent",
+    group: "quota",
+    label: "Paint a quota bar red from",
+    kind: { type: "percent" },
+    default: 90,
+    effect: "next view refresh",
   },
   {
     path: "watchdog.intervalMs",
@@ -777,6 +794,9 @@ export interface DelegationSettings {
     readonly stopAtPercentWeekly: number;
     readonly minRemainingPercentForLargeTask: number;
     readonly maxWaitMs: number;
+    // Only the color of a quota bar: the rule above decides which models run.
+    readonly colorWarnPercent: number;
+    readonly colorDangerPercent: number;
   };
   readonly models: {
     readonly layers: Readonly<Record<DelegationLayer, LayerModel>>;

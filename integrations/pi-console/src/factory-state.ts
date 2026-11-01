@@ -27,6 +27,9 @@ export const FACTORY_COLUMNS: readonly FactoryColumn[] = [
 export const ACTIVITY_VIEWS = ["activas", "en_cola", "fallidas", "hechas", "te_necesitan"] as const;
 export type ActivityView = (typeof ACTIVITY_VIEWS)[number];
 
+export const MODELOS_VIEWS = ["cuentas", "monitor", "historial", "cache"] as const;
+export type ModelosView = (typeof MODELOS_VIEWS)[number];
+
 export const AVANCE_SCOPES = ["proyecto", "tarea", "agente", "modelo"] as const;
 export type AvanceScope = (typeof AVANCE_SCOPES)[number];
 
@@ -42,7 +45,9 @@ export type FactoryAction =
       readonly kind: "approve" | "deny";
       readonly approvalId: string;
       readonly label: string;
-    };
+    }
+  // Reads the quota again; it only records what the providers answer, so it asks nothing.
+  | { readonly kind: "reread"; readonly label: string };
 
 export interface FactoryState {
   readonly tab: FactoryTab;
@@ -61,6 +66,7 @@ export interface FactoryState {
   readonly eventLog: boolean;
   readonly agentsTree: boolean;
   readonly avanceScope: AvanceScope;
+  readonly modelosView: ModelosView;
   // The text each tab is filtered by, and whether `/` is taking it right now.
   readonly filter: Readonly<Record<FactoryTab, string>>;
   readonly filtering: boolean;
@@ -102,6 +108,7 @@ export function initialFactoryState(): FactoryState {
     eventLog: false,
     agentsTree: true,
     avanceScope: "proyecto",
+    modelosView: "cuentas",
     filter: perTab(""),
     filtering: false,
     seen: {},
@@ -112,7 +119,7 @@ export function initialFactoryState(): FactoryState {
 
 // The rows of the tabs with data, as selectedRowId and the views read them. Lives here so a change of filter or sub-view
 // recounts in one place.
-const DATA_TABS: readonly FactoryTab[] = ["avance", "actividades", "tablero", "agentes"];
+const DATA_TABS: readonly FactoryTab[] = ["avance", "actividades", "tablero", "agentes", "modelos"];
 
 function recount(state: FactoryState): FactoryState {
   if (state.model === null) return state;
@@ -303,6 +310,9 @@ function tabKey(state: FactoryState, key: string): FactoryTransition | undefined
           }),
         );
       }
+      if (state.tab === "modelos") {
+        return handled({ ...state, modelosView: cycle(MODELOS_VIEWS, state.modelosView, step) });
+      }
       if (state.tab === "actividades" && !state.eventLog) {
         return handled(
           recount({
@@ -327,6 +337,13 @@ function tabKey(state: FactoryState, key: string): FactoryTransition | undefined
     case "t":
       return state.tab === "agentes"
         ? handled(recount({ ...state, agentsTree: !state.agentsTree }))
+        : undefined;
+    case "r":
+      return state.tab === "modelos"
+        ? handled(
+            { ...state, notice: "Leyendo la cuota…" },
+            { kind: "reread", label: "leer la cuota" },
+          )
         : undefined;
     case "n":
       if (state.tab !== "tablero") return undefined;

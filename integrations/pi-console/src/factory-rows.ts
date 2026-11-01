@@ -5,6 +5,7 @@ import type {
   FactoryEvent,
   FactoryHumanRequest,
   FactoryModel,
+  FactoryQuotaAccount,
   FactoryTask,
   FactoryWorkflow,
 } from "./factory-types.js";
@@ -96,6 +97,14 @@ export function agentRows(state: FactoryState): FactoryAgent[] {
   );
   // The tree keeps the model's depth-first order; the flat list sorts as htop does, the heaviest first.
   return state.agentsTree ? rows : [...rows].sort((a, b) => b.tokens - a.tokens);
+}
+
+export function quotaAccounts(state: FactoryState): FactoryQuotaAccount[] {
+  const { model } = state;
+  if (model === null) return [];
+  return model.quota.accounts.filter((account) =>
+    matches(state.filter.modelos, account.label, account.kind, account.provider, account.state),
+  );
 }
 
 function criteriaRatio(criteria: { passed: number; total: number } | null): number | null {
@@ -299,6 +308,14 @@ export function selectedRowId(state: FactoryState, tab: FactoryTab): SelectedRow
         rows.map((row) => row.id),
         0,
         rows[index]?.workflowId,
+      );
+    }
+    case "modelos": {
+      const accounts = quotaAccounts(state);
+      return out(
+        accounts.map((row) => row.id),
+        0,
+        undefined,
       );
     }
     default:

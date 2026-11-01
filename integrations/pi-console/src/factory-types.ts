@@ -88,6 +88,57 @@ export interface FactoryHumanRequest {
   readonly at: number;
 }
 
+// See packages/contracts/src/factory-model.ts for what each field means.
+export interface FactoryQuotaReading {
+  readonly pct: number | null;
+  readonly resetsAt: number | null;
+  readonly source: "api" | "estimated" | "none";
+  readonly readAt: number | null;
+  readonly stale: boolean;
+  readonly state: string | null;
+  readonly estimatedTokens: number | null;
+}
+
+export interface FactoryQuotaGroup {
+  readonly name: string | null;
+  readonly models: readonly string[];
+  readonly state: string;
+  readonly window5h: FactoryQuotaReading;
+  readonly weekly: FactoryQuotaReading;
+}
+
+export interface FactoryQuotaAccount {
+  readonly id: string;
+  readonly provider: string;
+  readonly label: string;
+  readonly kind: string | null;
+  readonly plan: string | null;
+  readonly state: string;
+  readonly groups: readonly FactoryQuotaGroup[];
+  readonly successes: number;
+  readonly failures: number;
+  readonly holders: readonly string[];
+  readonly cachedTokens: number | null;
+  readonly inputTokens: number;
+  readonly readAt: number | null;
+}
+
+export interface FactoryQuota {
+  readonly accounts: readonly FactoryQuotaAccount[];
+  readonly unread: readonly { readonly provider: string; readonly state: string }[];
+  readonly thresholds: {
+    readonly switchAt5h: number;
+    readonly stopAtWeekly: number;
+    readonly warnPct: number;
+    readonly dangerPct: number;
+  };
+  readonly history: readonly {
+    readonly key: string;
+    readonly label: string;
+    readonly points: readonly { readonly at: number; readonly pct: number }[];
+  }[];
+}
+
 export interface FactoryModel {
   readonly schemaVersion: 1;
   readonly generatedAt: number;
@@ -101,5 +152,6 @@ export interface FactoryModel {
     readonly child: string;
   }[];
   readonly events: readonly FactoryEvent[];
+  readonly quota: FactoryQuota;
   readonly humanRequests: readonly FactoryHumanRequest[];
 }

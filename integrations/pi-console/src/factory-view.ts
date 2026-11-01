@@ -12,6 +12,7 @@ import {
   factoryFrameTop,
   factorySegsWidth,
 } from "./factory-kit.js";
+import { modelosBody, modelosDetail } from "./factory-models.js";
 import { progressBody } from "./factory-progress.js";
 import {
   approvalTarget,
@@ -41,8 +42,8 @@ const TAB_PURPOSE: Readonly<Record<FactoryTab, string>> = {
   actividades: "Aquí se verá lo que hace cada agente.",
   tablero: "Aquí se verán las tareas por estado.",
   agentes: "Aquí se verán los agentes y sus roles.",
-  conexiones: "Aquí se verán las cuentas conectadas y su cuota.",
-  modelos: "Aquí se verán los modelos de cada rol.",
+  conexiones: "Aquí se verá quién habla con quién y a quién espera cada agente.",
+  modelos: "Aquí se verán las cuentas, sus grupos de modelos y su cuota.",
   sistema: "Aquí se verá la configuración de la fábrica.",
 };
 
@@ -115,7 +116,8 @@ function dataTab(state: FactoryState): boolean {
     (state.tab === "avance" ||
       state.tab === "actividades" ||
       state.tab === "tablero" ||
-      state.tab === "agentes")
+      state.tab === "agentes" ||
+      state.tab === "modelos")
   );
 }
 
@@ -134,6 +136,9 @@ function tabHints(state: FactoryState): Hint[] {
       out.push({ key: "e", action: state.eventLog ? "bandeja" : "eventos", keep: 1 });
     }
     if (state.tab === "avance") out.push({ key: "[/]", action: "vista", keep: 1 });
+    if (state.tab === "modelos") {
+      out.push({ key: "[/]", action: "vista", keep: 1 }, { key: "r", action: "releer", keep: 3 });
+    }
     if (state.tab === "agentes")
       out.push({ key: "t", action: state.agentsTree ? "lista" : "árbol", keep: 1 });
   }
@@ -215,15 +220,28 @@ function bodyMessages(state: FactoryState): BodyLine[] {
   ];
 }
 
+// While the first line of the feed is on its way: bars in the shape of a card, which stand for no value at all.
+function skeletonLines(width: number, g: FactoryGlyphs): BodyLine[] {
+  const bar = (size: number): BodyLine => [
+    { text: `  ${g.barOn.repeat(Math.max(0, Math.min(size, width - 2)))}`, token: "line" },
+  ];
+  return [[], bar(18), bar(36), bar(28)];
+}
+
 // The tab's own lines at `width` by `height`.
 function tabBody(state: FactoryState, width: number, height: number, g: FactoryGlyphs): BodyLine[] {
   if (!dataTab(state)) {
-    const messages = bodyMessages(state);
+    const loading = state.tab === "modelos" && state.model === null && !state.feedEnded;
+    const messages = [...bodyMessages(state), ...(loading ? skeletonLines(width, g) : [])];
     // A blank row above the text when there is room for it.
     return height >= messages.length + 1 ? [[], ...messages] : messages;
   }
-  if (state.detail) return detailBody(state, width);
+  if (state.detail) {
+    return state.tab === "modelos" ? modelosDetail(state, width, g) : detailBody(state, width);
+  }
   switch (state.tab) {
+    case "modelos":
+      return modelosBody(state, width, height, g);
     case "tablero":
       return boardBody(state, width, height, g);
     case "actividades":

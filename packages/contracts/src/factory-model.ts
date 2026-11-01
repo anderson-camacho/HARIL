@@ -16,6 +16,89 @@ const Context = Nullable(
   Type.Object({ used: Count, threshold: Count }, { additionalProperties: false }),
 );
 
+// One window of one group. `pct` comes only from the provider; an estimate is tokens from the usage log, never a percentage.
+// `state` says why there is no fresh percentage: "El proveedor no permite ver este dato", "Sin lectura: <motivo>" or
+// "No aplica"; null when the reading stands.
+const QuotaReadingSchema = Type.Object(
+  {
+    pct: Nullable(Count),
+    resetsAt: Nullable(Type.Number()),
+    source: Type.Union([Type.Literal("api"), Type.Literal("estimated"), Type.Literal("none")]),
+    readAt: Nullable(Type.Number()),
+    stale: Type.Boolean(),
+    state: Nullable(Type.String()),
+    estimatedTokens: Nullable(Count),
+  },
+  { additionalProperties: false },
+);
+
+const FactoryQuotaSchema = Type.Object(
+  {
+    accounts: Type.Array(
+      Type.Object(
+        {
+          // Opaque: never an e-mail or a file name.
+          id: Type.String(),
+          provider: Type.String(),
+          // The account's model prefix, else its kind and opaque reference.
+          label: Type.String(),
+          kind: Nullable(Type.String()),
+          plan: Nullable(Type.String()),
+          // What the quota rule says about it, in words.
+          state: Type.String(),
+          groups: Type.Array(
+            Type.Object(
+              {
+                // Null for an account the provider reports as one pool.
+                name: Nullable(Type.String()),
+                models: Type.Array(Type.String()),
+                state: Type.String(),
+                window5h: QuotaReadingSchema,
+                weekly: QuotaReadingSchema,
+              },
+              { additionalProperties: false },
+            ),
+          ),
+          successes: Count,
+          failures: Count,
+          // The agents on this account now.
+          holders: Type.Array(Type.String()),
+          // Null while no row of the usage log reported cached tokens.
+          cachedTokens: Nullable(Count),
+          inputTokens: Count,
+          readAt: Nullable(Type.Number()),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    // Providers with nothing to show but why: no account is known of them.
+    unread: Type.Array(
+      Type.Object(
+        { provider: Type.String(), state: Type.String() },
+        { additionalProperties: false },
+      ),
+    ),
+    thresholds: Type.Object(
+      { switchAt5h: Count, stopAtWeekly: Count, warnPct: Count, dangerPct: Count },
+      { additionalProperties: false },
+    ),
+    // The 5-hour use of each account's pools over time, oldest first; `key` is the account's id, and its pool's name.
+    history: Type.Array(
+      Type.Object(
+        {
+          key: Type.String(),
+          label: Type.String(),
+          points: Type.Array(
+            Type.Object({ at: Type.Number(), pct: Count }, { additionalProperties: false }),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+  },
+  { additionalProperties: false },
+);
+
 export const FactoryColumnSchema = Type.Union([
   Type.Literal("por_hacer"),
   Type.Literal("en_curso"),
@@ -118,6 +201,7 @@ export const FactoryModelSchema = Type.Object(
         { additionalProperties: false },
       ),
     ),
+    quota: FactoryQuotaSchema,
     humanRequests: Type.Array(
       Type.Object(
         {

@@ -3,6 +3,8 @@ import type {
   FactoryEvent,
   FactoryHumanRequest,
   FactoryModel,
+  FactoryQuota,
+  FactoryQuotaReading,
   FactoryTask,
   FactoryWorkflow,
 } from "../src/factory-types.js";
@@ -200,6 +202,157 @@ const EVENTS: readonly FactoryEvent[] = [
   },
 ];
 
+const HOUR = 60 * MINUTE;
+
+function apiReading(pct: number, resetIn: number): FactoryQuotaReading {
+  return {
+    pct,
+    resetsAt: NOW + resetIn,
+    source: "api",
+    readAt: NOW - 3 * MINUTE,
+    stale: false,
+    state: null,
+    estimatedTokens: null,
+  };
+}
+
+// An account with two pools, one spent; another the provider cannot read, estimated from the usage log; and one whose
+// provider does not report usage.
+export const QUOTA: FactoryQuota = {
+  accounts: [
+    {
+      id: "acct-aaa",
+      provider: "cliproxy",
+      label: "Anti1",
+      kind: "antigravity",
+      plan: "ultra",
+      state: "Gemini: Evitada: pasó el 80 % de su ventana de 5 horas · Claude and GPT: Disponible",
+      groups: [
+        {
+          name: "Gemini",
+          models: ["gemini-3.8-flash"],
+          state: "Evitada: pasó el 80 % de su ventana de 5 horas",
+          window5h: apiReading(90, HOUR),
+          weekly: apiReading(40, 24 * HOUR),
+        },
+        {
+          name: "Claude and GPT",
+          models: ["claude-opus-4-6-thinking", "gpt-6.1-sol"],
+          state: "Disponible",
+          window5h: apiReading(5, 2 * HOUR),
+          weekly: {
+            pct: null,
+            resetsAt: null,
+            source: "none",
+            readAt: null,
+            stale: false,
+            state: "No aplica",
+            estimatedTokens: null,
+          },
+        },
+      ],
+      successes: 12,
+      failures: 1,
+      holders: ["e1"],
+      cachedTokens: 4_000,
+      inputTokens: 10_000,
+      readAt: NOW - 3 * MINUTE,
+    },
+    {
+      id: "usage:cliproxy/Cl1",
+      provider: "cliproxy",
+      label: "Cl1",
+      kind: null,
+      plan: null,
+      state: "Sin dato",
+      groups: [
+        {
+          name: null,
+          models: ["claude-sonnet-4-6"],
+          state: "Sin dato",
+          window5h: {
+            pct: null,
+            resetsAt: null,
+            source: "estimated",
+            readAt: null,
+            stale: false,
+            state: "Sin lectura: falta la clave de gestión",
+            estimatedTokens: 12_300,
+          },
+          weekly: {
+            pct: 55,
+            resetsAt: NOW + 48 * HOUR,
+            source: "api",
+            readAt: NOW - 2 * HOUR,
+            stale: true,
+            state: "Sin lectura: el servidor de gestión no responde",
+            estimatedTokens: null,
+          },
+        },
+      ],
+      successes: 0,
+      failures: 0,
+      holders: [],
+      cachedTokens: null,
+      inputTokens: 900,
+      readAt: null,
+    },
+    {
+      id: "acct-ccc",
+      provider: "cliproxy",
+      label: "Grok",
+      kind: "xai",
+      plan: null,
+      state: "Sin dato",
+      groups: [
+        {
+          name: null,
+          models: [],
+          state: "Sin dato",
+          window5h: {
+            pct: null,
+            resetsAt: null,
+            source: "none",
+            readAt: null,
+            stale: false,
+            state: "El proveedor no permite ver este dato",
+            estimatedTokens: null,
+          },
+          weekly: {
+            pct: null,
+            resetsAt: null,
+            source: "none",
+            readAt: null,
+            stale: false,
+            state: "El proveedor no permite ver este dato",
+            estimatedTokens: null,
+          },
+        },
+      ],
+      successes: 0,
+      failures: 0,
+      holders: [],
+      cachedTokens: null,
+      inputTokens: 0,
+      readAt: NOW - 3 * MINUTE,
+    },
+  ],
+  unread: [{ provider: "other", state: "Sin lectura: falta la clave de gestión" }],
+  thresholds: { switchAt5h: 80, stopAtWeekly: 80, warnPct: 70, dangerPct: 90 },
+  history: [
+    {
+      key: "acct-aaa#Gemini",
+      label: "Anti1 Gemini",
+      points: [
+        { at: NOW - 3 * HOUR, pct: 30 },
+        { at: NOW - 2 * HOUR, pct: 55 },
+        { at: NOW - HOUR, pct: 85 },
+        { at: NOW, pct: 90 },
+      ],
+    },
+  ],
+};
+
 export function model(overrides: Partial<FactoryModel> = {}): FactoryModel {
   return {
     schemaVersion: 1,
@@ -215,6 +368,7 @@ export function model(overrides: Partial<FactoryModel> = {}): FactoryModel {
       { workflowId: "wf-stop", parent: "d1", child: "e1" },
     ],
     events: EVENTS,
+    quota: QUOTA,
     humanRequests: [APPROVAL, STOP],
     ...overrides,
   };

@@ -53,6 +53,19 @@ export interface FactoryGlyphs {
   readonly fill: string;
   readonly star: string;
   readonly spark: string;
+  readonly tick: string;
+  readonly dash: string;
+  // Draws lines with Braille dots; the ASCII set has none.
+  readonly braille: boolean;
+  readonly action: string;
+  readonly idleLink: string;
+  readonly activeLink: string;
+  readonly lifeline: string;
+  readonly arrowRight: string;
+  readonly arrowLeft: string;
+  readonly knob: string;
+  readonly focus: string;
+  readonly saved: string;
 }
 
 export const UNICODE_FACTORY_GLYPHS: FactoryGlyphs = {
@@ -76,6 +89,18 @@ export const UNICODE_FACTORY_GLYPHS: FactoryGlyphs = {
   fill: "·",
   star: "★",
   spark: "▁▂▃▄▅▆▇█",
+  tick: "┤",
+  dash: "╌",
+  braille: true,
+  action: "▶",
+  idleLink: "·",
+  activeLink: "•",
+  lifeline: "┆",
+  arrowRight: "▶",
+  arrowLeft: "◀",
+  knob: "●",
+  focus: "▌",
+  saved: "✓",
 };
 
 export const ASCII_FACTORY_GLYPHS: FactoryGlyphs = {
@@ -99,6 +124,18 @@ export const ASCII_FACTORY_GLYPHS: FactoryGlyphs = {
   fill: ".",
   star: "*",
   spark: "._-=+*#@",
+  tick: "+",
+  dash: "-",
+  braille: false,
+  action: ">",
+  idleLink: ".",
+  activeLink: "o",
+  lifeline: ":",
+  arrowRight: ">",
+  arrowLeft: "<",
+  knob: "O",
+  focus: ">",
+  saved: "OK",
 };
 
 // The same choice as the rest of the console: HARIL_CONSOLE_ASCII selects the ASCII set.

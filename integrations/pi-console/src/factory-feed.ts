@@ -11,6 +11,7 @@ const RETRY_DELAYS_MS: readonly number[] = [500, 1_000, 2_000];
 const WORKFLOW_STATES = new Set(["running", "awaiting_human", "completed", "failed", "stopped"]);
 const COLUMNS = new Set(["por_hacer", "en_curso", "detenidas", "errores", "hechas"]);
 const REQUEST_KINDS = new Set(["approval", "stop", "task"]);
+const QUOTA_SOURCES = new Set(["api", "estimated", "none"]);
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -146,6 +147,82 @@ function edgeOk(value: unknown): boolean {
   return row !== undefined && text(row.workflowId) && text(row.parent) && text(row.child);
 }
 
+function readingOk(value: unknown): boolean {
+  const row = record(value);
+  return (
+    row !== undefined &&
+    (row.pct === null || finite(row.pct)) &&
+    (row.resetsAt === null || finite(row.resetsAt)) &&
+    QUOTA_SOURCES.has(String(row.source)) &&
+    (row.readAt === null || finite(row.readAt)) &&
+    typeof row.stale === "boolean" &&
+    textOrNull(row.state) &&
+    (row.estimatedTokens === null || finite(row.estimatedTokens))
+  );
+}
+
+function groupOk(value: unknown): boolean {
+  const row = record(value);
+  return (
+    row !== undefined &&
+    textOrNull(row.name) &&
+    allOk(row.models, text) &&
+    text(row.state) &&
+    readingOk(row.window5h) &&
+    readingOk(row.weekly)
+  );
+}
+
+function accountOk(value: unknown): boolean {
+  const row = record(value);
+  return (
+    row !== undefined &&
+    text(row.id) &&
+    text(row.provider) &&
+    text(row.label) &&
+    textOrNull(row.kind) &&
+    textOrNull(row.plan) &&
+    text(row.state) &&
+    allOk(row.groups, groupOk) &&
+    finite(row.successes) &&
+    finite(row.failures) &&
+    allOk(row.holders, text) &&
+    (row.cachedTokens === null || finite(row.cachedTokens)) &&
+    finite(row.inputTokens) &&
+    (row.readAt === null || finite(row.readAt))
+  );
+}
+
+function quotaOk(value: unknown): boolean {
+  const row = record(value);
+  const limits = record(row?.thresholds);
+  return (
+    row !== undefined &&
+    limits !== undefined &&
+    allOk(row.accounts, accountOk) &&
+    allOk(row.unread, (item) => {
+      const unread = record(item);
+      return unread !== undefined && text(unread.provider) && text(unread.state);
+    }) &&
+    finite(limits.switchAt5h) &&
+    finite(limits.stopAtWeekly) &&
+    finite(limits.warnPct) &&
+    finite(limits.dangerPct) &&
+    allOk(row.history, (item) => {
+      const series = record(item);
+      return (
+        series !== undefined &&
+        text(series.key) &&
+        text(series.label) &&
+        allOk(series.points, (point) => {
+          const at = record(point);
+          return at !== undefined && finite(at.at) && finite(at.pct);
+        })
+      );
+    })
+  );
+}
+
 function allOk(value: unknown, check: (item: unknown) => boolean): boolean {
   return Array.isArray(value) && value.every(check);
 }
@@ -169,7 +246,8 @@ export function parseFactoryLine(line: string): FactoryModel | undefined {
     !allOk(model.agents, agentOk) ||
     !allOk(model.edges, edgeOk) ||
     !allOk(model.events, eventOk) ||
-    !allOk(model.humanRequests, requestOk)
+    !allOk(model.humanRequests, requestOk) ||
+    !quotaOk(model.quota)
   ) {
     return undefined;
   }

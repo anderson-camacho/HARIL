@@ -13,6 +13,7 @@ import type {
   WorkflowRecord,
   WorkflowTaskRecord,
 } from "@haril/core/ports";
+import { buildFactoryQuota, type FactoryQuotaSettings } from "./factory-quota.js";
 import { buildWorkflowSnapshot, eventText, type SnapshotOptions } from "./workflow-snapshot.js";
 
 // The factory's read model (feature haril-factory, F3): the workflows of a project, or of them all, as the console's
@@ -32,6 +33,8 @@ export interface FactoryModelOptions {
   readonly contextUsedOf?: SnapshotOptions["contextUsedOf"];
   // The snapshots of workflows that ended, kept between reads: they do not change any more.
   readonly endedSnapshots?: Map<string, WorkflowSnapshot>;
+  // The quota rule and bar colors in effect; default: haril.json's defaults.
+  readonly quotaSettings?: FactoryQuotaSettings;
 }
 
 function chosenWorkflows(store: Store, project: ProjectRecord | undefined): WorkflowRecord[] {
@@ -331,19 +334,21 @@ export function buildFactoryModel(store: Store, options: FactoryModelOptions): F
     .map((approval) =>
       approvalRequest(approval, slugOf.get(approval.projectId) ?? approval.projectId),
     );
+  const agents = built.flatMap((item) => item.agents);
   return {
     schemaVersion: 1,
     generatedAt: options.now,
     project: project?.slug ?? null,
     workflows: built.map((item) => item.workflow),
     tasks: built.flatMap((item) => item.tasks),
-    agents: built.flatMap((item) => item.agents),
+    agents,
     edges: built.flatMap((item) => item.edges),
     events: eventsOf(
       store,
       projects.map((item) => item.projectId),
       built,
     ),
+    quota: buildFactoryQuota(store, options.now, agents, options.quotaSettings),
     humanRequests: [...approvals, ...built.flatMap((item) => item.requests)],
   };
 }
