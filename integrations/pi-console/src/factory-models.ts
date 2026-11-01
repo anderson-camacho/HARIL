@@ -78,7 +78,7 @@ function readingSegs(
   now: number,
   g: FactoryGlyphs,
 ): Seg[] {
-  const head: Seg = { text: `  ${label.padEnd(7)}`, token: "muted" };
+  const head: Seg = { text: `  ${label.padEnd(8)}`, token: "muted" };
   if (reading.pct !== null) {
     const cells = Math.max(4, Math.min(24, width - 44));
     const filled = Math.round((Math.max(0, Math.min(100, reading.pct)) / 100) * cells);

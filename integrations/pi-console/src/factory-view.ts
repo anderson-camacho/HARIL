@@ -15,6 +15,7 @@ import {
 } from "./factory-kit.js";
 import { modelosBody, modelosDetail } from "./factory-models.js";
 import { progressBody } from "./factory-progress.js";
+import { sliderRange } from "./factory-settings.js";
 import {
   approvalTarget,
   continueTarget,
@@ -22,6 +23,7 @@ import {
   type FactoryState,
   type FactoryTab,
   type FactoryTarget,
+  selectedSetting,
 } from "./factory-state.js";
 import { sistemaBody } from "./factory-system.js";
 
@@ -177,17 +179,21 @@ function hintsOf(state: FactoryState, g: FactoryGlyphs): Hint[] {
     ];
   }
   const hasRows = state.rowCounts[state.tab] > 0 && !state.detail;
+  const setting = selectedSetting(state);
+  const adjusts = setting !== undefined && sliderRange(setting) !== undefined;
   const canGoBack =
     state.detail ||
     (dataTab(state) && state.filter[state.tab] !== "") ||
     (state.tab === "actividades" && state.eventLog);
   return [
-    { key: g.leftRight, action: "pestaña", keep: 2 },
+    adjusts
+      ? { key: g.leftRight, action: "ajustar", keep: 3 }
+      : { key: g.leftRight, action: "pestaña", keep: 2 },
     { key: "1-7", action: "ir", keep: 0 },
     ...(hasRows
       ? [
           { key: g.upDown, action: "mover", keep: 2 },
-          { key: "Enter", action: "detalle", keep: 1 },
+          { key: "Enter", action: setting === undefined ? "detalle" : "editar", keep: 1 },
         ]
       : []),
     ...tabHints(state),

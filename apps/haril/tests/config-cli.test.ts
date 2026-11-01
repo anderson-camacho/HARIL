@@ -323,6 +323,32 @@ describe("haril config set", () => {
     });
   });
 
+  it("edits a role's profile and the quota reserve, and refuses a floor that does not exist", async () => {
+    const path = writeConfig("{}");
+    for (const [key, value] of [
+      ["delegation.roles.backend.models", "*sonnet*,cliproxy/a/*opus*"],
+      ["delegation.roles.backend.floor", "high"],
+      ["delegation.roles.backend.enabled", "false"],
+      ["delegation.quota.reservePercent", "15"],
+    ] as const) {
+      const set = await cli(["config", "set", key, value], path);
+      expect([key, set.code, set.err]).toEqual([key, 0, []]);
+    }
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
+      delegation: {
+        roles: {
+          backend: { models: ["*sonnet*", "cliproxy/a/*opus*"], floor: "high", enabled: false },
+        },
+        quota: { reservePercent: 15 },
+      },
+    });
+    const refused = await cli(["config", "set", "delegation.roles.backend.floor", "ultra"], path);
+    expect(refused.code).toBe(2);
+    expect(refused.err.join("\n")).toContain("/delegation/roles/backend/floor");
+    const unknown = await cli(["config", "set", "delegation.roles.nobody.floor", "low"], path);
+    expect(unknown.code).toBe(2);
+  });
+
   it("sets the base branch of writing workflows, or null to detect it, and refuses an unsafe name", async () => {
     const path = writeConfig("{}");
     const set = await cli(["config", "set", "delegation.git.baseBranch", "release/2.0"], path);

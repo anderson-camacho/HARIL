@@ -330,7 +330,7 @@ export function approvalTarget(state: FactoryState): { id: string; title: string
 
 const READ_ONLY = "Este modo es de solo lectura: cambia de modo con Alt+M para hacerlo.";
 
-function selectedSetting(state: FactoryState) {
+export function selectedSetting(state: FactoryState) {
   if (state.tab !== "sistema" || state.sistemaView !== "ajustes" || state.detail) return undefined;
   return settingRows(state)[state.selection.sistema];
 }

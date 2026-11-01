@@ -122,6 +122,12 @@ describe("the settings screen", () => {
     expect(saved.state.settingDraft).toBeNull();
   });
 
+  it("says what the arrows do on a slider", () => {
+    expect(screen(on(PERCENT))).toContain("ajustar");
+    expect(screen(on(SWITCH))).toContain("pestaña");
+    expect(screen(on(SWITCH))).toContain("editar");
+  });
+
   it("stops a slider at its ends", () => {
     let state = on(PERCENT);
     for (let press = 0; press < 30; press++) state = factoryKey(state, RIGHT).state;
