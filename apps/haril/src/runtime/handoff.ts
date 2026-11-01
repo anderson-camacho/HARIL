@@ -1,4 +1,4 @@
-import { chooseModel, contextActionOf } from "@haril/core";
+import { chooseModel, contextActionOf, quotaHoldsBack } from "@haril/core";
 import type { DelegationHandoffView, Store } from "@haril/core/ports";
 import {
   resultText,
@@ -26,18 +26,13 @@ export function handoffCount(store: Pick<Store, "events">, task: Task): number {
     .length;
 }
 
-// Whether the turn's account and group passed the threshold; false when nothing is known.
+// Whether the turn's account and group are past what the model choice allows; false when nothing is known.
 export function quotaPassed(task: Task, settings: WorkflowSettings, now: number): boolean {
   if (task.model === null) return false;
   const context = settings.models(now);
   const entry = context.catalog.find((row) => row.ref === task.model);
   if (entry === undefined) return false;
-  const sample = context.quota[entry.quotaKey];
-  return (
-    sample?.available === true &&
-    sample.window5hUsedPct !== null &&
-    sample.window5hUsedPct >= context.policy.switchAtPercent5h
-  );
+  return quotaHoldsBack(context.quota[entry.quotaKey], context.policy);
 }
 
 export function contextPassed(
@@ -80,6 +75,28 @@ export function successorOf(
   if (choice.kind !== "use") return null;
   if (reason !== "context" && choice.model === task.model) return null;
   return choice.model;
+}
+
+const NO_SUCCESSOR_BACKOFF_MS = 60_000;
+const NO_SUCCESSOR_BACKOFF_MAX_MS = 15 * 60_000;
+export const NO_SUCCESSOR_CAUSE = "handoff_no_successor";
+
+export function noSuccessorCount(store: Pick<Store, "events">, task: Task): number {
+  return store.events.list({ aggregateId: task.taskId }).filter((event) => {
+    const payload = event.payload as { cause?: unknown };
+    return event.type === "capacity.waiting" && payload.cause === NO_SUCCESSOR_CAUSE;
+  }).length;
+}
+
+// What follows when no model can take a task over, after `blocks` earlier times: a longer wait each time, and once it has
+// tried as often as a task may hand over, a stop that asks a person instead of spending another agent's turn on it.
+export function noSuccessorStep(
+  blocks: number,
+  maxHandoffs: number,
+  now: number,
+): { readonly retryAt: number; readonly stop: boolean } {
+  const delay = Math.min(NO_SUCCESSOR_BACKOFF_MS * 2 ** blocks, NO_SUCCESSOR_BACKOFF_MAX_MS);
+  return { retryAt: now + delay, stop: blocks + 1 >= maxHandoffs };
 }
 
 function filesTouched(

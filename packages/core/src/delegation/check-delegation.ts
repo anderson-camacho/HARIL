@@ -69,6 +69,8 @@ export interface DelegationState {
     readonly queuedChildren: number;
     // Proposals of this thread that were applied.
     readonly proposals: number;
+    // Councillors it already proposed.
+    readonly councillors?: number;
   };
   readonly models: ModelSelectionContext;
 }
@@ -203,6 +205,7 @@ export function checkDelegation(
   const council = councilProposalProblem(
     children.map((item) => item.role),
     limits,
+    state.thread.councillors ?? 0,
   );
   if (council !== null) issues.push({ code: "council_size", message: council });
   issues.push(...modelIssues(children, childArchetype, state.models));

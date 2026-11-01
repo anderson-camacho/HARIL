@@ -131,7 +131,7 @@ function continueHint(workflowId: string): string {
 }
 
 // A stop in words; the stop's own name is always there, so the person can tell which one to remove.
-function stopInWords(stopReason: string | null): string {
+export function explainStop(stopReason: string | null): string {
   if (stopReason === null) return "El flujo se detuvo en una parada sin motivo registrado.";
   if (stopReason === "after_plan")
     return "Se detuvo en la parada after_plan: el plan ya está hecho y espera tu revisión antes de lanzar a los delegados.";
@@ -145,10 +145,15 @@ function stopInWords(stopReason: string | null): string {
     return "Un agente hizo una petición a una persona y el flujo espera la respuesta.";
   if (stopReason.startsWith("council_below_minimum:")) {
     const [valid, min] = stopReason.slice("council_below_minimum:".length).split("/");
+    if (valid === "0") {
+      return `Un sintetizador no tiene consejo cuyas opiniones unir: necesita al menos ${min} opiniones válidas y no hay ninguna. Propón consejeros o quita el sintetizador.`;
+    }
     return `Una discusión necesita al menos ${min} opiniones válidas y solo hay ${valid}: no sigue con menos. Falta capacidad de modelos o un consejero respondió vacío.`;
   }
   if (stopReason.startsWith("handoff_cap:"))
     return `${stopReason.slice("handoff_cap:".length)} ya pasó por el máximo de relevos de una tarea y no cambia de modelo otra vez.`;
+  if (stopReason.startsWith("handoff_no_successor:"))
+    return `${stopReason.slice("handoff_no_successor:".length)} tuvo que dejar su modelo y ningún modelo pudo relevarlo después de varios intentos. Libera cuota o añade otro modelo a su rol, y continúa.`;
   if (stopReason.startsWith("after_node:"))
     return `Se detuvo en la parada ${stopReason}: ese nodo cerró y espera tu revisión.`;
   if (stopReason.startsWith("on_budget_pct:"))
@@ -170,6 +175,9 @@ const CAUSE_TEXT: Readonly<Record<string, string>> = {
   weekly: "pasó su semana",
   large_task: "no le queda para una tarea grande",
   below_floor: "por debajo del piso de su rol",
+  quota: "su cuenta pasó el umbral de cuota",
+  context: "su contexto se llenó",
+  rate_limited: "el proveedor respondió 429",
 };
 
 function capacityExplanation(wait: CapacityWait, now: number): WaitExplanation {
@@ -233,7 +241,7 @@ const BLOCK_EXPLAINERS: Readonly<Record<BlockReason, (input: WaitInput) => WaitE
       "blocked_awaiting_human",
       "Espera una decisión tuya",
       input.workflow?.state === "awaiting_human"
-        ? stopInWords(input.workflow.stopReason)
+        ? explainStop(input.workflow.stopReason)
         : "La tarea pidió una decisión de la persona.",
       input.workflow?.state === "awaiting_human"
         ? continueHint(input.workflow.id)
@@ -341,7 +349,7 @@ function heldByWorkflow(
     return explanation(
       stoppedCode,
       "Detenida por una parada del flujo",
-      stopInWords(workflow.stopReason),
+      explainStop(workflow.stopReason),
       continueHint(workflow.id),
       true,
     );
@@ -549,7 +557,7 @@ export function explainWorkflow(workflow: WaitWorkflowInput): WaitExplanation {
       return explanation(
         "workflow_stop",
         "Detenido, espera tu revisión",
-        stopInWords(stopReason),
+        explainStop(stopReason),
         continueHint(id),
         true,
       );

@@ -75,14 +75,12 @@ function earliestEnd(
   return ends.length === 0 ? null : Math.min(...ends);
 }
 
-// A sintetizador whose council has fewer than its minimum of valid opinions does not run: the workflow stops and says
-// why. It never continues with two.
+// A sintetizador whose council has fewer than its minimum of valid opinions does not run, an empty council or none at all
+// included: the workflow stops and says why. It never continues with two.
 function councilGate(store: Store, epoch: number, view: WorkflowView, task: Task): boolean {
   if (view.roleOf(task) !== SYNTHESIZER_ROLE) return false;
   const parent = view.parentThreadId(task.threadId);
-  if (parent === null) return false;
-  const council = view.councillors(parent);
-  if (council.length === 0) return false;
+  const council = parent === null ? [] : view.councillors(parent);
   const valid = council.filter((row) => isValidOpinion(row.text)).length;
   if (valid >= COUNCIL_MIN_OPINIONS) return false;
   store.transaction(() => {

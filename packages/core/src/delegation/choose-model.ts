@@ -265,6 +265,12 @@ export function evaluateQuota(
   return { ok: true, data: "ok" };
 }
 
+// Whether this account's quota sends a running agent to another model. One rule with the choice above, so an agent is never
+// sent away from a model the choice would hand it again; the size of its task only matters when it starts.
+export function quotaHoldsBack(sample: QuotaSample | undefined, policy: QuotaPolicy): boolean {
+  return !evaluateQuota(sample, false, policy).ok;
+}
+
 // P4 (until spike S2 said more): a provider served by several accounts counts as its worst account, per window.
 export function worstQuota(samples: readonly QuotaSample[]): QuotaSample {
   const reporting = samples.flatMap((sample) => usableSample(sample) ?? []);

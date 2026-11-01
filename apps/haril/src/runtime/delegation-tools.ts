@@ -132,6 +132,7 @@ export function delegationState(
     thread: {
       queuedChildren: view.childThreads(threadId).filter((child) => view.unsettled(child)).length,
       proposals: view.proposalCount(threadId),
+      councillors: view.councillors(threadId).length,
     },
     models: settings.models(now),
   };

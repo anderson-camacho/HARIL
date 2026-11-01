@@ -45,6 +45,9 @@ import {
   type HandoffReason,
   handoffCount,
   latestHandoff,
+  NO_SUCCESSOR_CAUSE,
+  noSuccessorCount,
+  noSuccessorStep,
   quotaPassed,
   recordHandoff,
   successorOf,
@@ -1080,12 +1083,14 @@ function restartForMessageOrHandoff(
     const now = clock.now();
     const next = successorOf(view, task, settings, reason, now);
     if (next === null) {
-      // Nothing can take it: it waits, and says what it tried and who holds it.
+      // Nothing can take it: it waits, longer each time, says what it tried and who holds it, and in the end asks a person.
       const tried = [{ model: task.model, cause: reason, until: null }];
+      const blocks = noSuccessorCount(store, task);
+      const step = noSuccessorStep(blocks, settings.limits.maxHandoffsPerTask, now);
       store.transaction(() => {
         restartWorkflowTurn(deps, running, {
           model: task.model as string,
-          cooldownUntil: now + 60_000,
+          cooldownUntil: step.retryAt,
           runCode: "handoff.no_successor",
           message: "no eligible model can take this task over",
           outcome: "handoff_blocked",
@@ -1101,10 +1106,20 @@ function restartForMessageOrHandoff(
             tried,
             holders: holdersOf(store, tried),
             frees: null,
+            cause: NO_SUCCESSOR_CAUSE,
+            attempt: blocks + 1,
+            retryAt: step.retryAt,
           },
           projectId: view.workflow.projectId,
           taskId: task.taskId,
         });
+        if (step.stop && store.workflows.get(view.workflow.workflowId)?.state === "running") {
+          store.workflows.setState(context.epoch, {
+            workflowId: view.workflow.workflowId,
+            state: "awaiting_human",
+            reason: `handoff_no_successor:${view.label(task.threadId)}`,
+          });
+        }
       });
       return told("handoff_blocked");
     }
