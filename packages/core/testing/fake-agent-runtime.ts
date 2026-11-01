@@ -9,6 +9,7 @@ import type {
   Cancel,
   Clock,
   DelegationToolHandler,
+  DelegationToolResult,
   HarilError,
   PlanProposer,
   Result,
@@ -39,6 +40,14 @@ export interface FakeAgentRuntimeOptions {
   // How long a fake workflow turn takes, from the cost it draws (minutes of model time); default 0, so a test runs
   // fast while several turns are still in flight together.
   readonly delegationDelayMs?: (cost: FakeTurnCost) => number;
+  // A scripted workflow turn, in place of the fake agents' own: what it answers is its final message; a thrown error fails
+  // the attempt; `stall` never settles until an abort or its timeout. For a test that plays a whole scenario.
+  readonly turnScript?: (
+    spec: AgentSpec,
+    call: (tool: string, input: unknown) => Promise<DelegationToolResult>,
+  ) => Promise<string | "stall" | AgentOutcome>;
+  // Tells listeners a model turn ended this long after the prompt, as a real agent does between its turns.
+  readonly turnEndAfterMs?: number;
 }
 
 type Behaviour =
@@ -95,6 +104,7 @@ class FakeAgentHandle implements AgentHandle {
   private readonly spec: AgentSpec;
   private readonly behaviour: Behaviour;
   private readonly options: FakeAgentRuntimeOptions;
+  private readonly turnEndListeners: (() => void)[] = [];
 
   constructor(spec: AgentSpec, behaviour: Behaviour, options: FakeAgentRuntimeOptions) {
     this.spec = spec;
@@ -126,13 +136,26 @@ class FakeAgentHandle implements AgentHandle {
     this.finish({ status: "aborted" });
   }
 
+  onTurnEnd(listener: () => void): void {
+    this.turnEndListeners.push(listener);
+  }
+
   async dispose(): Promise<void> {
     this.finish({ status: "aborted" });
   }
 
   private begin(): void {
     const { behaviour, options, spec } = this;
-    if (behaviour.kind === "succeed") {
+    if (options.turnEndAfterMs !== undefined) {
+      this.cancels.push(
+        options.clock.schedule(options.turnEndAfterMs, () => {
+          for (const listener of this.turnEndListeners) listener();
+        }),
+      );
+    }
+    if (options.turnScript !== undefined && spec.delegation !== undefined) {
+      this.runScript(options.turnScript);
+    } else if (behaviour.kind === "succeed") {
       this.finish({ status: "succeeded", summary: "fake agent succeeded" });
     } else if (behaviour.kind === "say") {
       this.finish({ status: "succeeded", summary: behaviour.text });
@@ -197,6 +220,37 @@ class FakeAgentHandle implements AgentHandle {
         ? `proposed plan ${proposed.approvalId} (${count}); it waits for haril approve ${proposed.approvalId}`
         : `plan ${proposed.approvalId} (${count}) was already requested; it waits for haril approve ${proposed.approvalId}`,
     };
+  }
+
+  private runScript(script: NonNullable<FakeAgentRuntimeOptions["turnScript"]>): void {
+    const { options, spec } = this;
+    const call = async (tool: string, input: unknown): Promise<DelegationToolResult> => {
+      if (options.delegationTools === undefined || spec.projectId === undefined) {
+        throw new Error("a scripted turn needs the delegation tools and a project");
+      }
+      return await options.delegationTools(
+        { projectId: spec.projectId, taskId: spec.taskId, runId: spec.runId },
+        tool,
+        input,
+      );
+    };
+    script(spec, call).then(
+      (answer) => {
+        if (answer === "stall") {
+          this.cancels.push(
+            options.clock.schedule(spec.timeoutMs, () => this.finish({ status: "timed_out" })),
+          );
+          return;
+        }
+        this.finish(typeof answer === "string" ? { status: "succeeded", summary: answer } : answer);
+      },
+      (error: unknown) =>
+        this.finish({
+          status: "failed",
+          code: "fake.turn_failed",
+          message: error instanceof Error ? error.message : String(error),
+        }),
+    );
   }
 
   // A fake workflow turn: its calls go to the host at once; it settles after its drawn time (delegationDelayMs), or at

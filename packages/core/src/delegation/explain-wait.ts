@@ -141,6 +141,14 @@ function stopInWords(stopReason: string | null): string {
     return "Se detuvo en la parada on_audit_failure: una auditoría agotó sus reintentos.";
   if (stopReason === "at_end")
     return "Se detuvo en la parada at_end: todo terminó y espera tu visto bueno para cerrar.";
+  if (stopReason === "human_request")
+    return "Un agente hizo una petición a una persona y el flujo espera la respuesta.";
+  if (stopReason.startsWith("council_below_minimum:")) {
+    const [valid, min] = stopReason.slice("council_below_minimum:".length).split("/");
+    return `Una discusión necesita al menos ${min} opiniones válidas y solo hay ${valid}: no sigue con menos. Falta capacidad de modelos o un consejero respondió vacío.`;
+  }
+  if (stopReason.startsWith("handoff_cap:"))
+    return `${stopReason.slice("handoff_cap:".length)} ya pasó por el máximo de relevos de una tarea y no cambia de modelo otra vez.`;
   if (stopReason.startsWith("after_node:"))
     return `Se detuvo en la parada ${stopReason}: ese nodo cerró y espera tu revisión.`;
   if (stopReason.startsWith("on_budget_pct:"))

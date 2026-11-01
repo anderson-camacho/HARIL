@@ -51,6 +51,7 @@ export interface FactoryTask {
   readonly tokens: number;
   readonly criteria: CriteriaCount | null;
   readonly explanation: WaitExplanation;
+  readonly notes: readonly string[];
   readonly closedAt: number | null;
   readonly updatedAt: number;
 }
@@ -69,6 +70,8 @@ export interface FactoryAgent {
   readonly parent: string | null;
   readonly depth: number;
   readonly waitingFor: readonly string[];
+  readonly activity: string | null;
+  readonly said: readonly { readonly at: number; readonly text: string }[];
 }
 
 export interface FactoryEvent {
@@ -86,16 +89,52 @@ interface FactoryHandoff {
   readonly kind: "model" | "agent";
   readonly from: string;
   readonly to: string;
+  readonly reason: string | null;
+}
+
+export interface FactoryMessage {
+  readonly id: string;
+  readonly workflowId: string;
+  readonly agent: string;
+  readonly text: string;
+  readonly urgent: boolean;
+  readonly from: string;
+  readonly at: number;
+  readonly state: "waiting" | "delivered" | "applied";
+}
+
+export interface FactoryGitAction {
+  readonly at: number;
+  readonly workflowId: string | null;
+  readonly agent: string | null;
+  readonly level: string;
+  readonly command: string;
+  readonly exitCode: number | null;
+  readonly output: string;
+}
+
+export interface FactoryRequestRecord {
+  readonly reason: string;
+  readonly who: string;
+  readonly delegatedBy: string;
+  readonly task: string;
+  readonly doing: string;
+  readonly needs: string;
+  readonly why: string;
+  readonly ifRefused: string;
+  readonly blocks: readonly string[];
+  readonly action: string | null;
 }
 
 export interface FactoryHumanRequest {
-  readonly kind: "approval" | "stop" | "task";
+  readonly kind: "approval" | "stop" | "task" | "human";
   readonly id: string;
   readonly workflowId: string | null;
   readonly projectSlug: string;
   readonly title: string;
   readonly explanation: WaitExplanation;
   readonly at: number;
+  readonly request: FactoryRequestRecord | null;
 }
 
 // See packages/contracts/src/factory-model.ts for what each field means.
@@ -176,6 +215,8 @@ export interface FactoryModel {
   }[];
   readonly events: readonly FactoryEvent[];
   readonly handoffs: readonly FactoryHandoff[];
+  readonly messages: readonly FactoryMessage[];
+  readonly gitActions: readonly FactoryGitAction[];
   readonly quota: FactoryQuota;
   readonly system: FactorySystem;
   readonly humanRequests: readonly FactoryHumanRequest[];

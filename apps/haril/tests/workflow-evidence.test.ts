@@ -13,7 +13,8 @@ const executor = {
   workflowId: "wf-1",
   role: "executor",
   attempt: 1,
-} as WorkflowTaskRecord;
+  surfaceWrite: ["src/**"],
+} as unknown as WorkflowTaskRecord;
 const auditor = {
   taskId: "auditor-1",
   workflowId: "wf-1",

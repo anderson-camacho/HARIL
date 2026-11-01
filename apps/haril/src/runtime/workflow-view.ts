@@ -8,9 +8,11 @@ import {
   type Stop,
 } from "@haril/contracts";
 import {
+  COUNCILLOR_ROLE,
   DEFAULT_DELEGATION_LIMITS,
   DEFAULT_QUOTA_POLICY,
   type DelegationLimits,
+  isValidOpinion,
   type ModelSelectionContext,
   type ReworkState,
   type ReworkTurn,
@@ -20,6 +22,8 @@ import type {
   AuditRecord,
   DelegationAuditRequest,
   DelegationChildOutcome,
+  DelegationFailurePackage,
+  DelegationOpinionView,
   DelegationRecord,
   DelegationVerdictView,
   JsonObject,
@@ -48,6 +52,13 @@ export interface DelegationOptions {
     | ((now: number, workflow: WorkflowRecord) => DelegationModels);
   // The reasoning level a model runs at when nothing asks for one (the gateway's default level), when known.
   readonly levelOf?: (ref: string) => string | null;
+  // How full a run's context is, and the tokens its layer compacts at; unknown without them.
+  readonly contextUsedOf?: (runId: string) => number | null;
+  readonly compactAtOf?: (layer: Task["role"]) => number | null;
+  // Where a run's whole conversation is kept, for the package a handoff leaves.
+  readonly transcriptOf?: (runId: string) => string | null;
+  // A vigilante finding also queues a read-only analysis by a model. Off by default: it costs tokens.
+  readonly vigilanteAnalysis?: boolean;
 }
 
 export interface WorkflowSettings {
@@ -88,6 +99,8 @@ function limitsOf(snapshot: JsonObject, base: DelegationLimits): DelegationLimit
     largeTaskTokens: positive(record.largeTaskTokens, base.largeTaskTokens),
     attemptTimeoutMs: positive(record.attemptTimeoutMs, base.attemptTimeoutMs),
     minAuditorTokens: positive(record.minAuditorTokens, base.minAuditorTokens),
+    maxCouncillors: positive(record.maxCouncillors, base.maxCouncillors),
+    maxHandoffsPerTask: positive(record.maxHandoffsPerTask, base.maxHandoffsPerTask),
   };
 }
 
@@ -323,7 +336,76 @@ export class WorkflowView {
   }
 
   rework(executorThreadId: string, limits: DelegationLimits): ReworkState {
-    return replayRework(this.reworkTurns(executorThreadId), limits);
+    return replayRework(
+      this.reworkTurns(executorThreadId),
+      this.reworkLimits(executorThreadId, limits),
+    );
+  }
+
+  // A tester that fails found a defect: running it again finds the same one, so it goes back to its parent at once.
+  reworkLimits(executorThreadId: string, limits: DelegationLimits): DelegationLimits {
+    return this.assignmentOf(executorThreadId)?.role === "tester"
+      ? { ...limits, maxAuditRetries: 0 }
+      : limits;
+  }
+
+  // The councillors a thread proposed, each with its newest answer.
+  councillors(parentThreadId: string): {
+    readonly localId: string;
+    readonly threadId: string;
+    readonly model: string | null;
+    readonly text: string | null;
+    readonly live: boolean;
+  }[] {
+    return this.childThreads(parentThreadId).flatMap((threadId) => {
+      if (this.assignmentOf(threadId)?.role !== COUNCILLOR_ROLE) return [];
+      const turns = this.turns(threadId);
+      const done = [...turns].reverse().find((turn) => turn.state === "completed");
+      return [
+        {
+          localId: turns[0]?.localId ?? threadId,
+          threadId,
+          model: done?.model ?? this.latest(threadId)?.model ?? null,
+          text: resultText(done?.result ?? null),
+          live: this.unsettled(threadId),
+        },
+      ];
+    });
+  }
+
+  // What a sintetizador reads: the valid opinions of the council around it. It has no tools to read them with.
+  opinionsFor(task: Task): DelegationOpinionView[] {
+    const parent = this.parentThreadId(task.threadId);
+    if (parent === null) return [];
+    return this.councillors(parent).flatMap((row) =>
+      isValidOpinion(row.text)
+        ? [{ localId: row.localId, model: row.model, text: row.text as string }]
+        : [],
+    );
+  }
+
+  // A failed child, for its parent: the error, what was tried and what was done. Null while it did not fail.
+  failurePackage(threadId: string): DelegationFailurePackage | null {
+    const turns = this.turns(threadId);
+    const failed = [...turns].reverse().find((turn) => turn.state === "failed");
+    if (failed === undefined) return null;
+    const error = this.store.tasks.get(failed.taskId)?.error;
+    const done = [...turns].reverse().find((turn) => turn.state === "completed");
+    return {
+      code: error?.code ?? "unknown",
+      message: error?.message ?? "the attempt ended without a recorded error",
+      tried: turns.map((turn) => {
+        const verdict =
+          turn.role === "executor"
+            ? this.auditOfAuditor(this.auditorOf(turn.taskId)?.taskId ?? "")
+            : undefined;
+        return {
+          model: turn.model,
+          outcome: verdict === undefined ? turn.state : `${turn.state}, audit ${verdict.verdict}`,
+        };
+      }),
+      done: resultText(done?.result ?? null),
+    };
   }
 
   // A later turn of the thread came from a proposal: it was reformulated or reassigned once.
@@ -391,6 +473,29 @@ export class WorkflowView {
       retries: state.retries,
       escalations: state.escalations,
       reassigned: this.reassigned(threadId),
+      failure: status === "approved" ? null : this.executorFailure(threadId, status),
+    };
+  }
+
+  // An executor whose audit rejected it completed its turn: what failed is its auditor.
+  private executorFailure(
+    threadId: string,
+    status: DelegationChildOutcome["status"],
+  ): DelegationFailurePackage | null {
+    if (status === "blocked") return null;
+    const own = this.failurePackage(threadId);
+    if (own !== null) return own;
+    const turns = this.turns(threadId);
+    const latest = turns[turns.length - 1];
+    const auditor = latest === undefined ? undefined : this.auditorOf(latest.taskId);
+    const audit = auditor === undefined ? undefined : this.auditOfAuditor(auditor.taskId);
+    if (audit === undefined) return null;
+    const unmet = audit.reasons.filter((reason) => !reason.ok);
+    return {
+      code: "audit.rejected",
+      message: unmet.map((reason) => reason.criterion).join("; ") || "the audit rejected it",
+      tried: turns.map((turn) => ({ model: turn.model, outcome: turn.state })),
+      done: resultText(latest?.result ?? null),
     };
   }
 
@@ -408,6 +513,7 @@ export class WorkflowView {
       retries: 0,
       escalations: 0,
       reassigned: false,
+      failure: report?.status === "done" ? null : this.failurePackage(threadId),
     };
   }
 

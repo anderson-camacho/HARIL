@@ -15,6 +15,7 @@ import {
   type RunSummary,
   summarizeRun,
   type Verification,
+  vigilanteFindings,
 } from "@haril/core";
 import type {
   AgentHandle,
@@ -35,9 +36,20 @@ import type {
 import { createProcessControl } from "@haril/os";
 import { StoreError } from "@haril/state-sqlite";
 import { projectFileReader, verificationPayload } from "./acceptance.js";
+import { applyDeliveredMessages, deliverMessages, waitingMessages } from "./agent-messages.js";
 import { applyDecidedApprovals, denyPlansOfFailedTask } from "./approvals.js";
 import { controlEventOf } from "./control-events.js";
 import type { DelegationTools, TurnWindowReport } from "./delegation-tools.js";
+import {
+  contextPassed,
+  type HandoffReason,
+  handoffCount,
+  latestHandoff,
+  quotaPassed,
+  recordHandoff,
+  successorOf,
+} from "./handoff.js";
+import type { GitActionRunner } from "./human-requests.js";
 import { unmergedSteps } from "./integration.js";
 import {
   backoffJitter,
@@ -48,7 +60,7 @@ import {
 } from "./memory.js";
 import { rememberCompletedTask, withRecalledMemory } from "./memory-context.js";
 import { withStoreState } from "./model-context.js";
-import { decideProviderRetry } from "./model-launch.js";
+import { decideProviderRetry, holdersOf } from "./model-launch.js";
 import type { PlanAttemptReport, PlanProposals } from "./plan-proposals.js";
 import { killRecordedProcesses, recordSweep } from "./processes.js";
 import { type RealAgentReadiness, type RealAgents, realModelProblem } from "./real-agent.js";
@@ -67,6 +79,7 @@ import {
   buildTurnInput,
   commitWorkflowAttempt,
   recordCancelledTurn,
+  restartWorkflowTurn,
   retryWorkflowTurn,
 } from "./workflow-turns.js";
 import { type DelegationOptions, WorkflowView, workflowSettings } from "./workflow-view.js";
@@ -131,6 +144,8 @@ export interface RunLoopOptions {
   // haril shell started this runtime (LD-T6, ADR-0022): the start is recorded as runtime.started_by_shell, with the pid
   // and the epoch, once the lease is held.
   readonly startedByShell?: boolean;
+  // Runs what a person granted on a request (feature haril-factory, F7); default the real git and gh.
+  readonly gitAction?: GitActionRunner;
   // The host handler of the delegation tools (phase F2) that the agent runtimes were given. The loop opens a window for
   // each workflow turn and applies its decided call when the turn ends. Without it, a workflow turn hears no call.
   readonly delegationTools?: DelegationTools;
@@ -330,7 +345,8 @@ interface AttemptHooks {
 // Why the runtime ended an attempt before it settled on its own (3.14, 3.16): a stop or the watchdog's residual verdict
 // cancelled its task (the store already closed its run), or the watchdog closed it as idle (it commits as a failed
 // attempt).
-type EndedBy = CancelReason | "watchdog_idle";
+// "message" and "handoff": stopped at a safe point to go on at once; the turn runs again, on the same task.
+type EndedBy = CancelReason | "watchdog_idle" | "message" | "handoff";
 
 // One attempt in flight (3.9: the registry runId -> attempt). `abort` and `kill` reach its agent once it started (kill
 // without the grace period); `settled` holds its outcome once the agent run ended, and the loop closes it in its next
@@ -343,6 +359,11 @@ interface LiveAttempt {
   kill: () => void;
   settled: AgentOutcome | null;
   endedBy: EndedBy | null;
+  // Stop at the next model turn's end: another agent takes over, or a person's message waits.
+  handoffWanted: HandoffReason | null;
+  messageWaiting: boolean;
+  // What the vigilante already told about this attempt.
+  readonly alerted: Set<string>;
 }
 
 interface LiveWorkflowTurn {
@@ -391,6 +412,7 @@ async function serve(
   };
   let idleSince = clock.now();
   let haltTold = false;
+  const watched = { at: Number.NEGATIVE_INFINITY };
   // Worktrees whose removal failed in this runtime: the next runtime's startup sweep tries them again.
   const sweepTried = new Set<string>();
   // The watchdog (3.16): residual turns are cancelled every turn of the loop, the live nodes judged when their check
@@ -448,7 +470,9 @@ async function serve(
     // The standalone lane runs one attempt at a time, as before: decisions and memory wait while it is busy.
     const standaloneBusy = [...live.values()].some((attempt) => attempt.workflow === null);
     // Decisions first: a granted plan is queued in this turn and applied by the queue step right after it (LD-T3).
-    const decided = standaloneBusy ? 0 : applyDecidedApprovals(store, epoch, emit);
+    const decided = standaloneBusy
+      ? 0
+      : applyDecidedApprovals(store, epoch, emit, options.gitAction);
     const applied = early + decided + applyQueuedCommands(store, epoch, emit, shutdown, live);
     if (shutdown.requested) {
       // ARCH 4.2: each attempt in flight was aborted when the stop was requested; the lease goes once they all closed.
@@ -518,6 +542,7 @@ async function serve(
         );
       }
     }
+    if (!halted) watchTurns(options, epoch, clock.now(), live, watched);
     const turns = halted
       ? []
       : claimWorkflowTurns(store, epoch, options.delegation, new Set(notRunnable), clock.now());
@@ -562,6 +587,9 @@ function newAttempt(claimed: ClaimedTask, workflow: LiveWorkflowTurn | null): Li
     kill: () => undefined,
     settled: null,
     endedBy: null,
+    handoffWanted: null,
+    messageWaiting: false,
+    alerted: new Set(),
   };
 }
 
@@ -674,6 +702,144 @@ function closeStandalone(
   }
 }
 
+// At most this often the running turns are looked at for a message, a handoff or a finding.
+const WATCH_INTERVAL_MS = 1_000;
+
+// A person's message or a handoff stops an attempt at its next safe point; an urgent message stops it now.
+function stopAtBoundary(attempt: LiveAttempt): void {
+  if (attempt.endedBy !== null || attempt.settled !== null) return;
+  if (attempt.messageWaiting) attempt.endedBy = "message";
+  else if (attempt.handoffWanted !== null) attempt.endedBy = "handoff";
+  else return;
+  attempt.abort();
+}
+
+function watchTurns(
+  options: RunLoopOptions,
+  epoch: number,
+  now: number,
+  live: ReadonlyMap<string, LiveAttempt>,
+  watched: { at: number },
+): void {
+  if (now - watched.at < WATCH_INTERVAL_MS) return;
+  watched.at = now;
+  for (const attempt of live.values()) {
+    if (attempt.workflow === null || attempt.endedBy !== null || attempt.settled !== null) continue;
+    watchTurn(options, epoch, now, attempt, attempt.workflow.workflowId);
+  }
+}
+
+function watchTurn(
+  options: RunLoopOptions,
+  epoch: number,
+  now: number,
+  attempt: LiveAttempt,
+  workflowId: string,
+): void {
+  const { store } = options;
+  const view = WorkflowView.load(store, workflowId);
+  const task = view?.task(attempt.claimed.taskId);
+  if (view === undefined || task === undefined || view.workflow.state !== "running") return;
+  const waiting = waitingMessages(store, workflowId, task.threadId);
+  attempt.messageWaiting = waiting.length > 0;
+  if (waiting.some((message) => message.urgent)) {
+    stopAtBoundary(attempt);
+    return;
+  }
+  const settings = workflowSettings(view.workflow, options.delegation);
+  if (attempt.handoffWanted === null) {
+    const used = options.delegation?.contextUsedOf?.(attempt.runId) ?? null;
+    const threshold = options.delegation?.compactAtOf?.(task.role) ?? null;
+    const reason: HandoffReason | null = quotaPassed(task, settings, now)
+      ? "quota"
+      : contextPassed(view, task, used, threshold)
+        ? "context"
+        : null;
+    if (reason !== null) {
+      if (handoffCount(store, task) >= settings.limits.maxHandoffsPerTask) {
+        if (!attempt.alerted.has("handoff_cap")) {
+          attempt.alerted.add("handoff_cap");
+          store.workflows.setState(epoch, {
+            workflowId,
+            state: "awaiting_human",
+            reason: `handoff_cap:${view.label(task.threadId)}`,
+          });
+        }
+      } else {
+        attempt.handoffWanted = reason;
+      }
+    }
+  }
+  watchWithVigilante(options, now, attempt, view, task);
+}
+
+// The vigilante: code, at no token cost. Each finding reaches the agent's parent as an event, once per attempt. A model
+// is asked only when the person configured analysis, as an ordinary read-only task they can see.
+function watchWithVigilante(
+  options: RunLoopOptions,
+  now: number,
+  attempt: LiveAttempt,
+  view: WorkflowView,
+  task: WorkflowView["tasks"][number],
+): void {
+  const { store } = options;
+  const startedAt = attempt.workflow?.startedAt ?? now;
+  const activity = store.runs.activity(attempt.runId, startedAt);
+  const quietSince = activity.lastToolCallAt ?? startedAt;
+  const findings = vigilanteFindings({
+    now,
+    startedAt,
+    lastProgressAt: activity.openRequests > 0 ? now : activity.lastToolCallAt,
+    tokensSinceProgress:
+      activity.lastToolCallAt === null || now - quietSince > 60_000 ? activity.tokens : 0,
+    contextUsed: options.delegation?.contextUsedOf?.(attempt.runId) ?? null,
+    contextThreshold: options.delegation?.compactAtOf?.(task.role) ?? null,
+    refusals: options.delegationTools?.refusalsOf?.(attempt.runId) ?? [],
+  });
+  const parent = view.parentThreadId(task.threadId);
+  for (const finding of findings) {
+    if (attempt.alerted.has(finding.code)) continue;
+    attempt.alerted.add(finding.code);
+    store.events.append({
+      aggregateType: "task",
+      aggregateId: task.taskId,
+      type: "vigilante.alert",
+      actorKind: "system",
+      actorId: "vigilante",
+      payload: {
+        workflowId: view.workflow.workflowId,
+        code: finding.code,
+        node: view.label(task.threadId),
+        parent: parent === null ? null : view.label(parent),
+        text: `${view.label(task.threadId)}: ${finding.text}`,
+      },
+      projectId: view.workflow.projectId,
+      taskId: task.taskId,
+      runId: attempt.runId,
+    });
+    if (options.delegation?.vigilanteAnalysis === true) {
+      const key = `vigilante-${attempt.runId}-${finding.code}`;
+      store.commands.enqueue({
+        type: "task.create",
+        projectId: view.workflow.projectId,
+        args: {
+          goal: `Analiza por qué ${view.label(task.threadId)} tiene este problema: ${finding.text}`,
+          dependsOn: [],
+          kind: "work",
+          agent: "analyst",
+          maxAttempts: 1,
+          timeoutMs: 300_000,
+          model: task.model,
+          maxTokens: 30_000,
+          acceptance: [],
+        },
+        idempotencyKey: key,
+        requestHash: key,
+      });
+    }
+  }
+}
+
 // The window of a workflow turn's tool calls (phase F2), opened at its claim.
 function startWorkflowWindow(
   options: RunLoopOptions,
@@ -738,13 +904,17 @@ async function startWorkflowTurn(
   // turn's own end (phase F8).
   const commands = new AbortController();
   options.delegationTools?.attach(claimed.runId, workspace, context.epoch, commands.signal);
-  const delegation = buildTurnInput(
-    view,
-    task,
-    settings,
-    clock.now(),
-    workspace === null ? null : workspaceViewOf(options, view, task, workspace),
-  );
+  const delegation = {
+    ...buildTurnInput(
+      view,
+      task,
+      settings,
+      clock.now(),
+      workspace === null ? null : workspaceViewOf(options, view, task, workspace),
+    ),
+    messages: deliverMessages(store, view, task, claimed.runId),
+    handoff: latestHandoff(store, task),
+  };
   // The model and reasoning level the attempt runs at (3.11, 7.10): the snapshot shows them. Agents send no reasoning
   // level, so the gateway's default level applies; it is known when the live catalog published it.
   const levelOf = options.delegation?.levelOf;
@@ -789,9 +959,21 @@ async function startWorkflowTurn(
     commands.abort();
   }
   if (workspace === null || options.workspaces === undefined) return outcome;
-  // The executor's surface changes are committed to its branch; every other turn leaves its worktree as it found it.
+  // The executor's surface changes are committed to its branch; every other turn leaves its worktree as it found it. An
+  // attempt stopped to go on keeps what it did: the next agent continues from that commit.
+  const goesOn =
+    (attempt.endedBy === "message" || attempt.endedBy === "handoff") &&
+    outcome.status !== "succeeded";
   try {
-    return await options.workspaces.finish(store, context.epoch, view, task, workspace, outcome);
+    const finished = await options.workspaces.finish(
+      store,
+      context.epoch,
+      view,
+      task,
+      workspace,
+      goesOn ? { status: "succeeded", summary: "stopped at a safe point" } : outcome,
+    );
+    return goesOn && finished.status === "succeeded" ? outcome : finished;
   } catch (error) {
     return {
       status: "failed",
@@ -828,6 +1010,115 @@ function workspaceViewOf(
         ? { localId: pending.localId, files: pending.files }
         : null,
   };
+}
+
+// A turn that goes round again instead of closing. An urgent message or a message at a turn's end: the same model reads
+// it. A message that waits when the turn ended by itself and nothing of its thread follows: the same, since nothing else
+// would ever read it. A handoff: the next model, or a stop that says who holds them.
+function restartForMessageOrHandoff(
+  options: RunLoopOptions,
+  context: ServeContext,
+  attempt: LiveAttempt,
+  turn: LiveWorkflowTurn,
+  outcome: AgentOutcome,
+  report: TurnWindowReport,
+): boolean {
+  const { store, clock } = options;
+  const { epoch, emit } = context;
+  const { claimed } = attempt;
+  const view = WorkflowView.load(store, turn.workflowId);
+  const task = view?.task(claimed.taskId);
+  if (view === undefined || task === undefined || task.model === null) return false;
+  if (view.workflow.state === "failed" || view.workflow.state === "stopped") return false;
+  if (view.workflow.state === "completed") return false;
+  const deps = { store, clock, epoch };
+  const running = { claimed, workflowId: turn.workflowId, startedAt: turn.startedAt };
+  const told = (code: string): true => {
+    emit({
+      type: "task.retrying",
+      taskId: claimed.taskId,
+      goal: claimed.goal,
+      nextAttempt: claimed.attempt + 1,
+      maxAttempts: claimed.attempt + 1,
+      code,
+    });
+    return true;
+  };
+  const again = (runCode: string, usage: string): true => {
+    restartWorkflowTurn(deps, running, {
+      model: task.model as string,
+      cooldownUntil: null,
+      runCode,
+      message: "a person wrote to this agent; it continues with the message",
+      outcome: usage,
+    });
+    return told(usage);
+  };
+  if (attempt.endedBy === "message" && outcome.status === "aborted") {
+    return again("message.restart", "message_restart");
+  }
+  if (attempt.endedBy === "handoff" && outcome.status === "aborted") {
+    const reason = attempt.handoffWanted ?? "quota";
+    const settings = workflowSettings(view.workflow, options.delegation);
+    const now = clock.now();
+    const next = successorOf(view, task, settings, reason, now);
+    if (next === null) {
+      // Nothing can take it: it waits, and says what it tried and who holds it.
+      const tried = [{ model: task.model, cause: reason, until: null }];
+      store.transaction(() => {
+        restartWorkflowTurn(deps, running, {
+          model: task.model as string,
+          cooldownUntil: now + 60_000,
+          runCode: "handoff.no_successor",
+          message: "no eligible model can take this task over",
+          outcome: "handoff_blocked",
+        });
+        store.events.append({
+          aggregateType: "task",
+          aggregateId: task.taskId,
+          type: "capacity.waiting",
+          actorKind: "system",
+          actorId: "runtime",
+          payload: {
+            workflowId: view.workflow.workflowId,
+            tried,
+            holders: holdersOf(store, tried),
+            frees: null,
+          },
+          projectId: view.workflow.projectId,
+          taskId: task.taskId,
+        });
+      });
+      return told("handoff_blocked");
+    }
+    store.transaction(() => {
+      recordHandoff(store, view, task, {
+        from: task.model as string,
+        to: next,
+        reason,
+        transcript: options.delegation?.transcriptOf?.(claimed.runId) ?? null,
+        runId: claimed.runId,
+      });
+      restartWorkflowTurn(deps, running, {
+        model: next,
+        cooldownUntil: null,
+        runCode: "handoff",
+        message: `handed over: ${reason}`,
+        outcome: "handoff",
+      });
+    });
+    return told("handoff");
+  }
+  const continues =
+    report.action?.tool === "haril_delegate" || report.action?.tool === "haril_assign";
+  if (
+    outcome.status === "succeeded" &&
+    !continues &&
+    waitingMessages(store, turn.workflowId, task.threadId).length > 0
+  ) {
+    return again("message.pending", "message_pending");
+  }
+  return false;
 }
 
 // Closes a workflow turn: its decided call, its run and its usage row in one transaction (workflow-turns.ts). A stop that
@@ -868,6 +1159,7 @@ function closeWorkflowTurn(
     emit({ type: "task.returned", taskId: returned.taskId, goal: returned.goal });
     return;
   }
+  if (restartForMessageOrHandoff(options, context, attempt, turn, outcome, report)) return;
   const before = store.workflows.get(turn.workflowId)?.state;
   const task = store.workflows.tasks(turn.workflowId).find((row) => row.taskId === claimed.taskId);
   // 3.11: a 402 or 429 cools the model down; the turn is retried once on another model or after the cooldown, a
@@ -886,6 +1178,15 @@ function closeWorkflowTurn(
         now: clock.now(),
       });
       if (decision.kind === "retry") {
+        if (decision.substitutedFrom !== null) {
+          recordHandoff(store, view, current, {
+            from: decision.substitutedFrom,
+            to: decision.model,
+            reason: "rate_limited",
+            transcript: options.delegation?.transcriptOf?.(claimed.runId) ?? null,
+            runId: claimed.runId,
+          });
+        }
         retryWorkflowTurn(
           { store, clock, epoch },
           { claimed, workflowId: turn.workflowId, startedAt: turn.startedAt },
@@ -925,6 +1226,11 @@ function closeWorkflowTurn(
     );
     taskState = result.taskState;
     outcomeText = result.outcome;
+    const closed = WorkflowView.load(store, turn.workflowId);
+    const closedTask = closed?.task(claimed.taskId);
+    if (closed !== undefined && closedTask !== undefined && outcome.status === "succeeded") {
+      applyDeliveredMessages(store, closed, closedTask, claimed.runId);
+    }
   } catch (error) {
     // Nothing of the commit was written (one transaction): the run closes as failed on its own, and the workflow
     // continues as after any failed turn.
@@ -1189,6 +1495,7 @@ async function runAttempt(
   attempt.kill = () => {
     kill().catch(() => undefined);
   };
+  handle.onTurnEnd?.(() => stopAtBoundary(attempt));
   const recorded = handle.process;
   if (recorded !== undefined) {
     try {

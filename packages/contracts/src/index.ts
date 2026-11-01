@@ -7,6 +7,7 @@ export * from "./delegation-config.js";
 export * from "./docs-config.js";
 export * from "./enums.js";
 export * from "./factory-model.js";
+export * from "./human-request.js";
 export * from "./memory.js";
 export * from "./plan.js";
 export * from "./plugin-dock.js";

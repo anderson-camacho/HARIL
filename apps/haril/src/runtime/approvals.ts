@@ -1,7 +1,9 @@
+import { HUMAN_REQUEST_KIND } from "@haril/contracts";
 import type { RunEvent } from "@haril/core";
 import type { Store } from "@haril/core/ports";
 import { StoreError } from "@haril/state-sqlite";
 import { planSubmitCommand } from "../plan-submit.js";
+import { applyHumanRequest, type GitActionRunner, runGitAction } from "./human-requests.js";
 
 // The runtime's name as the decider of the plans it denies (LD-T4).
 const RUNTIME_DECIDER = "runtime";
@@ -12,6 +14,8 @@ const RUNTIME_DECIDER = "runtime";
 export function denyPlansOfFailedTask(store: Store, taskId: string, cause: string): number {
   let denied = 0;
   for (const approval of store.approvals.list({ status: "requested", requestedByTask: taskId })) {
+    // A request to a person outlives the turn that made it: only a person answers it.
+    if (approval.kind === HUMAN_REQUEST_KIND) continue;
     try {
       store.approvals.decide({
         approvalId: approval.approvalId,
@@ -36,9 +40,31 @@ export function applyDecidedApprovals(
   store: Store,
   epoch: number,
   emit: (event: RunEvent) => void,
+  humanAction: GitActionRunner = runGitAction,
+  wake: () => void = () => undefined,
 ): number {
   let applied = 0;
   for (const approval of store.approvals.listUnapplied()) {
+    if (approval.kind === HUMAN_REQUEST_KIND) {
+      const marked = store.approvals.markApplied(approval.approvalId, epoch);
+      if (marked) {
+        applyHumanRequest(
+          store,
+          approval,
+          humanAction,
+          (projectId) => store.projects.list().find((row) => row.projectId === projectId)?.rootPath,
+          wake,
+        );
+      }
+      emit({
+        type: "approval.applied",
+        approvalId: approval.approvalId,
+        outcome: approval.status === "granted" ? "granted" : "denied",
+        alreadySubmitted: false,
+      });
+      applied += 1;
+      continue;
+    }
     const outcome = approval.status === "granted" ? "granted" : "denied";
     const alreadySubmitted =
       outcome === "granted" &&

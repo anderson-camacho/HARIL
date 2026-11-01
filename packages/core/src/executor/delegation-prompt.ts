@@ -1,5 +1,6 @@
-// The prompt of a workflow turn (docs/modos-y-delegacion.md 3.4, 3.5, 3.7, 3.11; ADR-0021). The turn's own goal and
-// instructions come first (its parent wrote them for it: they are its assignment), then the host's lines, then one data
+// The prompt of a workflow turn (docs/modos-y-delegacion.md 3.4, 3.5, 3.7, 3.11; ADR-0021). What is the same for every
+// turn of a role and kind comes first, so a provider's prompt cache keeps it, and what changes comes last: the turn's own
+// goal and instructions (its parent wrote them for it: they are its assignment), then the host's lines, then one data
 // section with what other agents wrote: the memo of its last proposal, its children's outcomes and verdicts, the result
 // an auditor judges, the verdicts that rejected an earlier attempt and the sibling tasks around it (R-D4). Every line an
 // agent wrote starts with "| " and is shown as the terminal would draw it, through the rules of prompt-data.ts, so it
@@ -9,6 +10,7 @@
 // on). Pure.
 import type { DelegationArchetype } from "../delegation/archetypes.js";
 import { archetypeTools, isDecidingTool } from "../delegation/archetypes.js";
+import { roleAccessOf, roleTools } from "../delegation/role-policy.js";
 import { visibleText } from "../domain/visible-text.js";
 import type {
   DelegationChildOutcome,
@@ -55,6 +57,14 @@ function childBlock(child: DelegationChildOutcome): Block {
   child.verdicts.forEach((verdict, index) => {
     lines.push(...verdictLines(verdict, `verdict ${index + 1}`));
   });
+  const failure = child.failure ?? null;
+  if (failure !== null) {
+    lines.push(`error: ${failure.code}: ${failure.message}`);
+    for (const attempt of failure.tried) {
+      lines.push(`tried: ${attempt.model ?? "no model"}: ${attempt.outcome}`);
+    }
+    if (failure.done !== null && failure.done.trim() !== "") lines.push(`done: ${failure.done}`);
+  }
   return { header: `[child ${child.localId}: ${notes.join(", ")}]`, text: lines.join("\n") };
 }
 
@@ -105,6 +115,12 @@ function blocksOf(input: DelegationTurnInput): Block[] {
     });
   }
   for (const child of input.children) blocks.push(childBlock(child));
+  for (const opinion of input.opinions ?? []) {
+    blocks.push({
+      header: `[opinion of ${opinion.localId} on ${opinion.model ?? "unknown model"}]`,
+      text: opinion.text,
+    });
+  }
   for (const sibling of input.siblings) {
     const writes =
       sibling.writeSurface.length === 0
@@ -171,12 +187,12 @@ function capacityLines(input: DelegationTurnInput): string[] {
 }
 
 const DELEGATE_SHAPE =
-  'haril_delegate with {"schemaVersion": 1, "memo": "a note to your future self, at most 2000 characters", "delegations": [...]}; each delegation has "localId", "goal" (one sentence), "description" (the detail the goal lacks), "difficulty" (trivial, easy, medium, hard or expert), "difficultyReason", "dependsOn" (localIds it waits for; none means it may run in parallel), "priority" (0 to 9), "acceptanceCriteria" (in words; the auditors judge against them), "model" (null lets the table choose) and "budget" {"maxTokens": n}';
+  'haril_delegate with {"schemaVersion": 1, "memo": "a note to your future self, at most 2000 characters", "delegations": [...]}; each delegation has "localId", "goal" (one sentence), "description" (the detail the goal lacks), "difficulty" (trivial, easy, medium, hard or expert), "difficultyReason", "dependsOn" (localIds it waits for; none means it may run in parallel), "priority" (0 to 9), "acceptanceCriteria" (in words; the auditors judge against them), "role" (one of the roles listed below), "model" (null lets the list of the role choose) and "budget" {"maxTokens": n}';
 const ASSIGN_SHAPE =
-  'haril_assign with {"schemaVersion": 1, "memo": "a note to your future self", "assignments": [...]}; each assignment has "localId", "goal", "instructions" (the exact method), "files" {"write": [], "read": [globs]} (executors are read-only until writing arrives: leave "write" empty), "tests", "acceptanceCriteria", "difficulty", "difficultyReason", "dependsOn" (a step that depends on another starts once the other is approved), "model" (null lets the table choose) and "budget" {"maxTokens": n}';
+  'haril_assign with {"schemaVersion": 1, "memo": "a note to your future self", "assignments": [...]}; each assignment has "localId", "goal", "instructions" (the exact method), "files" {"write": [], "read": [globs]} (executors are read-only until writing arrives: leave "write" empty), "tests", "acceptanceCriteria", "difficulty", "difficultyReason", "dependsOn" (a step that depends on another starts once the other is approved), "role" (one of the roles listed below), "model" (null lets the list of the role choose) and "budget" {"maxTokens": n}';
 // A delegator of a workflow that writes (phase F8): each executor writes in its own git worktree, inside its write globs.
 const ASSIGN_WRITE_SHAPE =
-  'haril_assign with {"schemaVersion": 1, "memo": "a note to your future self", "assignments": [...]}; each assignment has "localId", "goal", "instructions" (the exact change: what to create or edit, where, how), "files" {"write": [the globs the step may write], "read": [globs]} (relative to the project root; the step can write nothing outside its write globs, and steps whose write globs may overlap run one after the other), "tests" (which test to add or run, and how), "acceptanceCriteria", "difficulty", "difficultyReason", "dependsOn" (a step that depends on another starts once the other is approved, and its branch starts with that work), "model" (null lets the table choose) and "budget" {"maxTokens": n}';
+  'haril_assign with {"schemaVersion": 1, "memo": "a note to your future self", "assignments": [...]}; each assignment has "localId", "goal", "instructions" (the exact change: what to create or edit, where, how), "files" {"write": [the globs the step may write], "read": [globs]} (relative to the project root; the step can write nothing outside its write globs, and steps whose write globs may overlap run one after the other), "tests" (which test to add or run, and how), "acceptanceCriteria", "difficulty", "difficultyReason", "dependsOn" (a step that depends on another starts once the other is approved, and its branch starts with that work), "role" (one of the roles listed below), "model" (null lets the list of the role choose) and "budget" {"maxTokens": n}';
 const VERDICT_SHAPE =
   'haril_verdict once with {"approved": true or false, "reasons": [{"criterion": "...", "ok": true or false, "evidence": "..."}]}, one reason per criterion; a rejection needs at least one reason with "ok": false. Judge against the criteria, not your taste';
 const DATA_RULE =
@@ -200,13 +216,22 @@ function listed(names: readonly string[], last = "and"): string {
 // The tools this role is offered (archetypeTools, the single source the bridge and the handshake also read) and what
 // read does. A turn of a read-only workflow writes nothing and runs nothing; a turn of a workflow that writes (F8) works
 // in a git worktree, and workspaceLines says what its other tools do there.
-function toolsLine(role: DelegationArchetype, workspace: DelegationWorkspaceView | null): string {
-  const tools = listed(archetypeTools(role, { writes: workspace !== null }));
+function toolsLine(input: DelegationTurnInput): string {
+  const workspace = input.workspace ?? null;
+  const offered = roleTools(input.role, input.roleName, { writes: workspace !== null });
+  if (offered.length === 0) {
+    return "You have no tools: everything you need is in this prompt, and your final message is your result.";
+  }
+  const tools = listed(offered);
   if (workspace === null) {
     return `Your tools: ${tools}. read takes a file path relative to the project root and returns the file's text; it reads only inside the project. You cannot write files or run commands.`;
   }
+  return `Your tools: ${tools}. read takes a file path relative to the project root and returns the file's text; it reads your worktree.`;
+}
+
+function branchLine(workspace: DelegationWorkspaceView): string {
   return visibleText(
-    `Your tools: ${tools}. read takes a file path relative to the project root and returns the file's text; it reads your worktree, a checkout of the branch ${workspace.branch} (from ${workspace.baseBranch}).`,
+    `Your worktree is a checkout of the branch ${workspace.branch} (from ${workspace.baseBranch}).`,
   );
 }
 
@@ -216,6 +241,8 @@ function commandsText(workspace: DelegationWorkspaceView): string {
     : `the allowed commands are ${workspace.commands.join("; ")}`;
 }
 
+const GIT_LINE =
+  'haril_git {"command": "git" or "gh", "args": [...], "why": "..."} is your only way to git. A read and a change to your own worktree run at once. A push, a pull request, a release or anything destructive never runs by itself: the host raises a request to a person, says so in its answer, and runs it only if that person grants it. Nothing is ever merged or pushed to main or master by an agent; those calls are refused.';
 const RUN_LINE =
   'haril_run {"command": "npm", "args": ["test"]} runs one allowed command (the program and its arguments, never a shell line) in your worktree and answers its exit code and the end of its output';
 
@@ -223,8 +250,27 @@ const RUN_LINE =
 function workspaceLines(input: DelegationTurnInput): string[] {
   const workspace = input.workspace ?? null;
   if (workspace === null) return [];
+  const access = roleAccessOf(input.roleName);
+  if (input.role === "executor" && access === "git") {
+    return [branchLine(workspace), visibleText(GIT_LINE)];
+  }
+  if (
+    input.role === "executor" &&
+    (access === "read_only" || access === "read_web" || access === "no_tools")
+  ) {
+    return [branchLine(workspace)];
+  }
+  if (input.role === "executor" && access === "docs") {
+    return [
+      branchLine(workspace),
+      visibleText(
+        `write and edit write only documentation (docs/ and text files) inside your write surface: ${workspace.writeSurface.join(", ") || "nothing"}.`,
+      ),
+    ];
+  }
   if (workspace.kind === "executor") {
     return [
+      branchLine(workspace),
       visibleText(
         `write {"path": "...", "content": "..."} creates or replaces a whole file, and edit {"path": "...", "edits": [{"oldText": "...", "newText": "..."}]} replaces exact text (each oldText must appear once); both write only inside your write surface: ${workspace.writeSurface.join(", ") || "nothing"}. Paths are relative to the project root; .git, .haril and secret files are refused.`,
       ),
@@ -233,6 +279,7 @@ function workspaceLines(input: DelegationTurnInput): string[] {
   }
   if (workspace.kind === "audit" || input.role === "auditor") {
     return [
+      branchLine(workspace),
       visibleText(
         `${RUN_LINE} (for example the tests); ${commandsText(workspace)}. You cannot write: anything a command changes there is discarded after your turn.`,
       ),
@@ -240,6 +287,7 @@ function workspaceLines(input: DelegationTurnInput): string[] {
   }
   if (input.role !== "delegator") return [];
   const lines = [
+    branchLine(workspace),
     visibleText(
       `${RUN_LINE}; ${commandsText(workspace)}. haril_merge {"localId": "step-1"} merges one of your approved steps into ${workspace.branch}; when the merge conflicts, its reply lists the conflicting files: fix each one with edit or write (keep the intent of both sides and remove every conflict marker), then call haril_merge_continue {} to commit the resolution, or haril_merge_abort {} to give the merge up. write and edit only resolve the conflicting files of a merge. None of these is a deciding call.`,
     ),
@@ -283,7 +331,7 @@ function jobLines(input: DelegationTurnInput): string[] {
       }
       if (input.turnKind === "first") {
         return [
-          `You are the orchestrator, layer 1: you plan the workflow, you do not do the work yourself; read only what you need to plan. Split the goal into parts, one delegator each and no more parts than the goal needs, and call ${DELEGATE_SHAPE}. The runtime checks the proposal against the limits; once it accepts, the delegators run and you run again, with their reports, once they finish. Waiting costs you nothing. To end the workflow as failed, call haril_abort {"reason": "..."}.`,
+          `You are the orchestrator, layer 1: you never execute; you plan the workflow and read only what you need to plan. Write your plan in the memo: the parts, who does each, in what order and why. Split the goal into parts, one delegator each and no more parts than the goal needs, name a role on each from the roles below, and call ${DELEGATE_SHAPE}. You choose who to call from what this goal needs: there is no fixed sequence, and a role the goal does not need is not called. Calling the council is your judgement, for large or risky work. The runtime checks the proposal against the limits; once it accepts, the delegators run and you run again, with their reports, once they finish. Waiting costs you nothing. To end the workflow as failed, call haril_abort {"reason": "..."}.`,
         ];
       }
       return [
@@ -294,8 +342,8 @@ function jobLines(input: DelegationTurnInput): string[] {
       if (input.turnKind === "first") {
         return [
           writes
-            ? `You are a delegator, layer 2: you split your part into steps, one executor each; you do not do the steps yourself, though you may read files to plan them. Each executor makes its change and its tests in its own git worktree, starting from the base branch. Call ${ASSIGN_WRITE_SHAPE}. Write acceptance criteria an auditor can check from the changed files and the tests. Each executor gets its own auditor, which judges it against its acceptanceCriteria. You run again, with their outcomes, once the auditors finish, and then you merge the approved steps.`
-            : `You are a delegator, layer 2: you split your part into steps, one executor each; you do not do the steps yourself, though you may read files to plan them. Call ${ASSIGN_SHAPE}. Write acceptance criteria an auditor can check from the executor's answer and the files. Each executor gets its own auditor, which judges it against its acceptanceCriteria. You run again, with their outcomes, once the auditors finish.`,
+            ? `You are a delegator, layer 2: you never execute; you split your part into steps, one executor each, naming the role of each from the roles below and choosing them from what this part needs, with no fixed sequence; you may read files to plan them. Each executor makes its change and its tests in its own git worktree, starting from the base branch. Call ${ASSIGN_WRITE_SHAPE}. Write acceptance criteria an auditor can check from the changed files and the tests. Each executor gets its own auditor, which judges it against its acceptanceCriteria. You run again, with their outcomes, once the auditors finish, and then you merge the approved steps.`
+            : `You are a delegator, layer 2: you never execute; you split your part into steps, one executor each, naming the role of each from the roles below and choosing them from what this part needs, with no fixed sequence; you may read files to plan them. Call ${ASSIGN_SHAPE}. Write acceptance criteria an auditor can check from the executor's answer and the files. Each executor gets its own auditor, which judges it against its acceptanceCriteria. You run again, with their outcomes, once the auditors finish.`,
         ];
       }
       return [
@@ -305,7 +353,7 @@ function jobLines(input: DelegationTurnInput): string[] {
               "Integrate first: merge each approved step into the integration branch with haril_merge, resolve any conflict, and run the allowed tests there with haril_run when one is allowed. haril_report with status done is refused while the work of an approved step is not merged.",
             ]
           : []),
-        `An escalated step was rejected twice: reformulate it once by calling haril_assign with the same localId, or leave it failed. A blocked step never ran because a step it depends on failed or was escalated: reassign it with the same localId if it should still run. A step can be reassigned once. Otherwise close your part: call haril_report with {"status": "done", "partial" or "failed", "summary": "...", "issues": [...]}; the summary carries the facts your part found, since it is what your orchestrator reads.`,
+        `A failed or escalated child comes back to you with its error, what was tried and what was done. You decide: retry it, send a fixer (a new step with role fixer), try another model, or replan. An escalated step was rejected twice: reformulate it once by calling haril_assign with the same localId, or leave it failed. A blocked step never ran because a step it depends on failed or was escalated: reassign it with the same localId if it should still run. A step can be reassigned once. Otherwise close your part: call haril_report with {"status": "done", "partial" or "failed", "summary": "...", "issues": [...]}; the summary carries the facts your part found, since it is what your orchestrator reads.`,
       ];
     }
     case "executor":
@@ -348,6 +396,57 @@ function jobLines(input: DelegationTurnInput): string[] {
   }
 }
 
+// The profiles a planner may name, always in this order, so this text stays in the part of the prompt that is cached.
+const ROLE_CATALOG = [
+  "Roles: arquitecto (designs before anything is built; reads only), sintetizador (joins the councillors' opinions; no tools), auditor (reviews against criteria; reads only), seguridad (security review on two vendors when two are connected; reads only), consejero (one opinion of a council; reads only), product-owner (accepts or rejects against the goal; reads only), backend, frontend, disenador, tester, fixer, sanitizador (each writes only in its own worktree, inside its write surface), investigador (reads and the web only), consultor (reads the project and answers; reads only), documentador (writes documentation only), git (the only role with git; publishing always waits for a person), vigilante (reads only).",
+  "A council is at least 3 consejero steps in one proposal, each with an opinion of its own, at most the limit in your capacity line, and one sintetizador step that depends on them and is not counted. The runtime refuses fewer, and it stops rather than continue with fewer than 3 valid opinions.",
+].join(" ");
+
+function roleBrief(input: DelegationTurnInput): string[] {
+  if (input.role === "orchestrator" || input.role === "delegator") return [ROLE_CATALOG];
+  const role = input.roleName ?? null;
+  if (role === null) return [];
+  if (role === "sintetizador") {
+    return [
+      "You are the sintetizador: join the councillors' opinions in the data below into one recommendation, say where they agree and where they differ, and add no opinion of your own.",
+    ];
+  }
+  if (role === "consejero") {
+    return [
+      "You are one councillor: give your own opinion with its reasons; another model gives another one.",
+    ];
+  }
+  return [`Your role in this workflow is ${visibleText(role)}.`];
+}
+
+function messageLines(input: DelegationTurnInput): string[] {
+  const messages = input.messages ?? [];
+  if (messages.length === 0) return [];
+  return [
+    "A person wrote to you while you worked. Follow what they say, and tell your parent about this correction in your final message or your report:",
+    ...messages.map(
+      (message) => `${message.urgent ? "(urgent) " : ""}${visibleText(message.text)}`,
+    ),
+  ];
+}
+
+// What the agent before this one left. Its text comes from an agent's turn: data, shown like the rest of the data.
+function handoffLines(input: DelegationTurnInput): string[] {
+  const handoff = input.handoff ?? null;
+  if (handoff === null) return [];
+  const parts = [
+    `You take this task over from ${handoff.from} (${handoff.reason}). Do not start again: continue from what it left, and do not redo what is done.`,
+    `Objective: ${handoff.objective}`,
+    `Done: ${handoff.done ?? "nothing recorded"}`,
+    `Pending: ${handoff.pending.join("; ") || "nothing recorded"}`,
+    `Decisions: ${handoff.decisions ?? "none recorded"}`,
+    `Files touched: ${handoff.filesTouched.join(", ") || "none recorded"}`,
+    ...(handoff.diffSummary === null ? [] : [`Diff: ${handoff.diffSummary}`]),
+    ...(handoff.transcript === null ? [] : [`Whole conversation: ${handoff.transcript}`]),
+  ];
+  return [parts.map((part) => visibleText(part)).join("\n")];
+}
+
 function roleInstructions(input: DelegationTurnInput): string[] {
   const lines = [
     ...(input.intake === undefined || input.intake === null
@@ -356,8 +455,8 @@ function roleInstructions(input: DelegationTurnInput): string[] {
           "The selected plan and methodology above are authoritative. Decompose and execute their actual tasks; do not substitute a generic plan, infer missing tasks, or claim an unavailable framework implementation.",
         ]),
     ...jobLines(input),
-    toolsLine(input.role, input.workspace ?? null),
-    ...workspaceLines(input),
+    ...roleBrief(input),
+    toolsLine(input),
   ];
   if (input.role !== "executor") lines.push(decidingLine(input.role));
   lines.push(DATA_RULE);
@@ -377,6 +476,7 @@ export function delegationPrompt(task: DelegationPromptTask, input: DelegationTu
   const reads = input.files.read;
   const intake = input.intake;
   return [
+    ...roleInstructions(input),
     task.goal,
     task.description,
     visibleText(`Workflow goal: ${input.workflowGoal}`),
@@ -395,7 +495,9 @@ export function delegationPrompt(task: DelegationPromptTask, input: DelegationTu
     reads.length === 0 ? "" : visibleText(`Files to read: ${reads.join(", ")}`),
     dataSection(blocksOf(input), promptDataBudget(task.maxTokens)),
     ...capacityLines(input),
-    ...roleInstructions(input),
+    ...workspaceLines(input),
+    ...handoffLines(input),
+    ...messageLines(input),
   ]
     .filter((part) => part.trim() !== "")
     .join("\n\n");

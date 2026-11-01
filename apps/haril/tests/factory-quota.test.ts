@@ -91,6 +91,8 @@ function agent(code: string, model: string, status = "running"): FactoryModel["a
     parent: null,
     depth: 1,
     waitingFor: [],
+    activity: null,
+    said: [],
   };
 }
 

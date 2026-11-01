@@ -1,10 +1,12 @@
-import type {
-  DelegationSettings,
-  FactoryColumn,
-  FactoryModel,
-  WaitExplanation,
-  WorkflowNode,
-  WorkflowSnapshot,
+import {
+  type DelegationSettings,
+  type FactoryColumn,
+  type FactoryModel,
+  HUMAN_REQUEST_KIND,
+  isHumanRequest,
+  type WaitExplanation,
+  type WorkflowNode,
+  type WorkflowSnapshot,
 } from "@haril/contracts";
 import type {
   ApprovalRecord,
@@ -15,7 +17,8 @@ import type {
   WorkflowTaskRecord,
 } from "@haril/core/ports";
 import { delegationSettingsOf } from "../delegation-section.js";
-import { WorkflowView } from "../runtime/workflow-view.js";
+import { agentMessages } from "../runtime/agent-messages.js";
+import { resultText, WorkflowView } from "../runtime/workflow-view.js";
 import { buildFactoryQuota } from "./factory-quota.js";
 import { buildFactorySystem } from "./factory-system.js";
 import { buildWorkflowSnapshot, eventText, type SnapshotOptions } from "./workflow-snapshot.js";
@@ -27,6 +30,7 @@ import { buildWorkflowSnapshot, eventText, type SnapshotOptions } from "./workfl
 // Older ended workflows are left out: the view is about the work at hand, and each one costs a read on every tick.
 const RECENT_ENDED_WORKFLOWS = 10;
 const RECENT_EVENTS = 300;
+const SAID_MAX_CHARS = 600;
 const ENDED: ReadonlySet<WorkflowRecord["state"]> = new Set(["completed", "failed", "stopped"]);
 // The person, as the card of a failed root task names who has it now.
 const THE_PERSON = "tú";
@@ -64,6 +68,30 @@ function snapshotOf(
   });
   if (ENDED.has(workflow.state)) options.endedSnapshots?.set(workflow.workflowId, snapshot);
   return snapshot;
+}
+
+// A person's request that is still open, by the task that made it.
+function openRequests(store: Store): ReadonlyMap<string, ApprovalRecord> {
+  const out = new Map<string, ApprovalRecord>();
+  for (const approval of store.approvals.list({ status: "requested" })) {
+    if (approval.kind === HUMAN_REQUEST_KIND && isHumanRequest(approval.subject)) {
+      out.set(approval.subject.taskId, approval);
+    }
+  }
+  return out;
+}
+
+function requestExplanation(approval: ApprovalRecord): WaitExplanation | null {
+  if (!isHumanRequest(approval.subject)) return null;
+  const { needs, why, ifRefused } = approval.subject;
+  return {
+    code: "human_request",
+    what: needs,
+    why,
+    systemAction: `Responde en la fábrica, o con \`haril factory answer ${approval.approvalId} approve|deny|write\`. Si no: ${ifRefused}`,
+    needsHuman: true,
+    until: null,
+  };
 }
 
 function columnOf(
@@ -166,6 +194,7 @@ interface Built {
   readonly requests: FactoryModel["humanRequests"];
   // The agent's code of each of its turns, for the event log.
   readonly agentOfTask: ReadonlyMap<string, string>;
+  readonly agentOfThread: ReadonlyMap<string, string>;
 }
 
 function buildWorkflow(
@@ -181,18 +210,35 @@ function buildWorkflow(
   const criteria = latestCriteria(audits);
   const fallback = fallbackExplanation(snapshot);
   const agentOfTask = new Map<string, string>();
+  const agentOfThread = new Map<string, string>();
   const tasks: FactoryModel["tasks"][number][] = [];
   const agents: FactoryModel["agents"][number][] = [];
   const edges: FactoryModel["edges"][number][] = [];
   const requests: FactoryModel["humanRequests"][number][] = [];
+  const asked = openRequests(store);
+  const workflowEvents = store.events.list({ aggregateId: record.workflowId });
 
   for (const node of snapshot.nodes) {
     const ownTurns = turns.filter((turn) => turn.threadId === node.threadId);
     const latest = ownTurns[ownTurns.length - 1];
     if (latest === undefined) continue;
     for (const turn of ownTurns) agentOfTask.set(turn.taskId, node.id);
-    const column = columnOf(node, latest, record);
-    const explanation = node.explanation ?? fallback;
+    agentOfThread.set(node.threadId, node.id);
+    const open = ownTurns.flatMap((turn) => {
+      const found = asked.get(turn.taskId);
+      return found === undefined ? [] : [found];
+    })[0];
+    const column = open === undefined ? columnOf(node, latest, record) : "detenidas";
+    const explanation =
+      (open === undefined ? null : requestExplanation(open)) ?? node.explanation ?? fallback;
+    const localId = ownTurns[0]?.localId ?? null;
+    const notes = workflowEvents.flatMap((event) => {
+      if (!event.type.startsWith("note.")) return [];
+      const payload = event.payload as { localId?: unknown; text?: unknown };
+      return payload.localId === localId && localId !== null && typeof payload.text === "string"
+        ? [payload.text]
+        : [];
+    });
     const model = latest.model;
     const newestCriteria = [...ownTurns]
       .reverse()
@@ -216,6 +262,7 @@ function buildWorkflow(
       tokens: node.tokens,
       criteria: newestCriteria ?? null,
       explanation,
+      notes,
       closedAt: column === "hechas" ? (latest.completedAt ?? null) : null,
       updatedAt: Math.max(...times, node.lastProgress?.at ?? 0),
     });
@@ -233,6 +280,13 @@ function buildWorkflow(
       parent: node.parentId,
       depth: node.depth,
       waitingFor: waitedAgents(latest, turns, snapshot.nodes),
+      activity: node.lastProgress?.text ?? null,
+      said: ownTurns.flatMap((turn) => {
+        const text = resultText(turn.result);
+        return text === null || text.trim() === "" || turn.completedAt === null
+          ? []
+          : [{ at: turn.completedAt, text: text.slice(0, SAID_MAX_CHARS) }];
+      }),
     });
     if (node.parentId !== null) {
       edges.push({ workflowId: record.workflowId, parent: node.parentId, child: node.id });
@@ -246,6 +300,7 @@ function buildWorkflow(
         title: `${node.id}: ${node.goal}`,
         explanation,
         at: latest.createdAt,
+        request: null,
       });
     }
   }
@@ -259,6 +314,7 @@ function buildWorkflow(
       title: record.goal,
       explanation: fallback,
       at: Math.max(record.createdAt, ...tasks.map((task) => task.updatedAt)),
+      request: null,
     });
   }
 
@@ -286,6 +342,7 @@ function buildWorkflow(
     edges,
     requests,
     agentOfTask,
+    agentOfThread,
   };
 }
 
@@ -303,6 +360,7 @@ function approvalRequest(
     workflowId: null,
     projectSlug,
     title: first === undefined ? `Plan de ${count}` : `Plan de ${count}: ${first}`,
+    request: null,
     explanation: {
       code: "approval_requested",
       what: "Un plan espera tu aprobación",
@@ -312,6 +370,47 @@ function approvalRequest(
       until: null,
     },
     at: approval.requestedAt,
+  };
+}
+
+function humanRequest(
+  approval: ApprovalRecord,
+  projectSlug: string,
+): FactoryModel["humanRequests"][number] | null {
+  if (!isHumanRequest(approval.subject)) return null;
+  const {
+    reason,
+    who,
+    delegatedBy,
+    task,
+    doing,
+    needs,
+    why,
+    ifRefused,
+    blocks,
+    action,
+    workflowId,
+  } = approval.subject;
+  return {
+    kind: "human",
+    id: approval.approvalId,
+    workflowId,
+    projectSlug,
+    title: `${who}: ${needs}`,
+    explanation: requestExplanation(approval) as WaitExplanation,
+    at: approval.requestedAt,
+    request: {
+      reason,
+      who,
+      delegatedBy,
+      task,
+      doing,
+      needs,
+      why,
+      ifRefused,
+      blocks: [...blocks],
+      action: action === null ? null : [action.program, ...action.args].join(" "),
+    },
   };
 }
 
@@ -375,7 +474,7 @@ function handoffsOf(
       const payload = event.payload as Readonly<Record<string, unknown>>;
       const workflowId =
         typeof payload.workflowId === "string" ? payload.workflowId : event.aggregateId;
-      const { from, to, taskId } = payload;
+      const { from, to, taskId, reason } = payload;
       if (!shown.has(workflowId) || typeof from !== "string" || typeof to !== "string") return [];
       const task = event.taskId ?? (typeof taskId === "string" ? taskId : null);
       return [
@@ -386,6 +485,53 @@ function handoffsOf(
           kind,
           from,
           to,
+          reason: typeof reason === "string" ? reason : null,
+        },
+      ];
+    })
+    .sort((a, b) => a.at - b.at);
+}
+
+function messagesOf(store: Store, built: readonly Built[]): FactoryModel["messages"] {
+  return built.flatMap((item) => {
+    const view = WorkflowView.load(store, item.workflow.id);
+    if (view === undefined) return [];
+    return agentMessages(store, item.workflow.id).map((message) => ({
+      id: message.id,
+      workflowId: item.workflow.id,
+      agent: item.agentOfThread.get(message.threadId) ?? message.threadId,
+      text: message.text,
+      urgent: message.urgent,
+      from: message.from,
+      at: message.at,
+      state: message.state,
+    }));
+  });
+}
+
+function gitActionsOf(
+  store: Store,
+  projectIds: readonly string[],
+  built: readonly Built[],
+): FactoryModel["gitActions"] {
+  const agentOfTask = new Map(built.flatMap((item) => [...item.agentOfTask]));
+  return projectIds
+    .flatMap((projectId) => store.events.list({ projectId, limit: RECENT_EVENTS }))
+    .flatMap((event) => {
+      if (event.type !== "git.action") return [];
+      const payload = event.payload as Readonly<Record<string, unknown>>;
+      return [
+        {
+          at: event.ts,
+          workflowId: typeof payload.workflowId === "string" ? payload.workflowId : null,
+          agent:
+            event.taskId === null || event.taskId === undefined
+              ? null
+              : (agentOfTask.get(event.taskId) ?? null),
+          level: typeof payload.level === "string" ? payload.level : "free",
+          command: typeof payload.command === "string" ? payload.command : "",
+          exitCode: typeof payload.exitCode === "number" ? payload.exitCode : null,
+          output: typeof payload.output === "string" ? payload.output : "",
         },
       ];
     })
@@ -404,9 +550,20 @@ export function buildFactoryModel(store: Store, options: FactoryModelOptions): F
       status: "requested",
       ...(project === undefined ? {} : { projectId: project.projectId }),
     })
+    .filter((approval) => approval.kind !== HUMAN_REQUEST_KIND)
     .map((approval) =>
       approvalRequest(approval, slugOf.get(approval.projectId) ?? approval.projectId),
     );
+  const asks = store.approvals
+    .list({
+      status: "requested",
+      ...(project === undefined ? {} : { projectId: project.projectId }),
+    })
+    .filter((approval) => approval.kind === HUMAN_REQUEST_KIND)
+    .flatMap((approval) => {
+      const row = humanRequest(approval, slugOf.get(approval.projectId) ?? approval.projectId);
+      return row === null ? [] : [row];
+    });
   const agents = built.flatMap((item) => item.agents);
   const settings = options.settings ?? delegationSettingsOf(undefined);
   const quota = buildFactoryQuota(store, options.now, agents, settings.quota);
@@ -428,8 +585,14 @@ export function buildFactoryModel(store: Store, options: FactoryModelOptions): F
       projects.map((item) => item.projectId),
       built,
     ),
+    messages: messagesOf(store, built),
+    gitActions: gitActionsOf(
+      store,
+      projects.map((item) => item.projectId),
+      built,
+    ),
     quota,
     system: buildFactorySystem(store, options.now, quota, settings),
-    humanRequests: [...approvals, ...built.flatMap((item) => item.requests)],
+    humanRequests: [...asks, ...approvals, ...built.flatMap((item) => item.requests)],
   };
 }

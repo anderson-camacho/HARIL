@@ -1,7 +1,15 @@
-import { chooseModel, type ModelRequest } from "@haril/core";
+import {
+  COUNCIL_MIN_OPINIONS,
+  chooseModel,
+  councilStopReason,
+  isValidOpinion,
+  type ModelRequest,
+  SYNTHESIZER_ROLE,
+} from "@haril/core";
 import type { AgentOutcome, ProviderFailure, Store } from "@haril/core/ports";
 import { groupIndex, quotaByKey, quotaKeyFor, quotaKeyOf } from "../quota-view.js";
 import type { TurnWindowReport } from "./delegation-tools.js";
+import { recordHandoff } from "./handoff.js";
 import { QUOTA_FRESH_MS } from "./model-context.js";
 import { type Task, type WorkflowSettings, WorkflowView } from "./workflow-view.js";
 
@@ -42,7 +50,7 @@ export type LaunchVerdict =
   | { readonly kind: "deferred"; readonly until: number };
 
 // The agents running on the models it tried, in every running workflow.
-function holdersOf(
+export function holdersOf(
   store: Store,
   tried: readonly { readonly model: string }[],
 ): { readonly model: string; readonly agent: string }[] {
@@ -67,6 +75,41 @@ function earliestEnd(
   return ends.length === 0 ? null : Math.min(...ends);
 }
 
+// A sintetizador whose council has fewer than its minimum of valid opinions does not run: the workflow stops and says
+// why. It never continues with two.
+function councilGate(store: Store, epoch: number, view: WorkflowView, task: Task): boolean {
+  if (view.roleOf(task) !== SYNTHESIZER_ROLE) return false;
+  const parent = view.parentThreadId(task.threadId);
+  if (parent === null) return false;
+  const council = view.councillors(parent);
+  if (council.length === 0) return false;
+  const valid = council.filter((row) => isValidOpinion(row.text)).length;
+  if (valid >= COUNCIL_MIN_OPINIONS) return false;
+  store.transaction(() => {
+    store.events.append({
+      aggregateType: "workflow",
+      aggregateId: view.workflow.workflowId,
+      type: "council.below_minimum",
+      actorKind: "system",
+      actorId: "runtime",
+      payload: {
+        workflowId: view.workflow.workflowId,
+        valid,
+        minimum: COUNCIL_MIN_OPINIONS,
+        councillors: council.map((row) => row.localId),
+      },
+      projectId: view.workflow.projectId,
+      taskId: task.taskId,
+    });
+    store.workflows.setState(epoch, {
+      workflowId: view.workflow.workflowId,
+      state: "awaiting_human",
+      reason: councilStopReason(valid),
+    });
+  });
+  return true;
+}
+
 // Checks a ready turn's model right before its claim, and writes what follows: a replaced model, or a wait.
 export function checkLaunch(
   store: Store,
@@ -76,6 +119,7 @@ export function checkLaunch(
   settings: WorkflowSettings,
   now: number,
 ): LaunchVerdict {
+  if (councilGate(store, epoch, view, task)) return { kind: "deferred", until: now };
   const choice = chooseModel(launchRequest(task, view), settings.models(now));
   if (choice.kind === "use" || choice.kind === "reject") {
     if (choice.kind === "use" && choice.reason === "role_order") {
@@ -112,6 +156,15 @@ export function checkLaunch(
           },
           projectId: view.workflow.projectId,
         });
+        // A later turn of a thread is the same agent's work: on another model that is a handoff, with what it leaves.
+        if (task.model !== null && view.turns(task.threadId)[0]?.taskId !== task.taskId) {
+          recordHandoff(store, view, task, {
+            from: task.model,
+            to: choice.model,
+            reason: "quota",
+            transcript: null,
+          });
+        }
       });
     }
     return { kind: "run" };

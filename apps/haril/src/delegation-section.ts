@@ -53,5 +53,7 @@ export function delegationLimitsOf(limits: DelegationSettings["limits"]): Delega
     largeTaskTokens: limits.largeTaskTokens,
     attemptTimeoutMs: limits.attemptTimeoutMs,
     minAuditorTokens: limits.minAuditorTokens,
+    maxCouncillors: limits.maxCouncillors,
+    maxHandoffsPerTask: limits.maxHandoffsPerTask,
   };
 }

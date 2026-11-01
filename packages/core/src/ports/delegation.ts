@@ -229,6 +229,9 @@ export interface RetryTurnInput {
   // transient: the same model again; route_failover: another model or account.
   readonly retryReason: "transient" | "route_failover";
   readonly error: { readonly code: string; readonly message: string };
+  // The code the closed run keeps; default PROVIDER_RETRY_CODE, which providerRetries counts. A message or a handoff is
+  // not a provider's failure, so it does not spend the one retry that failure gets.
+  readonly runCode?: string;
 }
 
 export interface WorkflowFilter {

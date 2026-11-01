@@ -1,7 +1,8 @@
 // Executor rules (M1-T5): the AgentSpec built from a claimed task, the handshake check that runs
 // before any prompt is sent, and the mapping of an agent outcome to the run completion. Pure.
 import type { TaskKind } from "@haril/contracts";
-import { archetypeTools, DELEGATION_ARCHETYPES } from "../delegation/archetypes.js";
+import { DELEGATION_ARCHETYPES } from "../delegation/archetypes.js";
+import { roleTools } from "../delegation/role-policy.js";
 import { READ_ONLY_AGENT_REFS } from "../domain/plan-graph.js";
 import type {
   AgentOutcome,
@@ -125,7 +126,7 @@ function workflowTurnSpec(
     taskId: task.taskId,
     attempt: run.attempt,
     agentRef: task.agentRef,
-    allowedTools: [...archetypeTools(delegation.role, { writes })],
+    allowedTools: [...roleTools(delegation.role, delegation.roleName, { writes })],
     prompt: delegationPrompt(task, delegation),
     timeoutMs: task.timeoutMs,
     delegation,

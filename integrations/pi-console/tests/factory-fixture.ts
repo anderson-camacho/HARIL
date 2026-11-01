@@ -61,6 +61,7 @@ export function workflow(overrides: Partial<FactoryWorkflow> = {}): FactoryWorkf
 
 export function task(overrides: Partial<FactoryTask> = {}): FactoryTask {
   return {
+    notes: [],
     id: "t-1",
     workflowId: "wf-stop",
     title: "Build the cart",
@@ -85,6 +86,8 @@ export function task(overrides: Partial<FactoryTask> = {}): FactoryTask {
 
 function agentOf(row: FactoryTask, depth: number): FactoryAgent {
   return {
+    activity: null,
+    said: [],
     workflowId: row.workflowId,
     code: row.agent,
     role: row.role,
@@ -163,6 +166,7 @@ export const TASKS: readonly FactoryTask[] = [
 
 const APPROVAL: FactoryHumanRequest = {
   kind: "approval",
+  request: null,
   id: "ap-1",
   workflowId: null,
   projectSlug: "demo",
@@ -179,6 +183,7 @@ const APPROVAL: FactoryHumanRequest = {
 
 const STOP: FactoryHumanRequest = {
   kind: "stop",
+  request: null,
   id: "wf-stop",
   workflowId: "wf-stop",
   projectSlug: "demo",
@@ -379,6 +384,8 @@ export function model(overrides: Partial<FactoryModel> = {}): FactoryModel {
     ],
     events: EVENTS,
     handoffs: [],
+    messages: [],
+    gitActions: [],
     quota: QUOTA,
     system: SYSTEM,
     humanRequests: [APPROVAL, STOP],

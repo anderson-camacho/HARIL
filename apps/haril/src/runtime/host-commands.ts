@@ -282,6 +282,8 @@ export interface HostCommandRequest {
   // The agent's worktree.
   readonly cwd: string;
   readonly settings: HostCommandSettings;
+  // The Core classified it already (classifyGitCommand): the allow list does not apply.
+  readonly classified?: boolean;
   // The environment the clean one is taken from; defaults to this process's.
   readonly env?: NodeJS.ProcessEnv;
   readonly platform?: string;
@@ -340,7 +342,10 @@ class Tail {
 export function runHostCommand(request: HostCommandRequest): Promise<HostCommandResult> {
   const platform = request.platform ?? process.platform;
   const { settings } = request;
-  if (!allowedCommand(settings.allow, request.command, request.args, platform)) {
+  if (
+    request.classified !== true &&
+    !allowedCommand(settings.allow, request.command, request.args, platform)
+  ) {
     const allowed = settings.allow.length === 0 ? "none" : settings.allow.join("; ");
     return Promise.resolve({
       ok: false,

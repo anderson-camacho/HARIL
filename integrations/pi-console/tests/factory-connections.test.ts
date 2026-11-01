@@ -89,6 +89,7 @@ describe("the Conexiones tab", () => {
           workflowId: "wf-stop",
           agent: "e1",
           kind: "model",
+          reason: null,
           from: "fake/low",
           to: "fake/mid",
         },
@@ -117,7 +118,15 @@ describe("the Conexiones tab", () => {
     const views = ["cadena", "arbol", "red", "secuencia", "relevo"] as const;
     const withHandoff = opened({
       handoffs: [
-        { at: NOW, workflowId: "wf-stop", agent: "e1", kind: "agent", from: "e1", to: "e4" },
+        {
+          at: NOW,
+          workflowId: "wf-stop",
+          agent: "e1",
+          kind: "agent",
+          from: "e1",
+          to: "e4",
+          reason: "quota",
+        },
       ],
     });
     for (const view of views) {

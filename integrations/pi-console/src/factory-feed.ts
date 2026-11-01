@@ -10,7 +10,7 @@ const EXIT_WITH_CONSOLE = "--exit-on-stdin-end";
 const RETRY_DELAYS_MS: readonly number[] = [500, 1_000, 2_000];
 const WORKFLOW_STATES = new Set(["running", "awaiting_human", "completed", "failed", "stopped"]);
 const COLUMNS = new Set(["por_hacer", "en_curso", "detenidas", "errores", "hechas"]);
-const REQUEST_KINDS = new Set(["approval", "stop", "task"]);
+const REQUEST_KINDS = new Set(["approval", "stop", "task", "human"]);
 const QUOTA_SOURCES = new Set(["api", "estimated", "none"]);
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -113,7 +113,43 @@ function agentOk(value: unknown): boolean {
     fillOk(row.context, "used", "threshold") &&
     textOrNull(row.parent) &&
     finite(row.depth) &&
-    allOk(row.waitingFor, text)
+    allOk(row.waitingFor, text) &&
+    textOrNull(row.activity) &&
+    allOk(row.said, saidOk)
+  );
+}
+
+function saidOk(value: unknown): boolean {
+  const row = record(value);
+  return row !== undefined && finite(row.at) && text(row.text);
+}
+
+function messageOk(value: unknown): boolean {
+  const row = record(value);
+  return (
+    row !== undefined &&
+    text(row.id) &&
+    text(row.workflowId) &&
+    text(row.agent) &&
+    text(row.text) &&
+    typeof row.urgent === "boolean" &&
+    text(row.from) &&
+    finite(row.at) &&
+    (row.state === "waiting" || row.state === "delivered" || row.state === "applied")
+  );
+}
+
+function gitActionOk(value: unknown): boolean {
+  const row = record(value);
+  return (
+    row !== undefined &&
+    finite(row.at) &&
+    textOrNull(row.workflowId) &&
+    textOrNull(row.agent) &&
+    text(row.level) &&
+    text(row.command) &&
+    (row.exitCode === null || finite(row.exitCode)) &&
+    typeof row.output === "string"
   );
 }
 
@@ -286,6 +322,8 @@ export function parseFactoryLine(line: string): FactoryModel | undefined {
     !allOk(model.events, eventOk) ||
     !allOk(model.humanRequests, requestOk) ||
     !allOk(model.handoffs, handoffOk) ||
+    !allOk(model.messages, messageOk) ||
+    !allOk(model.gitActions, gitActionOk) ||
     !quotaOk(model.quota) ||
     !systemOk(model.system)
   ) {

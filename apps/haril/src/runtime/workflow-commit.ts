@@ -3,18 +3,23 @@ import type { AssignInput, DelegateInput, RequestAuditInput, VerdictInput } from
 import {
   type AutonomySettings,
   auditorBudgetTokens,
+  COUNCILLOR_ROLE,
   canonicalJson,
   checkDelegation,
   chooseModel,
   completionFor,
   type DelegationCheck,
   decideRework,
+  isSecurityRole,
+  isValidOpinion,
   type ModelRequest,
   proposalFromAssign,
   proposalFromDelegate,
   type ReworkEvent,
   type StopEvent,
+  SYNTHESIZER_ROLE,
   stopFor,
+  vendorOf,
 } from "@haril/core";
 import type {
   AgentOutcome,
@@ -25,6 +30,7 @@ import type {
   Store,
 } from "@haril/core/ports";
 import { delegationState, reassignmentProblem, type TurnAction } from "./delegation-tools.js";
+import { raiseHumanRequest } from "./human-requests.js";
 import { evidenceStatus, executorEvidence, workflowEvidence } from "./workflow-evidence.js";
 import {
   firedStops,
@@ -354,7 +360,7 @@ function assignTurns(
   context: TurnContext,
   input: AssignInput,
   check: Extract<DelegationCheck, { ok: true }>,
-): NewTurn[] {
+): { readonly turns: NewTurn[]; readonly notes: readonly (() => void)[] } {
   const { view, task, settings } = context;
   const steps = new Map(
     view
@@ -362,13 +368,25 @@ function assignTurns(
       .map((thread) => [view.turns(thread)[0]?.localId ?? "", thread]),
   );
   const turns: NewTurn[] = [];
+  const notes: (() => void)[] = [];
+  const councilModels: string[] = [];
+  const pickCouncillor = (request: ModelRequest): ReturnType<typeof pickModel> => {
+    // Different models where possible: each councillor avoids the ones already taken, one at a time, as far as the
+    // role's list goes. A model used twice is marked.
+    let picked = pickModel(context, request);
+    for (const taken of councilModels) {
+      if (picked.model !== taken) continue;
+      picked = pickModel(context, { ...request, avoid: taken });
+    }
+    return picked;
+  };
   for (const assignment of input.assignments) {
     const existing = steps.get(assignment.localId);
     const firstTurn = existing === undefined ? undefined : view.turns(existing)[0];
     const latest = existing === undefined ? undefined : view.latest(existing);
     const auditorThread =
       latest === undefined ? undefined : view.auditorOf(latest.taskId)?.threadId;
-    const executorModel = pickModel(context, {
+    const executorRequest: ModelRequest = {
       archetype: "executor",
       difficulty: assignment.difficulty,
       budgetTokens: assignment.budget.maxTokens,
@@ -376,15 +394,40 @@ function assignTurns(
       proposed: assignment.model ?? null,
       role: assignment.role ?? null,
       sticky: latest?.model ?? null,
-    });
-    const auditorModel = pickModel(context, {
+    };
+    const councillor = assignment.role === COUNCILLOR_ROLE;
+    const executorModel = councillor
+      ? pickCouncillor(executorRequest)
+      : pickModel(context, executorRequest);
+    if (councillor) {
+      if (councilModels.includes(executorModel.model)) {
+        notes.push(() =>
+          noteOf(context, "note.repeated_model", assignment.localId, {
+            text: `Modelo repetido en la discusión: ${executorModel.model}.`,
+          }),
+        );
+      }
+      councilModels.push(executorModel.model);
+    }
+    const security = isSecurityRole(assignment.role);
+    const auditorRequest: ModelRequest = {
       archetype: "auditor",
       difficulty: assignment.difficulty,
       budgetTokens: assignment.budget.maxTokens,
       phase: "launch",
       avoid: executorModel.model,
-      role: assignment.auditorRole ?? null,
-    });
+      role: assignment.auditorRole ?? (security ? "seguridad" : null),
+    };
+    const auditorModel = security
+      ? otherVendor(context, auditorRequest, executorModel.model)
+      : pickModel(context, auditorRequest);
+    if (security && vendorOf(auditorModel.model) === vendorOf(executorModel.model)) {
+      notes.push(() =>
+        noteOf(context, "note.single_vendor", assignment.localId, {
+          text: `Seguridad corrió con un solo proveedor: ${vendorOf(executorModel.model)}. No hay otro conectado que pueda.`,
+        }),
+      );
+    }
     const auditKey = `audit:${assignment.localId}`;
     turns.push({
       key: assignment.localId,
@@ -408,8 +451,13 @@ function assignTurns(
       surfaceRead: assignment.files.read,
       // A step that depends on another (or that the Core serialized after it, 3.10) waits for its approval: it waits on
       // the other's auditor turn, which completes only when it approves.
+      // A sintetizador waits for its council to settle, not to pass: launch counts the valid opinions (checkLaunch).
       dependsOn: [...assignment.dependsOn, ...serializedAfter(check, assignment.localId)].map(
-        (on) => ({ on: `audit:${on}`, kind: "completed" as const }),
+        (on) => ({
+          on: `audit:${on}`,
+          kind:
+            assignment.role === SYNTHESIZER_ROLE ? ("settled" as const) : ("completed" as const),
+        }),
       ),
     });
     turns.push({
@@ -443,7 +491,47 @@ function assignTurns(
       kind: "settled" as const,
     })),
   });
-  return turns;
+  return { turns, notes };
+}
+
+// A note on one step, which the factory shows on its card.
+function noteOf(
+  context: TurnContext,
+  type: string,
+  localId: string,
+  payload: { readonly text: string },
+): void {
+  const { store, view } = context;
+  store.events.append({
+    aggregateType: "workflow",
+    aggregateId: view.workflow.workflowId,
+    type,
+    actorKind: "system",
+    actorId: "runtime",
+    payload: { workflowId: view.workflow.workflowId, localId, ...payload },
+    projectId: view.workflow.projectId,
+  });
+}
+
+// An auditor of seguridad reviews on a vendor the executor did not use, whenever the role's list reaches one.
+function otherVendor(
+  context: TurnContext,
+  request: ModelRequest,
+  executorModel: string,
+): ReturnType<typeof pickModel> {
+  const vendor = vendorOf(executorModel);
+  const models = context.settings.models(context.clock.now());
+  const others = models.catalog.filter((entry) => vendorOf(entry.ref) !== vendor);
+  for (const other of others) {
+    const choice = chooseModel(
+      { ...request, proposed: other.ref, avoid: executorModel },
+      { ...models, catalog: others },
+    );
+    if (choice.kind === "use" && vendorOf(choice.model) !== vendor) {
+      return { model: choice.model, pinned: choice.source === "pinned" };
+    }
+  }
+  return pickModel(context, request);
 }
 
 // The executor's next turn and its auditor's (3.8: the relaunch). The dependents of the earlier auditor turn (the
@@ -451,10 +539,26 @@ function assignTurns(
 // closes, so none of them runs on a rejected or failed attempt.
 function relaunch(context: TurnContext, executor: Task, auditor: Task): () => void {
   return () => {
+    const replaced =
+      context.view.roleOf(executor) === COUNCILLOR_ROLE
+        ? pickModel(context, {
+            archetype: "executor",
+            difficulty: executor.difficulty ?? "medium",
+            budgetTokens: executor.budgetTokens,
+            phase: "launch",
+            avoid: executor.model,
+            role: COUNCILLOR_ROLE,
+          })
+        : null;
     context.store.workflows.applyTurns(context.epoch, {
       workflowId: context.view.workflow.workflowId,
       turns: [
-        { ...turnLike(executor), key: "relaunch", dependsOn: [] },
+        {
+          ...turnLike(executor),
+          ...(replaced === null ? {} : { model: replaced.model, modelPinned: replaced.pinned }),
+          key: "relaunch",
+          dependsOn: [],
+        },
         {
           ...turnLike(auditor),
           key: "relaunch:audit",
@@ -483,7 +587,12 @@ function reworkEvent(
   const state = view.rework(executor.threadId, settings.limits);
   const canRelaunch =
     relaunchable && view.workflow.agentsCreated + 2 <= settings.limits.maxAgentsPerWorkflow;
-  return decideRework(state, event, settings.limits, canRelaunch);
+  return decideRework(
+    state,
+    event,
+    view.reworkLimits(executor.threadId, settings.limits),
+    canRelaunch,
+  );
 }
 
 function retryEvent(context: TurnContext, executor: Task, cause: string): () => void {
@@ -643,6 +752,37 @@ function orchestratorPlan(
   };
 }
 
+// A delegator that gave up with nothing left to spend: its proposals are gone, so the next word is a person's.
+function capReached(context: TurnContext, summary: string): (() => void)[] {
+  const { store, epoch, view, task, settings, runId } = context;
+  if (view.proposalCount(task.threadId) < settings.limits.maxProposalsPerThread) return [];
+  const parent = view.parentThreadId(task.threadId);
+  return [
+    () => {
+      raiseHumanRequest(store, epoch, {
+        projectId: view.workflow.projectId,
+        requestedBy: runId,
+        request: {
+          schemaVersion: 1,
+          reason: "failure_cap",
+          who: view.label(task.threadId),
+          delegatedBy: parent === null ? "tú" : view.label(parent),
+          workflowId: view.workflow.workflowId,
+          taskId: task.taskId,
+          task: task.goal,
+          doing: "Cerró su parte sin terminarla y ya no le quedan propuestas.",
+          needs: "Que decidas si se reintenta, se replantea o se deja así.",
+          why: short(summary),
+          ifRefused: "La parte queda como fallida y el orquestador sigue con lo que tiene.",
+          blocks: [parent === null ? "el flujo" : view.label(parent)],
+          action: null,
+          notifyThreadId: parent,
+        },
+      });
+    },
+  ];
+}
+
 function delegatorPlan(
   context: TurnContext,
   outcome: AgentOutcome,
@@ -671,7 +811,7 @@ function delegatorPlan(
         after: [],
       };
     }
-    const turns = assignTurns(context, action.input, check);
+    const { turns, notes } = assignTurns(context, action.input, check);
     const continuation = view.turns(task.threadId)[0]?.taskId !== task.taskId;
     return {
       before: [
@@ -683,6 +823,7 @@ function delegatorPlan(
             delegation: proposalRecord(context, "haril_assign", action.input, action.input.memo),
           });
         },
+        ...notes,
       ],
       completion: {
         runId: context.runId,
@@ -706,7 +847,10 @@ function delegatorPlan(
           : failure(context, `delegation.report_${report.status}`, short(report.summary), output),
       outcome: `reported_${report.status}`,
       verdict: null,
-      after: [stopAt(context, { type: "node_closed", localId })],
+      after: [
+        stopAt(context, { type: "node_closed", localId }),
+        ...(report.status === "done" ? [] : capReached(context, report.summary)),
+      ],
     };
   }
   return {
@@ -718,8 +862,25 @@ function delegatorPlan(
   };
 }
 
-function executorPlan(context: TurnContext, outcome: AgentOutcome): CommitPlan {
+// A councillor that answered nothing gave no opinion: its attempt failed, and its relaunch takes another model.
+function asCouncilOutcome(context: TurnContext, outcome: AgentOutcome): AgentOutcome {
+  if (
+    context.view.roleOf(context.task) === COUNCILLOR_ROLE &&
+    outcome.status === "succeeded" &&
+    !isValidOpinion(outcome.summary)
+  ) {
+    return {
+      status: "failed",
+      code: "council.empty_opinion",
+      message: "the councillor answered nothing",
+    };
+  }
+  return outcome;
+}
+
+function executorPlan(context: TurnContext, given: AgentOutcome): CommitPlan {
   const { view, task } = context;
+  const outcome = asCouncilOutcome(context, given);
   if (outcome.status === "succeeded") {
     return {
       before: [],
@@ -756,7 +917,7 @@ function taskAuditPlan(
   const verdict =
     outcome.status === "succeeded" && action?.tool === "haril_verdict" ? action.input : null;
   const observed =
-    verdict?.approved && view.workflow.baseBranch !== null
+    verdict?.approved && view.workflow.baseBranch !== null && executor.surfaceWrite.length > 0
       ? executorEvidence(store, executor, task)
       : null;
   const accepted: VerdictInput | null =

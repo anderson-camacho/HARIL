@@ -149,6 +149,7 @@ describe("a full delegation section", () => {
     expect(settings.quota.switchAtPercent5h).toBe(70);
     expect(settings.quota.stopAtPercentWeekly).toBe(80);
     expect(settings.watchdog).toEqual({
+      vigilanteAnalysis: false,
       intervalMs: 600_000,
       idleStrikesToClose: 2,
       closeResidualImmediately: true,

@@ -3,6 +3,7 @@ import {
   type AbortInput,
   type AssignInput,
   type DelegateInput,
+  type HumanRequest,
   isDelegationToolName,
   type ReportInput,
   type RequestAuditInput,
@@ -11,21 +12,28 @@ import {
   validateWorkspaceFileInput,
 } from "@haril/contracts";
 import {
+  COUNCIL_MIN_OPINIONS,
   canonicalJson,
   checkDelegation,
   checkVerdict,
+  classifyGitCommand,
   type DelegationCaller,
   type DelegationCheck,
   type DelegationState,
   isDelegationArchetype,
+  isValidOpinion,
   isWorkspaceTool,
+  mayRoleUseTool,
   mayUseTool,
   proposalFromAssign,
   proposalFromDelegate,
+  roleWriteProblem,
 } from "@haril/core";
 import type { Clock, DelegationToolHandler, DelegationToolResult, Store } from "@haril/core/ports";
-import { changedPaths, headCommit } from "@haril/git";
+import { changedPaths, headBranch, headCommit } from "@haril/git";
+import { raiseHumanRequest } from "./human-requests.js";
 import { createIntegration, type Integration, unmergedSteps } from "./integration.js";
+import { readWebPage, type WebFetch } from "./web-read.js";
 import { projectTestCommand } from "./workflow-evidence.js";
 import {
   type DelegationOptions,
@@ -81,6 +89,8 @@ export interface DelegationTools {
   attach(runId: string, workspace: TurnWorkspace | null, epoch: number, ended?: AbortSignal): void;
   // The delegators' merges (phase F8): the run loop forgets a merge whose turn ended, and the prompt names one waiting.
   readonly integration: Integration;
+  // What the host refused this run so far, for the vigilante.
+  refusalsOf?(runId: string): readonly string[];
 }
 
 interface Window {
@@ -100,6 +110,8 @@ export interface DelegationToolsDeps {
   readonly options?: DelegationOptions;
   // The worktrees of workflows that write (phase F8). Without them every workspace tool is refused.
   readonly workspaces?: Workspaces;
+  // haril_web's fetch; default the platform's. Tests never reach the network.
+  readonly webFetch?: WebFetch;
 }
 
 // The state checkDelegation reads for a calling thread (3.6).
@@ -241,6 +253,16 @@ export function createDelegationTools(deps: DelegationToolsDeps): DelegationTool
         break;
       }
       case "haril_report": {
+        if (action.input.status === "done") {
+          const council = view.councillors(task.threadId);
+          const valid = council.filter((row) => isValidOpinion(row.text)).length;
+          if (council.length > 0 && valid < COUNCIL_MIN_OPINIONS) {
+            return refuse(
+              window,
+              `a discussion needs at least ${COUNCIL_MIN_OPINIONS} valid opinions and yours has ${valid}: add councillors, or report partial or failed`,
+            );
+          }
+        }
         // 3.10.3: a part that writes is done once its approved work is in the integration branch.
         if (action.input.status === "done" && window.workspace?.kind === "integration") {
           const unmerged = unmergedSteps(store, view, task.threadId, settings.limits);
@@ -286,6 +308,122 @@ export function createDelegationTools(deps: DelegationToolsDeps): DelegationTool
     return reply;
   };
 
+  // The git role's tool: the Core gives the action its level. What only reads or changes the worktree runs now; what
+  // publishes or destroys becomes a request to a person and runs only if granted; what merges to main never runs.
+  const gitCall = async (
+    window: Window,
+    view: WorkflowView,
+    task: WorkflowView["tasks"][number],
+    workspace: TurnWorkspace,
+    workspaces: Workspaces,
+    raw: unknown,
+  ): Promise<DelegationToolResult> => {
+    const valid = validateDelegationToolInput("haril_git", raw);
+    if (!valid.ok) return refuse(window, `haril_git input: ${valid.errors.join("; ")}`);
+    const { command, args, why } = valid.input;
+    const git = worktreeGit(workspaces.settings.git ?? {}, workspace);
+    const current = command === "git" ? ((await headBranch(workspace.root, git)) ?? null) : null;
+    const decision = classifyGitCommand(command, args, current);
+    const text = [command, ...args].join(" ");
+    if (decision.level === "forbidden") return refuse(window, `${text}: ${decision.why}`);
+    if (decision.level === "publish" || decision.level === "destructive") {
+      const parent = view.parentThreadId(task.threadId);
+      const request: HumanRequest = {
+        schemaVersion: 1,
+        reason: decision.level === "publish" ? "git_publish" : "git_destructive",
+        who: view.label(task.threadId),
+        delegatedBy: parent === null ? "tú" : view.label(parent),
+        workflowId: view.workflow.workflowId,
+        taskId: task.taskId,
+        task: task.goal,
+        doing: `Quiere ejecutar ${text}`,
+        needs: `Permiso para ejecutar ${text}`,
+        why,
+        ifRefused:
+          decision.level === "publish"
+            ? "No se publica nada; el trabajo sigue en su rama."
+            : "No se destruye nada; todo queda como está.",
+        blocks: [parent === null ? "el flujo" : view.label(parent)],
+        action: { program: command, args: [...args] },
+        notifyThreadId: parent,
+      };
+      const raised = raiseHumanRequest(store, window.epoch, {
+        projectId: view.workflow.projectId,
+        requestedBy: window.attempt.runId,
+        request,
+      });
+      if (!raised.ok) return refuse(window, raised.reason);
+      return {
+        ok: true,
+        pending: true,
+        requestId: raised.approvalId,
+        note: "not run: a person must grant it. End your turn with what you asked for; your parent hears the answer.",
+      };
+    }
+    const runId = window.attempt.runId;
+    const result = await workspaces.runGit(workspace, command, args, {
+      ...(window.ended === undefined ? {} : { signal: window.ended }),
+      onSpawn: (child) => {
+        try {
+          store.runs.recordCommand(window.epoch, runId, child);
+        } catch {
+          // A command left unrecorded only leaves the sweeps blind to it.
+        }
+      },
+      onExit: (child) => {
+        try {
+          store.runs.markProcessesGone(
+            [{ runId, pid: child.pid, startedAt: child.startedAt }],
+            clock.now(),
+          );
+        } catch {
+          // Unmarked, the next sweep checks it once more.
+        }
+      },
+    });
+    if (!result.ok) return refuse(window, result.reason);
+    store.events.append({
+      aggregateType: "task",
+      aggregateId: task.taskId,
+      type: "git.action",
+      actorKind: "system",
+      actorId: `runtime:${window.epoch}`,
+      payload: {
+        workflowId: view.workflow.workflowId,
+        level: decision.level,
+        command: text,
+        exitCode: result.exitCode,
+        output: `${result.stdout}${result.stderr}`.slice(-2000),
+      },
+      projectId: view.workflow.projectId,
+      taskId: task.taskId,
+      runId,
+    });
+    return result;
+  };
+
+  // The investigador's read of a public page. Never a deciding call.
+  const webCall = async (window: Window, raw: unknown): Promise<DelegationToolResult> => {
+    const view = WorkflowView.load(store, window.attempt.workflowId);
+    const task = view?.task(window.attempt.taskId);
+    if (view === undefined || task === undefined || !isDelegationArchetype(task.role)) {
+      return refuse(window, `run ${window.attempt.runId} is not a turn of a workflow`);
+    }
+    if (
+      !mayRoleUseTool(task.role, view.roleOf(task), "haril_web", {
+        writes: window.workspace !== null,
+      })
+    ) {
+      return refuse(window, "haril_web is only for the investigador role");
+    }
+    const valid = validateDelegationToolInput("haril_web", raw);
+    if (!valid.ok) return refuse(window, `haril_web input: ${valid.errors.join("; ")}`);
+    const read = await readWebPage(valid.input.url, deps.webFetch ?? fetch);
+    return read.ok
+      ? { ok: true, text: read.text, truncated: read.truncated }
+      : refuse(window, read.reason);
+  };
+
   // A workspace tool (phase F8): checked like any call, then done inside the turn's worktree. Never a deciding call.
   const workspaceCall = async (
     window: Window,
@@ -298,12 +436,15 @@ export function createDelegationTools(deps: DelegationToolsDeps): DelegationTool
       return refuse(window, `run ${window.attempt.runId} is not a turn of a workflow`);
     }
     const workspace = window.workspace;
-    if (!mayUseTool(task.role, tool as never, { writes: workspace !== null })) {
+    const roleName = view.roleOf(task);
+    if (!mayRoleUseTool(task.role, roleName, tool as never, { writes: workspace !== null })) {
       return refuse(
         window,
-        mayUseTool(task.role, tool as never, { writes: true })
+        mayRoleUseTool(task.role, roleName, tool as never, { writes: true })
           ? `${tool} works only in a workflow that writes in git worktrees; this workflow is read-only`
-          : `${tool} is not a tool of the ${task.role}`,
+          : roleName === null
+            ? `${tool} is not a tool of the ${task.role}`
+            : `${tool} is not a tool of the ${roleName} role`,
       );
     }
     const workspaces = deps.workspaces;
@@ -326,6 +467,8 @@ export function createDelegationTools(deps: DelegationToolsDeps): DelegationTool
     if (tool === "write" || tool === "edit") {
       const valid = validateWorkspaceFileInput(tool, raw);
       if (!valid.ok) return refuse(window, `${tool} input: ${valid.errors.join("; ")}`);
+      const forbidden = roleWriteProblem(roleName, valid.input.path);
+      if (forbidden !== null) return refuse(window, forbidden);
       let surface: WriteScope = workspace.writeSurface;
       if (task.role === "delegator") {
         const waiting = integration.pending(view.workflow.workflowId);
@@ -354,6 +497,7 @@ export function createDelegationTools(deps: DelegationToolsDeps): DelegationTool
             );
       return reply.ok ? reply : refuse(window, reply.reason);
     }
+    if (tool === "haril_git") return gitCall(window, view, task, workspace, workspaces, raw);
     const valid = validateDelegationToolInput(tool as "haril_run", raw);
     if (!valid.ok) return refuse(window, `${tool} input: ${valid.errors.join("; ")}`);
     if (tool === "haril_run") {
@@ -437,6 +581,14 @@ export function createDelegationTools(deps: DelegationToolsDeps): DelegationTool
           `run ${context.runId} is not a running workflow turn; only a workflow turn may call the delegation tools`,
         );
       }
+      if (tool === "haril_web") {
+        return webCall(window, input).catch((error: unknown) =>
+          refuse(
+            window,
+            `haril_web failed: ${error instanceof Error ? error.message.slice(0, 200) : "unknown error"}`,
+          ),
+        );
+      }
       if (isWorkspaceTool(tool)) {
         return workspaceCall(window, tool, input).catch((error: unknown) =>
           refuse(
@@ -470,5 +622,6 @@ export function createDelegationTools(deps: DelegationToolsDeps): DelegationTool
       window.ended = ended;
     },
     integration,
+    refusalsOf: (runId) => windows.get(runId)?.refusals ?? [],
   };
 }

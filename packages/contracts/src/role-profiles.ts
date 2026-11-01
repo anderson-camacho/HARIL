@@ -141,3 +141,7 @@ export const ROLE_PROFILES = Object.freeze({
 
 export type RoleName = keyof typeof ROLE_PROFILES;
 export const ROLE_NAMES = Object.freeze(Object.keys(ROLE_PROFILES)) as readonly RoleName[];
+
+export function isRoleName(value: string): value is RoleName {
+  return (ROLE_NAMES as readonly string[]).includes(value);
+}

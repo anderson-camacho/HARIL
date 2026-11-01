@@ -156,7 +156,8 @@ export default async function harilBridge(pi: BridgePiApi): Promise<void> {
   // so a name the bridge does not serve fails the handshake instead of being announced.
   let sequence = 0;
   const nextId = (): string => `op-${++sequence}`;
-  const tools = [readTool(channel, nextId)];
+  // A role with no tools (the sintetizador) announces none, so even read is registered only when announced.
+  const tools = announced.includes("read") ? [readTool(channel, nextId)] : [];
   if (announced.includes(PROPOSE_PLAN_TOOL)) tools.push(proposePlanTool(channel, nextId));
   for (const name of new Set(announced)) {
     const spec = DELEGATION_TOOLS[name];
@@ -270,6 +271,9 @@ const LOCAL_ID = text('A short id of letters, digits, "-" or "_", unique among y
 const CHILD_MODEL = text(
   "Optional: the model for this child, one your prompt lists under Models for your children. Leave it out to let the difficulty table choose.",
 );
+const CHILD_ROLE = text(
+  "The role of this child: arquitecto, sintetizador, auditor, seguridad, consejero, product-owner, backend, frontend, disenador, tester, fixer, investigador, consultor, sanitizador, documentador, git or vigilante.",
+);
 const SCHEMA_VERSION = { type: "integer", description: "Always 1." };
 const MEMO = text(
   "A note to your future self, at most 2000 characters: it comes back in your next turn.",
@@ -300,6 +304,7 @@ const DELEGATION_TOOLS: Readonly<Record<string, DelegationToolSpec>> = {
               priority: { type: "integer", description: "0 (lowest) to 9 (highest)." },
               acceptanceCriteria: texts("What must be true when the part is done, in words."),
               model: CHILD_MODEL,
+              role: CHILD_ROLE,
               budget: BUDGET,
             },
             required: [
@@ -354,6 +359,7 @@ const DELEGATION_TOOLS: Readonly<Record<string, DelegationToolSpec>> = {
               difficultyReason: text("Why it is that difficult."),
               dependsOn: texts("localIds of steps it waits for (their approval); [] for none."),
               model: CHILD_MODEL,
+              role: CHILD_ROLE,
               budget: BUDGET,
             },
             required: [
@@ -488,6 +494,30 @@ const DELEGATION_TOOLS: Readonly<Record<string, DelegationToolSpec>> = {
         args: texts('Its arguments, for example ["test"].'),
       },
       required: ["command"],
+    },
+  },
+  haril_git: {
+    label: "Git",
+    description:
+      "Git role only: run git or gh by its argv. A read or a change to your own worktree runs at once; a push, a pull request, a release or anything destructive waits for a person, and merging to main is refused.",
+    parameters: {
+      type: "object",
+      properties: {
+        command: text('"git" or "gh".'),
+        args: texts('Its arguments, for example ["status"].'),
+        why: text("Why this is needed, in one sentence: it is what the person reads."),
+      },
+      required: ["command", "args", "why"],
+    },
+  },
+  haril_web: {
+    label: "Read web page",
+    description:
+      "Investigador only: read one public web page by its https URL; the answer has its text, cut to a limit. Private addresses are refused.",
+    parameters: {
+      type: "object",
+      properties: { url: text("The https URL.") },
+      required: ["url"],
     },
   },
   haril_merge: {

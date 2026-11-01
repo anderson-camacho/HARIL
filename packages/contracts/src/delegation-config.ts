@@ -383,6 +383,22 @@ export const DELEGATION_FIELDS: readonly DelegationField[] = Object.freeze([
     effect: "new workflows",
   },
   {
+    path: "limits.maxCouncillors",
+    group: "limits",
+    label: "Max councillors in one discussion (its minimum, 3, is fixed)",
+    kind: int(3, 20, "count"),
+    default: 5,
+    effect: "new workflows",
+  },
+  {
+    path: "limits.maxHandoffsPerTask",
+    group: "limits",
+    label: "Handoffs of one task before it stops with an explanation",
+    kind: int(0, 20, "count"),
+    default: 3,
+    effect: "new workflows",
+  },
+  {
     // M2-D5: every model call of a real agent of the project is charged to it, over the project's whole life.
     path: "limits.projectTokens",
     group: "limits",
@@ -487,6 +503,14 @@ export const DELEGATION_FIELDS: readonly DelegationField[] = Object.freeze([
     label: "Checks without progress before closing",
     kind: int(1, 10, "count"),
     default: 1,
+    effect: "next runtime start",
+  },
+  {
+    path: "watchdog.vigilanteAnalysis",
+    group: "watchdog",
+    label: "The vigilante also asks a model to analyse what it found (costs tokens)",
+    kind: { type: "boolean" },
+    default: false,
     effect: "next runtime start",
   },
   {
@@ -836,6 +860,8 @@ export interface DelegationSettings {
     readonly largeTaskTokens: number;
     readonly attemptTimeoutMs: number;
     readonly minAuditorTokens: number;
+    readonly maxCouncillors: number;
+    readonly maxHandoffsPerTask: number;
     // The project's budget, not a workflow's: real agents read it at each launch.
     readonly projectTokens: number;
   };
@@ -876,6 +902,7 @@ export interface DelegationSettings {
   // `haril workflow start --base` wins over it.
   readonly git: { readonly baseBranch: string | null };
   readonly watchdog: {
+    readonly vigilanteAnalysis: boolean;
     readonly intervalMs: number;
     readonly idleStrikesToClose: number;
     readonly closeResidualImmediately: true;

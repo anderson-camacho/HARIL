@@ -166,6 +166,8 @@ export const FactoryModelSchema = Type.Object(
           tokens: Count,
           criteria: Criteria,
           explanation: WaitExplanationSchema,
+          // What else the person should know: a model repeated in a discussion, a review on one vendor.
+          notes: Type.Array(Type.String()),
           closedAt: Nullable(Type.Number()),
           updatedAt: Type.Number(),
         },
@@ -189,6 +191,15 @@ export const FactoryModelSchema = Type.Object(
           depth: Count,
           // The agents whose work it waits for; empty when it waits for no agent.
           waitingFor: Type.Array(Type.String()),
+          // What it did last, from what the host saw; null before anything happened.
+          activity: Nullable(Type.String()),
+          // What it answered at the end of each of its turns, oldest first, cut to a screenful.
+          said: Type.Array(
+            Type.Object(
+              { at: Type.Number(), text: Type.String() },
+              { additionalProperties: false },
+            ),
+          ),
         },
         { additionalProperties: false },
       ),
@@ -221,6 +232,43 @@ export const FactoryModelSchema = Type.Object(
           kind: Type.Union([Type.Literal("model"), Type.Literal("agent")]),
           from: Type.String(),
           to: Type.String(),
+          // Why it moved; null for a model replaced at a launch.
+          reason: Nullable(Type.String()),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    // A person's messages to agents, oldest first: waiting, delivered to a turn, applied when that turn closed.
+    messages: Type.Array(
+      Type.Object(
+        {
+          id: Type.String(),
+          workflowId: Type.String(),
+          agent: Type.String(),
+          text: Type.String(),
+          urgent: Type.Boolean(),
+          from: Type.String(),
+          at: Type.Number(),
+          state: Type.Union([
+            Type.Literal("waiting"),
+            Type.Literal("delivered"),
+            Type.Literal("applied"),
+          ]),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    // What the git role ran, or what a person granted, oldest first.
+    gitActions: Type.Array(
+      Type.Object(
+        {
+          at: Type.Number(),
+          workflowId: Nullable(Type.String()),
+          agent: Nullable(Type.String()),
+          level: Type.String(),
+          command: Type.String(),
+          exitCode: Nullable(Type.Number()),
+          output: Type.String(),
         },
         { additionalProperties: false },
       ),
@@ -246,14 +294,37 @@ export const FactoryModelSchema = Type.Object(
     humanRequests: Type.Array(
       Type.Object(
         {
-          // An approval to grant or deny, a workflow stop to lift, or a task blocked on a person.
-          kind: Type.Union([Type.Literal("approval"), Type.Literal("stop"), Type.Literal("task")]),
+          // An approval to grant or deny, a workflow stop to lift, a task blocked on a person, or an agent's request.
+          kind: Type.Union([
+            Type.Literal("approval"),
+            Type.Literal("stop"),
+            Type.Literal("task"),
+            Type.Literal("human"),
+          ]),
           id: Type.String(),
           workflowId: Nullable(Type.String()),
           projectSlug: Type.String(),
           title: Type.String(),
           explanation: WaitExplanationSchema,
           at: Type.Number(),
+          // The uniform record of an agent's request; null for the other kinds.
+          request: Nullable(
+            Type.Object(
+              {
+                reason: Type.String(),
+                who: Type.String(),
+                delegatedBy: Type.String(),
+                task: Type.String(),
+                doing: Type.String(),
+                needs: Type.String(),
+                why: Type.String(),
+                ifRefused: Type.String(),
+                blocks: Type.Array(Type.String()),
+                action: Nullable(Type.String()),
+              },
+              { additionalProperties: false },
+            ),
+          ),
         },
         { additionalProperties: false },
       ),

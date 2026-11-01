@@ -1,10 +1,12 @@
-import type {
-  AssignInput,
-  CheckpointRequest,
-  DelegateInput,
-  DelegationToolName,
-  Difficulty,
-  WorkflowState,
+import {
+  type AssignInput,
+  type CheckpointRequest,
+  type DelegateInput,
+  type DelegationToolName,
+  type Difficulty,
+  isRoleName,
+  ROLE_NAMES,
+  type WorkflowState,
 } from "@haril/contracts";
 import {
   ARCHETYPES,
@@ -19,8 +21,10 @@ import {
   type ModelSelectionContext,
   modelPin,
 } from "./choose-model.js";
+import { councilProposalProblem } from "./council.js";
 import { surfacesMayOverlap } from "./globs.js";
 import type { DelegationLimits } from "./limits.js";
+import { roleMayWrite } from "./role-policy.js";
 
 // Validation of a delegation proposal (docs/modos-y-delegacion.md 3.6). Agents propose through haril_delegate and
 // haril_assign; this pure rule decides, and only an accepted proposal reaches the Runtime, which creates the tasks.
@@ -80,6 +84,9 @@ export type DelegationIssueCode =
   | "duplicate_task_id"
   | "unknown_dependency"
   | "cycle"
+  | "unknown_role"
+  | "role_cannot_write"
+  | "council_size"
   | ModelRejection
   | "checkpoint_removes_stop";
 
@@ -192,6 +199,12 @@ export function checkDelegation(
 
   const graphIssues = graphIssuesOf(children);
   issues.push(...graphIssues);
+  issues.push(...roleIssues(children));
+  const council = councilProposalProblem(
+    children.map((item) => item.role),
+    limits,
+  );
+  if (council !== null) issues.push({ code: "council_size", message: council });
   issues.push(...modelIssues(children, childArchetype, state.models));
 
   const change = checkpointChange(proposal.checkpoints);
@@ -240,6 +253,29 @@ function gateIssue(
     };
   }
   return null;
+}
+
+// A role names a profile, and a role that may not write gets no write surface: the host would refuse every write anyway.
+function roleIssues(children: readonly ProposedChild[]): DelegationIssue[] {
+  const issues: DelegationIssue[] = [];
+  for (const item of children) {
+    const role = item.role ?? null;
+    if (role === null) continue;
+    if (!isRoleName(role)) {
+      issues.push({
+        code: "unknown_role",
+        localId: item.localId,
+        message: `child "${item.localId}" names role "${role}"; the roles are ${ROLE_NAMES.join(", ")}`,
+      });
+    } else if (item.writeSurface.length > 0 && !roleMayWrite(role)) {
+      issues.push({
+        code: "role_cannot_write",
+        localId: item.localId,
+        message: `child "${item.localId}" is a ${role}, which may not write; leave its write surface empty or give the step to a role that writes`,
+      });
+    }
+  }
+  return issues;
 }
 
 // Duplicates, unknown dependencies and cycles among the proposal's local ids (the plan-graph rules, on this shape).
