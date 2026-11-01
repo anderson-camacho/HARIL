@@ -1,24 +1,16 @@
-import type { BodyLine } from "./factory-board.js";
-import {
-  type FactoryGlyphs,
-  FactoryGrid,
-  type FactorySeg,
-  type FactoryToken,
-  factoryCell,
-} from "./factory-kit.js";
+import { type BodyLine, roleLabel } from "./factory-board.js";
+import { type FactoryGlyphs, FactoryGrid, type FactoryToken, factoryCell } from "./factory-kit.js";
 import { agoText } from "./factory-models.js";
 import { connectionAgents } from "./factory-rows.js";
 import type { FactoryState, FactoryTarget } from "./factory-state.js";
 import type { FactoryAgent, FactoryEvent, FactoryModel } from "./factory-types.js";
-import { plainText, truncate } from "./text.js";
+import { plainText, textWidth, truncate } from "./text.js";
 
 // The Conexiones tab: who delegated to whom, from the read model's edges and events. A chain of boxes for the selected
 // agent (dns-resolver-chain), the delegation tree with its path lit (binary-tree), the whole network with what is in flight
 // (network-topology), the selected agent's events as a sequence (sequence-diagram), and a handoff when one happened
 // (blue-green-deploy). Every view falls back to an indented tree when it does not fit, and the selected agent's wait is
 // always below it.
-
-type Seg = FactorySeg<FactoryTarget>;
 
 const CHAIN_BOX = 18;
 const CHAIN_GAP = 4;
@@ -136,7 +128,7 @@ function chainBody(
       truncate(plainText(agent.code), CHAIN_BOX - 4),
       agent === selected ? "text" : "blue",
     );
-    grid.text(x + 2, 2, truncate(plainText(agent.role), CHAIN_BOX - 4), "muted");
+    grid.text(x + 2, 2, truncate(roleLabel(plainText(agent.role)), CHAIN_BOX - 4), "muted");
     if (index > 0) {
       const active = busy;
       for (let gap = 0; gap < CHAIN_GAP; gap++) {
@@ -166,8 +158,10 @@ function chainBody(
       lines.push([
         factoryCell(event.agent ?? "", 9, "muted"),
         factoryCell(event.type, 24, "blue"),
-        factoryCell(event.text, Math.max(0, width - 45), "muted"),
-        factoryCell(agoText(event.at, model.generatedAt), 12, "dim", true),
+        factoryCell(event.text, Math.max(0, width - 50), "muted"),
+        { text: " ", token: "dim" },
+        // Wide enough for "hace un momento".
+        factoryCell(agoText(event.at, model.generatedAt), 16, "dim", true),
       ]);
     }
   }
@@ -384,10 +378,16 @@ function sequenceBody(
     if (x1 > x0) grid.text(x1 - 1, y + 1, g.arrowRight, "text");
     else grid.text(x1 + 1, y + 1, g.arrowLeft, "text");
   });
-  const head: Seg[] = codes.map((code) =>
-    factoryCell(code, step, code === selected.code ? "yellow" : "blue"),
-  );
-  return [head, ...Array.from({ length: room * 2 }, (_, row) => grid.segs<FactoryTarget>(row))];
+  // Each name sits over its own lifeline.
+  const head = new FactoryGrid(width, 1);
+  for (const code of codes) {
+    const x = columnOf(code) - Math.floor(textWidth(code) / 2);
+    head.text(Math.max(0, x), 0, code, code === selected.code ? "yellow" : "blue");
+  }
+  return [
+    head.segs<FactoryTarget>(0),
+    ...Array.from({ length: room * 2 }, (_, row) => grid.segs<FactoryTarget>(row)),
+  ];
 }
 
 function handoffBody(

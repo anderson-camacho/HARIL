@@ -19,34 +19,19 @@ const TOPIC_TOKENS: readonly FactoryToken[] = [
 const MIN_WIDTH = 70;
 const MIN_HEIGHT = 16;
 const LABEL_MAX = 18;
+const ROOT_LABEL_MAX = 26;
+const MIN_LABEL = 6;
 
-function slope(dx: number, dy: number): string {
-  const ax = Math.abs(dx);
-  const ay = Math.abs(dy) * 2;
-  if (ay < ax * 0.4) return "─";
-  if (ax < ay * 0.4) return "│";
-  return dx * dy > 0 ? "╲" : "╱";
+interface Place {
+  readonly x: number;
+  readonly y: number;
+  readonly left: boolean;
+  // The rows its leaves may use.
+  readonly top: number;
+  readonly bottom: number;
 }
 
-function line(
-  grid: FactoryGrid,
-  x0: number,
-  y0: number,
-  x1: number,
-  y1: number,
-  token: FactoryToken,
-  g: FactoryGlyphs,
-): void {
-  const steps = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0) * 2, 1);
-  const ascii = !g.braille;
-  const raw = slope(x1 - x0, y1 - y0);
-  const char = ascii ? ({ "─": "-", "│": "|", "╲": "\\", "╱": "/" }[raw] ?? raw) : raw;
-  for (let step = 0; step <= steps; step++) {
-    const at = step / steps;
-    grid.set(Math.round(x0 + (x1 - x0) * at), Math.round(y0 + (y1 - y0) * at), char, token);
-  }
-}
-
+// Draws the box, and answers its left edge.
 function box(
   grid: FactoryGrid,
   centerX: number,
@@ -54,9 +39,10 @@ function box(
   text: string,
   token: FactoryToken,
   double: boolean,
+  max: number,
   g: FactoryGlyphs,
-): void {
-  const label = truncate(text, LABEL_MAX + (double ? 8 : 0));
+): number {
+  const label = truncate(text, max);
   const width = [...label].length + 4;
   const left = Math.max(0, Math.min(grid.width - width, centerX - Math.floor(width / 2)));
   const ascii = !g.braille;
@@ -69,7 +55,33 @@ function box(
   grid.text(left, y, `${v}${" ".repeat(width - 2)}${v}`, token);
   grid.text(left + 2, y, label, double ? "yellow" : "text");
   grid.text(left, y + 1, `${bl}${h.repeat(width - 2)}${br}`, token);
+  return left;
 }
+
+function horizontal(
+  grid: FactoryGrid,
+  from: number,
+  to: number,
+  y: number,
+  token: FactoryToken,
+  g: FactoryGlyphs,
+): void {
+  for (let x = Math.min(from, to); x <= Math.max(from, to); x++) grid.set(x, y, g.h, token);
+}
+
+function vertical(
+  grid: FactoryGrid,
+  x: number,
+  from: number,
+  to: number,
+  token: FactoryToken,
+  g: FactoryGlyphs,
+): void {
+  for (let y = Math.min(from, to); y <= Math.max(from, to); y++) grid.set(x, y, g.v, token);
+}
+
+// A junction joining three lines: ASCII has one character for them all.
+const tee = (char: string, g: FactoryGlyphs): string => (g.braille ? char : "+");
 
 interface Topic {
   readonly task: FactoryTask;
@@ -120,6 +132,81 @@ function treeLines(
   return lines;
 }
 
+// From the part's box along its row to the middle's column, and along that column to the goal, which is drawn over it.
+function joinToRoot(
+  grid: FactoryGrid,
+  place: Place,
+  places: readonly Place[],
+  centerX: number,
+  centerY: number,
+  token: FactoryToken,
+  g: FactoryGlyphs,
+): void {
+  horizontal(grid, place.x, centerX, place.y, token, g);
+  if (place.y === centerY) return;
+  vertical(grid, centerX, place.y, centerY, token, g);
+  const above = place.y < centerY;
+  const bothSides = places.filter((row) => row.y === place.y).length > 1;
+  const corner = bothSides
+    ? tee(above ? "┬" : "┴", g)
+    : above
+      ? place.left
+        ? g.topRight
+        : g.topLeft
+      : place.left
+        ? g.bottomRight
+        : g.bottomLeft;
+  grid.set(centerX, place.y, corner, token);
+}
+
+// The part's tasks, half above its box and half below, each on its own row joined to the box by a square line.
+function leaves(
+  grid: FactoryGrid,
+  place: Place,
+  tasks: readonly FactoryTask[],
+  width: number,
+  token: FactoryToken,
+  g: FactoryGlyphs,
+): void {
+  const roomAbove = Math.max(0, place.y - 2 - place.top + 1);
+  const roomBelow = Math.max(0, place.bottom - (place.y + 2) + 1);
+  const room = roomAbove + roomBelow;
+  const hidden = tasks.length > room ? tasks.length - Math.max(0, room - 1) : 0;
+  const count = hidden > 0 ? Math.max(0, room - 1) : tasks.length;
+  const rows = count + (hidden > 0 && room > 0 ? 1 : 0);
+  const above = Math.min(roomAbove, Math.ceil(rows / 2));
+  const below = Math.min(roomBelow, rows - above);
+  const places = [
+    ...Array.from({ length: above }, (_, at) => place.y - 2 - (above - 1 - at)),
+    ...Array.from({ length: below }, (_, at) => place.y + 2 + at),
+  ];
+  if (above > 0) vertical(grid, place.x, place.y - 1 - above, place.y - 2, token, g);
+  if (below > 0) vertical(grid, place.x, place.y + 2, place.y + 1 + below, token, g);
+  const maxLabel = Math.max(4, Math.floor(width * 0.2) - 2);
+  places.forEach((y, at) => {
+    const leaf = tasks[at];
+    const isMore = at >= count;
+    const label = truncate(isMore ? `+ ${hidden} más` : (leaf?.title ?? ""), maxLabel);
+    const x = place.left ? 1 : width - [...label].length - 3;
+    const lineEnd = place.left ? x + 2 + [...label].length + 1 : x - 2;
+    horizontal(grid, lineEnd, place.x + (place.left ? -1 : 1), y, token, g);
+    if (leaf !== undefined && !isMore) grid.set(x, y, g.dot, COLUMN_DOT[leaf.column] ?? token);
+    grid.text(x + 2, y, label, "muted");
+    const farthest = y === place.y - 1 - above || y === place.y + 1 + below;
+    const isAbove = y < place.y;
+    const end = !farthest
+      ? tee(place.left ? "┤" : "├", g)
+      : isAbove
+        ? place.left
+          ? g.topRight
+          : g.topLeft
+        : place.left
+          ? g.bottomRight
+          : g.bottomLeft;
+    grid.set(place.x, y, end, token);
+  });
+}
+
 export function mindMapBody(
   state: FactoryState,
   width: number,
@@ -139,46 +226,56 @@ export function mindMapBody(
   const grid = new FactoryGrid(width, height);
   const centerX = Math.floor(width / 2);
   const centerY = Math.floor(height / 2);
-  // Topics go round the middle: first to the left and right of it, then above and below.
-  const places = topics.slice(0, TOPIC_TOKENS.length).map((_, index, list) => {
-    const left = index % 2 === 0;
-    const rowsPerSide = Math.ceil(list.length / 2);
+  const shown = topics.slice(0, TOPIC_TOKENS.length);
+  const rootMax = Math.min(ROOT_LABEL_MAX, Math.max(MIN_LABEL, Math.floor(width * 0.2)));
+  const rootEdge = centerX - Math.floor((rootMax + 4) / 2);
+  // Topics go to the left and the right of the middle, each with its own band of rows for its leaves.
+  const rowsPerSide = Math.ceil(shown.length / 2);
+  const places = shown.map((_, index): Place => {
     const row = Math.floor(index / 2);
-    const y = Math.round(((row + 1) * height) / (rowsPerSide + 1));
-    const x = left ? Math.floor(width * 0.26) : Math.floor(width * 0.74);
-    return { x, y: Math.max(1, Math.min(height - 2, y)), left };
+    const top = Math.floor((row * height) / rowsPerSide);
+    const bottom = Math.floor(((row + 1) * height) / rowsPerSide) - 1;
+    const y = Math.max(1, Math.min(height - 2, Math.floor((top + bottom + 1) / 2)));
+    const left = index % 2 === 0;
+    return { x: Math.floor(width * (left ? 0.26 : 0.74)), y, left, top, bottom };
   });
-  topics.slice(0, TOPIC_TOKENS.length).forEach((topic, index) => {
-    const place = places[index] as { x: number; y: number; left: boolean };
+  const topicMax = Math.min(
+    LABEL_MAX,
+    Math.max(MIN_LABEL, (rootEdge - 2 - Math.floor(width * 0.26)) * 2 - 4),
+  );
+  shown.forEach((topic, index) => {
+    const place = places[index] as Place;
     const token = TOPIC_TOKENS[index] as FactoryToken;
-    line(grid, centerX, centerY, place.x, place.y, token, g);
-    topic.leaves.slice(0, 4).forEach((leaf, at, leaves) => {
-      const y =
-        place.y +
-        at -
-        Math.floor(leaves.length / 2) +
-        (at >= Math.floor(leaves.length / 2) ? 2 : -1);
-      const clamped = Math.max(0, Math.min(height - 1, y));
-      const label = truncate(leaf.title, Math.max(4, Math.floor(width * 0.2) - 2));
-      const x = place.left ? 1 : width - [...label].length - 3;
-      line(
-        grid,
-        place.x,
-        place.y,
-        place.left ? x + [...label].length + 2 : x - 1,
-        clamped,
-        token,
-        g,
-      );
-      grid.set(x, clamped, g.dot, COLUMN_DOT[leaf.column] ?? token);
-      grid.text(x + 2, clamped, label, "muted");
-    });
+    joinToRoot(grid, place, places, centerX, centerY, token, g);
+    leaves(grid, place, topic.leaves, width, token, g);
   });
-  topics.slice(0, TOPIC_TOKENS.length).forEach((topic, index) => {
-    const place = places[index] as { x: number; y: number };
-    box(grid, place.x, place.y, topic.task.title, TOPIC_TOKENS[index] as FactoryToken, false, g);
+  shown.forEach((topic, index) => {
+    const place = places[index] as Place;
+    box(
+      grid,
+      place.x,
+      place.y,
+      topic.task.title,
+      TOPIC_TOKENS[index] as FactoryToken,
+      false,
+      topicMax,
+      g,
+    );
   });
-  box(grid, centerX, centerY, root?.title ?? workflow.goal, "yellow", true, g);
-  if (g.braille) grid.set(Math.max(0, centerX - 16), centerY, "◆", "orange");
+  const edge = box(
+    grid,
+    centerX,
+    centerY,
+    root?.title ?? workflow.goal,
+    "yellow",
+    true,
+    rootMax,
+    g,
+  );
+  if (g.braille && edge > 0) grid.set(edge - 1, centerY, "◆", "orange");
+  if (topics.length > shown.length) {
+    const more = `+ ${topics.length - shown.length} partes más`;
+    grid.text(centerX - Math.floor(more.length / 2), height - 1, more, "muted");
+  }
   return Array.from({ length: height }, (_, y) => grid.segs(y));
 }

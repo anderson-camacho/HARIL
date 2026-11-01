@@ -56,6 +56,12 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 - Sin capacidad un flujo ya no falla en silencio. Cuando ningún modelo puede correr una tarea, esta se detiene y explica qué modelos probó y por qué, quién los usa y cuándo se libera el primero (`capacity.waiting`, código `blocked_no_capacity`). Reintenta sola cuando se libera y, como mínimo, cada minuto, y sigue en cuanto haya capacidad. `limits.maxWorkflowWallMs` sigue siendo el tope: pasado, el flujo falla con `wall_time`.
 - La tabla de dificultad ya no pone `*flash-high` primero en `hard`: ahora es `*sonnet*`, `*flash-high`, `*pro`. Motivo: 19,1 % en Terminal-Bench 4.0, según una fuente secundaria.
 
+### Corregido
+
+- Mapa mental del Tablero: las líneas ya no quedan sueltas ni en diagonal. Cada parte queda en la fila de la meta o unida a ella con una línea en escuadra, sus hojas se ven todas las que caben y el resto se cuenta con «+ N más».
+- Conexiones: en Secuencia cada nombre queda sobre su propia línea de vida; en Cadena el rol sale en español y la edad de un evento se lee entera («hace un momento»).
+- Tablero: una columna llena del plan ya no se pega a la siguiente. Modelos: los medidores de 5 horas y de semana quedan separados, y la edad de una cuenta ya no se pega a la esquina del recuadro.
+
 ### Limitaciones
 
 - El atajo es `Alt+G` y no `Alt+F`, que es de Pi (`tui.editor.cursorWordRight`): la consola no sobrescribe atajos propios de Pi.
@@ -69,7 +75,8 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 - Pruebas de la consola con un Pi simulado: colores RGB exactos, alternativas 256, sin color y ASCII, reductor, ancho de 1 a 200 columnas y alto de 1 a 60 filas en todas las vistas, y apertura del overlay en los cuatro modos.
 - Pruebas de `haril factory` y de las explicaciones con el almacén real y agentes simulados; prueba gemela de los tipos de la consola contra los contratos.
 - Prueba de punta a punta de «hazme una página» con almacén, bucle y repositorio git reales y agentes simulados: plan, consultor, diseñador y frontend, tester que falla y vuelve a su padre, fixer, tester que pasa, product-owner y git pidiendo permiso; el empuje se simula.
-- No verificado: Pi real, un terminal real, clics reales, una publicación real, ni una actualización real.
+- `haril console` del build, en Pi 1.2.0 real dentro de una pseudoconsola de Windows (ConPTY) sin credenciales ni modelos: arranca, `/haril-factory` abre la fábrica, las pestañas responden, el mapa se dibuja y `/quit` sale con código 0 sin procesos sobrantes.
+- No verificado: Windows Terminal en persona, clics reales, un agente con modelo real, una publicación real, ni una actualización real.
 
 ---
 

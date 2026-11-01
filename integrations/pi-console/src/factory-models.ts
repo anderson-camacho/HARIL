@@ -155,7 +155,7 @@ function cardLines(
     .filter((part) => part !== null)
     .join(" · ");
   const age = agoText(account.readAt, now);
-  const fill = Math.max(0, inner - 3 - textWidth(plainText(title)) - textWidth(age) - 2);
+  const fill = Math.max(0, inner - 3 - textWidth(plainText(title)) - textWidth(age) - 4);
   const holders = account.holders.length === 0 ? "ningún agente" : account.holders.join(", ");
   const rows: Seg[][] = [
     ...account.groups.flatMap((group) => groupLines(group, inner, thresholds, now, g)),
@@ -174,7 +174,7 @@ function cardLines(
         { text: title, token: "blue" },
         { text: ` ${g.h.repeat(fill)} `, token: border },
         { text: age, token: "muted" },
-        { text: g.topRight, token: border },
+        { text: ` ${g.h}${g.topRight}`, token: border },
       ],
       width,
     ),
@@ -279,7 +279,8 @@ function monitorBody(
         ...(room >= 12
           ? [
               ...meterSegs("5h", group.window5h, meter, thresholds),
-              ...meterSegs("7d", group.weekly, room - meter, thresholds),
+              { text: " ", token: "dim" } satisfies Seg,
+              ...meterSegs("7d", group.weekly, room - meter - 1, thresholds),
             ]
           : meterSegs("5h", group.window5h, room, thresholds)),
       ]);

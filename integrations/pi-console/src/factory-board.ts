@@ -300,8 +300,11 @@ function rolloutRow(
   return [
     { text: selected ? `${g.pointer} ` : "  ", token: "blue" },
     factoryCell(task.agent, codeWidth, "text"),
-    factoryCell(task.title, titleWidth, "text"),
-    factoryCell(task.explanation.what, stateWidth, COLUMN_TOKEN[task.column]),
+    // A full column keeps one space before the next.
+    factoryCell(task.title, titleWidth - 1, "text"),
+    { text: " ", token: "dim" },
+    factoryCell(task.explanation.what, stateWidth - 1, COLUMN_TOKEN[task.column]),
+    { text: " ", token: "dim" },
     ...(attemptsWidth > 0 ? [factoryCell<FactoryTarget>(attempts, attemptsWidth, "muted")] : []),
     ...(modelWidth > 0
       ? [factoryCell<FactoryTarget>(task.model ?? "sin modelo", modelWidth, "muted")]
