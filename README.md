@@ -432,6 +432,57 @@ El vigilante es código, no un modelo, y no gasta tokens: cada 15 minutos el del
 .\bin\haril.ps1 workflow stop <id>
 ```
 
+### La fábrica (`Alt+G` o `/haril-factory`)
+
+La fábrica muestra el trabajo de los agentes a pantalla completa, desde cualquiera de los cuatro modos. Mirar no amplía permisos: CONSULT no puede escribirle a un agente ni aprobar nada, y CONSULT y PLAN no cambian ajustes. `ACTION` nunca cambia de modelo solo: al pasar el umbral te avisa y tú decides con `/model`.
+
+| Pestaña | Qué ves | Teclas propias |
+|---|---|---|
+| `1` Avance | Anillo, indicadores y barras; `Compuertas` muestra los pasos del flujo y qué falta | `[` `]` cambian de vista |
+| `2` Actividades | Bandeja; `Te necesitan` son las peticiones a ti, agrupadas por tipo | `e` eventos, `a` aprobar, `d` negar, `w` responder |
+| `3` Tablero | Cinco columnas con la explicación de lo detenido; `[` `]` lo pasa a mapa | `h`/`l` columna, `n` nueva, `c` continuar |
+| `4` Agentes | Lista como `htop` con tokens y contexto | `Enter` o `c` abre el chat, `i` el detalle, `t` árbol |
+| `5` Conexiones | Cadena, árbol, red, secuencia y relevo | `[` `]` |
+| `6` Modelos | Cuentas, grupos, cuota e historial | `[` `]`, `r` releer |
+| `7` Sistema | Mapa, inventario, ajustes y lo que hizo el rol git | `[` `]`, `Enter` editar |
+
+`←`/`→` o `Tab` cambian de pestaña, `/` busca y `Esc` vuelve o cierra.
+
+**Roles.** Cada tarea nombra uno de 17 roles, y el rol limita en código lo que puede usar:
+
+| Rol | Puede |
+|---|---|
+| consultor, auditor, seguridad, consejero, product-owner, vigilante, arquitecto | Solo leer |
+| investigador | Leer y la web pública |
+| sintetizador | Nada: recibe las opiniones en su mensaje |
+| backend, frontend, disenador, tester, fixer, sanitizador | Escribir en su worktree, dentro de su superficie |
+| documentador | Escribir solo documentación |
+| git | El único con git. Publicar o destruir siempre te pregunta, y nunca fusiona a `main` |
+
+Una discusión necesita al menos 3 consejeros con opinión válida (`delegation.limits.maxCouncillors`, 5 por defecto, fija el máximo); con menos se detiene y lo explica. El sintetizador no cuenta. Seguridad revisa con dos proveedores si hay dos conectados, y si no dice que corrió con uno.
+
+**Listas de modelos.** `delegation.roles.<rol>` guarda `models` en orden, `floor` y `enabled`:
+
+```bash
+haril config get delegation.roles.backend.models
+haril config set delegation.limits.maxHandoffsPerTask 2
+```
+
+**Relevo.** Cuando la cuenta del modelo pasa `quota.switchAtPercent5h`, o el contexto de un rol que escribe se llena, el agente deja lo hecho y otro sigue la misma tarea y el mismo worktree en el siguiente modelo de la lista, en su próximo punto seguro. `limits.maxHandoffsPerTask` lo limita; pasado el tope, o sin sucesor, se detiene y dice por qué.
+
+**Hablar con un agente.** Un intento acepta un solo mensaje inicial, así que lo tuyo llega al terminar su turno, o de inmediato con `--urgent`, que detiene el intento y lo reanuda con tu mensaje:
+
+```bash
+haril factory message <tarea o agente> "Usa el otro archivo" [--urgent]
+haril factory answer <petición> approve|deny|write "texto"
+```
+
+**Clave de gestión.** Para ver la cuota real, conecta CLIProxy: guarda la clave en una variable de entorno y di cuál es. HARIL guarda el nombre de la variable, nunca la clave.
+
+```bash
+haril config set delegation.quota.managementKeyEnv HARIL_CLIPROXY_KEY
+```
+
 ### Idioma de la interfaz HARIL / HARIL UI language
 
 Puedes cambiar el idioma de los menús y mensajes **propios de HARIL** sin reiniciar la consola:
@@ -493,6 +544,8 @@ En terminales de **120 columnas y 40 filas o más**, el encabezado HARIL muestra
 **Limitación real de Pi 1.2.0:** su API solo dibuja encabezado, pie y widgets verticales; no ofrece una división del historial a altura completa. Por eso la columna está **anclada al extremo derecho del encabezado**, no sobre el contenido desplazable del chat. Los nombres de extensiones del banner inicial de Pi tampoco son accesibles por la API; se muestran los estados que Pi comunica y los avisos propios de HARIL.
 
 ### Actualizar HARIL (sin repositorio local)
+
+`haril update` muestra una fila por componente y marca ✓ solo tras verificar la versión instalada. Si HARIL falla a medias vuelve a la versión anterior, los demás componentes siguen, el resumen final dice qué pasó y qué hacer, y la salida es distinta de cero si algo falló. Skills, MCP y plantillas dicen `No lo gestiona HARIL`. El registro queda en `<raíz>/logs/`.
 
 Para consultar y actualizar desde cualquier carpeta:
 

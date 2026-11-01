@@ -34,24 +34,42 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 - `quota.reservePercent` (10 por defecto): la última parte de cada ventana que ninguna elección toma.
 - Sistema: mapa de arquitectura (consola, runtime, CLIProxy, cuentas, SQLite y Engram) con su salud real; inventario de skills, MCP, integraciones y plantillas, reutilizando la lista de TOOLS; y ajustes generados de `DELEGATION_FIELDS`, con interruptores, deslizadores con `←`/`→`, `Enter` para el valor exacto y la consecuencia de cada cambio. `✓ Guardado` aparece solo cuando `haril config set` escribió de verdad, CONSULT y PLAN lo rechazan, y un secreto nunca se muestra.
 
+- Roles con efecto real: el orquestador nunca ejecuta, escribe su plan en el memo y nombra un rol en cada tarea, sin secuencia fija; llamar al consejo es su criterio. Las instrucciones estables van primero para aprovechar la caché del proveedor y lo que cambia al final.
+- Herramientas por rol, en código: consultor, auditor, seguridad, consejero, product-owner, vigilante y arquitecto solo leen; investigador lee y usa `haril_web` (solo https públicas); sintetizador no tiene herramientas y recibe las opiniones en su mensaje; documentador escribe solo documentación; los que escriben siguen limitados a su worktree y superficie. El puente registra justo esa lista, el saludo la comprueba y el host rechaza lo demás. Un rol inexistente o una superficie de escritura para quien no escribe se rechazan al proponer.
+- Rol `git` con `haril_git`, el único con git: lectura y cambios locales corren; publicar y destruir generan una petición a una persona y solo corren si la concede; nada se fusiona ni se empuja a `main`.
+- Discusiones: al menos 3 opiniones válidas, comprobado en código. Una propuesta con menos se rechaza, y con menos respuestas el flujo se detiene y lo explica. Cada consejero toma otro modelo si puede, y un modelo repetido queda marcado. Un consejero vacío se reintenta en otro modelo. `limits.maxCouncillors` fija el máximo, 5 por defecto.
+- Seguridad revisa con dos proveedores cuando hay dos conectados; si no, la tarjeta dice que corrió con uno.
+- Vigilante en código: turno sin avance, tokens sin progreso, contexto alto y errores repetidos llegan al padre como evento. Solo con `watchdog.vigilanteAnalysis` se pide además un análisis a un modelo.
+- Una tarea fallida vuelve a su padre con el error, lo intentado y lo hecho. Decide reintentar, enviar un fixer, cambiar de modelo o replanear. Un tester que falla vuelve de inmediato, sin repetir la misma prueba. Sin propuestas restantes, la decisión pasa a una persona.
+- Relevo: al pasar `quota.switchAtPercent5h` en su cuenta y grupo, o al llenarse el contexto de un rol que escribe, el agente se detiene en el siguiente fin de turno, guarda su trabajo y otro sigue la misma tarea y worktree con un paquete de lo hecho, lo pendiente, las decisiones, los archivos y la conversación completa. Un 429 hace lo mismo desde el último punto guardado. Evento `handoff` con `from`, `to` y `reason`; `limits.maxHandoffsPerTask` lo limita (3); pasado el tope, o sin sucesor, se detiene y explica quién tiene los modelos. En ACTION solo avisa: tú aceptas con `/model`.
+- Peticiones a una persona: registro uniforme (quién, quién delegó, tarea, qué hace, qué necesita, por qué, si niegas y a quién bloquea) que se rechaza si falta un campo. Aparecen en Actividades > Te necesitan, en el tablero y en el panel lateral con su número. Se responden con aprobar, negar o texto (`a`, `d`, `w`, o `haril factory answer`). Las del mismo tipo se agrupan, y los recordatorios llegan a 1, 5 y 15 minutos, en silencio mientras la fábrica está abierta.
+- Chat directo: `haril factory message <tarea> "<texto>" [--urgent]` guarda el mensaje y lo entrega en el siguiente fin de turno, o con `--urgent` detiene el intento y lo reanuda con él; el agente debe contárselo a su padre. Estados: en espera del fin de turno, entregado y aplicado. En Agentes, `Enter` o `c` abre el chat e `i` el detalle; CONSULT lo rechaza.
+- Vistas nuevas: `Compuertas` en Avance, mapa mental en Tablero y `Publicación` en Sistema, con los comandos reales y notas de las tareas cerradas.
+- `haril update` muestra un registro por componente (HARIL, Engram, Skills, MCP, Gentle AI, Plantillas), marca ✓ solo tras verificar la versión, vuelve a la versión anterior si HARIL falla a medias, sigue con lo demás, termina con un resumen que dice qué pasó, cómo quedó y qué hacer, sale con error si algo falló y guarda el registro. Sin terminal da la misma información en líneas simples.
+- Paleta `magic` con los colores de las piezas de referencia, ahora la predeterminada. El panel lateral conserva sus datos y añade `Te necesitan` solo si hay algo.
+- Se revisaron 25 piezas contra su fuente: la tarjeta elegida del tablero y el redactor activo usan caja gruesa, la secuencia marca la línea activa, y la cobertura lleva orden, veredicto y leyenda.
+
 ### Cambiado
 
+- En Agentes, `Enter` abre el chat; el detalle pasó a `i`.
+- `haril approvals` lista planes; las peticiones de los agentes salen con `--all` y en `haril factory requests`.
 - Sin capacidad un flujo ya no falla en silencio. Cuando ningún modelo puede correr una tarea, esta se detiene y explica qué modelos probó y por qué, quién los usa y cuándo se libera el primero (`capacity.waiting`, código `blocked_no_capacity`). Reintenta sola cuando se libera y, como mínimo, cada minuto, y sigue en cuanto haya capacidad. `limits.maxWorkflowWallMs` sigue siendo el tope: pasado, el flujo falla con `wall_time`.
 - La tabla de dificultad ya no pone `*flash-high` primero en `hard`: ahora es `*sonnet*`, `*flash-high`, `*pro`. Motivo: 19,1 % en Terminal-Bench 4.0, según una fuente secundaria.
 
 ### Limitaciones
 
 - El atajo es `Alt+G` y no `Alt+F`, que es de Pi (`tui.editor.cursorWordRight`): la consola no sobrescribe atajos propios de Pi.
-- `gpt-6.1-sol` cuenta como nivel alto solo si la capa del rol pide el razonamiento `max`; sin eso, un rol de piso alto salta a su siguiente modelo. Las reglas especiales de seguridad (dos proveedores) y consejero (mínimo 3 por discusión) quedan como intención: las discusiones llegan más adelante.
+- `gpt-6.1-sol` cuenta como nivel alto solo si la capa del rol pide el razonamiento `max`; sin eso, un rol de piso alto salta a su siguiente modelo.
 - La salud de Engram sale de `haril memory status`, y la de CLIProxy de la última lectura de cuota guardada: no se hace ninguna llamada nueva para pintar el mapa. HARIL aún no tiene plantillas y la tarjeta lo dice.
-- La secuencia de Conexiones sale de los eventos guardados, que no dicen a quién iba cada mensaje: una respuesta se dibuja hacia el padre y el resto queda en la línea del propio agente. Los relevos que hoy existen son cambios de modelo: el relevo entre agentes llega con la entrega al 80 %.
+- La secuencia de Conexiones sale de los eventos guardados, que no dicen a quién iba cada mensaje: una respuesta se dibuja hacia el padre y el resto queda en la línea del propio agente.
 - La vista incluye todos los flujos activos y los 10 terminados más recientes. Los eventos no tienen duración, así que el registro no dibuja la cascada de la pieza de referencia.
 
 ### Verificación
 
 - Pruebas de la consola con un Pi simulado: colores RGB exactos, alternativas 256, sin color y ASCII, reductor, ancho de 1 a 200 columnas y alto de 1 a 60 filas en todas las vistas, y apertura del overlay en los cuatro modos.
 - Pruebas de `haril factory` y de las explicaciones con el almacén real y agentes simulados; prueba gemela de los tipos de la consola contra los contratos.
-- No verificado: Pi real, un terminal real ni clics reales.
+- Prueba de punta a punta de «hazme una página» con almacén, bucle y repositorio git reales y agentes simulados: plan, consultor, diseñador y frontend, tester que falla y vuelve a su padre, fixer, tester que pasa, product-owner y git pidiendo permiso; el empuje se simula.
+- No verificado: Pi real, un terminal real, clics reales, una publicación real, ni una actualización real.
 
 ---
 
