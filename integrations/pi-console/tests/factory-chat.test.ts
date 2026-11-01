@@ -104,7 +104,7 @@ describe("the chat with an agent", () => {
           agent: agent?.code ?? "",
           text: "Usa el otro archivo",
           urgent: false,
-          from: "ander",
+          from: "persona",
           at: NOW - 1000,
           state: "waiting",
         },

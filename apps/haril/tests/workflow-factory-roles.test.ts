@@ -435,7 +435,7 @@ describe("a person's message", () => {
             taskId: spec.taskId,
             text: "Usa el otro archivo",
             urgent: false,
-            from: "ander",
+            from: "persona",
           });
         }
       }
@@ -477,7 +477,7 @@ describe("a person's message", () => {
             taskId: spec.taskId,
             text: "Para ya",
             urgent: true,
-            from: "ander",
+            from: "persona",
           });
           return "stall";
         }
@@ -612,11 +612,16 @@ describe("the investigador's web", () => {
       return {
         status: page.status,
         headers: { get: () => page.location ?? null },
-        text: async () => page.body ?? "",
+        body: (async function* () {
+          yield new TextEncoder().encode(page.body ?? "");
+        })(),
       };
     };
-    expect(await readWebPage("https://example.com/a", fetcher)).toMatchObject({ ok: false });
-    expect(await readWebPage("https://example.com/b", fetcher)).toMatchObject({
+    const lookup = async () => ["93.184.216.34"];
+    expect(await readWebPage("https://example.com/a", fetcher, { lookup })).toMatchObject({
+      ok: false,
+    });
+    expect(await readWebPage("https://example.com/b", fetcher, { lookup })).toMatchObject({
       ok: true,
       text: "hola",
     });

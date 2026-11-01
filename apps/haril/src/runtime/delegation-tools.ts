@@ -418,7 +418,7 @@ export function createDelegationTools(deps: DelegationToolsDeps): DelegationTool
     }
     const valid = validateDelegationToolInput("haril_web", raw);
     if (!valid.ok) return refuse(window, `haril_web input: ${valid.errors.join("; ")}`);
-    const read = await readWebPage(valid.input.url, deps.webFetch ?? fetch);
+    const read = await readWebPage(valid.input.url, deps.webFetch);
     return read.ok
       ? { ok: true, text: read.text, truncated: read.truncated }
       : refuse(window, read.reason);
