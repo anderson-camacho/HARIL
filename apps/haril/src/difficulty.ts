@@ -63,7 +63,8 @@ const DEFAULT_CLASSES: Readonly<
   trivial: { minSuccessRate: 0.7, order: ["*flash-lite", "*flash"] },
   easy: { minSuccessRate: 0.75, order: ["*flash", "*flash-lite"] },
   medium: { minSuccessRate: 0.8, order: ["*flash", "*flash-high", "*sonnet*"] },
-  hard: { minSuccessRate: 0.8, order: ["*flash-high", "*sonnet*", "*pro"] },
+  // Sonnet first: flash-high scored 19.1% on Terminal-Bench 4.0 (a secondary source), too low to lead hard work.
+  hard: { minSuccessRate: 0.8, order: ["*sonnet*", "*flash-high", "*pro"] },
   expert: { minSuccessRate: 0.85, order: ["*opus*", "*sonnet*", "*pro"] },
 };
 

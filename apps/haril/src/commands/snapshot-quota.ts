@@ -23,6 +23,7 @@ export function storeQuota(
     switchAtPercent5h: settings.quota.switchAtPercent5h,
     stopAtPercentWeekly: settings.quota.stopAtPercentWeekly,
     minRemainingPercentForLargeTask: settings.quota.minRemainingPercentForLargeTask,
+    reservePercent: settings.quota.reservePercent,
     maxWaitMs: settings.quota.maxWaitMs,
   };
   const records = store.quota.latest(now - QUOTA_FRESH_MS);

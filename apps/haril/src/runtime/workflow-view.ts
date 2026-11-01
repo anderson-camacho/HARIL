@@ -265,6 +265,16 @@ export class WorkflowView {
     return payload?.delegations?.find((item) => item.localId === localId);
   }
 
+  // The role profile a turn's proposal gave it, read from the stored proposal; null when it named none.
+  roleOf(task: Task): string | null {
+    if (task.role === "executor") return this.assignmentOf(task.threadId)?.role ?? null;
+    if (task.role === "delegator") return this.delegationOf(task.threadId)?.role ?? null;
+    if (task.role !== "auditor") return null;
+    const audited = this.task(task.auditedTaskId);
+    if (audited === undefined) return null;
+    return this.assignmentOf(audited.threadId)?.auditorRole ?? null;
+  }
+
   // The orchestrator's haril_request_audit behind a final auditor turn (3.8): its summary and outstanding list, as the
   // proposal that created the turn stored them; null for any other turn.
   auditRequestOf(auditorTurn: Task): DelegationAuditRequest | null {

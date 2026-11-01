@@ -79,6 +79,15 @@ const SurfaceSchema = Type.Array(GlobSchema, { maxItems: SURFACE_MAX_ITEMS });
 const ModelPreferenceSchema = Type.Optional(
   Type.Union([Type.String({ minLength: 1 }), Type.Null()]),
 );
+// The child's role profile (delegation.roles in haril.json): its model comes from that role's list. Absent: no role.
+const RoleSchema = Type.Optional(
+  Type.String({
+    minLength: 1,
+    maxLength: 40,
+    description:
+      "Optional role: arquitecto, sintetizador, auditor, seguridad, consejero, product-owner, backend, frontend, disenador, tester, fixer, investigador, consultor, sanitizador, documentador, git or vigilante.",
+  }),
+);
 const ChildBudgetSchema = Type.Object(
   { maxTokens: Type.Integer({ minimum: 1 }) },
   { additionalProperties: false },
@@ -99,6 +108,7 @@ export const DelegationSchema = Type.Object(
     priority: Type.Integer({ minimum: 0, maximum: 9 }),
     acceptanceCriteria: AcceptanceCriteriaSchema,
     model: ModelPreferenceSchema,
+    role: RoleSchema,
     budget: ChildBudgetSchema,
   },
   { additionalProperties: false },
@@ -133,6 +143,9 @@ export const AssignmentSchema = Type.Object(
     difficultyReason: NonEmptyText,
     dependsOn: Type.Array(LocalIdSchema),
     model: ModelPreferenceSchema,
+    role: RoleSchema,
+    // The role of the auditor created with this executor.
+    auditorRole: RoleSchema,
     budget: ChildBudgetSchema,
   },
   { additionalProperties: false },

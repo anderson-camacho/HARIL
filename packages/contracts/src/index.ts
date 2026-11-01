@@ -12,6 +12,7 @@ export * from "./plan.js";
 export * from "./plugin-dock.js";
 export * from "./primitives.js";
 export * from "./providers.js";
+export * from "./role-profiles.js";
 export * from "./secrets.js";
 export * from "./session.js";
 export * from "./task.js";

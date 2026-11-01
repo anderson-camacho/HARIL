@@ -114,6 +114,7 @@ export async function quota(args: readonly string[], io: CliIo, host: HostInfo):
     switchAtPercent5h: settings.quota.switchAtPercent5h,
     stopAtPercentWeekly: settings.quota.stopAtPercentWeekly,
     minRemainingPercentForLargeTask: settings.quota.minRemainingPercentForLargeTask,
+    reservePercent: settings.quota.reservePercent,
     maxWaitMs: settings.quota.maxWaitMs,
   };
   const clock = clockFor(host);

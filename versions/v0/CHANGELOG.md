@@ -28,10 +28,19 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 - Cada lectura dice de dónde sale: del proveedor, estimada con `~` a partir de los tokens del registro de uso (un conteo, nunca un porcentaje) o de ninguna parte, y entonces por qué: `El proveedor no permite ver este dato`, `Sin lectura: <motivo>` (conservando el último valor, marcado como antiguo) o `No aplica`. Las direcciones de correo no viajan: se usa el prefijo o una referencia opaca.
 - Conexiones: cinco vistas con `[`/`]`. Cadena del agente elegido en cajas redondeadas con enlaces `·` y `•`, línea de acción `▶` y traza; árbol de delegación con el camino iluminado; red con los mensajes en curso; secuencia de eventos del agente; y relevo, solo si hubo uno. Debajo siempre dice a quién espera el agente y por qué. Sin ancho o alto suficientes se reduce a un árbol con sangría.
 - `delegation.quota.colorWarnPercent` y `colorDangerPercent` fijan el color de las barras, aparte de los umbrales que deciden qué modelo corre.
+- Perfiles de rol: 17 roles (arquitecto, sintetizador, auditor, seguridad, consejero, product-owner, backend, frontend, diseñador, tester, fixer, investigador, consultor, sanitizador, documentador, git y vigilante) como datos sobre los cuatro arquetipos, sin ampliar `tasks.role`. Cada uno tiene `archetype`, `models` en orden, `floor` y `enabled` en `delegation.roles.<rol>`, editables con `haril config set`. Las listas coinciden con cualquier prefijo de cuenta; ningún rol incluye Fable, y los modelos de imagen y `gpt-oss-*` quedan fuera salvo que la lista los pida.
+- Selector: una tarea con rol toma su modelo de la lista justo después de un modelo fijado, con las mismas reglas de cuota y enfriamiento. Se mantiene en el modelo de su hilo mientras siga elegible y, si se conoce el uso, pasa al menos usado del mismo nivel. Un rol nunca baja de su piso: arquitecto, sintetizador, auditor y seguridad rechazan Sonnet 4.6 y Flash, y no recurre a la tabla de dificultad. `model.selected` registra `role_order`. Una tarea sin rol se comporta como antes.
+- `haril models` avisa cuando un rol solo llega a un proveedor entre los modelos conectados.
+- `quota.reservePercent` (10 por defecto): la última parte de cada ventana que ninguna elección toma.
+
+### Cambiado
+
+- La tabla de dificultad ya no pone `*flash-high` primero en `hard`: ahora es `*sonnet*`, `*flash-high`, `*pro`. Motivo: 19,1 % en Terminal-Bench 4.0, según una fuente secundaria.
 
 ### Limitaciones
 
 - El atajo es `Alt+G` y no `Alt+F`, que es de Pi (`tui.editor.cursorWordRight`): la consola no sobrescribe atajos propios de Pi.
+- `gpt-6.1-sol` cuenta como nivel alto solo si la capa del rol pide el razonamiento `max`; sin eso, un rol de piso alto salta a su siguiente modelo. Las reglas especiales de seguridad (dos proveedores) y consejero (mínimo 3 por discusión) quedan como intención: las discusiones llegan más adelante.
 - Sistema aún no tiene datos y lo dice con «Sin datos conectados todavía».
 - La secuencia de Conexiones sale de los eventos guardados, que no dicen a quién iba cada mensaje: una respuesta se dibuja hacia el padre y el resto queda en la línea del propio agente. Los relevos que hoy existen son cambios de modelo: el relevo entre agentes llega con la entrega al 80 %.
 - La vista incluye todos los flujos activos y los 10 terminados más recientes. Los eventos no tienen duración, así que el registro no dibuja la cascada de la pieza de referencia.

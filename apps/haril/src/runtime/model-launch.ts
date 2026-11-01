@@ -21,7 +21,7 @@ const RATE_LIMIT_BACKOFF_MS = 60_000;
 const QUOTA_BACKOFF_MS = 15 * 60_000;
 const ENDED = new Set(["completed", "failed", "stopped"]);
 
-function launchRequest(task: Task): ModelRequest {
+function launchRequest(task: Task, view: WorkflowView): ModelRequest {
   return {
     archetype: task.role,
     difficulty: task.difficulty ?? "medium",
@@ -29,6 +29,8 @@ function launchRequest(task: Task): ModelRequest {
     phase: "launch",
     explicit: task.modelPinned ? task.model : null,
     proposed: task.modelPinned ? null : task.model,
+    role: view.roleOf(task),
+    sticky: task.model,
   };
 }
 
@@ -51,8 +53,25 @@ export function checkLaunch(
   settings: WorkflowSettings,
   now: number,
 ): LaunchVerdict {
-  const choice = chooseModel(launchRequest(task), settings.models(now));
+  const choice = chooseModel(launchRequest(task, view), settings.models(now));
   if (choice.kind === "use" || choice.kind === "reject") {
+    if (choice.kind === "use" && choice.reason === "role_order") {
+      store.events.append({
+        aggregateType: "task",
+        aggregateId: task.taskId,
+        type: "model.selected",
+        actorKind: "system",
+        actorId: "runtime",
+        payload: {
+          workflowId: view.workflow.workflowId,
+          model: choice.model,
+          reason: choice.reason,
+          role: view.roleOf(task),
+        },
+        projectId: view.workflow.projectId,
+        taskId: task.taskId,
+      });
+    }
     if (choice.kind === "use" && choice.model !== task.model) {
       store.transaction(() => {
         store.workflows.setTurnModel(epoch, task.taskId, choice.model);
@@ -175,7 +194,7 @@ export function decideProviderRetry(input: {
       outcome: "provider_retry",
     };
   }
-  const choice = chooseModel(launchRequest(task), settings.models(now));
+  const choice = chooseModel(launchRequest(task, view), settings.models(now));
   if (choice.kind === "use" || choice.kind === "reject") {
     const next = choice.kind === "use" ? choice.model : model;
     return {

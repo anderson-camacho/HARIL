@@ -12,9 +12,11 @@ import { type DelegationModels, type DelegationOptions, defaultModels } from "./
 
 // A quota reading older than this is no longer evidence: its rule is skipped ("sin dato").
 export const QUOTA_FRESH_MS = 15 * 60_000;
+// How far back "the least used model" of a role looks.
+const USAGE_WINDOW_MS = 5 * 3_600_000;
 
 export function withStoreState(
-  store: Pick<Store, "quota">,
+  store: Pick<Store, "quota" | "usageLog">,
   options: DelegationOptions | undefined,
 ): DelegationOptions {
   const source = options?.models;
@@ -38,8 +40,19 @@ export function withStoreState(
       };
       const records = store.quota.latest(now - QUOTA_FRESH_MS);
       const groups = groupIndex(records);
+      const usage =
+        base.roles === undefined
+          ? undefined
+          : Object.fromEntries(
+              store.usageLog
+                .summary("model", { from: now - USAGE_WINDOW_MS, simulated: false })
+                .flatMap((row) =>
+                  row.key === null ? [] : [[row.key, row.tokensIn + row.tokensOut] as const],
+                ),
+            );
       return {
         ...base,
+        ...(usage === undefined ? {} : { usage }),
         catalog: base.catalog.map((entry) => ({
           ...entry,
           quotaKey:

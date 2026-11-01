@@ -11,4 +11,5 @@ export * from "./liveness.js";
 export * from "./order-preview.js";
 export * from "./path-guard.js";
 export * from "./rework.js";
+export * from "./roles.js";
 export * from "./select-claims.js";

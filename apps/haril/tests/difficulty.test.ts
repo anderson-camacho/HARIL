@@ -61,6 +61,14 @@ function hostWithConfig() {
 }
 
 describe("the table in effect", () => {
+  it("does not lead hard work with flash-high", () => {
+    expect(resolveDifficulty(undefined).classes.hard.order).toEqual([
+      "*sonnet*",
+      "*flash-high",
+      "*pro",
+    ]);
+  });
+
   it("starts from provisional defaults and expands their patterns against the catalog", () => {
     const policy = resolveDifficulty(undefined);
     expect(policy.classes.easy.source).toEqual({ minSuccessRate: "default", order: "default" });

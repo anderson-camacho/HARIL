@@ -40,6 +40,7 @@ export interface ProposedChild {
   readonly difficulty: Difficulty;
   readonly budgetTokens: number;
   readonly model: string | null;
+  readonly role?: string | null;
   readonly writeSurface: readonly string[];
 }
 
@@ -122,6 +123,7 @@ export function proposalFromDelegate(
       difficulty: delegation.difficulty,
       budgetTokens: delegation.budget.maxTokens,
       model: delegation.model ?? null,
+      ...(delegation.role === undefined ? {} : { role: delegation.role }),
       writeSurface: [],
     })),
     checkpoints: input.checkpoints ?? [],
@@ -141,6 +143,7 @@ export function proposalFromAssign(
       difficulty: assignment.difficulty,
       budgetTokens: assignment.budget.maxTokens,
       model: assignment.model ?? null,
+      ...(assignment.role === undefined ? {} : { role: assignment.role }),
       writeSurface: assignment.files.write,
     })),
     checkpoints: [],
@@ -312,6 +315,7 @@ function modelIssues(
         budgetTokens: item.budgetTokens,
         phase: "propose",
         proposed: item.model,
+        role: item.role ?? null,
       },
       models,
     );

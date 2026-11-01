@@ -74,6 +74,8 @@ describe("the delegation section's defaults", () => {
       source: _source,
       managementBaseUrl: _url,
       managementKeyEnv: _env,
+      colorWarnPercent: _warn,
+      colorDangerPercent: _danger,
       ...policy
     } = settings.quota;
     expect(policy).toEqual(DEFAULT_QUOTA_POLICY);

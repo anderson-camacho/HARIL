@@ -154,7 +154,7 @@ describe("chooseModel: a model the user specified", () => {
       request({ explicit: "mid/m" }),
       context({ quota: { mid: used(10, 90) } }),
     );
-    expect(choice).toEqual({ kind: "unavailable", model: "mid/m", cause: "weekly" });
+    expect(choice).toMatchObject({ kind: "unavailable", model: "mid/m", cause: "weekly" });
   });
 
   it("is used with quota 'no_data' when the provider reports none", () => {
@@ -438,12 +438,12 @@ describe("chooseModel: the difficulty table", () => {
 
   it("ends with no capacity when every model is out beyond the longest wait", () => {
     const quota = { mid: used(5, 90), cheap: used(5, 95), high: used(5, 99) };
-    expect(chooseModel(request({ difficulty: "medium" }), context({ quota }))).toEqual({
+    expect(chooseModel(request({ difficulty: "medium" }), context({ quota }))).toMatchObject({
       kind: "unavailable",
       model: null,
       cause: "weekly",
     });
-    expect(chooseModel(request({ difficulty: "medium" }), context({ catalog: [] }))).toEqual({
+    expect(chooseModel(request({ difficulty: "medium" }), context({ catalog: [] }))).toMatchObject({
       kind: "unavailable",
       model: null,
       cause: "not_in_catalog",

@@ -13,6 +13,7 @@ import type {
   WorkflowRecord,
   WorkflowTaskRecord,
 } from "@haril/core/ports";
+import { WorkflowView } from "../runtime/workflow-view.js";
 import { buildFactoryQuota, type FactoryQuotaSettings } from "./factory-quota.js";
 import { buildWorkflowSnapshot, eventText, type SnapshotOptions } from "./workflow-snapshot.js";
 
@@ -171,6 +172,7 @@ function buildWorkflow(
   options: FactoryModelOptions,
 ): Built {
   const snapshot = snapshotOf(store, record, options);
+  const view = WorkflowView.load(store, record.workflowId);
   const turns = store.workflows.tasks(record.workflowId);
   const audits = store.workflows.audits(record.workflowId);
   const criteria = latestCriteria(audits);
@@ -200,7 +202,7 @@ function buildWorkflow(
       title: node.goal,
       state: latest.state,
       column,
-      role: node.role,
+      role: view?.roleOf(latest) ?? node.role,
       agent: node.id,
       delegatedBy: node.parentId,
       returnedTo: column === "errores" ? (node.parentId ?? THE_PERSON) : null,
@@ -217,7 +219,7 @@ function buildWorkflow(
     agents.push({
       workflowId: record.workflowId,
       code: node.id,
-      role: node.role,
+      role: view?.roleOf(latest) ?? node.role,
       status: node.state,
       taskId: latest.taskId,
       task: node.goal,

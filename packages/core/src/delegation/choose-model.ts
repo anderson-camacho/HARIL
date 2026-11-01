@@ -1,12 +1,14 @@
-import { DIFFICULTIES, type Difficulty } from "@haril/contracts";
+import { DIFFICULTIES, type Difficulty, type ModelTier } from "@haril/contracts";
 import type { DelegationArchetype } from "./archetypes.js";
+import { meetsFloor, modelTier } from "./roles.js";
 
 // Model choice for a delegated agent (docs/modos-y-delegacion.md 3.11). Precedence, inspired by how Codex resolves a
 // subagent's model:
 //   1. the model the user specified (for the task in the message or card, or for the layer in delegation.models):
 //      used exactly as given, never substituted; when its quota blocks it, the task waits or the workflow stops;
-//   2. the model the parent proposed, which the Core validates (rejected at proposal time, substituted at launch);
-//   3. the difficulty table.
+//   2. a task with a role whose profile applies (feature haril-factory, F6): its list in order, never below its floor;
+//   3. the model the parent proposed, which the Core validates (rejected at proposal time, substituted at launch);
+//   4. the difficulty table.
 // Quota rule, per quota key (provider or account prefix, ADR-0021 P25), skipped when there is no data ("sin dato"). The
 // boundaries follow the user's wording ("más del 80 %", "menos del 20 %"), not the strict formula of 3.11, so exactly
 // 80% used and exactly 20% left are still allowed:
@@ -42,6 +44,8 @@ export interface QuotaPolicy {
   readonly switchAtPercent5h: number;
   readonly stopAtPercentWeekly: number;
   readonly minRemainingPercentForLargeTask: number;
+  // The last share of a window no choice takes, whatever the thresholds above say. Absent: none.
+  readonly reservePercent?: number;
   // The longest a task waits for a reset before the workflow gives up on that model.
   readonly maxWaitMs: number;
 }
@@ -50,6 +54,7 @@ export const DEFAULT_QUOTA_POLICY: QuotaPolicy = Object.freeze({
   switchAtPercent5h: 80,
   stopAtPercentWeekly: 80,
   minRemainingPercentForLargeTask: 20,
+  reservePercent: 10,
   maxWaitMs: 18_000_000,
 });
 
@@ -68,6 +73,15 @@ export interface ModelStat {
 // model_stats keyed by (model, difficulty class).
 export type ModelStats = Readonly<Record<string, Partial<Readonly<Record<Difficulty, ModelStat>>>>>;
 
+// A role's profile against the catalog: its list already expanded to the catalog's models, in order.
+export interface RoleSelection {
+  readonly archetype: DelegationArchetype;
+  readonly floor: ModelTier;
+  readonly order: readonly string[];
+  // The layer asks for the maximum reasoning level, which is what makes a model like sol count as high.
+  readonly maxLevel?: boolean;
+}
+
 export interface ModelSelectionContext {
   readonly now: number;
   readonly catalog: readonly CatalogModel[];
@@ -84,6 +98,10 @@ export interface ModelSelectionContext {
   // delegation.models.auditorDistinctFromExecutor (3.8 rule 2, phase F7): false lets an auditor run on its executor's
   // model like any other. Absent means true.
   readonly auditorDistinctFromExecutor?: boolean;
+  // The role profiles in effect, by role. Absent: no role applies and everything goes as without them.
+  readonly roles?: Readonly<Record<string, RoleSelection>>;
+  // What each model spent lately (tokens); a model absent here has no known usage.
+  readonly usage?: Readonly<Record<string, number>>;
 }
 
 export interface ModelRequest {
@@ -99,6 +117,10 @@ export interface ModelRequest {
   readonly proposed?: string | null;
   // For an auditor: its executor's model, avoided when another one is eligible (3.8 rule 2).
   readonly avoid?: string | null;
+  // The task's role, when it has one; a role with no profile that applies changes nothing.
+  readonly role?: string | null;
+  // The model this agent's thread already runs on: kept while it stays eligible for the role.
+  readonly sticky?: string | null;
 }
 
 export type ExclusionCause =
@@ -108,7 +130,8 @@ export type ExclusionCause =
   | "cooldown"
   | "window_5h"
   | "weekly"
-  | "large_task";
+  | "large_task"
+  | "below_floor";
 
 // The problem codes of 3.6 for a proposed model.
 export type ModelRejection = "model_not_allowed" | "model_unavailable" | "quota_blocked";
@@ -117,10 +140,11 @@ export type ModelChoice =
   | {
       readonly kind: "use";
       readonly model: string;
-      readonly source: "pinned" | "parent" | "table";
+      readonly source: "pinned" | "role" | "parent" | "table";
       readonly reason:
         | "explicit"
         | "layer_pin"
+        | "role_order"
         | "parent"
         | "success_rate"
         | "table_order"
@@ -150,6 +174,12 @@ export type ModelChoice =
       readonly kind: "unavailable";
       readonly model: string | null;
       readonly cause: ExclusionCause | null;
+      // Every model it considered, why each cannot run, and when that ends if it is known.
+      readonly tried: readonly {
+        readonly model: string;
+        readonly cause: ExclusionCause;
+        readonly until: number | null;
+      }[];
     };
 
 export type QuotaStatus =
@@ -168,12 +198,15 @@ const REJECTION: Record<ExclusionCause, ModelRejection> = {
   window_5h: "quota_blocked",
   weekly: "quota_blocked",
   large_task: "quota_blocked",
+  below_floor: "model_not_allowed",
 };
 
 interface Exclusion {
   readonly cause: ExclusionCause;
   // When the exclusion ends, if known.
   readonly until: number | null;
+  // The model it holds back, when the caller is weighing several.
+  readonly model?: string;
 }
 
 export function isLargeTask(
@@ -219,10 +252,11 @@ export function evaluateQuota(
   const usable = usableSample(sample);
   if (usable === null) return { ok: true, data: "no_data" };
   const { window5hUsedPct: used5h, weeklyUsedPct: usedWeekly } = usable;
-  if (usedWeekly !== null && usedWeekly > policy.stopAtPercentWeekly) {
+  const ceiling = 100 - (policy.reservePercent ?? 0);
+  if (usedWeekly !== null && (usedWeekly > policy.stopAtPercentWeekly || usedWeekly > ceiling)) {
     return { ok: false, cause: "weekly", until: usable.weeklyResetsAt };
   }
-  if (used5h !== null && used5h > policy.switchAtPercent5h) {
+  if (used5h !== null && (used5h > policy.switchAtPercent5h || used5h > ceiling)) {
     return { ok: false, cause: "window_5h", until: usable.window5hResetsAt };
   }
   if (large && used5h !== null && 100 - used5h < policy.minRemainingPercentForLargeTask) {
@@ -317,7 +351,15 @@ function waitOrGiveUp(
   if (earliest !== null && (earliest.until as number) - context.now <= context.policy.maxWaitMs) {
     return { kind: "wait", model, until: earliest.until as number, cause: earliest.cause };
   }
-  return { kind: "unavailable", model, cause: earliest?.cause ?? exclusions[0]?.cause ?? null };
+  return {
+    kind: "unavailable",
+    model,
+    cause: earliest?.cause ?? exclusions[0]?.cause ?? null,
+    tried: exclusions.flatMap((exclusion) => {
+      const name = exclusion.model ?? model;
+      return name === null ? [] : [{ model: name, cause: exclusion.cause, until: exclusion.until }];
+    }),
+  };
 }
 
 function costOf(ref: string, context: ModelSelectionContext): number {
@@ -349,7 +391,7 @@ function chooseFromTable(
   for (const ref of candidates) {
     const exclusion = exclusionOf(ref, request.archetype, large, context);
     if (exclusion === null) eligible.push(ref);
-    else exclusions.push(exclusion);
+    else exclusions.push({ ...exclusion, model: ref });
   }
   if (eligible.length === 0) return waitOrGiveUp(null, exclusions, context);
 
@@ -389,6 +431,82 @@ function chooseFromTable(
   };
 }
 
+// The role's profile for this request. A planning role also runs as a delegator: that is the layer that plans below the
+// orchestrator. Anything else that does not fit leaves the request to the steps without a role.
+function activeRole(
+  request: ModelRequest,
+  context: ModelSelectionContext,
+): RoleSelection | undefined {
+  const name = request.role;
+  if (name === null || name === undefined) return undefined;
+  const role = context.roles?.[name];
+  if (role === undefined) return undefined;
+  const fits =
+    role.archetype === request.archetype ||
+    (role.archetype === "orchestrator" && request.archetype === "delegator");
+  return fits ? role : undefined;
+}
+
+// Among the eligible models the list's order holds, except that the first gives way to the least used of its own tier when
+// usage is known for both: a cheaper tier never overtakes a stronger one.
+function leastUsed(
+  eligible: readonly string[],
+  role: RoleSelection,
+  context: ModelSelectionContext,
+) {
+  const first = eligible[0] as string;
+  const usage = context.usage;
+  const known = usage?.[first];
+  if (usage === undefined || known === undefined) return first;
+  const tierOf = (ref: string) => modelTier(ref, role.maxLevel === true);
+  let chosen = first;
+  let least = known;
+  for (const ref of eligible) {
+    const spent = usage[ref];
+    if (spent !== undefined && spent < least && tierOf(ref) === tierOf(first)) {
+      chosen = ref;
+      least = spent;
+    }
+  }
+  return chosen;
+}
+
+function chooseFromRole(
+  request: ModelRequest,
+  role: RoleSelection,
+  large: boolean,
+  context: ModelSelectionContext,
+): ModelChoice {
+  const exclusions: Exclusion[] = [];
+  let eligible: string[] = [];
+  for (const ref of new Set(role.order)) {
+    const below = !meetsFloor(ref, role.floor, role.maxLevel === true);
+    const exclusion: Exclusion | null = below
+      ? { cause: "below_floor", until: null }
+      : exclusionOf(ref, request.archetype, large, context);
+    if (exclusion === null) eligible.push(ref);
+    else exclusions.push({ ...exclusion, model: ref });
+  }
+  if (eligible.length === 0) return waitOrGiveUp(null, exclusions, context);
+  const avoid = avoidedModel(request, context);
+  if (avoid !== null && eligible.some((ref) => ref !== avoid)) {
+    eligible = eligible.filter((ref) => ref !== avoid);
+  }
+  const sticky = request.sticky ?? null;
+  const chosen =
+    sticky !== null && eligible.includes(sticky) ? sticky : leastUsed(eligible, role, context);
+  const proposed = request.proposed ?? null;
+  return {
+    kind: "use",
+    model: chosen,
+    source: "role",
+    reason: "role_order",
+    quota: quotaData(chosen, large, context),
+    substitutedFrom: proposed !== null && proposed !== chosen ? proposed : null,
+    sameAsAvoided: chosen === avoid,
+  };
+}
+
 // A model id the user gave, or null when it is absent, null, empty or blank: such a value never pins a model.
 export function modelPin(value: string | null | undefined): string | null {
   return typeof value === "string" && value.trim() !== "" ? value : null;
@@ -415,8 +533,18 @@ export function chooseModel(request: ModelRequest, context: ModelSelectionContex
     };
   }
 
-  // 2. The parent's choice, validated.
+  // 2. The role's list. A parent's proposal is checked against its floor when it is proposed; once the task launches, the
+  // list decides.
   const proposed = request.proposed ?? null;
+  const role = activeRole(request, context);
+  if (role !== undefined) {
+    if (request.phase === "launch") return chooseFromRole(request, role, large, context);
+    if (proposed !== null && !meetsFloor(proposed, role.floor, role.maxLevel === true)) {
+      return { kind: "reject", code: "model_not_allowed", model: proposed, cause: "below_floor" };
+    }
+  }
+
+  // 3. The parent's choice, validated.
   if (proposed !== null) {
     const exclusion = exclusionOf(proposed, request.archetype, large, context);
     if (exclusion === null) {
@@ -441,6 +569,6 @@ export function chooseModel(request: ModelRequest, context: ModelSelectionContex
     return chooseFromTable(request, large, context, proposed);
   }
 
-  // 3. The difficulty table.
+  // 4. The difficulty table.
   return chooseFromTable(request, large, context, null);
 }

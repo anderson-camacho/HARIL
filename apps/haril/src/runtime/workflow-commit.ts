@@ -313,6 +313,7 @@ function delegateTurns(
       budgetTokens: delegation.budget.maxTokens,
       phase: "launch",
       proposed: delegation.model ?? null,
+      role: delegation.role ?? null,
     });
     if (model === null) return null;
     turns.push({
@@ -374,6 +375,8 @@ function assignTurns(
       budgetTokens: assignment.budget.maxTokens,
       phase: "launch",
       proposed: assignment.model ?? null,
+      role: assignment.role ?? null,
+      sticky: latest?.model ?? null,
     });
     if (executorModel === null) return null;
     const auditorModel = pickModel(context, {
@@ -382,6 +385,7 @@ function assignTurns(
       budgetTokens: assignment.budget.maxTokens,
       phase: "launch",
       avoid: executorModel.model,
+      role: assignment.auditorRole ?? null,
     });
     if (auditorModel === null) return null;
     const auditKey = `audit:${assignment.localId}`;
