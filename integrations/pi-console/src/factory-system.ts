@@ -64,6 +64,24 @@ function drawBox(grid: FactoryGrid, x: number, y: number, node: MapNode, g: Fact
   grid.text(x + 2, y + 2, truncate(plainText(node.sub), BOX_W - 4), "muted");
 }
 
+// The accounts' own state is whether they have a reading. The gateway has its own box and its own color: a gateway that
+// stopped answering is said here, without painting red what was read.
+export function accountsNode(
+  system: Pick<NonNullable<FactoryState["model"]>["system"], "accounts" | "gateway">,
+): MapNode {
+  const read = `${system.accounts} cuentas con lectura.`;
+  return {
+    name: "Cuentas",
+    sub: `${system.accounts} leídas`,
+    state: system.accounts > 0 ? "ok" : "unknown",
+    detail:
+      system.gateway.state === "down"
+        ? `${read} Pueden ser antiguas: ${system.gateway.detail}`
+        : read,
+    token: "purple",
+  };
+}
+
 function mapBody(state: FactoryState, width: number, height: number, g: FactoryGlyphs): BodyLine[] {
   const { model } = state;
   if (model === null) return [];
@@ -91,13 +109,7 @@ function mapBody(state: FactoryState, width: number, height: number, g: FactoryG
     ...system.gateway,
     token: "orange",
   };
-  const accounts: MapNode = {
-    name: "Cuentas",
-    sub: `${system.accounts} leídas`,
-    state: system.accounts > 0 ? system.gateway.state : "unknown",
-    detail: `${system.accounts} cuentas con lectura.`,
-    token: "purple",
-  };
+  const accounts = accountsNode(system);
   const sqlite: MapNode = { name: "SQLite", sub: "estado", ...system.store, token: "cyan" };
   const engram: MapNode = { name: "Engram", sub: "memoria", ...memory, token: "yellow" };
   const flow = [console, runtime, gateway, accounts];

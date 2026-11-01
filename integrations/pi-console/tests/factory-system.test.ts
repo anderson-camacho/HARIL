@@ -15,6 +15,7 @@ import {
   factorySystemArrived,
   initialFactoryState,
 } from "../src/factory-state.js";
+import { accountsNode } from "../src/factory-system.js";
 import { renderFactoryScreen } from "../src/factory-view.js";
 import { plainText, textWidth } from "../src/text.js";
 import { model } from "./factory-fixture.js";
@@ -70,6 +71,18 @@ describe("the architecture map", () => {
     expect(text).toContain("el servidor de gestión no responde");
     expect(text).toContain("esquema 19");
     expect(text).toContain("3 leídas");
+  });
+
+  it("does not paint the accounts red for the gateway's state", () => {
+    const down = { state: "down", detail: "el servidor de gestión no responde" } as const;
+    const node = accountsNode({ accounts: 3, gateway: down });
+    expect(node.state).toBe("ok");
+    expect(node.sub).toBe("3 leídas");
+    expect(node.detail).toContain("el servidor de gestión no responde");
+    expect(accountsNode({ accounts: 0, gateway: down }).state).toBe("unknown");
+    expect(accountsNode({ accounts: 3, gateway: { state: "ok", detail: "Responde" } }).detail).toBe(
+      "3 cuentas con lectura.",
+    );
   });
 
   it("warns of a role with one vendor", () => {

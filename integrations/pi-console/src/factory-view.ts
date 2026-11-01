@@ -24,6 +24,7 @@ import {
   type FactoryState,
   type FactoryTab,
   type FactoryTarget,
+  onBoardMap,
   requestTarget,
   selectedSetting,
 } from "./factory-state.js";
@@ -134,9 +135,11 @@ function tabHints(state: FactoryState): Hint[] {
   const out: Hint[] = [];
   if (!dataTab(state)) return out;
   if (!state.detail) {
-    out.push({ key: "/", action: "buscar", keep: 1 });
+    if (!onBoardMap(state)) out.push({ key: "/", action: "buscar", keep: 1 });
     if (state.tab === "tablero") {
-      if (state.rowCounts.tablero > 0) out.push({ key: "h/l", action: "columna", keep: 1 });
+      if (state.rowCounts.tablero > 0 && !onBoardMap(state)) {
+        out.push({ key: "h/l", action: "columna", keep: 1 });
+      }
       if (!state.readOnly) out.push({ key: "n", action: "nueva", keep: 1 });
       out.push({ key: "[/]", action: state.tableroView === "mapa" ? "columnas" : "mapa", keep: 1 });
     }
@@ -205,7 +208,7 @@ function hintsOf(state: FactoryState, g: FactoryGlyphs): Hint[] {
       { key: "Esc", action: "cancelar", keep: 4 },
     ];
   }
-  const hasRows = state.rowCounts[state.tab] > 0 && !state.detail;
+  const hasRows = state.rowCounts[state.tab] > 0 && !state.detail && !onBoardMap(state);
   const setting = selectedSetting(state);
   const adjusts = setting !== undefined && sliderRange(setting) !== undefined;
   const canGoBack =

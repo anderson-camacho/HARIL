@@ -325,6 +325,11 @@ function cycle<Value>(list: readonly Value[], value: Value, step: number): Value
   return list[(index + step + list.length) % list.length] as Value;
 }
 
+// The board's map shows every card at once: it has no selected row, so nothing moves or opens on it.
+export function onBoardMap(state: FactoryState): boolean {
+  return state.tab === "tablero" && state.tableroView === "mapa" && !state.detail;
+}
+
 // h and l on the board: to the first card of the column next to the selected card's, skipping the empty ones.
 function moveColumn(state: FactoryState, step: number): FactoryTransition {
   const tasks = selectedRowId(state, "tablero").tasks;
@@ -540,9 +545,9 @@ function tabKey(state: FactoryState, key: string): FactoryTransition | undefined
         ? handled({ ...state, filtering: true, notice: null })
         : undefined;
     case "h":
-      return state.tab === "tablero" ? moveColumn(state, -1) : undefined;
+      return state.tab === "tablero" && !onBoardMap(state) ? moveColumn(state, -1) : undefined;
     case "l":
-      return state.tab === "tablero" ? moveColumn(state, 1) : undefined;
+      return state.tab === "tablero" && !onBoardMap(state) ? moveColumn(state, 1) : undefined;
     case "[":
     case "]": {
       const step = key === "]" ? 1 : -1;
@@ -670,11 +675,12 @@ export function factoryKey(state: FactoryState, data: string): FactoryTransition
       return stepTab(state, -1);
     case "up":
     case "k":
-      return factoryMove(state, -1);
+      return onBoardMap(state) ? handled(state) : factoryMove(state, -1);
     case "down":
     case "j":
-      return factoryMove(state, 1);
+      return onBoardMap(state) ? handled(state) : factoryMove(state, 1);
     case "enter": {
+      if (onBoardMap(state)) return handled(state);
       const setting = settingEnter(state);
       if (setting !== undefined) return setting;
       if (state.tab === "agentes" && state.rowCounts.agentes > 0) return openChat(state);

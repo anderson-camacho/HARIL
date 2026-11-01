@@ -216,6 +216,27 @@ describe("a request in Te necesitan", () => {
 });
 
 describe("the new views", () => {
+  it("offers on the map only the keys that do something there", () => {
+    const columns = press(factoryModelArrived(initialFactoryState(), factoryModel()), "3");
+    const footerOf = (state: FactoryState) => {
+      const { lines } = renderFactoryScreen(state, 200, 30, G);
+      return plainText(lines[lines.length - 1] ?? "");
+    };
+    expect(footerOf(columns)).toContain("Enter");
+    expect(footerOf(columns)).toContain("h/l");
+    expect(footerOf(columns)).toContain(G.upDown);
+    const map = press(columns, "]");
+    const footer = footerOf(map);
+    expect(footer).toContain("[/]");
+    expect(footer).toContain("Esc");
+    for (const key of ["Enter", "h/l", G.upDown]) expect(footer).not.toContain(key);
+    for (const key of ["\r", "j", "k", "h", "l"]) {
+      const after = press(map, key);
+      expect(after.detail, key).toBe(false);
+      expect(after.selection.tablero, key).toBe(map.selection.tablero);
+    }
+  });
+
   it("draws the map under Tablero, and a tree when it does not fit", () => {
     const state = press(factoryModelArrived(initialFactoryState(), factoryModel()), "3", "]");
     expect(state.tableroView).toBe("mapa");
