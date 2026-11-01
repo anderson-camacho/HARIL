@@ -62,6 +62,18 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 - Conexiones: en Secuencia cada nombre queda sobre su propia línea de vida; en Cadena el rol sale en español y la edad de un evento se lee entera («hace un momento»).
 - Tablero: una columna llena del plan ya no se pega a la siguiente. Modelos: los medidores de 5 horas y de semana quedan separados, y la edad de una cuenta ya no se pega a la esquina del recuadro.
 
+- Permisos de git: una acción aprobada ya no se ejecuta en tu checkout. Corre en el worktree del agente que la pidió, con su git fijado (`--git-dir`, `--work-tree`) y solo las variables que hacen falta para tus credenciales, y se juzga otra vez al aprobarla con la rama real: si ya está prohibida, si el worktree no existe o si está en `main` o `master`, no corre, queda registrado y el padre recibe el motivo.
+- Niveles de git: cada subcomando tiene su lista cerrada de opciones por nombre exacto, también las abreviadas (`--outp`). Quedan fuera `--output`, `--upload-pack`, `--receive-pack`, `--exec`, `--ext-diff`, `--textconv`, `-O` y rutas fuera del worktree.
+- `git push` admite solo `<remoto> <ref>` con destino explícito, y `-u` como mucho: se rechazan `--all`, `--mirror`, `--tags`, comodines, `:` y un push sin destino o a `HEAD`. Ninguna orden mueve `main` o `master`, ni `branch -f main`.
+- Destructivas que pasaban por locales ahora piden permiso: `checkout .`, `restore .`, `switch -f`, `rm -rf .`, `stash drop`, `stash pop`, `reset --keep`, `clean` y `branch -f`, también con opciones cortas combinadas como `-fu`. `git checkout <nombre>` también lo pide, porque puede sobrescribir un archivo; para cambiar de rama está `git switch`.
+- `haril_web`: resuelve el nombre y rechaza direcciones privadas, de bucle local, enlace local, CGNAT, de pruebas, IPv4 en IPv6 y NAT64 en cada salto. La conexión usa solo las direcciones comprobadas, así que un cambio de DNS entre la comprobación y la conexión no entra. El cuerpo se corta mientras llega, y hay un solo límite de tiempo para toda la lectura.
+- El documentador escribe solo en `docs/`, `versions/` y archivos `README*` o `CHANGELOG*`: ya no toca `AGENTS.md`, `CLAUDE.md`, `.claude/`, `.github/`, `requirements.txt` ni `CMakeLists.txt`.
+- `haril update`: una reparación solo lleva ✓ si la herramienta pasa `verifyBinary`; si no, ✗ y salida distinta de cero. La vuelta atrás borra lo que la instalación añadió a `bin/`, comprueba lo restaurado y dice si fue parcial, y también lo que no deshace.
+- Cuota: el relevo y la elección de modelo usan la misma regla, con la semana y la reserva. Con exactamente el umbral ya no hay relevo que la elección devolvería al mismo modelo. Sin sucesor, la tarea espera cada vez más, lo registra con evento y, al agotar los intentos, se detiene y explica por qué.
+- Un sintetizador necesita al menos 3 opiniones válidas en todos los casos: se rechaza la propuesta con menos consejeros y, al lanzarlo sin consejo, el flujo se detiene con la explicación.
+- Una respuesta a una persona ya no deja el flujo esperando para siempre si el runtime cae: lo que no ejecuta nada se aplica en una transacción, y al arrancar se cierra lo que quedó a medias. Una acción interrumpida no se repite y se avisa de que no se sabe si llegó a ejecutarse.
+- Mapa mental: el pie ya no ofrece `↑/↓`, `Enter`, `h/l` ni `/`, que allí no hacen nada. Mapa de Sistema: `Cuentas` ya no sale en rojo con «3 leídas»; el estado de la pasarela se ve en su propia caja y en el detalle.
+
 ### Limitaciones
 
 - El atajo es `Alt+G` y no `Alt+F`, que es de Pi (`tui.editor.cursorWordRight`): la consola no sobrescribe atajos propios de Pi.
@@ -69,6 +81,10 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 - La salud de Engram sale de `haril memory status`, y la de CLIProxy de la última lectura de cuota guardada: no se hace ninguna llamada nueva para pintar el mapa. HARIL aún no tiene plantillas y la tarjeta lo dice.
 - La secuencia de Conexiones sale de los eventos guardados, que no dicen a quién iba cada mensaje: una respuesta se dibuja hacia el padre y el resto queda en la línea del propio agente.
 - La vista incluye todos los flujos activos y los 10 terminados más recientes. Los eventos no tienen duración, así que el registro no dibuja la cascada de la pieza de referencia.
+
+- Esperar a una persona no tiene tope: el tiempo máximo del flujo solo cuenta mientras corre, y lo esperado no se le cobra al seguir. Una petición no caduca sola.
+- La vuelta atrás de `haril update` cubre `app/current.json` y `bin/`; lo que el instalador ya escribió fuera de ahí se queda, sin usar.
+- Las acciones `gh` que publican o destruyen no tienen lista de opciones: las ve la persona que las aprueba, pero `--repo` sigue siendo posible.
 
 ### Verificación
 
