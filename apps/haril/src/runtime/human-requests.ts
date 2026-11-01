@@ -239,7 +239,12 @@ function recordGitAction(
       command: [action.program, ...action.args].join(" "),
       outcome: outcome.kind,
       exitCode: outcome.kind === "ran" ? outcome.ran.exitCode : null,
-      output: outcome.kind === "ran" ? outcome.ran.output.slice(-4000) : "",
+      output:
+        outcome.kind === "ran"
+          ? outcome.ran.output.slice(-4000)
+          : outcome.kind === "refused"
+            ? `No se ejecutó: ${outcome.why}`
+            : "El runtime se detuvo mientras se aplicaba: no se sabe si llegó a ejecutarse.",
       ...(outcome.kind === "refused" ? { why: outcome.why } : {}),
       grantedBy: approval.decidedBy,
     },
@@ -297,7 +302,9 @@ export function applyHumanRequest(
           },
         }),
       )
-      .then(finish),
+      .then(finish)
+      // An outcome that could not be written stays unclosed: the next start closes it as interrupted.
+      .catch(() => undefined),
   );
   return true;
 }

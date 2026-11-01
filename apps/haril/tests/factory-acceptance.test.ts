@@ -581,6 +581,8 @@ describe.skipIf(!HAS_GIT)('"hazme una página"', () => {
     for (const row of refused) {
       expect(row.why).toEqual(expect.any(String));
       expect(row.exitCode).toBeNull();
+      // The factory's git log shows the output: that is where a person reads why it did not run.
+      expect(row.output).toContain(String(row.why));
     }
   });
 
