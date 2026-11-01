@@ -237,6 +237,30 @@ function quotaOk(value: unknown): boolean {
   );
 }
 
+function healthOk(value: unknown): boolean {
+  const row = record(value);
+  return (
+    row !== undefined &&
+    (row.state === "ok" || row.state === "down" || row.state === "unknown") &&
+    text(row.detail)
+  );
+}
+
+function systemOk(value: unknown): boolean {
+  const row = record(value);
+  return (
+    row !== undefined &&
+    healthOk(row.runtime) &&
+    healthOk(row.gateway) &&
+    healthOk(row.store) &&
+    finite(row.accounts) &&
+    allOk(row.roleWarnings, (item) => {
+      const warning = record(item);
+      return warning !== undefined && text(warning.role) && text(warning.vendor);
+    })
+  );
+}
+
 function allOk(value: unknown, check: (item: unknown) => boolean): boolean {
   return Array.isArray(value) && value.every(check);
 }
@@ -262,7 +286,8 @@ export function parseFactoryLine(line: string): FactoryModel | undefined {
     !allOk(model.events, eventOk) ||
     !allOk(model.humanRequests, requestOk) ||
     !allOk(model.handoffs, handoffOk) ||
-    !quotaOk(model.quota)
+    !quotaOk(model.quota) ||
+    !systemOk(model.system)
   ) {
     return undefined;
   }

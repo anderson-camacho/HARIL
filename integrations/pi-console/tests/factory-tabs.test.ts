@@ -139,14 +139,6 @@ describe("before the data arrives", () => {
     }
     expect(text(factoryFeedEnded(initialFactoryState()))).toContain("haril factory watch");
   });
-
-  it("keeps saying so on the tabs that have no source yet, even with a model", () => {
-    for (const tab of ["sistema"] as const) {
-      const shown = text(on(tab));
-      expect(shown).toContain("Sin datos conectados todavía");
-      expect(shown).not.toContain("buscar");
-    }
-  });
 });
 
 describe("Tablero", () => {

@@ -11,7 +11,7 @@ export interface QuotaWindowView {
   readonly resetsAt: number | null;
 }
 
-export interface QuotaGroupView {
+interface QuotaGroupView {
   readonly name: string;
   readonly models: readonly string[];
   readonly window5h: QuotaWindowView;

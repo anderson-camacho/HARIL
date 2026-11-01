@@ -32,6 +32,7 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 - Selector: una tarea con rol toma su modelo de la lista justo después de un modelo fijado, con las mismas reglas de cuota y enfriamiento. Se mantiene en el modelo de su hilo mientras siga elegible y, si se conoce el uso, pasa al menos usado del mismo nivel. Un rol nunca baja de su piso: arquitecto, sintetizador, auditor y seguridad rechazan Sonnet 4.6 y Flash, y no recurre a la tabla de dificultad. `model.selected` registra `role_order`. Una tarea sin rol se comporta como antes.
 - `haril models` avisa cuando un rol solo llega a un proveedor entre los modelos conectados.
 - `quota.reservePercent` (10 por defecto): la última parte de cada ventana que ninguna elección toma.
+- Sistema: mapa de arquitectura (consola, runtime, CLIProxy, cuentas, SQLite y Engram) con su salud real; inventario de skills, MCP, integraciones y plantillas, reutilizando la lista de TOOLS; y ajustes generados de `DELEGATION_FIELDS`, con interruptores, deslizadores con `←`/`→`, `Enter` para el valor exacto y la consecuencia de cada cambio. `✓ Guardado` aparece solo cuando `haril config set` escribió de verdad, CONSULT y PLAN lo rechazan, y un secreto nunca se muestra.
 
 ### Cambiado
 
@@ -42,7 +43,7 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 
 - El atajo es `Alt+G` y no `Alt+F`, que es de Pi (`tui.editor.cursorWordRight`): la consola no sobrescribe atajos propios de Pi.
 - `gpt-6.1-sol` cuenta como nivel alto solo si la capa del rol pide el razonamiento `max`; sin eso, un rol de piso alto salta a su siguiente modelo. Las reglas especiales de seguridad (dos proveedores) y consejero (mínimo 3 por discusión) quedan como intención: las discusiones llegan más adelante.
-- Sistema aún no tiene datos y lo dice con «Sin datos conectados todavía».
+- La salud de Engram sale de `haril memory status`, y la de CLIProxy de la última lectura de cuota guardada: no se hace ninguna llamada nueva para pintar el mapa. HARIL aún no tiene plantillas y la tarjeta lo dice.
 - La secuencia de Conexiones sale de los eventos guardados, que no dicen a quién iba cada mensaje: una respuesta se dibuja hacia el padre y el resto queda en la línea del propio agente. Los relevos que hoy existen son cambios de modelo: el relevo entre agentes llega con la entrega al 80 %.
 - La vista incluye todos los flujos activos y los 10 terminados más recientes. Los eventos no tienen duración, así que el registro no dibuja la cascada de la pieza de referencia.
 

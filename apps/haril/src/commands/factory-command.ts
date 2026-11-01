@@ -91,7 +91,7 @@ function reader(
       ...(project === undefined ? {} : { project }),
       contextUsedOf: (runId) => piContextUsed(dataDir, runId),
       endedSnapshots,
-      quotaSettings: settingsAt(now).quota,
+      settings: settingsAt(now),
     });
 }
 

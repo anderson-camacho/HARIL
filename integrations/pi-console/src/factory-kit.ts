@@ -41,6 +41,8 @@ export interface FactoryGlyphs {
   readonly barOn: string;
   readonly barOff: string;
   readonly dot: string;
+  // A piece whose health nobody has checked.
+  readonly idle: string;
   readonly leftRight: string;
   readonly upDown: string;
   // Marks the selected row with more than a color, so it shows under NO_COLOR too.
@@ -78,6 +80,7 @@ export const UNICODE_FACTORY_GLYPHS: FactoryGlyphs = {
   barOn: "█",
   barOff: "░",
   dot: "●",
+  idle: "○",
   leftRight: "←/→",
   upDown: "↑/↓",
   pointer: "›",
@@ -113,6 +116,7 @@ export const ASCII_FACTORY_GLYPHS: FactoryGlyphs = {
   barOn: "#",
   barOff: "-",
   dot: "*",
+  idle: "o",
   leftRight: "Left/Right",
   upDown: "Up/Down",
   pointer: ">",

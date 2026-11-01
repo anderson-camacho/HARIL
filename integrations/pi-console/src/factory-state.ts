@@ -1,4 +1,10 @@
-import { selectedRowId } from "./factory-rows.js";
+import { selectedRowId, settingRows } from "./factory-rows.js";
+import {
+  type FactorySystemData,
+  isEditable,
+  sliderRange,
+  valueToText,
+} from "./factory-settings.js";
 import type { FactoryColumn, FactoryModel } from "./factory-types.js";
 import { keyOf } from "./orchestration-state.js";
 
@@ -27,11 +33,14 @@ export const FACTORY_COLUMNS: readonly FactoryColumn[] = [
 export const ACTIVITY_VIEWS = ["activas", "en_cola", "fallidas", "hechas", "te_necesitan"] as const;
 export type ActivityView = (typeof ACTIVITY_VIEWS)[number];
 
-export const MODELOS_VIEWS = ["cuentas", "monitor", "historial", "cache"] as const;
-export type ModelosView = (typeof MODELOS_VIEWS)[number];
+const MODELOS_VIEWS = ["cuentas", "monitor", "historial", "cache"] as const;
+type ModelosView = (typeof MODELOS_VIEWS)[number];
 
-export const CONEXIONES_VIEWS = ["cadena", "arbol", "red", "secuencia", "relevo"] as const;
-export type ConexionesView = (typeof CONEXIONES_VIEWS)[number];
+const CONEXIONES_VIEWS = ["cadena", "arbol", "red", "secuencia", "relevo"] as const;
+type ConexionesView = (typeof CONEXIONES_VIEWS)[number];
+
+const SISTEMA_VIEWS = ["mapa", "inventario", "ajustes"] as const;
+type SistemaView = (typeof SISTEMA_VIEWS)[number];
 
 export const AVANCE_SCOPES = ["proyecto", "tarea", "agente", "modelo"] as const;
 export type AvanceScope = (typeof AVANCE_SCOPES)[number];
@@ -50,13 +59,20 @@ export type FactoryAction =
       readonly label: string;
     }
   // Reads the quota again; it only records what the providers answer, so it asks nothing.
-  | { readonly kind: "reread"; readonly label: string };
+  | { readonly kind: "reread"; readonly label: string }
+  // Writes one setting through haril config set.
+  | {
+      readonly kind: "setting";
+      readonly path: string;
+      readonly value: string;
+      readonly label: string;
+    };
 
 export interface FactoryState {
   readonly tab: FactoryTab;
   // The selected row of each tab, so coming back to a tab finds it where it was.
   readonly selection: Readonly<Record<FactoryTab, number>>;
-  // How many selectable rows each tab has. The feed's model sets them; conexiones, modelos and sistema have no source yet.
+  // How many selectable rows each tab has. The feed's model and the Sistema tab's settings set them.
   readonly rowCounts: Readonly<Record<FactoryTab, number>>;
   readonly detail: boolean;
   // Null until haril factory watch printed its first line.
@@ -71,6 +87,17 @@ export interface FactoryState {
   readonly avanceScope: AvanceScope;
   readonly modelosView: ModelosView;
   readonly conexionesView: ConexionesView;
+  readonly sistemaView: SistemaView;
+  // What the Sistema tab reads apart from the feed; null until it arrived.
+  readonly system: FactorySystemData | null;
+  // A slider moved and not saved yet.
+  readonly settingDraft: { readonly path: string; readonly value: number } | null;
+  // An exact value being typed.
+  readonly settingEdit: { readonly path: string; readonly text: string } | null;
+  // The setting whose last write succeeded.
+  readonly savedPath: string | null;
+  // True in a mode that refuses to change settings (CONSULT and PLAN).
+  readonly settingsLocked: boolean;
   // The text each tab is filtered by, and whether `/` is taking it right now.
   readonly filter: Readonly<Record<FactoryTab, string>>;
   readonly filtering: boolean;
@@ -114,6 +141,12 @@ export function initialFactoryState(): FactoryState {
     avanceScope: "proyecto",
     modelosView: "cuentas",
     conexionesView: "cadena",
+    sistemaView: "mapa",
+    system: null,
+    settingDraft: null,
+    settingEdit: null,
+    savedPath: null,
+    settingsLocked: false,
     filter: perTab(""),
     filtering: false,
     seen: {},
@@ -131,6 +164,7 @@ const DATA_TABS: readonly FactoryTab[] = [
   "agentes",
   "modelos",
   "conexiones",
+  "sistema",
 ];
 
 function recount(state: FactoryState): FactoryState {
@@ -172,6 +206,15 @@ export function factoryModelArrived(state: FactoryState, model: FactoryModel): F
 
 export function factoryFeedEnded(state: FactoryState): FactoryState {
   return { ...state, feedEnded: true };
+}
+
+export function factorySystemArrived(state: FactoryState, system: FactorySystemData): FactoryState {
+  return recount({ ...state, system });
+}
+
+// The write of this setting succeeded: the screen may say so.
+export function factorySettingSaved(state: FactoryState, path: string): FactoryState {
+  return { ...state, savedPath: path };
 }
 
 export function factoryNotice(state: FactoryState, notice: string | null): FactoryState {
@@ -287,6 +330,80 @@ export function approvalTarget(state: FactoryState): { id: string; title: string
 
 const READ_ONLY = "Este modo es de solo lectura: cambia de modo con Alt+M para hacerlo.";
 
+function selectedSetting(state: FactoryState) {
+  if (state.tab !== "sistema" || state.sistemaView !== "ajustes" || state.detail) return undefined;
+  return settingRows(state)[state.selection.sistema];
+}
+
+function save(state: FactoryState, path: string, value: string, label: string): FactoryTransition {
+  return handled(
+    { ...state, settingDraft: null, settingEdit: null, savedPath: null, notice: "Guardando…" },
+    { kind: "setting", path, value, label },
+  );
+}
+
+// ← and → on a slider: a new value, not saved until Enter.
+function nudgeSetting(state: FactoryState, step: number): FactoryTransition | undefined {
+  const field = selectedSetting(state);
+  if (field === undefined) return undefined;
+  const range = sliderRange(field);
+  if (range === undefined || !isEditable(field)) return undefined;
+  if (state.settingsLocked) return handled({ ...state, notice: READ_ONLY });
+  const from =
+    state.settingDraft?.path === field.path
+      ? state.settingDraft.value
+      : typeof field.value === "number"
+        ? field.value
+        : range.min;
+  const value = Math.max(range.min, Math.min(range.max, from + step * range.step));
+  return handled({
+    ...state,
+    settingDraft: { path: field.path, value },
+    savedPath: null,
+    notice: null,
+  });
+}
+
+function settingEnter(state: FactoryState): FactoryTransition | undefined {
+  const field = selectedSetting(state);
+  if (field === undefined) return undefined;
+  if (state.settingsLocked) return handled({ ...state, notice: READ_ONLY });
+  if (!isEditable(field)) return handled(state);
+  if (state.settingDraft?.path === field.path) {
+    return save(state, field.path, String(state.settingDraft.value), field.label);
+  }
+  if (field.kind.type === "boolean")
+    return save(state, field.path, String(field.value !== true), field.label);
+  return handled({
+    ...state,
+    settingEdit: { path: field.path, text: valueToText(field.value) },
+    savedPath: null,
+    notice: null,
+  });
+}
+
+function settingEditKey(
+  state: FactoryState,
+  data: string,
+  key: string | undefined,
+): FactoryTransition {
+  const edit = state.settingEdit;
+  if (edit === null) return handled(state);
+  if (key === "escape") return handled({ ...state, settingEdit: null });
+  if (key === "enter") return save(state, edit.path, edit.text.trim(), edit.path);
+  if (data === "\u007f" || data === "\b") {
+    return handled({
+      ...state,
+      settingEdit: { ...edit, text: Array.from(edit.text).slice(0, -1).join("") },
+    });
+  }
+  const printable =
+    data !== "" && Array.from(data).every((char) => char >= " " && char !== "\u007f");
+  return handled(
+    printable ? { ...state, settingEdit: { ...edit, text: `${edit.text}${data}` } } : state,
+  );
+}
+
 function ask(state: FactoryState, action: FactoryAction | null): FactoryTransition {
   if (action === null) return { state, handled: false };
   if (state.readOnly) return handled({ ...state, notice: READ_ONLY });
@@ -324,6 +441,15 @@ function tabKey(state: FactoryState, key: string): FactoryTransition | undefined
       }
       if (state.tab === "modelos") {
         return handled({ ...state, modelosView: cycle(MODELOS_VIEWS, state.modelosView, step) });
+      }
+      if (state.tab === "sistema") {
+        return handled(
+          recount({
+            ...state,
+            sistemaView: cycle(SISTEMA_VIEWS, state.sistemaView, step),
+            settingDraft: null,
+          }),
+        );
       }
       if (state.tab === "conexiones") {
         return handled({
@@ -391,11 +517,14 @@ export function factoryKey(state: FactoryState, data: string): FactoryTransition
   const key = keyOf(data);
   if (state.confirm !== null) return confirmKey(state, key);
   if (state.filtering) return filterKey(state, data, key);
+  if (state.settingEdit !== null) return settingEditKey(state, data, key);
   switch (key) {
     case "right":
+      return nudgeSetting(state, 1) ?? stepTab(state, 1);
+    case "left":
+      return nudgeSetting(state, -1) ?? stepTab(state, -1);
     case "tab":
       return stepTab(state, 1);
-    case "left":
     case "shift-tab":
       return stepTab(state, -1);
     case "up":
@@ -404,9 +533,13 @@ export function factoryKey(state: FactoryState, data: string): FactoryTransition
     case "down":
     case "j":
       return factoryMove(state, 1);
-    case "enter":
+    case "enter": {
+      const setting = settingEnter(state);
+      if (setting !== undefined) return setting;
       return handled(state.rowCounts[state.tab] > 0 ? { ...markSeen(state), detail: true } : state);
+    }
     case "escape":
+      if (state.settingDraft !== null) return handled({ ...state, settingDraft: null });
       return backOrClose(state);
     default: {
       if (key === undefined) return { state, handled: false };

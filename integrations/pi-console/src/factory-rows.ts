@@ -1,3 +1,5 @@
+import type { SettingField } from "./delegation-settings.js";
+import { settingLabel } from "./factory-settings.js";
 import type { ActivityView, FactoryState, FactoryTab } from "./factory-state.js";
 import type {
   FactoryAgent,
@@ -104,6 +106,15 @@ export function connectionAgents(state: FactoryState): FactoryAgent[] {
   if (model === null) return [];
   return model.agents.filter((agent) =>
     matches(state.filter.conexiones, agent.code, agent.role, agent.task, agent.status),
+  );
+}
+
+// The settings the Sistema tab lists, in HARIL's order; its other views have no rows to move over.
+export function settingRows(state: FactoryState): readonly SettingField[] {
+  if (state.sistemaView !== "ajustes") return [];
+  const fields = state.system?.settings?.fields ?? [];
+  return fields.filter((field) =>
+    matches(state.filter.sistema, settingLabel(field), field.path, field.group),
   );
 }
 
@@ -318,6 +329,12 @@ export function selectedRowId(state: FactoryState, tab: FactoryTab): SelectedRow
         rows[index]?.workflowId,
       );
     }
+    case "sistema":
+      return out(
+        settingRows(state).map((row) => row.path),
+        0,
+        undefined,
+      );
     case "conexiones": {
       const agents = connectionAgents(state);
       return out(

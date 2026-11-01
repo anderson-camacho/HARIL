@@ -79,7 +79,7 @@ export interface FactoryEvent {
   readonly agent: string | null;
 }
 
-export interface FactoryHandoff {
+interface FactoryHandoff {
   readonly at: number;
   readonly workflowId: string;
   readonly agent: string | null;
@@ -149,6 +149,19 @@ export interface FactoryQuota {
   }[];
 }
 
+interface FactoryHealth {
+  readonly state: "ok" | "down" | "unknown";
+  readonly detail: string;
+}
+
+export interface FactorySystem {
+  readonly runtime: FactoryHealth;
+  readonly gateway: FactoryHealth;
+  readonly store: FactoryHealth;
+  readonly accounts: number;
+  readonly roleWarnings: readonly { readonly role: string; readonly vendor: string }[];
+}
+
 export interface FactoryModel {
   readonly schemaVersion: 1;
   readonly generatedAt: number;
@@ -164,5 +177,6 @@ export interface FactoryModel {
   readonly events: readonly FactoryEvent[];
   readonly handoffs: readonly FactoryHandoff[];
   readonly quota: FactoryQuota;
+  readonly system: FactorySystem;
   readonly humanRequests: readonly FactoryHumanRequest[];
 }

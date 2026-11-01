@@ -5,6 +5,7 @@ import type {
   FactoryModel,
   FactoryQuota,
   FactoryQuotaReading,
+  FactorySystem,
   FactoryTask,
   FactoryWorkflow,
 } from "../src/factory-types.js";
@@ -354,6 +355,14 @@ export const QUOTA: FactoryQuota = {
   ],
 };
 
+const SYSTEM: FactorySystem = {
+  runtime: { state: "down", detail: "Sin runtime en marcha: `haril start` lo arranca." },
+  gateway: { state: "down", detail: "Sin lectura: el servidor de gestión no responde" },
+  store: { state: "ok", detail: "esquema 19" },
+  accounts: 3,
+  roleWarnings: [{ role: "git", vendor: "anthropic" }],
+};
+
 export function model(overrides: Partial<FactoryModel> = {}): FactoryModel {
   return {
     schemaVersion: 1,
@@ -371,6 +380,7 @@ export function model(overrides: Partial<FactoryModel> = {}): FactoryModel {
     events: EVENTS,
     handoffs: [],
     quota: QUOTA,
+    system: SYSTEM,
     humanRequests: [APPROVAL, STOP],
     ...overrides,
   };

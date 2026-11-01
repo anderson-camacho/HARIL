@@ -10,10 +10,13 @@ export interface FactoryActionDeps {
   // A note when it had to start a runtime or could not; undefined when one already ran.
   ensureRuntime(): Promise<string | undefined>;
   // Why the mode refuses the command, if it does.
-  refusal(command: "continue" | "approve" | "deny"): string | undefined;
+  refusal(command: "continue" | "approve" | "deny" | "config"): string | undefined;
 }
 
-function commandOf(action: Exclude<FactoryAction, { kind: "reread" }>): {
+// The mark of a write that succeeded, the only thing that may say it was saved.
+export const SAVED_MARK = "✓ Guardado";
+
+function commandOf(action: Exclude<FactoryAction, { kind: "reread" | "setting" }>): {
   readonly command: "continue" | "approve" | "deny";
   readonly args: readonly string[];
   readonly done: string;
@@ -50,6 +53,14 @@ export async function runFactoryAction(
     return read.ok
       ? "Cuota leída de nuevo."
       : firstLine(read.stderr) || "No se pudo leer la cuota.";
+  }
+  if (action.kind === "setting") {
+    const refused = deps.refusal("config");
+    if (refused !== undefined) return refused;
+    const saved = await deps.run(["config", "set", action.path, action.value, "--json"]);
+    return saved.ok
+      ? `${SAVED_MARK}: ${action.path}`
+      : firstLine(saved.stderr) || "No se pudo guardar.";
   }
   const { command, args, done } = commandOf(action);
   const refused = deps.refusal(command);

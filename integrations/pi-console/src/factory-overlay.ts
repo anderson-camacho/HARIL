@@ -1,5 +1,7 @@
+import { SAVED_MARK } from "./factory-actions.js";
 import type { FactoryFeed } from "./factory-feed.js";
 import type { FactoryGlyphs } from "./factory-kit.js";
+import type { FactorySystemData } from "./factory-settings.js";
 import {
   type FactoryAction,
   type FactoryState,
@@ -10,6 +12,8 @@ import {
   factoryModelArrived,
   factoryMove,
   factoryNotice,
+  factorySettingSaved,
+  factorySystemArrived,
 } from "./factory-state.js";
 import type { FactoryModel } from "./factory-types.js";
 import { renderFactoryScreen } from "./factory-view.js";
@@ -29,6 +33,10 @@ export interface FactoryOverlayHost {
   // Runs a confirmed action; the answer is shown on the screen.
   act?(action: FactoryAction): Promise<string>;
   readOnly?(): boolean;
+  // CONSULT and PLAN refuse to change settings.
+  settingsLocked?(): boolean;
+  // The Sistema tab's data; read when the view opens and after a saved setting.
+  loadSystem?(): Promise<FactorySystemData>;
 }
 
 // What the view asks the console to do once it closed.
@@ -40,7 +48,16 @@ export async function openFactoryOverlay(
   host: FactoryOverlayHost,
 ): Promise<FactoryOverlayResult> {
   let feed: FactoryFeed | undefined;
-  host.set({ ...host.get(), readOnly: host.readOnly?.() ?? false, confirm: null, notice: null });
+  host.set({
+    ...host.get(),
+    readOnly: host.readOnly?.() ?? false,
+    settingsLocked: host.settingsLocked?.() ?? false,
+    confirm: null,
+    notice: null,
+    settingDraft: null,
+    settingEdit: null,
+    savedPath: null,
+  });
   try {
     return await ctx.ui.custom<FactoryOverlayResult>(
       (tui, _theme, _keybindings, done) => {
@@ -52,12 +69,25 @@ export async function openFactoryOverlay(
           feed?.close();
           done(result);
         };
+        const loadSystem = (): void => {
+          void host.loadSystem?.().then(
+            (data) => {
+              if (finished) return;
+              host.set(factorySystemArrived(host.get(), data));
+              tui.requestRender();
+            },
+            () => undefined,
+          );
+        };
         const run = (action: FactoryAction): void => {
           if (host.act === undefined) return;
           void host.act(action).then(
             (answer) => {
               if (finished) return;
-              host.set(factoryNotice(host.get(), answer));
+              const saved = action.kind === "setting" && answer.startsWith(SAVED_MARK);
+              const state = saved ? factorySettingSaved(host.get(), action.path) : host.get();
+              host.set(factoryNotice(state, answer));
+              if (saved) loadSystem();
               tui.requestRender();
             },
             (error: unknown) => {
@@ -91,6 +121,7 @@ export async function openFactoryOverlay(
             tui.requestRender();
           },
         });
+        loadSystem();
         return {
           render(width) {
             block = renderFactoryScreen(

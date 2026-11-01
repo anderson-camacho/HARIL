@@ -58,6 +58,7 @@ import { runFactoryAction } from "./factory-actions.js";
 import { startFactoryFeed } from "./factory-feed.js";
 import { factoryGlyphs } from "./factory-kit.js";
 import { openFactoryOverlay } from "./factory-overlay.js";
+import { loadFactorySystem } from "./factory-settings.js";
 import { type FactoryState, initialFactoryState } from "./factory-state.js";
 import { createGitSummaryCache, type GitSummary } from "./git-summary.js";
 import { DEFAULT_UI_LOCALE, localized, readConsoleLocale, type UiLocale } from "./locale.js";
@@ -740,11 +741,22 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
                 projectSlug: () => current.project?.slug,
                 ...listener,
               }),
+            settingsLocked: () => modes.mode() === "consult" || modes.mode() === "plan",
+            loadSystem: () =>
+              loadFactorySystem({
+                run: (args) => runHaril(args, { cwd: current.cwd }),
+                catalog: () => loadedCatalog(current),
+              }),
             act: (action) =>
               runFactoryAction(action, {
                 run: (args) => runHaril(args, { cwd: current.cwd }),
                 ensureRuntime: () => ensureRuntime(current),
-                refusal: (command) => commandRefusal(modes.mode(), command),
+                refusal: (command) =>
+                  command !== "config"
+                    ? commandRefusal(modes.mode(), command)
+                    : modes.mode() === "consult" || modes.mode() === "plan"
+                      ? "Este modo no cambia la configuración: cambia de modo con Alt+M."
+                      : undefined,
               }),
           });
           // A workflow needs a goal, a plan and a methodology: /delegate asks for them, as it does in the chat.

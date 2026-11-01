@@ -23,10 +23,11 @@ import {
   type FactoryTab,
   type FactoryTarget,
 } from "./factory-state.js";
+import { sistemaBody } from "./factory-system.js";
 
 // The factory's screen, pure: a state, a width and a height in, the lines and their hit-boxes out. A tab bar on top, the
-// tab's framed body, and a footer with the keys that work right now. Avance, Actividades, Tablero and Agentes draw what
-// haril factory watch printed; the other three have no data source yet and say so. This screen never draws sample data.
+// tab's framed body, and a footer with the keys that work right now. Every tab draws what haril factory watch printed; a tab
+// says so until the first line arrives. This screen never draws sample data.
 
 export const FACTORY_TAB_LABELS: Readonly<Record<FactoryTab, string>> = {
   avance: "Avance",
@@ -119,7 +120,8 @@ function dataTab(state: FactoryState): boolean {
       state.tab === "tablero" ||
       state.tab === "agentes" ||
       state.tab === "modelos" ||
-      state.tab === "conexiones")
+      state.tab === "conexiones" ||
+      state.tab === "sistema")
   );
 }
 
@@ -138,6 +140,7 @@ function tabHints(state: FactoryState): Hint[] {
       out.push({ key: "e", action: state.eventLog ? "bandeja" : "eventos", keep: 1 });
     }
     if (state.tab === "avance") out.push({ key: "[/]", action: "vista", keep: 1 });
+    if (state.tab === "sistema") out.push({ key: "[/]", action: "vista", keep: 1 });
     if (state.tab === "conexiones") out.push({ key: "[/]", action: "vista", keep: 1 });
     if (state.tab === "modelos") {
       out.push({ key: "[/]", action: "vista", keep: 1 }, { key: "r", action: "releer", keep: 3 });
@@ -165,6 +168,12 @@ function hintsOf(state: FactoryState, g: FactoryGlyphs): Hint[] {
     return [
       { key: "Enter", action: "aplicar", keep: 4 },
       { key: "Esc", action: "limpiar", keep: 4 },
+    ];
+  }
+  if (state.settingEdit !== null) {
+    return [
+      { key: "Enter", action: "guardar", keep: 4 },
+      { key: "Esc", action: "cancelar", keep: 4 },
     ];
   }
   const hasRows = state.rowCounts[state.tab] > 0 && !state.detail;
@@ -247,6 +256,8 @@ function tabBody(state: FactoryState, width: number, height: number, g: FactoryG
       return modelosBody(state, width, height, g);
     case "conexiones":
       return conexionesBody(state, width, height, g);
+    case "sistema":
+      return sistemaBody(state, width, height, g);
     case "tablero":
       return boardBody(state, width, height, g);
     case "actividades":

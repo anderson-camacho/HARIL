@@ -99,6 +99,14 @@ const FactoryQuotaSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const HealthSchema = Type.Object(
+  {
+    state: Type.Union([Type.Literal("ok"), Type.Literal("down"), Type.Literal("unknown")]),
+    detail: Type.String(),
+  },
+  { additionalProperties: false },
+);
+
 export const FactoryColumnSchema = Type.Union([
   Type.Literal("por_hacer"),
   Type.Literal("en_curso"),
@@ -218,6 +226,23 @@ export const FactoryModelSchema = Type.Object(
       ),
     ),
     quota: FactoryQuotaSchema,
+    // How the pieces behind the console answer, from what the store knows.
+    system: Type.Object(
+      {
+        runtime: HealthSchema,
+        gateway: HealthSchema,
+        store: HealthSchema,
+        accounts: Count,
+        // Roles that reach one vendor among the models known to be connected.
+        roleWarnings: Type.Array(
+          Type.Object(
+            { role: Type.String(), vendor: Type.String() },
+            { additionalProperties: false },
+          ),
+        ),
+      },
+      { additionalProperties: false },
+    ),
     humanRequests: Type.Array(
       Type.Object(
         {

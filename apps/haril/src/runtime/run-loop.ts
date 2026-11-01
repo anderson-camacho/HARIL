@@ -520,13 +520,7 @@ async function serve(
     }
     const turns = halted
       ? []
-      : claimWorkflowTurns(
-          store,
-          epoch,
-          options.delegation,
-          new Set(notRunnable),
-          clock.now(),
-        );
+      : claimWorkflowTurns(store, epoch, options.delegation, new Set(notRunnable), clock.now());
     for (const turn of turns) {
       // The attempt's first watchdog window starts at its claim (3.16).
       store.workflows.scheduleCheck(epoch, turn.claimed.taskId, clock.now() + policy.intervalMs);

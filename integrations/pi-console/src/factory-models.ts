@@ -51,11 +51,11 @@ function inText(at: number | null, now: number): string {
 }
 
 // 12300 → "12.300": exact, and the same whatever the machine's locale.
-export function countText(value: number): string {
+function countText(value: number): string {
   return String(Math.round(value)).replace(/\B(?=(\d{3})+(?!\d))/g, ".");
 }
 
-export function barToken(pct: number, thresholds: FactoryQuota["thresholds"]): FactoryToken {
+function barToken(pct: number, thresholds: FactoryQuota["thresholds"]): FactoryToken {
   if (pct >= thresholds.dangerPct) return "red";
   return pct >= thresholds.warnPct ? "yellow" : "green";
 }
