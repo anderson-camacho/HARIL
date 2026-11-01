@@ -1,3 +1,7 @@
+import { activityBody, searchField } from "./factory-activity.js";
+import { agentsBody } from "./factory-agents.js";
+import { type BodyLine, boardBody } from "./factory-board.js";
+import { detailBody } from "./factory-detail.js";
 import {
   type FactoryGlyphs,
   type FactoryRow,
@@ -8,7 +12,10 @@ import {
   factoryFrameTop,
   factorySegsWidth,
 } from "./factory-kit.js";
+import { progressBody } from "./factory-progress.js";
 import {
+  approvalTarget,
+  continueTarget,
   FACTORY_TABS,
   type FactoryState,
   type FactoryTab,
@@ -16,8 +23,8 @@ import {
 } from "./factory-state.js";
 
 // The factory's screen, pure: a state, a width and a height in, the lines and their hit-boxes out. A tab bar on top, the
-// tab's framed body, and a footer with the keys that work right now. No tab has a data source yet, so each says so and
-// shows nothing else: this screen never draws sample data.
+// tab's framed body, and a footer with the keys that work right now. Avance, Actividades, Tablero and Agentes draw what
+// haril factory watch printed; the other three have no data source yet and say so. This screen never draws sample data.
 
 export const FACTORY_TAB_LABELS: Readonly<Record<FactoryTab, string>> = {
   avance: "Avance",
@@ -40,6 +47,7 @@ const TAB_PURPOSE: Readonly<Record<FactoryTab, string>> = {
 };
 
 const NO_DATA = "Sin datos conectados todavía";
+const FEED_ENDED = "La lectura de datos se detuvo: `haril factory watch` no responde.";
 const SEPARATOR = " · ";
 // Below this height a frame would leave no room for its text.
 const MIN_FRAMED_ROWS = 5;
@@ -101,10 +109,63 @@ interface Hint {
   readonly target?: FactoryTarget;
 }
 
+function dataTab(state: FactoryState): boolean {
+  return (
+    state.model !== null &&
+    (state.tab === "avance" ||
+      state.tab === "actividades" ||
+      state.tab === "tablero" ||
+      state.tab === "agentes")
+  );
+}
+
+// The keys of the tab open now, and only those that would do something.
+function tabHints(state: FactoryState): Hint[] {
+  const out: Hint[] = [];
+  if (!dataTab(state)) return out;
+  if (!state.detail) {
+    out.push({ key: "/", action: "buscar", keep: 1 });
+    if (state.tab === "tablero") {
+      if (state.rowCounts.tablero > 0) out.push({ key: "h/l", action: "columna", keep: 1 });
+      if (!state.readOnly) out.push({ key: "n", action: "nueva", keep: 1 });
+    }
+    if (state.tab === "actividades") {
+      if (!state.eventLog) out.push({ key: "[/]", action: "vista", keep: 1 });
+      out.push({ key: "e", action: state.eventLog ? "bandeja" : "eventos", keep: 1 });
+    }
+    if (state.tab === "avance") out.push({ key: "[/]", action: "vista", keep: 1 });
+    if (state.tab === "agentes")
+      out.push({ key: "t", action: state.agentsTree ? "lista" : "árbol", keep: 1 });
+  }
+  if (!state.readOnly) {
+    if (approvalTarget(state) !== null) {
+      out.push({ key: "a", action: "aprobar", keep: 3 }, { key: "d", action: "negar", keep: 3 });
+    }
+    if (continueTarget(state) !== null) out.push({ key: "c", action: "continuar", keep: 3 });
+  }
+  return out;
+}
+
 function hintsOf(state: FactoryState, g: FactoryGlyphs): Hint[] {
+  if (state.confirm !== null) {
+    return [
+      { key: "s", action: "confirmar", keep: 4 },
+      { key: "n", action: "cancelar", keep: 4 },
+    ];
+  }
+  if (state.filtering) {
+    return [
+      { key: "Enter", action: "aplicar", keep: 4 },
+      { key: "Esc", action: "limpiar", keep: 4 },
+    ];
+  }
   const hasRows = state.rowCounts[state.tab] > 0 && !state.detail;
+  const canGoBack =
+    state.detail ||
+    (dataTab(state) && state.filter[state.tab] !== "") ||
+    (state.tab === "actividades" && state.eventLog);
   return [
-    { key: g.leftRight, action: "pestaña", keep: 3 },
+    { key: g.leftRight, action: "pestaña", keep: 2 },
     { key: "1-7", action: "ir", keep: 0 },
     ...(hasRows
       ? [
@@ -112,7 +173,8 @@ function hintsOf(state: FactoryState, g: FactoryGlyphs): Hint[] {
           { key: "Enter", action: "detalle", keep: 1 },
         ]
       : []),
-    state.detail
+    ...tabHints(state),
+    canGoBack
       ? { key: "Esc", action: "volver", keep: 4, target: { kind: "back" } as const }
       : { key: "Esc", action: "cerrar", keep: 4, target: { kind: "close" } as const },
   ];
@@ -133,16 +195,58 @@ function footer(state: FactoryState, width: number, g: FactoryGlyphs): Seg[] {
   let hints = hintsOf(state, g);
   while (factorySegsWidth(hintSegs(hints)) > width && hints.length > 1) {
     const lowest = Math.min(...hints.map((hint) => hint.keep));
-    hints = hints.filter((hint) => hint.keep !== lowest);
+    const remaining = hints.filter((hint) => hint.keep !== lowest);
+    if (remaining.length === 0) break;
+    hints = remaining;
   }
   return hintSegs(hints);
 }
 
-function bodyMessages(tab: FactoryTab): Seg[][] {
+function bodyMessages(state: FactoryState): BodyLine[] {
+  if (state.feedEnded && state.model === null) {
+    return [
+      [{ text: `  ${NO_DATA}`, token: "yellow" }],
+      [{ text: `  ${FEED_ENDED}`, token: "muted" }],
+    ];
+  }
   return [
     [{ text: `  ${NO_DATA}`, token: "yellow" }],
-    [{ text: `  ${TAB_PURPOSE[tab]}`, token: "muted" }],
+    [{ text: `  ${TAB_PURPOSE[state.tab]}`, token: "muted" }],
   ];
+}
+
+// The tab's own lines at `width` by `height`.
+function tabBody(state: FactoryState, width: number, height: number, g: FactoryGlyphs): BodyLine[] {
+  if (!dataTab(state)) {
+    const messages = bodyMessages(state);
+    // A blank row above the text when there is room for it.
+    return height >= messages.length + 1 ? [[], ...messages] : messages;
+  }
+  if (state.detail) return detailBody(state, width);
+  switch (state.tab) {
+    case "tablero":
+      return boardBody(state, width, height, g);
+    case "actividades":
+      return activityBody(state, width, height, g);
+    case "agentes":
+      return agentsBody(state, width, height, g);
+    default:
+      return progressBody(state, width, height, g);
+  }
+}
+
+// The question waiting for s or n, or the answer to the last action.
+function statusLine(state: FactoryState): BodyLine | undefined {
+  if (state.confirm !== null) {
+    return [{ text: ` ¿${state.confirm.label}? s/n`, token: "yellow" }];
+  }
+  return state.notice === null ? undefined : [{ text: ` ${state.notice}`, token: "orange" }];
+}
+
+function frameRight(state: FactoryState): string {
+  const position = `${FACTORY_TABS.indexOf(state.tab) + 1}/${FACTORY_TABS.length}`;
+  if (!dataTab(state) || state.tab === "actividades") return position;
+  return state.filtering || state.filter[state.tab] !== "" ? searchField(state) : position;
 }
 
 export function renderFactoryScreen(
@@ -160,17 +264,21 @@ export function renderFactoryScreen(
   const height = Math.max(0, rows);
   if (height >= 1) push(factoryCompose(tabBar(state.tab, width), width));
   const bodyRows = Math.max(0, height - 2);
-  const messages = bodyMessages(state.tab);
+  const status = statusLine(state);
   if (height < MIN_FRAMED_ROWS) {
-    for (let row = 0; row < bodyRows; row++) push(factoryCompose(messages[row] ?? [], width));
+    const body = tabBody(state, width, bodyRows, g);
+    const shown = status === undefined ? body : [status, ...body];
+    for (let row = 0; row < bodyRows; row++) push(factoryCompose(shown[row] ?? [], width));
   } else {
     const label = FACTORY_TAB_LABELS[state.tab];
-    const position = `${FACTORY_TABS.indexOf(state.tab) + 1}/${FACTORY_TABS.length}`;
-    lines.push(factoryFrameTop(width, state.detail ? `${label} · detalle` : label, position, g));
+    lines.push(
+      factoryFrameTop(width, state.detail ? `${label} · detalle` : label, frameRight(state), g),
+    );
     const inner = bodyRows - 2;
-    // A blank row above the text when there is room for it.
-    const shown = inner >= messages.length + 1 ? [[], ...messages] : messages;
-    for (let row = 0; row < inner; row++) push(factoryBoxRow(shown[row] ?? [], width, g));
+    const room = status === undefined ? inner : Math.max(0, inner - 1);
+    const body = tabBody(state, Math.max(0, width - 2), room, g);
+    for (let row = 0; row < room; row++) push(factoryBoxRow(body[row] ?? [], width, g));
+    if (status !== undefined && inner > 0) push(factoryBoxRow(status, width, g));
     lines.push(factoryFrameBottom(width, g));
   }
   if (height >= 2) push(factoryCompose(footer(state, width, g), width));

@@ -12,6 +12,11 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 ### Añadido
 
 - `Alt+G` o `/haril-factory` abre la fábrica a pantalla completa, con siete pestañas: Avance, Actividades, Tablero, Agentes, Conexiones, Modelos y Sistema.
+- Tablero: cinco columnas (Por hacer, En curso, Detenidas, Errores, Hechas) con rol, agente y quién delegó; debajo, el plan de la tarjeta elegida con la explicación de cada fila detenida o fallida y su barra de avance. `h`/`l` cambian de columna, `Enter` abre la tarjeta, `n` prepara `/delegate` para añadir una tarea y `c` continúa un plan detenido.
+- Actividades: bandeja con Activas, En cola, Fallidas, Hechas y Te necesitan, punto de no leído y búsqueda; `e` abre el registro de eventos. Desde Te necesitan se aprueba o niega un plan con `a` o `d`.
+- Agentes: lista como `htop` con tokens exactos, contexto, tiempo, modelo y tarea; `t` alterna entre árbol y lista por tokens.
+- Avance: anillo, indicadores de Tareas, Agentes, Tokens y Calidad, historial de tareas cerradas y barras por tarea, agente y modelo (`[`/`]`). Los números salen de hechos; `~` marca un total que aún puede crecer, y sin datos dice `Sin pruebas`, nunca 0. En ventanas pequeñas todo se reduce a barras.
+- `/` busca en las cuatro pestañas con datos. Las acciones piden confirmación (`s`/`n`), usan los mismos comandos que `/continue`, `/approve` y `/deny`, y CONSULT las rechaza.
 - Teclas: `←`/`→` o `Tab` cambian de pestaña, `1`-`7` saltan a una, `Esc` sale de un detalle y luego cierra. El pie lista solo las teclas que funcionan en ese momento. Con el ratón, un clic en una pestaña la abre.
 - Kit visual de la fábrica: la paleta exacta de las piezas de referencia, cajas redondeadas con título, barra de progreso y punto de estado. Respeta `PI_TRUE_COLOR=0`, `NO_COLOR`, `TERM=dumb` y `HARIL_CONSOLE_ASCII`, y no pinta fondos.
 - Prueba que documenta por qué una delegación parece atascada: con la parada por defecto `after_plan` el flujo espera a la persona y sus hijos quedan en cola; nada falló.
@@ -22,10 +27,13 @@ Las versiones van de la más reciente a la más antigua. Cada entrada indica la 
 ### Limitaciones
 
 - El atajo es `Alt+G` y no `Alt+F`, que es de Pi (`tui.editor.cursorWordRight`): la consola no sobrescribe atajos propios de Pi.
+- Conexiones, Modelos y Sistema aún no tienen datos y lo dicen con «Sin datos conectados todavía».
+- La vista incluye todos los flujos activos y los 10 terminados más recientes. Los eventos no tienen duración, así que el registro no dibuja la cascada de la pieza de referencia.
 
 ### Verificación
 
-- Pruebas de la consola con un Pi simulado: colores RGB exactos, alternativas 256, sin color y ASCII, reductor, ancho de 1 a 120 columnas y apertura del overlay en los cuatro modos.
+- Pruebas de la consola con un Pi simulado: colores RGB exactos, alternativas 256, sin color y ASCII, reductor, ancho de 1 a 200 columnas y alto de 1 a 60 filas en todas las vistas, y apertura del overlay en los cuatro modos.
+- Pruebas de `haril factory` y de las explicaciones con el almacén real y agentes simulados; prueba gemela de los tipos de la consola contra los contratos.
 - No verificado: Pi real, un terminal real ni clics reales.
 
 ---

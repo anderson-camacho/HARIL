@@ -18,6 +18,7 @@ import {
   type CommandHost,
   chooseMode,
   delegationHost,
+  ensureRuntime,
   harilCommandDescriptions,
   registerCommands,
 } from "./commands.js";
@@ -53,6 +54,8 @@ import {
   dockSlotAt,
 } from "./dock-navigation.js";
 import { stopAll } from "./emergency.js";
+import { runFactoryAction } from "./factory-actions.js";
+import { startFactoryFeed } from "./factory-feed.js";
 import { factoryGlyphs } from "./factory-kit.js";
 import { openFactoryOverlay } from "./factory-overlay.js";
 import { type FactoryState, initialFactoryState } from "./factory-state.js";
@@ -68,7 +71,7 @@ import {
   registerHarilModels,
   restoreHarilModel,
 } from "./models.js";
-import { modeLabel } from "./modes.js";
+import { commandRefusal, modeLabel } from "./modes.js";
 import {
   attachNativePanes,
   DOCK_LABELS,
@@ -175,7 +178,7 @@ interface Session extends CommandHost {
   // children haril workflow watch and tail (orchestration-feed.ts).
   orchestration: OrchestrationState;
   orchestrationOpen: boolean;
-  // The factory view (factory-state.ts) and whether its overlay is open: it only views, so it holds nothing else.
+  // The factory view (factory-state.ts) and whether its overlay is open. Its data child runs only while it is open.
   factory: FactoryState;
   factoryOpen: boolean;
   openFactoryView(ctx: ConsoleContext): Promise<void>;
@@ -724,13 +727,31 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
         if (current.factoryOpen) return;
         current.factoryOpen = true;
         try {
-          await openFactoryOverlay(viewCtx, {
+          const outcome = await openFactoryOverlay(viewCtx, {
             get: () => current.factory,
             set: (state) => {
               current.factory = state;
             },
             glyphs: factoryGlyphs(),
+            readOnly: () => commandRefusal(modes.mode(), "continue") !== undefined,
+            startFeed: (listener) =>
+              startFactoryFeed({
+                cwd: () => current.cwd,
+                projectSlug: () => current.project?.slug,
+                ...listener,
+              }),
+            act: (action) =>
+              runFactoryAction(action, {
+                run: (args) => runHaril(args, { cwd: current.cwd }),
+                ensureRuntime: () => ensureRuntime(current),
+                refusal: (command) => commandRefusal(modes.mode(), command),
+              }),
           });
+          // A workflow needs a goal, a plan and a methodology: /delegate asks for them, as it does in the chat.
+          if (outcome === "new-task") {
+            viewCtx.ui.setEditorText("/delegate ");
+            viewCtx.ui.notify("Escribe el objetivo de la nueva tarea y pulsa Enter.", "info");
+          }
         } finally {
           current.factoryOpen = false;
           redraw();
@@ -2036,8 +2057,8 @@ export default function harilConsole(pi: ConsolePi, options: ConsoleOptions = {}
     },
   });
 
-  // Alt+G is free in Pi 1.2.0's default keybindings; Alt+F, the obvious one, is Pi's cursorWordRight. It only views, so
-  // it works in every mode.
+  // Alt+G is free in Pi 1.2.0's default keybindings; Alt+F, the obvious one, is Pi's cursorWordRight. It opens in every
+  // mode; a mode that refuses a command also refuses the key that would run it.
   registerShortcut("alt+g", {
     description: "Abrir la fábrica de HARIL",
     handler: (ctx) => {

@@ -43,6 +43,16 @@ export interface FactoryGlyphs {
   readonly dot: string;
   readonly leftRight: string;
   readonly upDown: string;
+  // Marks the selected row with more than a color, so it shows under NO_COLOR too.
+  readonly pointer: string;
+  readonly barMid: string;
+  readonly heavy: string;
+  readonly branch: string;
+  readonly lastBranch: string;
+  readonly point: string;
+  readonly fill: string;
+  readonly star: string;
+  readonly spark: string;
 }
 
 export const UNICODE_FACTORY_GLYPHS: FactoryGlyphs = {
@@ -57,6 +67,15 @@ export const UNICODE_FACTORY_GLYPHS: FactoryGlyphs = {
   dot: "●",
   leftRight: "←/→",
   upDown: "↑/↓",
+  pointer: "›",
+  barMid: "▒",
+  heavy: "━",
+  branch: "├─",
+  lastBranch: "└─",
+  point: "•",
+  fill: "·",
+  star: "★",
+  spark: "▁▂▃▄▅▆▇█",
 };
 
 export const ASCII_FACTORY_GLYPHS: FactoryGlyphs = {
@@ -71,6 +90,15 @@ export const ASCII_FACTORY_GLYPHS: FactoryGlyphs = {
   dot: "*",
   leftRight: "Left/Right",
   upDown: "Up/Down",
+  pointer: ">",
+  barMid: "+",
+  heavy: "=",
+  branch: "|-",
+  lastBranch: "`-",
+  point: "o",
+  fill: ".",
+  star: "*",
+  spark: "._-=+*#@",
 };
 
 // The same choice as the rest of the console: HARIL_CONSOLE_ASCII selects the ASCII set.
@@ -191,4 +219,57 @@ export function factoryProgressBar(
 
 export function factoryStatusDot(token: FactoryToken, g: FactoryGlyphs): string {
   return factoryText(g.dot, token);
+}
+
+// A cell of `width` columns: the text cut or padded with unpainted spaces, to the right when `end` is set.
+export function factoryCell<Target>(
+  text: string,
+  width: number,
+  token: FactoryToken,
+  end = false,
+): FactorySeg<Target> {
+  const shown = truncate(plainText(text), Math.max(0, width));
+  const padding = " ".repeat(Math.max(0, width - textWidth(shown)));
+  return { text: end ? `${padding}${shown}` : `${shown}${padding}`, token };
+}
+
+// A fixed grid of glyphs and colors, as the reference pieces draw on theirs; its rows come out as segments.
+export class FactoryGrid {
+  private readonly cells: { char: string; token: FactoryToken }[][];
+  readonly width: number;
+
+  constructor(width: number, height: number) {
+    this.width = width;
+    this.cells = Array.from({ length: Math.max(0, height) }, () =>
+      Array.from({ length: Math.max(0, width) }, () => ({
+        char: " ",
+        token: "dim" as FactoryToken,
+      })),
+    );
+  }
+
+  set(x: number, y: number, char: string, token: FactoryToken): void {
+    const row = this.cells[y];
+    if (row === undefined || x < 0 || x >= row.length) return;
+    row[x] = { char, token };
+  }
+
+  // Single-column characters only: a wide one would shift the rest of its row.
+  text(x: number, y: number, text: string, token: FactoryToken): void {
+    let at = x;
+    for (const char of plainText(text)) {
+      if (textWidth(char) === 1) this.set(at, y, char, token);
+      at += 1;
+    }
+  }
+
+  segs<Target>(y: number): FactorySeg<Target>[] {
+    const out: { text: string; token: FactoryToken }[] = [];
+    for (const cell of this.cells[y] ?? []) {
+      const last = out[out.length - 1];
+      if (last !== undefined && last.token === cell.token) last.text += cell.char;
+      else out.push({ text: cell.char, token: cell.token });
+    }
+    return out;
+  }
 }
