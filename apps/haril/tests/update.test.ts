@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -123,6 +123,12 @@ describe("haril update (local verified source only)", () => {
     expect(out.join(" ")).toContain("Matrix dependency needs repair");
     expect(install).not.toHaveBeenCalled();
 
+    // The repair only counts once the tools verify: here the installer put them in place.
+    const before = services.exists;
+    services = {
+      ...services,
+      exists: (path) => before(path) || install.mock.calls.length > 0,
+    };
     expect(await update(["--yes"], io, host, services)).toBe(0);
     expect(install).toHaveBeenCalledOnce();
     expect(out.join(" ")).toContain("dependencias reparadas");
@@ -145,7 +151,8 @@ describe("haril update (local verified source only)", () => {
     writeFileSync(tte, "tte fixture");
     services = {
       ...services,
-      verifyBinary: vi.fn(async (path) => path !== tte),
+      // Broken until the installer ran.
+      verifyBinary: vi.fn(async (path) => path !== tte || install.mock.calls.length > 0),
     };
 
     expect(await update(["--check"], io, host, services)).toBe(0);
@@ -218,6 +225,84 @@ describe("haril update (local verified source only)", () => {
       expect(restored).toEqual([1]);
       expect(all()).toContain("ok: Engram 1.2.3");
       expect(all()).toContain("Qué hacer:");
+    });
+
+    it("gives no ✓ to a repair whose tool still fails its verification", async () => {
+      manifest("0.21.0");
+      writeFileSync(join(source, "scripts", "install-visual-tools.mjs"), "// fixture\n");
+      const verifyBinary = vi.fn(async () => false);
+      services = { ...services, verifyBinary };
+      expect(await update(["--yes", "--from", source], io, host, services)).toBe(1);
+      expect(install).toHaveBeenCalledOnce();
+      expect(all()).toContain("fallo: HARIL");
+      expect(all()).toContain("Matrix");
+      expect(all()).not.toContain("ok: HARIL");
+      expect(all()).not.toContain("dependencias reparadas");
+    });
+
+    it("gives its ✓ once the repaired tools verify", async () => {
+      manifest("0.21.0");
+      writeFileSync(join(source, "scripts", "install-visual-tools.mjs"), "// fixture\n");
+      const before = services.exists;
+      services = {
+        ...services,
+        exists: (path) => before(path) || install.mock.calls.length > 0,
+        verifyBinary: vi.fn(async () => install.mock.calls.length > 0),
+      };
+      expect(await update(["--yes", "--from", source], io, host, services)).toBe(0);
+      expect(all()).toContain("ok: HARIL");
+    });
+
+    it("takes the launchers back and removes the ones the failed install added", async () => {
+      const bin = join(root, "bin");
+      mkdirSync(join(bin, "folder"), { recursive: true });
+      writeFileSync(join(bin, "haril"), "old launcher");
+      install.mockImplementation(async () => {
+        writeFileSync(join(bin, "haril"), "new launcher");
+        writeFileSync(join(bin, "added"), "new file");
+        writeFileSync(join(root, "app", "current.json"), JSON.stringify({ version: "0.21.1" }));
+        return 3;
+      });
+      expect(await update(["--yes", "--from", source], io, host, services)).toBe(1);
+      expect(readFileSync(join(bin, "haril"), "utf8")).toBe("old launcher");
+      expect(existsSync(join(bin, "added"))).toBe(false);
+      expect(existsSync(join(bin, "folder"))).toBe(true);
+      expect(JSON.parse(readFileSync(join(root, "app", "current.json"), "utf8")).version).toBe(
+        "0.21.0",
+      );
+      expect(all()).toContain("se restauró la versión anterior");
+    });
+
+    it("says the rollback was partial when it could not put everything back", async () => {
+      const bin = join(root, "bin");
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(join(bin, "haril"), "old launcher");
+      install.mockImplementation(async () => {
+        rmSync(bin, { recursive: true });
+        writeFileSync(bin, "a file where the folder was");
+        return 3;
+      });
+      expect(await update(["--yes", "--from", source], io, host, services)).toBe(1);
+      expect(all()).not.toContain("se restauró la versión anterior");
+      expect(all()).toContain("parcial");
+      expect(all()).toContain("haril");
+    });
+
+    it("does not claim a rollback when the record still names the new version", async () => {
+      install.mockImplementation(async () => {
+        writeFileSync(join(root, "app", "current.json"), JSON.stringify({ version: "0.21.1" }));
+        return 3;
+      });
+      services = { ...services, restore: () => undefined };
+      expect(await update(["--yes", "--from", source], io, host, services)).toBe(1);
+      expect(all()).not.toContain("se restauró la versión anterior");
+      expect(all()).toContain("parcial");
+    });
+
+    it("says what the rollback does not cover", async () => {
+      install.mockResolvedValue(3);
+      expect(await update(["--yes", "--from", source], io, host, services)).toBe(1);
+      expect(all()).toContain("no se deshace");
     });
 
     it("never gives a ✓ to what HARIL does not manage", async () => {

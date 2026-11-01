@@ -6,6 +6,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -49,7 +50,8 @@ export interface UpdateServices {
   readonly install: (script: string, root: string, source: string) => Promise<number>;
   readonly confirm: () => Promise<boolean>;
   readonly checkoutMain: () => Promise<MainCheckout>;
-  // What may be restored if the install fails midway, and how; the old version's folder stays on disk.
+  // What may be restored if the install fails midway, and how; the old version's folder stays on disk. A restore that could
+  // not put everything back throws, saying what.
   readonly snapshot?: (root: string) => InstallSnapshot;
   readonly restore?: (root: string, snapshot: InstallSnapshot) => void;
   // The versions of the tools HARIL manages apart from itself, read locally; null when absent.
@@ -70,13 +72,39 @@ function takeSnapshot(root: string): InstallSnapshot {
     ...(existsSync(bin) ? readdirSync(bin).map((name) => join(bin, name)) : []),
   ];
   for (const path of files) {
-    if (existsSync(path)) out.push({ path, bytes: readFileSync(path) });
+    if (existsSync(path) && statSync(path).isFile()) out.push({ path, bytes: readFileSync(path) });
   }
   return out;
 }
 
-function restoreSnapshot(_root: string, snapshot: InstallSnapshot): void {
-  for (const { path, bytes } of snapshot) writeFileSync(path, bytes);
+// Puts back what the snapshot holds, reads it back, and removes what the install added to bin/. Everything it can, then
+// throws with what it could not.
+function restoreSnapshot(root: string, snapshot: InstallSnapshot): void {
+  const problems: string[] = [];
+  const attempt = (path: string, work: () => void): void => {
+    try {
+      work();
+    } catch (error) {
+      problems.push(`${path}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+  const bin = join(root, "bin");
+  const kept = new Set(snapshot.map((file) => file.path));
+  attempt(bin, () => {
+    if (!existsSync(bin) || !statSync(bin).isDirectory()) return;
+    for (const name of readdirSync(bin)) {
+      const path = join(bin, name);
+      if (kept.has(path) || !statSync(path).isFile()) continue;
+      attempt(path, () => rmSync(path));
+    }
+  });
+  for (const { path, bytes } of snapshot) {
+    attempt(path, () => {
+      writeFileSync(path, bytes);
+      if (!readFileSync(path).equals(bytes)) throw new Error("it reads back different");
+    });
+  }
+  if (problems.length > 0) throw new Error(problems.join("; "));
 }
 
 function writeLogFile(root: string, text: string): string | null {
@@ -146,6 +174,12 @@ async function runComponents(
     readonly script: string;
     readonly source: string;
     readonly repairOnly: boolean;
+    // The tools a repair is there for: it counts only once they pass their verification.
+    readonly repairs: readonly {
+      readonly name: string;
+      readonly path: string;
+      readonly version: string;
+    }[];
   },
   io: CliIo,
   host: HostInfo,
@@ -178,7 +212,20 @@ async function runComponents(
   draw();
 
   // HARIL
-  const snapshot = (services.snapshot ?? takeSnapshot)(root);
+  let snapshot: InstallSnapshot;
+  try {
+    snapshot = (services.snapshot ?? takeSnapshot)(root);
+  } catch (error) {
+    set("HARIL", {
+      state: "failed",
+      version: current,
+      status: "falló antes de instalar",
+      happened: `No se pudo guardar lo que haría falta restaurar: ${error instanceof Error ? error.message : String(error)}.`,
+      result: `Sigue en ${current}: no se tocó nada.`,
+      todo: "Revisa los permisos de la carpeta de HARIL y repite haril update.",
+    });
+    return 1;
+  }
   set("HARIL", { state: "running", status: "instalando" });
   const timer = tty
     ? setInterval(() => {
@@ -200,40 +247,59 @@ async function runComponents(
   } catch {
     installed = null;
   }
+  const unverified: string[] = [];
   if (code === 0 && installed === available) {
+    for (const tool of input.repairs) {
+      let healthy = false;
+      try {
+        healthy =
+          services.exists(tool.path) && (await services.verifyBinary(tool.path, tool.version));
+      } catch {
+        healthy = false;
+      }
+      if (!healthy) unverified.push(tool.name);
+    }
+  }
+  if (code === 0 && installed === available && unverified.length === 0) {
     set("HARIL", {
       state: "ok",
       version: installed,
       status: input.repairOnly ? "dependencias reparadas" : "versión verificada",
       happened: input.repairOnly
-        ? "Se reparó una dependencia que faltaba."
+        ? "Se reparó una dependencia que faltaba y pasó su verificación."
         : `Pasó de ${current} a ${installed}.`,
       result: `Instalado y verificado en ${installed}.`,
     });
   } else {
-    let restored = false;
+    let partial: string | null = null;
     try {
       (services.restore ?? restoreSnapshot)(root, snapshot);
-      restored = true;
-    } catch {
-      restored = false;
+      const back = installedVersion(root, services);
+      if (back !== current) partial = `su registro dice ${back}`;
+    } catch (error) {
+      partial = error instanceof Error ? error.message : String(error);
     }
     const why =
       code !== 0
         ? `El instalador terminó con ${code}.`
-        : `Se esperaba ${available} y quedó ${installed ?? "sin versión"}.`;
+        : unverified.length > 0
+          ? `El instalador terminó bien, pero ${unverified.join(" y ")} no pasa su verificación.`
+          : `Se esperaba ${available} y quedó ${installed ?? "sin versión"}.`;
     set("HARIL", {
       state: "failed",
-      version: current,
-      status: restored ? `falló; se volvió a ${current}` : "falló",
+      version: partial === null ? current : null,
+      status: partial === null ? `falló; se volvió a ${current}` : "falló; restauración parcial",
       happened: why,
-      result: restored
-        ? `Sigue en ${current}: se restauró la versión anterior.`
-        : "No se pudo restaurar la versión anterior.",
+      result:
+        partial === null
+          ? `Sigue en ${current}: se restauró la versión anterior (su registro y bin/). Lo demás que el instalador ya escribió, como la carpeta de la versión nueva y las herramientas, no se deshace y queda sin usar.`
+          : `Restauración parcial, la instalación puede haber quedado mezclada: ${partial}.`,
       todo: "Lee la salida del instalador y repite haril update.",
     });
     io.err(
-      `haril: installer failed (exit ${code}); inspect its output. Do not assume the update succeeded.`,
+      code !== 0
+        ? `haril: installer failed (exit ${code}); inspect its output. Do not assume the update succeeded.`
+        : `haril: the install did not verify; inspect its output. Do not assume the update succeeded.`,
     );
   }
 
@@ -691,7 +757,15 @@ export async function update(
         : "Repairing the missing Matrix dependency through the HARIL installer...",
     );
     return await runComponents(
-      { available, current, root, script, source, repairOnly: comparison === 0 },
+      {
+        available,
+        current,
+        root,
+        script,
+        source,
+        repairOnly: comparison === 0,
+        repairs: comparison === 0 ? unhealthyTools : [],
+      },
       io,
       host,
       services,
