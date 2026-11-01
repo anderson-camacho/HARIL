@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { delegationPrompt } from "../src/executor/delegation-prompt.js";
 import { buildAgentSpec, DELEGATION_DATA_END } from "../src/executor/index.js";
 import type { DelegationChildOutcome, DelegationTurnInput } from "../src/ports/index.js";
 
@@ -518,5 +519,71 @@ describe("the role brief of a turn that writes in a git worktree (phase F8)", ()
     expect(spec.allowedTools).toEqual(["read", "haril_run", "haril_verdict"]);
     expect(spec.prompt).toContain("Your tools: read, haril_run and haril_verdict.");
     expect(spec.prompt).toContain("anything a command changes there is discarded");
+  });
+});
+
+describe("the factory's prompts", () => {
+  const task = { goal: "The goal of this turn", description: "Its detail" };
+
+  it("keeps what never changes before what does, for the provider's cache", () => {
+    const one = delegationPrompt(
+      task,
+      input({ role: "orchestrator", layer: 1, turnKind: "first" }),
+    );
+    const two = delegationPrompt(
+      { goal: "Another goal", description: "Other detail" },
+      input({
+        role: "orchestrator",
+        layer: 1,
+        turnKind: "first",
+        workflowGoal: "Another workflow",
+      }),
+    );
+    const shared = one.slice(0, one.indexOf("The goal of this turn"));
+    expect(shared.length).toBeGreaterThan(500);
+    expect(two.startsWith(shared)).toBe(true);
+  });
+
+  it("tells the orchestrator it never executes, and to plan with roles and no fixed sequence", () => {
+    const prompt = delegationPrompt(
+      task,
+      input({ role: "orchestrator", layer: 1, turnKind: "first" }),
+    );
+    expect(prompt).toContain("you never execute");
+    expect(prompt).toContain("Write your plan in the memo");
+    expect(prompt).toContain("no fixed sequence");
+    expect(prompt).toContain("Calling the council is your judgement");
+    for (const role of ["consultor", "disenador", "sintetizador", "product-owner", "vigilante"]) {
+      expect(prompt).toContain(role);
+    }
+  });
+
+  it("tells the delegator to name a role and to choose after a failure", () => {
+    const first = delegationPrompt(task, input({ role: "delegator", turnKind: "first" }));
+    expect(first).toContain('"role" (one of the roles listed below)');
+    const later = delegationPrompt(task, input({ role: "delegator", turnKind: "continuation" }));
+    expect(later).toContain("send a fixer");
+    expect(later).toContain("what was tried");
+  });
+
+  it("carries a person's message last, with the order to report it", () => {
+    const prompt = delegationPrompt(
+      task,
+      input({ messages: [{ id: "m", text: "Usa otro archivo", urgent: true }] }),
+    );
+    expect(prompt).toContain("(urgent) Usa otro archivo");
+    expect(prompt).toContain("tell your parent");
+    expect(prompt.indexOf("Usa otro archivo")).toBeGreaterThan(
+      prompt.indexOf("The goal of this turn"),
+    );
+  });
+
+  it("offers a role only the tools it has", () => {
+    const prompt = delegationPrompt(
+      task,
+      input({ role: "executor", layer: 3, roleName: "sintetizador" }),
+    );
+    expect(prompt).toContain("You have no tools");
+    expect(prompt).toContain("sintetizador");
   });
 });

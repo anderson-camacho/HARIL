@@ -58,7 +58,7 @@ export interface UpdateServices {
   readonly writeLog?: (root: string, text: string) => string | null;
 }
 
-export type InstallSnapshot = readonly { readonly path: string; readonly bytes: Buffer }[];
+type InstallSnapshot = readonly { readonly path: string; readonly bytes: Buffer }[];
 
 const REDRAW_MS = 125;
 

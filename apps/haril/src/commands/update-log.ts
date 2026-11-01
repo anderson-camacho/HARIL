@@ -3,7 +3,7 @@
 // state it left and what to do. A row says ✓ only after its installed version was verified, and a component HARIL does not
 // manage says so instead of a ✓. Pure: rows in, lines out. Without a terminal the same facts come out as plain lines.
 
-export type ComponentState = "pending" | "running" | "ok" | "warning" | "failed" | "unmanaged";
+type ComponentState = "pending" | "running" | "ok" | "warning" | "failed" | "unmanaged";
 
 export const NOT_MANAGED = "No lo gestiona HARIL";
 
@@ -61,7 +61,7 @@ function pad(text: string, room: number): string {
 
 const SETTLED = new Set<ComponentState>(["ok", "warning", "failed", "unmanaged"]);
 
-export function progressOf(rows: readonly ComponentRow[]): number {
+function progressOf(rows: readonly ComponentRow[]): number {
   return rows.length === 0 ? 0 : rows.filter((row) => SETTLED.has(row.state)).length / rows.length;
 }
 

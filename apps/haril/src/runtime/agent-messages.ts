@@ -7,7 +7,7 @@ import type { Task, WorkflowView } from "./workflow-view.js";
 // message reaches the agent at the next turn boundary, or at once with --urgent, which stops the attempt and resumes it
 // with the message.
 
-export type MessageState = "waiting" | "delivered" | "applied";
+type MessageState = "waiting" | "delivered" | "applied";
 
 export interface AgentMessage {
   readonly id: string;

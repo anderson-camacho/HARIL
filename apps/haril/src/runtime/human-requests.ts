@@ -13,7 +13,7 @@ import { appendAgentMessage } from "./agent-messages.js";
 // a person answers, the runtime runs what was granted (a git action, and only that one), tells the agent's parent what
 // happened through the message channel, and lifts the workflow's stop once no other request holds it.
 
-export const HUMAN_REQUEST_STOP = "human_request";
+const HUMAN_REQUEST_STOP = "human_request";
 
 const OUTPUT_MAX_CHARS = 4000;
 const GIT_ACTION_TIMEOUT_MS = 10 * 60_000;
@@ -55,10 +55,7 @@ export const runGitAction: GitActionRunner = (action, cwd) =>
     });
   });
 
-export function openHumanRequests(
-  store: Pick<Store, "approvals">,
-  workflowId: string,
-): ApprovalRecord[] {
+function openHumanRequests(store: Pick<Store, "approvals">, workflowId: string): ApprovalRecord[] {
   return store.approvals
     .list({ status: "requested" })
     .filter(

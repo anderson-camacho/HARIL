@@ -1,6 +1,5 @@
 import { chooseModel, contextActionOf } from "@haril/core";
 import type { DelegationHandoffView, Store } from "@haril/core/ports";
-import { quotaByKey } from "../quota-view.js";
 import {
   resultText,
   type Task,
@@ -28,11 +27,7 @@ export function handoffCount(store: Pick<Store, "events">, task: Task): number {
 }
 
 // Whether the turn's account and group passed the threshold; false when nothing is known.
-export function quotaPassed(
-  task: Task,
-  settings: WorkflowSettings,
-  now: number,
-): boolean {
+export function quotaPassed(task: Task, settings: WorkflowSettings, now: number): boolean {
   if (task.model === null) return false;
   const context = settings.models(now);
   const entry = context.catalog.find((row) => row.ref === task.model);
@@ -104,7 +99,7 @@ function filesTouched(
   return { paths: [...paths], commit };
 }
 
-export function handoffPackage(
+function handoffPackage(
   store: Pick<Store, "events">,
   view: WorkflowView,
   task: Task,
@@ -181,6 +176,3 @@ export function latestHandoff(
   const kept = (last?.payload as { package?: DelegationHandoffView } | undefined)?.package;
   return kept ?? null;
 }
-
-// Re-exported for the checks of the quota tab.
-export { quotaByKey };
