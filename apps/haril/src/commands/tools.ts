@@ -414,3 +414,13 @@ function latestText(status: ToolStatus): string {
     ? status.latest
     : `${status.latest}  (checked ${status.latestCheckedAt})`;
 }
+
+// The installed versions of the tools HARIL manages apart from itself, read locally: no network.
+export async function toolVersionsFor(
+  host: HostInfo,
+): Promise<Readonly<Record<"engram" | "gentle-ai", string | null>>> {
+  const report = await collectToolsReport(toolsInputFor(host), toolsDepsFor(host, {}), "never");
+  const versionOf = (id: string): string | null =>
+    report.tools.find((tool) => tool.id === id)?.active?.version ?? null;
+  return { engram: versionOf("engram"), "gentle-ai": versionOf("gentle-ai") };
+}
