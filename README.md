@@ -1,3 +1,4 @@
+hola mundoi
 # HARIL
 
 **¿Primera vez?** Consulta la [guía completa de uso](docs/GUIA_DE_USO.md): instalación, modos, comandos, paneles laterales e interpretación de cada indicador.
